@@ -2024,6 +2024,63 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"got temp[1]={temp.iloc[1]}, temp[2]={temp.iloc[2]}"
         )
 
+    def test_thermal_battery_physics_cooling_targets_hot(self):
+        """Physics thermal_battery with sense='cool' schedules cooling when hot, not cold (#994).
+
+        With the heating-only demand bug the building gain term is zero whenever it is
+        hot outside, so a hot profile drives no cooling. The fix makes the cooler run
+        more on a hot profile than on a cool one.
+        """
+        cooling_config = {
+            "start_temperature": 24.0,
+            "supply_temperature": 18.0,
+            "volume": 12.0,
+            "u_value": 0.4,
+            "envelope_area": 342.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 597.0,
+            "indoor_target_temperature": 24.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [26.0] * 48,
+            "sense": "cool",
+        }
+
+        opt_res_hot = self.run_thermal_battery_optimization(cooling_config, outdoor_temps=36.0)
+        opt_res_cool = self.run_thermal_battery_optimization(cooling_config, outdoor_temps=18.0)
+
+        self.assertIn("P_deferrable0", opt_res_hot.columns)
+        cooling_when_hot = opt_res_hot["P_deferrable0"].sum()
+        cooling_when_cool = opt_res_cool["P_deferrable0"].sum()
+        self.assertGreater(
+            cooling_when_hot,
+            cooling_when_cool,
+            f"Cooling should run more when hot ({cooling_when_hot}) than when cool "
+            f"({cooling_when_cool})",
+        )
+
+    def test_thermal_battery_hdd_cooling_warns(self):
+        """Degree-day (specific_heating_demand) demand is heating-only.
+
+        With sense='cool' on the HDD path the optimizer must warn rather than
+        silently produce heating-style demand on cold periods (#996 review).
+        """
+        hdd_cooling_config = {
+            "start_temperature": 24.0,
+            "supply_temperature": 18.0,
+            "volume": 12.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [26.0] * 48,
+            "sense": "cool",
+        }
+        with self.assertLogs(level="WARNING") as logs:
+            self.run_thermal_battery_optimization(hdd_cooling_config, outdoor_temps=36.0)
+        self.assertTrue(
+            any("heating-only" in message for message in logs.output),
+            f"Expected a heating-only warning for HDD sense='cool'; got {logs.output}",
+        )
+
     def test_thermal_management_penalty(self):
         # Case: Penalize mode (Legacy behavior)
         # We use desired_temperatures, which triggers the penalty logic
