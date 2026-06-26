@@ -1728,19 +1728,27 @@ async def treat_runtimeparams(
                     ).dt.tz_convert(time_zone)
 
                     # Aggregate any sub-step points to the optimization time step.
+                    # Resample in the local time_zone so the buckets line up with the
+                    # forecast grid, which get_forecast_dates floors in local time
+                    # (this matters for sub-hour UTC offsets such as +05:30).
                     forecast_data_df = forecast_data_df.resample(
                         pd.to_timedelta(optimization_time_step, "minutes"),
                         on="time",
                     ).aggregate({"value": "mean"})
-                    # Align with forecast_dates using hold-last (step) semantics: each
-                    # value holds until the next provided point. Union the two indexes
-                    # first so points defined before forecast_dates[0] still anchor the
-                    # forward-fill; reindexing straight onto forecast_dates with
-                    # method="nearest" dropped that anchor and let the trailing bfill
-                    # fill the leading slots with the NEXT value instead (issue #1003).
-                    # forecast_dates is a list of ISO strings; parse to a tz-aware
-                    # (UTC) index so the union aligns by instant across DST edges.
+                    # Now move to UTC so the union/reindex below align by instant
+                    # across DST edges without mixing two differently-localized
+                    # indexes. forecast_dates is a list of ISO strings; parse it to
+                    # the same UTC index. tz_convert only relabels, the instants are
+                    # unchanged, so the local-time aggregation above is preserved.
+                    forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
                     target_dates = pd.to_datetime(forecast_dates, utc=True)
+                    # Align with forecast_dates using hold-last (step) semantics: each
+                    # value holds until the next provided point. Union the provided
+                    # index with the horizon first so points defined before
+                    # forecast_dates[0] still anchor the forward-fill; reindexing
+                    # straight onto forecast_dates with method="nearest" dropped that
+                    # anchor and let the trailing bfill fill the leading slots with the
+                    # NEXT value instead (issue #1003).
                     combined_index = forecast_data_df.index.union(target_dates)
                     forecast_data_df = forecast_data_df.reindex(combined_index)
                     # ffill applies the hold-last; bfill then covers any slots before
