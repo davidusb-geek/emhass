@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://emhass.github.io/api/v1/plan.schema.json",
+  "title": "EMHASS /api/v1/plan response",
+  "description": "Response shape for GET /api/v1/plan. The latest optimization plan as JSON records. Columns follow docs/plan_output_schema.md (versioned by emhass_schema_version).",
+  "type": "object",
+  "required": ["status", "generated_at", "emhass_schema_version", "plan"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["no-run", "ok"],
+      "description": "Discriminator: 'no-run' before any optimization, 'ok' once a plan exists."
+    },
+    "generated_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 UTC instant the optimization that produced this plan completed. Equals /api/v1/last-run's timestamp for the same run. Null when status='no-run'."
+    },
+    "emhass_schema_version": {
+      "type": ["string", "null"],
+      "description": "EMHASS_SCHEMA_VERSION. The plan columns follow docs/plan_output_schema.md at this version."
+    },
+    "plan": {
+      "type": ["array", "null"],
+      "items": {"type": "object"},
+      "description": "Per-timestep optimization records (one object per timestep; columns per docs/plan_output_schema.md, plus a 'timestamp' field). Each record's 'timestamp' is an ISO 8601 UTC instant (Z suffix), the same instant the CSV export and HA publish use, not the configured local timezone — align consumers on UTC, like generated_at. Null when status='no-run'."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "no-run"}}, "required": ["status"]},
+      "then": {"properties": {"generated_at": {"const": null}, "plan": {"const": null}}}
+    }
+  ]
+}
