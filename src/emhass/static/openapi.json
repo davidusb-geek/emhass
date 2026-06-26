@@ -1177,7 +1177,7 @@
             "items": {
               "type": "object"
             },
-            "description": "Per-timestep optimization records (one object per timestep; columns per docs/plan_output_schema.md, plus a 'timestamp' field). Null when status='no-run'."
+            "description": "Per-timestep optimization records (one object per timestep; columns per docs/plan_output_schema.md, plus a 'timestamp' field). Each record's 'timestamp' is an ISO 8601 UTC instant (Z suffix), the same instant the CSV export and HA publish use, not the configured local timezone — align consumers on UTC, like generated_at. Null when status='no-run'."
           }
         },
         "allOf": [
