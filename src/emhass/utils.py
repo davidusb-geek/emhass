@@ -1727,16 +1727,27 @@ async def treat_runtimeparams(
                         forecast_data_df["time"], format="ISO8601", utc=True
                     ).dt.tz_convert(time_zone)
 
-                    # align index with forecast_dates
-                    forecast_data_df = (
-                        forecast_data_df.resample(
-                            pd.to_timedelta(optimization_time_step, "minutes"),
-                            on="time",
-                        )
-                        .aggregate({"value": "mean"})
-                        .reindex(forecast_dates, method="nearest")
-                    )
+                    # Aggregate any sub-step points to the optimization time step.
+                    forecast_data_df = forecast_data_df.resample(
+                        pd.to_timedelta(optimization_time_step, "minutes"),
+                        on="time",
+                    ).aggregate({"value": "mean"})
+                    # Align with forecast_dates using hold-last (step) semantics: each
+                    # value holds until the next provided point. Union the two indexes
+                    # first so points defined before forecast_dates[0] still anchor the
+                    # forward-fill; reindexing straight onto forecast_dates with
+                    # method="nearest" dropped that anchor and let the trailing bfill
+                    # fill the leading slots with the NEXT value instead (issue #1003).
+                    # forecast_dates is a list of ISO strings; parse to a tz-aware
+                    # (UTC) index so the union aligns by instant across DST edges.
+                    target_dates = pd.to_datetime(forecast_dates, utc=True)
+                    combined_index = forecast_data_df.index.union(target_dates)
+                    forecast_data_df = forecast_data_df.reindex(combined_index)
+                    # ffill applies the hold-last; bfill then covers any slots before
+                    # the first provided point (a dict that starts after the window
+                    # start) by extending that first value back over them.
                     forecast_data_df["value"] = forecast_data_df["value"].ffill().bfill()
+                    forecast_data_df = forecast_data_df.reindex(target_dates)
                     forecast_input = forecast_data_df["value"].tolist()
                 if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
                     params["passed_data"][forecast_key] = forecast_input
