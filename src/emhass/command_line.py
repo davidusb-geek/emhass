@@ -60,10 +60,15 @@ def _record_optim_snapshot(
             duration_total_seconds=_time.monotonic() - t0_monotonic,
             schema_version=EMHASS_SCHEMA_VERSION,
         )
-        # Write the structured plan snapshot reusing the SAME timestamp last_run
-        # stamped, so GET /api/v1/plan and GET /api/v1/last-run agree on the run
-        # instant. Backs the /api/v1/plan endpoint (AC-6).
-        if isinstance(opt_res, pd.DataFrame):
+        # Publish the structured plan ONLY for a successful (Optimal) run, reusing
+        # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
+        # /api/v1/last-run for that run. Only the timestamp is shared, not the
+        # verdict: a failed/infeasible run is still recorded by last_run (status
+        # error/infeasible) but must not surface on /api/v1/plan as status "ok" —
+        # the plan endpoint keeps serving the last VALID plan (or no-run). Gating on
+        # optim_status == "Optimal" mirrors last_run's own "ok" criterion, so the
+        # two endpoints stay consistent (plan published iff last-run is "ok").
+        if optim_status == "Optimal":
             plan_store.record(
                 input_data_dict["emhass_conf"]["data_path"],
                 plan=plan_store.serialize(opt_res),

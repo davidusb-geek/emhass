@@ -116,3 +116,31 @@ class TestRecordOptimSnapshotWritesPlan(unittest.TestCase):
         self.assertEqual(plan["plan"][0]["P_Load"], 100.0)
         # shared timestamp: plan generated_at equals the last_run timestamp
         self.assertEqual(plan["generated_at"], lr["timestamp"])
+
+    def test_record_optim_snapshot_skips_plan_on_non_optimal(self):
+        """A failed/infeasible run is recorded by last_run but must NOT publish a
+        plan: /api/v1/plan would otherwise report status='ok' for the same run
+        that /api/v1/last-run reports as 'infeasible'. The plan is published iff
+        the run is Optimal (i.e. iff last_run's status is 'ok')."""
+        import logging
+
+        from emhass import command_line
+
+        idx = pd.to_datetime(["2026-06-17T00:00:00+00:00"], utc=True)
+        idx.name = "timestamp"
+        opt_res = pd.DataFrame({"P_Load": [100.0], "optim_status": ["Infeasible"]}, index=idx)
+        input_data_dict = {
+            "emhass_conf": {"data_path": self.tmp_path},
+            "stage_times": {},
+        }
+        command_line._record_optim_snapshot(
+            input_data_dict,
+            last_run.ACTION_DAYAHEAD_OPTIM,
+            opt_res,
+            0.0,
+            logging.getLogger("test_plan_store"),
+        )
+        # no plan published for a non-Optimal run
+        self.assertIsNone(plan_store.read(self.tmp_path))
+        # last_run still records the failed run, as 'infeasible'
+        self.assertEqual(last_run.read(self.tmp_path)["status"], "infeasible")
