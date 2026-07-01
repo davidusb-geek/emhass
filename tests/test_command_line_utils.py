@@ -25,6 +25,7 @@ from emhass.command_line import (
     _load_opt_res_latest,
     _prepare_dayahead_optim,
     _publish_and_update_freq,
+    _publish_from_saved_entities,
     adjust_pv_forecast,
     continual_publish,
     dayahead_forecast_optim,
@@ -2045,6 +2046,31 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         # Expected new frequency based on the mocked lowest_time_step
         self.assertEqual(res, pd.Timedelta(minutes=15))
+
+    @patch("emhass.command_line.publish_json", new_callable=AsyncMock)
+    async def test_publish_from_saved_entities_skips_tmp_files(self, mock_publish_json):
+        """publish-data must skip in-flight atomic-write temp files, like the
+        continual-publish loop already does: publishing one derives a bogus
+        entity_id and KeyErrors on the metadata lookup, aborting the whole
+        publish instead of skipping the stray file."""
+        mock_publish_json.return_value = pd.DataFrame({"col": [1.0]})
+        with tempfile.TemporaryDirectory() as td:
+            data_path = pathlib.Path(td)
+            entity_dir = data_path / "entities"
+            entity_dir.mkdir()
+            (entity_dir / "sensor1.json").write_text("{}")
+            (entity_dir / "metadata.json").write_text("{}")
+            (entity_dir / "sensor1.json.1234.deadbeef.tmp").write_text("{}")
+            (entity_dir / "metadata.json.1234.tmp").write_text("{}")
+            input_data_dict = {"emhass_conf": {"data_path": data_path}}
+            params = {"passed_data": {"publish_prefix": "all"}}
+            logger = MagicMock()
+            res = await _publish_from_saved_entities(input_data_dict, logger, params)
+        # Only the real entity file is published - not metadata, not temp files.
+        mock_publish_json.assert_called_once()
+        self.assertEqual(mock_publish_json.call_args[0][0], "sensor1.json")
+        self.assertIsNotNone(res)
+        self.assertEqual(list(res.columns), ["sensor1"])
 
     @patch("emhass.command_line.pd.read_json")
     @patch("emhass.command_line.aiofiles.open")
