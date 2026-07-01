@@ -165,6 +165,9 @@ async def _build_ml_predict_day(
         horizon = len(target_dates)
         if len(history_before) < num_lags:
             return pd.Series(np.nan, index=target_dates)
+        # skforecast only needs the last num_lags observations to seed the
+        # recursion; pass a little more (2x) as a safe margin so a short gap
+        # near the boundary still leaves enough non-NaN lags.
         last_window = history_before.iloc[-num_lags * 2 :]
         try:
             # The fitted forecaster expects the same date-feature exog columns

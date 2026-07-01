@@ -180,6 +180,21 @@ class TestForecastCalibration(unittest.TestCase):
         mae_naive_common = np.mean([2.0, 2.0])
         self.assertAlmostEqual(skill, 1 - mae_method / mae_naive_common)
 
+    def test_build_table_na_for_uncovered_split(self):
+        """A method with no coverage in a split -> every cell for that split is N/A."""
+        metrics_rows = {
+            "typical": {
+                "test": {"mae": 5.0, "rmse": 6.0, "r2": 0.9, "mape": 3.0, "n_samples": 10},
+                "val": None,  # no coverage in val
+            },
+        }
+        skills = {"typical": {"test": 0.4, "val": None}}
+        table = fc._build_table(metrics_rows, skills, ["typical"]).set_index("method")
+        for col in ("val_mae", "val_rmse", "val_r2", "val_mape", "val_skill", "val_n"):
+            self.assertEqual(table.loc["typical", col], "N/A")
+        # the covered split still has real numbers
+        self.assertEqual(table.loc["typical", "test_mae"], 5.0)
+
     def test_plot_frame_shape(self):
         load = build_load(days=80)
         res = run(fc.compute_forecast_calibration(load, FREQ, EMHASS_CONF, logger))
