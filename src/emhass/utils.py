@@ -3745,6 +3745,8 @@ DEF_LOAD_ARRAY_PARAMS: dict[str, bool | int | float] = {
     "set_deferrable_max_startups": 0,
     "operating_hours_of_each_deferrable_load": 0,
     "nominal_power_of_deferrable_loads": 0,
+    "def_minimum_on_time": 0,
+    "def_minimum_off_time": 0,
 }
 # Legacy (pre-#342) names for the same 9 arrays, from
 # src/emhass/data/associations.csv column 2. The association loop accepts

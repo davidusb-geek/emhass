@@ -1619,6 +1619,20 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result_config["costfun"], "profit")
         self.assertTrue(result_config["set_use_battery"])
 
+    async def test_build_params_pads_def_minimum_on_off_time(self):
+        """def_minimum_on_time / def_minimum_off_time must be padded to
+        number_of_deferrable_loads like every sibling per-load array - otherwise
+        raising the load count silently disables short-cycle protection for the
+        new loads (optimization.py falls back to 0 for out-of-range indices,
+        with no log)."""
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config["number_of_deferrable_loads"] = 3
+        config["def_minimum_on_time"] = [3, 0]
+        config["def_minimum_off_time"] = [2, 0]
+        params = await utils.build_params(emhass_conf, {}, config, logger)
+        self.assertEqual(params["optim_conf"]["def_minimum_on_time"], [3, 0, 0])
+        self.assertEqual(params["optim_conf"]["def_minimum_off_time"], [2, 0, 0])
+
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
         default_val = 5
