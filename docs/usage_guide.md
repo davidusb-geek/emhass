@@ -13,6 +13,7 @@ With this web server, you can perform RESTful POST commands on multiple ENDPOINT
 - A POST call to `action/forecast-model-fit` to train a machine learning forecaster model with the passed data (see the [ML Forecaster](mlforecaster) section for more help).
 - A POST call to `action/forecast-model-predict` to obtain a forecast from a pre-trained machine learning forecaster model (see the [ML Forecaster](mlforecaster) section for more help).
 - A POST call to `action/forecast-model-tune` to optimize the machine learning forecaster models hyperparameters using Bayesian optimization (see the [ML Forecaster](mlforecaster) section for more help).
+- A POST call to `action/forecast-calibration` to compare the accuracy of the load forecast methods on your own history and help you pick the best one (see the [Load forecast calibration](forecasts.md) section for more help).
 
 A `curl` command can then be used to launch an optimization task like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
@@ -26,7 +27,7 @@ A `curl` command can then be used to launch an optimization task like this: `cur
 
 To run a command simply use the `emhass` CLI command followed by the needed arguments.
 The available arguments are:
-- `--action`: This is used to set the desired action, options are: `perfect-optim`, `dayahead-optim`, `naive-mpc-optim`, `publish-data`, `forecast-model-fit`, `forecast-model-predict` and `forecast-model-tune`.
+- `--action`: This is used to set the desired action, options are: `perfect-optim`, `dayahead-optim`, `naive-mpc-optim`, `publish-data`, `forecast-model-fit`, `forecast-model-predict`, `forecast-model-tune` and `forecast-calibration`.
 - `--config`: Define the path to the config.json file (including the yaml file itself)
 - `--secrets`: Define secret parameter file (secrets_emhass.yaml) path
 - `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`

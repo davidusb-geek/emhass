@@ -264,6 +264,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-fit
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-calibration
 curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
 curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
