@@ -160,6 +160,15 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         ("operating_hours_of_each_deferrable_load", "none_element"),
         ("set_deferrable_startup_penalty", "none_element"),
         ("deferrable_load_max_cost", "none_element"),
+        # def_minimum_on_time / def_minimum_off_time joined DEF_LOAD_ARRAY_PARAMS
+        # (padded like their siblings, #900). A None element never reaches the
+        # timestep coercion: check_def_loads pads length without touching
+        # elements, and the load holding the None (index 0) is single-constant,
+        # whose path skips the min-on/off-time block entirely - so the case runs
+        # clean and is a live regression test. The stringly variants still raise the
+        # contextual error and stay xfail.
+        ("def_minimum_on_time", "none_element"),
+        ("def_minimum_off_time", "none_element"),
         # #610: check_batt_params coerces a stringly-typed "null" scalar to the
         # per-battery default and broadcasts it - a real guard, so this stays a
         # live regression test even though the same param is xfail'd for the
