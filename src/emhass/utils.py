@@ -562,6 +562,16 @@ def compile_heat_topology(topology: dict) -> dict:
     groups = topology.get("actuator_groups", []) or []
     cost_tracks = topology.get("cost_tracks", {}) or {}
 
+    # Validate ids up front so a malformed entry raises the documented
+    # ValueError naming the offending field, not an internal KeyError (callers
+    # like the web UI's save-time validation only catch ValueError).
+    for kind, entries in (("sources", sources), ("storage", storage)):
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not entry.get("id"):
+                raise ValueError(
+                    f"heat_topology.{kind}[{i}] is missing the required 'id' field"
+                )
+
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
     sto_by_id = {s["id"]: s for s in storage}
