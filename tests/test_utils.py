@@ -4266,6 +4266,31 @@ class TestCompileHeatTopology(unittest.TestCase):
         """Empty dict must return {} without raising."""
         self.assertEqual(utils.compile_heat_topology({}), {})
 
+    def test_missing_id_raises_value_error_with_field_path(self):
+        """A source/storage entry without an `id` must raise the documented
+        ValueError naming the offending field, not an internal KeyError - the
+        web UI's save-time validation (and any other caller) only catches
+        ValueError, so a KeyError surfaces as an unhandled 500."""
+        no_source_id = {
+            "sources": [{"type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_source_id)
+        self.assertIn("sources[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
+
+        no_storage_id = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_storage_id)
+        self.assertIn("storage[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
+
 
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
