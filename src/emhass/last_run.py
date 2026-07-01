@@ -64,7 +64,7 @@ def record(
     duration_total_seconds: float,
     schema_version: str,
     error_message: str | None = None,
-) -> None:
+) -> str:
     """Persist a snapshot after a completed optimization run.
 
     Writes to both the in-memory cache and <data_path>/last_run.json under
@@ -107,6 +107,12 @@ def record(
             target.write_text(payload, encoding="utf-8")
         except OSError as exc:
             _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
+
+    # Return the stamped timestamp so callers (e.g. _record_optim_snapshot)
+    # can reuse the exact same instant for the plan snapshot's generated_at,
+    # keeping /api/v1/last-run and /api/v1/plan in agreement. Existing callers
+    # that ignore the return value are unaffected.
+    return snap["timestamp"]
 
 
 def read(data_path: Path) -> dict | None:
