@@ -385,7 +385,10 @@ def resolve_min_temperatures(
         static_arr = None
 
     if curve_temps is not None and static_arr is not None:
-        effective = np.maximum(static_arr, curve_temps)
+        # fmax, not maximum: a null static entry (nan after the float cast) means
+        # "no static floor at this step - defer to the curve". np.maximum would
+        # propagate the nan and silently discard the curve floor for that slot.
+        effective = np.fmax(static_arr, curve_temps)
     elif curve_temps is not None:
         effective = curve_temps
     else:
