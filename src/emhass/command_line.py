@@ -20,6 +20,10 @@ import pandas as pd
 
 from emhass import last_run, plan_store, utils
 from emhass.forecast import Forecast
+from emhass.forecast_calibration import (
+    CALIBRATION_DEFAULT_DAYS,
+    compute_forecast_calibration,
+)
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
@@ -1157,6 +1161,7 @@ async def set_input_data_dict(
         "forecast-model-fit",
         "forecast-model-predict",
         "forecast-model-tune",
+        "forecast-calibration",
     ]
     if set_type in actions_without_fcst_or_opt:
         fcst = None
@@ -1262,6 +1267,10 @@ async def set_input_data_dict(
         result = await _prepare_naive_mpc_optim(ctx, stage_times=stage_times)
     elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
         result = await _prepare_ml_fit_predict(ctx)
+    elif set_type == "forecast-calibration":
+        # The calibration action retrieves its own (longer) history window inside
+        # forecast_calibration(); no ML-prep here.
+        result = {}
     elif set_type == "regressor-model-fit":
         result = _prepare_regressor_fit(ctx)
     elif set_type == "regressor-model-predict":
@@ -1819,6 +1828,61 @@ async def forecast_model_fit(
             await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
             logger.debug("saved model to " + str(filename_path))
     return df_pred, df_pred_backtest, mlf
+
+
+async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) -> dict | None:
+    """Compute an on-demand load forecast calibration report from HA history.
+
+    Retrieves the load history, then compares the built-in load forecast methods
+    (naive, typical, mlforecaster) against the realised load over held-out
+    test/val windows. Reporting only: no model or artifact is saved and no
+    optimization is affected.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :return: The calibration result dict, or None when there is not enough history
+    :rtype: dict | None
+    """
+    passed_data = input_data_dict["params"]["passed_data"]
+    retrieve_hass_conf = input_data_dict["retrieve_hass_conf"]
+    rh = input_data_dict["rh"]
+    var_model = passed_data.get("var_model") or retrieve_hass_conf.get(
+        "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+    )
+    # Calibration needs a long window (typical averages month/day-of-week
+    # recurrences); honour an explicit larger request but never go below the floor.
+    requested_days = int(passed_data.get("historic_days_to_retrieve") or 0)
+    days_to_retrieve = max(requested_days, CALIBRATION_DEFAULT_DAYS)
+
+    days_list = utils.get_days_list(days_to_retrieve)
+    if not await rh.get_data(days_list, [var_model]):
+        logger.error("Forecast calibration: failed to retrieve load history from Home Assistant")
+        return None
+    rh.prepare_data(
+        var_model,
+        load_negative=retrieve_hass_conf.get("load_negative", False),
+        set_zero_min=retrieve_hass_conf.get("set_zero_min", True),
+        var_replace_zero=retrieve_hass_conf.get("sensor_replace_zero", []),
+        var_interp=retrieve_hass_conf.get("sensor_linear_interp", []),
+        skip_renaming=True,
+    )
+    load = rh.df_final[var_model].copy()
+    # The mlforecaster row is fit fresh in memory with a fast, stable
+    # LinearRegression (not the user's configured/saved model), so the report is
+    # quick and reproducible and never depends on a slow estimator (e.g. SVR/MLP).
+    result = await compute_forecast_calibration(
+        load,
+        rh.freq,
+        input_data_dict["emhass_conf"],
+        logger,
+        sklearn_model="LinearRegression",
+        var_model=var_model,
+    )
+    if result.get("error"):
+        return None
+    return result
 
 
 async def forecast_model_predict(
@@ -2910,7 +2974,8 @@ async def main():
     This function may take several arguments as inputs. You can type `emhass --help` to see the list of options:
 
     - action: Set the desired action, options are: perfect-optim, dayahead-optim,
-      naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune
+      naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune,
+      forecast-calibration
 
     - config: Define path to the config.yaml file
 
@@ -2931,7 +2996,8 @@ async def main():
         "--action",
         type=str,
         help="Set the desired action, options are: perfect-optim, dayahead-optim,\
-        naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune",
+        naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune,\
+        forecast-calibration",
     )
     parser.add_argument(
         "--config", type=str, help="Define path to the config.json/defaults.json file"
@@ -3129,6 +3195,9 @@ async def main():
             input_data_dict, logger, debug=args.debug, mlf=mlf
         )
         opt_res = None
+    elif args.action == "forecast-calibration":
+        await forecast_calibration(input_data_dict, logger)
+        opt_res = None
     elif args.action == "regressor-model-fit":
         mlr = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
         opt_res = None
@@ -3149,7 +3218,7 @@ async def main():
     else:
         logger.error("The passed action argument is not valid")
         logger.error(
-            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, export-influxdb-to-csv or publish-data"
+            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, forecast-calibration, export-influxdb-to-csv or publish-data"
         )
         opt_res = None
     logger.info(opt_res)

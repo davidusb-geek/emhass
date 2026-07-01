@@ -21,6 +21,7 @@ import pandas as pd
 import plotly.express as px
 import pytz
 import yaml
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
@@ -2365,6 +2366,74 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     return injection_dict
 
 
+def compute_forecast_metrics(
+    actual: pd.Series | np.ndarray,
+    predicted: pd.Series | np.ndarray,
+    logger: logging.Logger | None = None,
+) -> dict:
+    """
+    Compute goodness-of-fit metrics for a forecast against realised values.
+
+    Only rows where both the actual and the predicted value are present are
+    used; any leading warm-up NaNs are excluded. The guards mirror the degenerate
+    cases the metrics can hit: r2_score requires at least 2 samples, MAE/RMSE
+    require at least 1, and MAPE excludes zero actuals to avoid division by zero.
+
+    :param actual: The realised values.
+    :type actual: pd.Series | np.ndarray
+    :param predicted: The forecasted values (same index/length as ``actual``).
+    :type predicted: pd.Series | np.ndarray
+    :param logger: Optional logger for the degenerate-case warning.
+    :type logger: logging.Logger, optional
+    :return: A dict with keys mae, rmse, r2, mape, n_samples.
+    :rtype: dict
+    """
+    actual_values = pd.Series(np.asarray(actual, dtype=float))
+    predicted_values = pd.Series(np.asarray(predicted, dtype=float))
+    valid_mask = predicted_values.notna() & actual_values.notna()
+    n_valid_samples = int(valid_mask.sum())
+    actual_valid = actual_values[valid_mask]
+    predicted_valid = predicted_values[valid_mask]
+
+    # Guard against degenerate cases (all-NaN predictions or single sample).
+    # r2_score requires at least 2 samples; MAE/RMSE require at least 1.
+    if n_valid_samples == 0:
+        if logger is not None:
+            logger.warning("Forecast metrics: no valid predictions - metrics set to NaN")
+        return {
+            "mae": float("nan"),
+            "rmse": float("nan"),
+            "r2": float("nan"),
+            "mape": float("nan"),
+            "n_samples": 0,
+        }
+    mae = float(mean_absolute_error(actual_valid, predicted_valid))
+    rmse = float(np.sqrt(mean_squared_error(actual_valid, predicted_valid)))
+    # r2_score is undefined for a single sample (variance == 0)
+    r2 = float(r2_score(actual_valid, predicted_valid)) if n_valid_samples > 1 else float("nan")
+    # MAPE: exclude zero actuals to avoid division by zero
+    nonzero_mask = actual_valid != 0
+    if nonzero_mask.sum() > 0:
+        mape = float(
+            np.mean(
+                np.abs(
+                    (actual_valid[nonzero_mask] - predicted_valid[nonzero_mask])
+                    / actual_valid[nonzero_mask]
+                )
+            )
+            * 100
+        )
+    else:
+        mape = float("nan")
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+        "mape": mape,
+        "n_samples": n_valid_samples,
+    }
+
+
 def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLForecaster) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF fit case.
@@ -2393,6 +2462,39 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
         + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
+    return injection_dict
+
+
+def get_injection_dict_forecast_calibration(result: dict) -> dict:
+    """
+    Build the webui graph + metrics table for the forecast-calibration action.
+
+    :param result: The dict returned by ``compute_forecast_calibration``
+        (keys: ``table``, ``plot``, ``val_window``, ``caveats``).
+    :type result: dict
+    :return: A dictionary containing the graph and table in html format
+    :rtype: dict
+    """
+    plot_df = result["plot"]
+    fig = plot_df.plot()
+    fig.layout.template = "presentation"
+    fig.update_yaxes(title_text="Load")
+    fig.update_xaxes(title_text="Time")
+    figure_0 = fig.to_html(full_html=False, default_width="75%")
+    table1 = result["table"].to_html(classes="mystyle", index=False)
+    val_start, val_end = result["val_window"]
+    injection_dict = {}
+    injection_dict["title"] = "<h2>Load forecast calibration</h2>"
+    injection_dict["subsubtitle0"] = (
+        "<h4>Actual vs forecast methods over the validation window "
+        + f"({val_start} to {val_end})</h4>"
+    )
+    injection_dict["figure_0"] = figure_0
+    injection_dict["subsubtitle1"] = (
+        "<h4>Accuracy metrics by method and split (train / test / val)</h4>"
+    )
+    injection_dict["table1"] = table1
+    injection_dict["subsubtitle2"] = "<h5>" + result["caveats"] + "</h5>"
     return injection_dict
 
 
