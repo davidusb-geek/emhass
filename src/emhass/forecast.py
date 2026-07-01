@@ -937,6 +937,10 @@ class Forecast:
             and (
                 isinstance(cfg.get("thermal_config"), dict)
                 or isinstance(cfg.get("thermal_battery"), dict)
+                # heat_topology-compiled loads carry a thermal_source block;
+                # their heating/cooling-curve COP and solar-gain physics need
+                # ghi/temp_air just the same.
+                or isinstance(cfg.get("thermal_source"), dict)
             )
             for cfg in self.optim_conf.get("def_load_config", []) or []
         )

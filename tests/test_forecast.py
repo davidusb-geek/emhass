@@ -1548,6 +1548,31 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["yhat"].iloc[0], 1)
         self.assertEqual(data["yhat"].iloc[-1], 48)
 
+    async def test_get_weather_forecast_list_keeps_ghi_for_heat_topology(self):
+        """A heat_topology-compiled load carries a `thermal_source` block (not
+        thermal_config/thermal_battery) and its heating-curve COP + solar-gain
+        physics need ghi/temp_air just the same - without the augmentation the
+        optimizer silently falls back to a constant 15 C outdoor temperature."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=False)
+        fcst.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "heating_curve": {"slope": 0.7, "offset": 38.0},
+                    "carnot_efficiency": 0.46,
+                }
+            }
+        ]
+        fake = self._fake_open_meteo_frame(fcst)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(return_value=fake),
+        ) as m:
+            data = await fcst.get_weather_forecast(method="list")
+        m.assert_awaited_once()
+        self.assertIn("ghi", data.columns)
+        self.assertIn("temp_air", data.columns)
+
     async def test_get_weather_forecast_list_open_meteo_failure_is_soft(self):
         """#997 fail-soft: an open-meteo error leaves the plain list frame and warns."""
         fcst = await self._build_list_fcst_pinned(with_thermal=True)
