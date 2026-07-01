@@ -232,9 +232,9 @@ See the [machine learning forecaster](mlforecaster.md) section for more details.
 
 ### Load forecast calibration
 
-With three load forecast methods available (`naive`, `typical` and `mlforecaster`) it is not always obvious which one tracks your own consumption best. The `forecast-calibration` action produces an on-demand accuracy report to help you pick. It is reporting only: it does not change any optimization and it saves no model or file.
+With three load forecast methods available (`naive`, `typical` and `mlforecaster`), it is not always obvious which one tracks your own consumption best. The `forecast-calibration` action produces an on-demand accuracy report to help you pick. It is reporting only: it does not change any optimization and it saves no model or file.
 
-The action retrieves your recent load history (always at least about 90 days, regardless of the `historic_days_to_retrieve` setting, since the typical method needs a long window to be meaningful), splits it chronologically into three windows (`train` / `test` / `val`) and scores every method with a day-ahead walk-forward. To predict a given day a method may only see history strictly before that day, so there is no look-ahead. The report is shown in the add-on web UI as a graph (actual load versus each method over the validation window) and a metrics table (MAE, RMSE, R2, MAPE, a persistence skill score and the sample count `n`, per method and per split).
+The action retrieves your recent load history (always at least about 90 days, regardless of the `historic_days_to_retrieve` setting, since the typical method needs a long window to be meaningful), splits it chronologically into three windows (`train` / `test` / `val`) and scores every method with a day-ahead walk-forward. To predict a given day, a method may only see history strictly before that day, so there is no look-ahead. The report is shown in the add-on web UI as a graph (actual load versus each method over the validation window) and a metrics table (MAE, RMSE, R2, MAPE, a persistence skill score and the sample count `n`, per method and per split).
 
 Run it with an empty body:
 
