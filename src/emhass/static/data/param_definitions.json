@@ -22,6 +22,20 @@
       "default_value": "sensor.p_pv_forecast",
       "unit": "none"
     },
+    "sensor_power_battery": {
+      "friendly_name": "Sensor signed battery power",
+      "Description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’.",
+      "input": "string",
+      "default_value": "sensor.power_battery",
+      "unit": "none"
+    },
+    "sensor_battery_state_of_charge": {
+      "friendly_name": "Sensor battery state of charge",
+      "Description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’.",
+      "input": "string",
+      "default_value": "sensor.battery_state_of_charge",
+      "unit": "none"
+    },
     "sensor_power_load_no_var_loads": {
       "friendly_name": "Sensor power loads with no variable loads",
       "Description": "The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be subtracted from this sensor in HASS. For example: ‘sensor.power_load_no_var_loads’",
@@ -422,6 +436,28 @@
     "adjusted_pv_model_max_age": {
       "friendly_name": "Adjusted PV model maximum age",
       "Description": "Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
+      "input": "int",
+      "default_value": 24,
+      "unit": "h"
+    },
+    "set_use_battery_identification": {
+      "friendly_name": "Use battery self-identification",
+      "Description": "Opt-in, default off. When enabled, EMHASS learns the battery usable capacity and round-trip efficiency from Home Assistant history (signed battery power and measured state of charge) instead of relying only on the hand-entered values. It requires set_use_battery to be true and the sensor_power_battery and sensor_battery_state_of_charge sensors. In v1 this is advisory only: it never changes the configured battery values used by the optimizer. Defaults to false.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "battery_identification_trust_tier": {
+      "friendly_name": "Battery identification trust tier",
+      "Description": "Controls what battery self-identification does with its estimate. 'observe' (default) writes the estimate to a JSON file and the log only. 'suggest' additionally publishes two read-only Home Assistant sensors (identified capacity and round-trip efficiency) and logs a recommendation. Neither tier changes the configured battery values used by the optimizer. Defaults to 'observe'.",
+      "input": "select",
+      "select_options": ["observe", "suggest"],
+      "default_value": "observe",
+      "unit": "none"
+    },
+    "battery_identification_model_max_age": {
+      "friendly_name": "Battery identification model maximum age",
+      "Description": "Maximum age in hours before the battery identification estimate is re-fitted from fresh Home Assistant history. If the saved result is older than this value, a new estimate is produced. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
       "input": "int",
       "default_value": 24,
       "unit": "h"
