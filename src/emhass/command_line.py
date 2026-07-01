@@ -3567,7 +3567,11 @@ async def _publish_from_saved_entities(
     opt_res_list = []
     opt_res_list_names = []
     for entity in entity_path_contents:
-        if entity == default_metadata_json:
+        # Skip the metadata file and any in-flight atomic-write temp file
+        # ("<name>.json.<pid>.<uuid>.tmp") left by retrieve_hass.post_data -
+        # publishing one derives a bogus entity_id and KeyErrors on the
+        # metadata lookup, aborting the whole publish.
+        if entity == default_metadata_json or entity.endswith(".tmp"):
             continue
         if publish_prefix == "all" or publish_prefix in entity:
             entity_data = await publish_json(entity, input_data_dict, entity_path, logger)
