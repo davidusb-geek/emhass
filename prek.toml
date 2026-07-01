@@ -30,4 +30,4 @@ name = "regenerate openapi.json from param_definitions"
 entry = "python scripts/generate_openapi.py"
 language = "system"
 pass_filenames = false
-files = '^(src/emhass/static/data/param_definitions\.json|scripts/generate_openapi\.py|docs/api/v1/last-run\.schema\.json|docs/api/healthz\.schema\.json)$'
+files = '^(src/emhass/static/data/param_definitions\.json|scripts/generate_openapi\.py|docs/api/v1/last-run\.schema\.json|docs/api/v1/plan\.schema\.json|docs/api/healthz\.schema\.json)$'

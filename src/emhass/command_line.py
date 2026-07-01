@@ -18,7 +18,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import last_run, utils
+from emhass import last_run, plan_store, utils
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -51,7 +51,7 @@ def _record_optim_snapshot(
             if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
             else "Unknown"
         )
-        last_run.record(
+        ts = last_run.record(
             input_data_dict["emhass_conf"]["data_path"],
             action=action,
             stage_times=input_data_dict["stage_times"],
@@ -60,6 +60,21 @@ def _record_optim_snapshot(
             duration_total_seconds=_time.monotonic() - t0_monotonic,
             schema_version=EMHASS_SCHEMA_VERSION,
         )
+        # Publish the structured plan ONLY for a successful (Optimal) run, reusing
+        # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
+        # /api/v1/last-run for that run. Only the timestamp is shared, not the
+        # verdict: a failed/infeasible run is still recorded by last_run (status
+        # error/infeasible) but must not surface on /api/v1/plan as status "ok" —
+        # the plan endpoint keeps serving the last VALID plan (or no-run). Gating on
+        # optim_status == "Optimal" mirrors last_run's own "ok" criterion, so the
+        # two endpoints stay consistent (plan published iff last-run is "ok").
+        if optim_status == "Optimal":
+            plan_store.record(
+                input_data_dict["emhass_conf"]["data_path"],
+                plan=plan_store.serialize(opt_res),
+                generated_at=ts,
+                schema_version=EMHASS_SCHEMA_VERSION,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
 
