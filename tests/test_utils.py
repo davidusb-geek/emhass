@@ -393,6 +393,76 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             "my_custom_deferrable_forecast_id",
         )
 
+    @patch("emhass.utils._get_now")
+    async def test_treat_runtimeparams_dict_forecast_holds_last_value(self, mock_now):
+        """Regression for issue #1003.
+
+        A dict forecast (load_cost_forecast / prod_price_forecast) must hold each
+        value until the next provided point (step semantics). A point defined
+        BEFORE the forecast horizon start must anchor the leading slots; it must
+        not be discarded so that the trailing back-fill paints those slots with
+        the NEXT value. Before the fix, reindex(method="nearest") dropped the
+        pre-horizon anchor and the bfill filled the leading slots with the next
+        value, so the load price before the first in-horizon point read 0 and the
+        production price before its first point read the later peak value.
+        """
+        params = await TestUtils.get_test_params()
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            orjson.dumps(params).decode("utf-8"), logger
+        )
+        time_zone = retrieve_hass_conf["time_zone"]
+
+        # Pin "now" to 09:00 local so the 30 min forecast grid starts there.
+        mock_local = pd.Timestamp("2026-06-26T09:00:00", tz=time_zone)
+        mock_now.return_value = mock_local.tz_convert(UTC)
+
+        def iso(hour, minute=0):
+            return pd.Timestamp(f"2026-06-26T{hour:02d}:{minute:02d}:00", tz=time_zone).isoformat()
+
+        horizon = 12  # 12 x 30 min = 09:00 .. 14:30
+        runtimeparams = {
+            "prediction_horizon": horizon,
+            # First point (08:00) is one hour before the horizon start (09:00).
+            "load_cost_forecast": {iso(8): 0.308, iso(11): 0.0, iso(14): 0.308},
+            "prod_price_forecast": {iso(8): 0.0, iso(13): 0.1, iso(21): 0.0},
+        }
+        set_type = "naive-mpc-optim"
+        params_out, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams,
+            orjson.dumps(params).decode("utf-8"),
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        passed = orjson.loads(params_out)["passed_data"]
+        load_cost = passed["load_cost_forecast"]
+        prod_price = passed["prod_price_forecast"]
+
+        self.assertEqual(len(load_cost), horizon)
+        self.assertEqual(len(prod_price), horizon)
+
+        # Leading slots hold the pre-horizon anchor (the bug back-filled the next
+        # value here: load_cost[0] -> 0.0 and prod_price[0] -> 0.1).
+        self.assertAlmostEqual(load_cost[0], 0.308)
+        self.assertAlmostEqual(prod_price[0], 0.0)
+
+        # Full step profile across the horizon.
+        # load_cost: 0.308 until 11:00 (idx 4), 0.0 until 14:00 (idx 10), then 0.308.
+        for idx in range(0, 4):
+            self.assertAlmostEqual(load_cost[idx], 0.308)
+        for idx in range(4, 10):
+            self.assertAlmostEqual(load_cost[idx], 0.0)
+        for idx in range(10, 12):
+            self.assertAlmostEqual(load_cost[idx], 0.308)
+        # prod_price: 0.0 until 13:00 (idx 8), then 0.1 to the end of the horizon.
+        for idx in range(0, 8):
+            self.assertAlmostEqual(prod_price[idx], 0.0)
+        for idx in range(8, 12):
+            self.assertAlmostEqual(prod_price[idx], 0.1)
+
     async def test_treat_runtimeparams_failed(self):
         # Test treatment of nan values
         params = await TestUtils.get_test_params()

@@ -55,6 +55,20 @@ The possible dictionary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
+#### Passing a forecast as timestamped values
+
+Instead of a plain list, any of these forecast keys can be passed as an object that maps ISO 8601 timestamps to values. EMHASS aggregates the points to the optimization time step and then holds each value until the next provided point (step interpolation), so you only need to supply a point where the value changes. A point whose timestamp falls before the start of the optimization window is used to anchor the first values of the horizon.
+
+```json
+{
+  "load_cost_forecast": {
+    "2024-01-01T00:00:00+01:00": 0.20,
+    "2024-01-01T06:00:00+01:00": 0.15,
+    "2024-01-01T18:00:00+01:00": 0.30
+  }
+}
+```
+
 ### Passing other data at runtime
 
 It is possible to also pass other data during runtime to automate energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`operating_hours_of_each_deferrable_load`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
