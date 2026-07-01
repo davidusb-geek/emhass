@@ -10,6 +10,7 @@ import pathlib
 import pickle
 import threading
 import time as _time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -952,7 +953,8 @@ async def identify_battery(
     except Exception as e:
         logger.warning(
             f"Battery identification failed unexpectedly ({type(e).__name__}: {e}); "
-            "keeping configured battery values."
+            "keeping configured battery values.",
+            exc_info=True,
         )
 
 
@@ -1038,7 +1040,11 @@ async def _identify_battery_impl(
         "battery_charge_efficiency": plant_conf.get("battery_charge_efficiency"),
         "battery_discharge_efficiency": plant_conf.get("battery_discharge_efficiency"),
     }
-    tmp_path = json_path.with_name(f"battery_identification.json.{os.getpid()}.tmp")
+    # Unique temp name (pid + uuid) so overlapping identify_battery calls in the
+    # same process never share a tmp file before the atomic os.replace.
+    tmp_path = json_path.with_name(
+        f"battery_identification.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     with open(tmp_path, "w", encoding="utf-8") as outp:
         json.dump(payload, outp, indent=2)
     os.replace(tmp_path, json_path)
