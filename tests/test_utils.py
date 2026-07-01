@@ -3227,6 +3227,28 @@ class TestResolveMinTemperatures(unittest.TestCase):
         out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
         self.assertEqual(out, [40.0, 35.0, 40.0, 50.0, 60.0])
 
+    def test_null_static_entry_defers_to_curve(self):
+        """A None static entry means "no static floor at this step" - the curve
+        floor must survive there, not be poisoned to None by a NaN-propagating
+        max. Regression: np.maximum(nan, curve) is nan, which the nan->None
+        mapping then turned into "no floor at all" for exactly the slots the
+        user marked curve-only."""
+        cfg = {
+            "min_temperatures": [20.0, None, 20.0, None, 60.0],
+            "min_temperature_curve": {
+                "slope": 1.0,
+                "offset": 35.0,
+                "min_supply": 30.0,
+                "max_supply": 55.0,
+            },
+        }
+        # curve at outdoor = -5,0,5,15,25 -> [40, 35, 30, 30, 30]
+        # static                          -> [20, None, 20, None, 60]
+        # expected: None defers to curve  -> [40, 35, 30, 30, 60]
+        outdoor = np.array([-5.0, 0.0, 5.0, 15.0, 25.0])
+        out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
+        self.assertEqual(out, [40.0, 35.0, 30.0, 30.0, 60.0])
+
     def test_floor_of_30_via_curve_min_supply(self):
         """User-friendly pattern: curve with min_supply=30 keeps buffer at 30 even in summer."""
         cfg = {
