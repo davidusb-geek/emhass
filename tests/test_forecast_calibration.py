@@ -203,6 +203,22 @@ class TestForecastCalibration(unittest.TestCase):
         # val window is 14 days
         self.assertEqual(len(plot), fc.CALIBRATION_VAL_DAYS * STEPS_PER_DAY)
 
+    def test_custom_val_days_change_report_window(self):
+        """A non-default val_days must resize the report's val window, proving the
+        runtime knob reaches the report rather than being ignored."""
+        load = build_load(days=80)
+        custom_val_days = 21
+        self.assertNotEqual(custom_val_days, fc.CALIBRATION_VAL_DAYS)
+        res = run(
+            fc.compute_forecast_calibration(
+                load, FREQ, EMHASS_CONF, logger, test_days=10, val_days=custom_val_days
+            )
+        )
+        self.assertNotIn("error", res)
+        self.assertEqual(len(res["plot"]), custom_val_days * STEPS_PER_DAY)
+        start, end = res["val_window"]
+        self.assertEqual((pd.Timestamp(end) - pd.Timestamp(start)).days, custom_val_days - 1)
+
 
 if __name__ == "__main__":
     unittest.main()
