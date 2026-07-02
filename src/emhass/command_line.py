@@ -22,6 +22,8 @@ from emhass import last_run, plan_store, utils
 from emhass.forecast import Forecast
 from emhass.forecast_calibration import (
     CALIBRATION_DEFAULT_DAYS,
+    CALIBRATION_TEST_DAYS,
+    CALIBRATION_VAL_DAYS,
     compute_forecast_calibration,
 )
 from emhass.machine_learning_forecaster import MLForecaster
@@ -1851,10 +1853,22 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
     var_model = passed_data.get("var_model") or retrieve_hass_conf.get(
         "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
     )
-    # Calibration needs a long window (typical averages month/day-of-week
-    # recurrences); honour an explicit larger request but never go below the floor.
-    requested_days = int(passed_data.get("historic_days_to_retrieve") or 0)
-    days_to_retrieve = max(requested_days, CALIBRATION_DEFAULT_DAYS)
+
+    # The calibration day windows are runtime-overridable, report-only knobs (never
+    # read from the config GUI). Each falls back to its module default, so an empty
+    # request reproduces the standard 90 / 14 / 14 day report. A non-positive value
+    # is treated as "not set" and falls back to the default; an over-short retrieval
+    # window is caught by compute_forecast_calibration's minimum-history gate, which
+    # returns a clean error rather than crashing.
+    def _positive_or_default(key: str, default: int) -> int:
+        value = int(passed_data.get(key) or 0)
+        return value if value > 0 else default
+
+    days_to_retrieve = _positive_or_default(
+        "calibration_days_to_retrieve", CALIBRATION_DEFAULT_DAYS
+    )
+    test_days = _positive_or_default("calibration_test_days", CALIBRATION_TEST_DAYS)
+    val_days = _positive_or_default("calibration_val_days", CALIBRATION_VAL_DAYS)
 
     days_list = utils.get_days_list(days_to_retrieve)
     if not await rh.get_data(days_list, [var_model]):
@@ -1878,6 +1892,8 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
         input_data_dict["emhass_conf"],
         logger,
         sklearn_model="LinearRegression",
+        test_days=test_days,
+        val_days=val_days,
         var_model=var_model,
     )
     if result.get("error"):

@@ -234,12 +234,24 @@ See the [machine learning forecaster](mlforecaster.md) section for more details.
 
 With three load forecast methods available (`naive`, `typical` and `mlforecaster`), it is not always obvious which one tracks your own consumption best. The `forecast-calibration` action produces an on-demand accuracy report to help you pick. It is reporting only: it does not change any optimization and it saves no model or file.
 
-The action retrieves your recent load history (always at least about 90 days, regardless of the `historic_days_to_retrieve` setting, since the typical method needs a long window to be meaningful), splits it chronologically into three windows (`train` / `test` / `val`) and scores every method with a day-ahead walk-forward. To predict a given day, a method may only see history strictly before that day, so there is no look-ahead. The report is shown in the add-on web UI as a graph (actual load versus each method over the validation window) and a metrics table (MAE, RMSE, R2, MAPE, a persistence skill score and the sample count `n`, per method and per split).
+The action retrieves your recent load history (90 days by default, since the typical method needs a long window to be meaningful), splits it chronologically into three windows (`train` / `test` / `val`) and scores every method with a day-ahead walk-forward. To predict a given day, a method may only see history strictly before that day, so there is no look-ahead. The report is shown in the add-on web UI as a graph (actual load versus each method over the validation window) and a metrics table (MAE, RMSE, R2, MAPE, a persistence skill score and the sample count `n`, per method and per split).
 
-Run it with an empty body:
+You can launch it from the add-on web UI with the **Load forecast calibration** button on the advanced page, or over the REST API with an empty body:
 
 ```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-calibration
+```
+
+The three day windows are optional runtime parameters, so you can trade report length against how far back it looks without editing any config. They default to the values above when omitted:
+
+- `calibration_days_to_retrieve`: how much history to pull (default `90`). Lower it for a quicker run or raise it to cover more of the year. If it is too short for the split below, the action returns a clear "not enough history" message instead of a report.
+- `calibration_test_days`: size of the held-out `test` window in days (default `14`).
+- `calibration_val_days`: size of the held-out `val` window in days (default `14`).
+
+```bash
+curl -i -H 'Content-Type:application/json' -X POST \
+  -d '{"calibration_days_to_retrieve": 120, "calibration_test_days": 21, "calibration_val_days": 21}' \
+  http://localhost:5000/action/forecast-calibration
 ```
 
 A few things to keep in mind when reading the report:

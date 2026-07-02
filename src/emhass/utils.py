@@ -2082,6 +2082,23 @@ async def treat_runtimeparams(
         if "solar_forecast_kwp" in runtimeparams.keys():
             params["retrieve_hass_conf"]["solar_forecast_kwp"] = runtimeparams["solar_forecast_kwp"]
         # Treat custom entities id's and friendly names for variables
+        # Runtime-only day windows for the forecast-calibration report. These are
+        # report knobs (not config settings), so they live in passed_data next to
+        # the custom_* ids and never touch retrieve_hass_conf / optim_conf. Each is
+        # optional; the calibration action falls back to its default when unset.
+        for calibration_key in (
+            "calibration_days_to_retrieve",
+            "calibration_test_days",
+            "calibration_val_days",
+        ):
+            if calibration_key in runtimeparams.keys():
+                try:
+                    params["passed_data"][calibration_key] = int(runtimeparams[calibration_key])
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Ignoring non-integer runtime value for {calibration_key}: "
+                        f"{runtimeparams[calibration_key]}"
+                    )
         if "custom_pv_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_pv_forecast_id"] = runtimeparams["custom_pv_forecast_id"]
         if "custom_load_forecast_id" in runtimeparams.keys():
