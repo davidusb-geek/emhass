@@ -213,7 +213,7 @@ async def index():
             content = await fid.read()
             try:
                 injection_dict = pickle.loads(content)
-            except (EOFError, pickle.UnpicklingError):
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
                 app.logger.warning(
                     "The data container file is empty or incomplete (possible write race condition). "
                     "Please launch an optimization task."
@@ -292,7 +292,7 @@ async def configuration():
             content = await fid.read()
             try:
                 _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
-            except (EOFError, pickle.UnpicklingError):
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
                 params = {}
     else:
         params = {}
@@ -314,7 +314,7 @@ async def template_action():
             content = await fid.read()
             try:
                 injection_dict = pickle.loads(content)
-            except (EOFError, pickle.UnpicklingError):
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
                 app.logger.warning(
                     "The data container file is empty or incomplete (possible write race condition). "
                     "Please launch an optimization task."
@@ -492,7 +492,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
             content = await fid.read()
             try:
                 _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
-            except (EOFError, pickle.UnpicklingError):
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
                 logger.error(
                     "params.pkl is corrupted or truncated (race condition); cannot proceed"
                 )
@@ -948,7 +948,7 @@ async def _load_injection_dict() -> dict | None:
             content = await fid.read()
             try:
                 return pickle.loads(content)
-            except (EOFError, pickle.UnpicklingError):
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
                 # File truncated due to write race condition; treat as not yet available
                 return None
     else:
