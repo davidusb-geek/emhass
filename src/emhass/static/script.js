@@ -25,6 +25,7 @@ async function loadButtons(page) {
         "forecast-model-fit",
         "forecast-model-predict",
         "forecast-model-tune",
+        "forecast-calibration",
         "regressor-model-fit",
         "regressor-model-predict",
         "export-influxdb-to-csv",

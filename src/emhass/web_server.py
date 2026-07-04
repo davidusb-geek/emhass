@@ -26,6 +26,7 @@ from emhass.command_line import (
     continual_publish,
     dayahead_forecast_optim,
     export_influxdb_to_csv,
+    forecast_calibration,
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
@@ -44,6 +45,7 @@ from emhass.utils import (
     build_params,
     build_secrets,
     get_injection_dict,
+    get_injection_dict_forecast_calibration,
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
     get_keys_to_mask,
@@ -616,6 +618,18 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return "EMHASS >> Action forecast-model-tune executed... \n", 200
+
+    # forecast-calibration
+    if action_name == "forecast-calibration":
+        action_str = " >> Performing a load forecast calibration..."
+        logger.info(action_str)
+        result = await forecast_calibration(input_data_dict, logger)
+        if result is None:
+            return await grab_log(action_str), 400
+
+        injection_dict = get_injection_dict_forecast_calibration(result)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-calibration executed... \n", 200
 
     # regressor-model-fit
     if action_name == "regressor-model-fit":

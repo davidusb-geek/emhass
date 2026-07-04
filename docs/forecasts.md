@@ -230,6 +230,37 @@ The hyperparameter tuning using Bayesian optimization improves the bare KNN regr
 
 See the [machine learning forecaster](mlforecaster.md) section for more details.
 
+### Load forecast calibration
+
+With three load forecast methods available (`naive`, `typical` and `mlforecaster`), it is not always obvious which one tracks your own consumption best. The `forecast-calibration` action produces an on-demand accuracy report to help you pick. It is reporting only: it does not change any optimization and it saves no model or file.
+
+The action retrieves your recent load history (90 days by default, since the typical method needs a long window to be meaningful), splits it chronologically into three windows (`train` / `test` / `val`) and scores every method with a day-ahead walk-forward. To predict a given day, a method may only see history strictly before that day, so there is no look-ahead. The report is shown in the add-on web UI as a graph (actual load versus each method over the validation window) and a metrics table (MAE, RMSE, R2, MAPE, a persistence skill score and the sample count `n`, per method and per split).
+
+You can launch it from the add-on web UI with the **Load forecast calibration** button on the advanced page, or over the REST API with an empty body:
+
+```bash
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-calibration
+```
+
+The three day windows are optional runtime parameters, so you can trade report length against how far back it looks without editing any config. They default to the values above when omitted:
+
+- `calibration_days_to_retrieve`: how much history to pull (default `90`). Lower it for a quicker run or raise it to cover more of the year. If it is too short for the split below, the action returns a clear "not enough history" message instead of a report.
+- `calibration_test_days`: size of the held-out `test` window in days (default `14`).
+- `calibration_val_days`: size of the held-out `val` window in days (default `14`).
+
+```bash
+curl -i -H 'Content-Type:application/json' -X POST \
+  -d '{"calibration_days_to_retrieve": 120, "calibration_test_days": 21, "calibration_val_days": 21}' \
+  http://localhost:5000/action/forecast-calibration
+```
+
+A few things to keep in mind when reading the report:
+
+- The `naive` and `typical` methods have no fitting step, so their `train` column is reported as `N/A`. The `train` column is an in-sample score for `mlforecaster` only.
+- The skill score is `1 - method_MAE / naive_MAE`, computed over the days a method and `naive` both cover so the comparison is fair even when a method covers fewer days. `naive` is the baseline at `0` and a positive value means the method beats naive persistence.
+- `mlforecaster` is fitted fresh in memory on the `train` window for this report using a fast LinearRegression baseline; it never reads a model you previously trained with `forecast-model-fit`, so the report works even if you have never run a fit (and it will not stall on a slow configured estimator).
+- `typical` here is derived from the retrieved history window rather than the long-term typical profile used in production, and it needs prior same-month, same-weekday history, so on a short window it may cover fewer days than the other methods (compare the `n` columns).
+
 ## Load cost forecast
 
 The default method for load cost forecast is defined for a peak and non-peak hours contract type. This is obtained using `method=hp_hc_periods`.
