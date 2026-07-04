@@ -1338,6 +1338,96 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
         self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
+    def test_battery_first_priority_dayahead_default_soc_final_is_feasible(self):
+        """Issue #1002: ``set_battery_first_priority`` with dayahead-optim used to
+        be structurally infeasible whenever ``soc_init`` was above ``SOC_min``
+        and no explicit ``soc_final`` was passed. The default ``soc_final =
+        soc_init`` collided with the "import only when SoC <= SOC_min" gate:
+        the solver was forced to end at the initial (high) SoC while never
+        being allowed to recharge through import. The fix defaults
+        ``soc_final`` to ``SOC_min`` under the flag, letting the battery drain
+        naturally so the plan is feasible.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 1000.0
+        df["unit_load_cost"] = 0.28
+        df["unit_prod_price"] = 0.08
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "set_battery_first_priority": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 7700,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        # soc_init=1.0, soc_final=None. Before #1002 the default soc_final=
+        # soc_init=1.0 made this infeasible. It must now solve to Optimal.
+        self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=1.0)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_dayahead_forecast_optim_honours_soc_final(self):
+        """Issue #1002: ``perform_dayahead_forecast_optim`` now accepts
+        ``soc_final`` and passes it through to ``perform_optimization``.
+        Setting an explicit ``soc_final`` different from ``soc_init`` must
+        change the final SoC in the resulting plan, proving the plumbing.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 500.0
+        df["unit_load_cost"] = 0.28
+        df["unit_prod_price"] = 0.08
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": False,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        res_hi = self.opt.perform_dayahead_forecast_optim(
+            df, pv, load, soc_init=0.9, soc_final=0.9
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        self.opt = self.create_optimization()
+        res_lo = self.opt.perform_dayahead_forecast_optim(
+            df, pv, load, soc_init=0.9, soc_final=0.1
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # The lower target must end at a strictly lower SoC — proving the
+        # runtime soc_final actually reached the constraint.
+        self.assertLess(res_lo["SOC_opt"].iloc[-1], res_hi["SOC_opt"].iloc[-1] - 0.05)
+
     def test_sequence_load_runs_with_zero_operating_hours(self):
         """Issue #887: a sequence (list-valued power) deferrable load runs for
         the length of its sequence and ignores operating_hours, which is
