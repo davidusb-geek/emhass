@@ -393,6 +393,58 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             "my_custom_deferrable_forecast_id",
         )
 
+    async def test_treat_runtimeparams_forecast_calibration_day_windows(self):
+        """The forecast-calibration day windows are runtime-overridable passed_data
+        keys: valid values land as ints, a non-integer is dropped (not fatal), and
+        omitting them leaves them absent so the action uses its defaults."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        runtimeparams = orjson.loads(self.runtimeparams_json)
+        runtimeparams.update(
+            {
+                "calibration_days_to_retrieve": "120",  # string int -> cast
+                "calibration_test_days": 21,
+                "calibration_val_days": "not-a-number",  # invalid -> ignored
+            }
+        )
+        (params, _, _, _) = await utils.treat_runtimeparams(
+            runtimeparams,
+            self.params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "forecast-calibration",
+            logger,
+            emhass_conf,
+        )
+        passed = orjson.loads(params)["passed_data"]
+        self.assertEqual(passed["calibration_days_to_retrieve"], 120)
+        self.assertIsInstance(passed["calibration_days_to_retrieve"], int)
+        self.assertEqual(passed["calibration_test_days"], 21)
+        # invalid value is skipped, never raised, and the config GUI is untouched
+        self.assertNotIn("calibration_val_days", passed)
+
+    async def test_treat_runtimeparams_forecast_calibration_defaults_absent(self):
+        """With no calibration keys passed, none appear in passed_data, so the
+        action falls back to its 90 / 14 / 14 defaults (true no-op)."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        (params, _, _, _) = await utils.treat_runtimeparams(
+            orjson.loads(self.runtimeparams_json),
+            self.params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "forecast-calibration",
+            logger,
+            emhass_conf,
+        )
+        passed = orjson.loads(params)["passed_data"]
+        for key in (
+            "calibration_days_to_retrieve",
+            "calibration_test_days",
+            "calibration_val_days",
+        ):
+            self.assertNotIn(key, passed)
+
     @patch("emhass.utils._get_now")
     async def test_treat_runtimeparams_dict_forecast_holds_last_value(self, mock_now):
         """Regression for issue #1003.

@@ -10,6 +10,8 @@ This API provides three main methods:
 
 - tune: to optimize the model's hyperparameters using Bayesian optimization. This method is exposed with the `forecast-model-tune` endpoint.
 
+To measure how this machine learning forecaster compares against the `naive` and `typical` load forecast methods on your own history, see the [load forecast calibration](forecasts.md) report.
+
 ## A basic model fit
 
 To train a model use the `forecast-model-fit` end point. 
