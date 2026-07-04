@@ -3763,7 +3763,16 @@ class Optimization:
                 else:
                     soc_init = self.plant_conf["battery_target_state_of_charge"]
             if soc_final is None:
-                if soc_init is not None:
+                # With set_battery_first_priority enabled, defaulting
+                # soc_final = soc_init collides with the "import only when
+                # SoC <= SOC_min" gate whenever soc_init > SOC_min: the
+                # solver is forced to end at the initial (high) SoC without
+                # ever being allowed to recharge through import, which is
+                # structurally infeasible (#1002). Fall back to SOC_min so
+                # the battery is free to drain naturally under the flag.
+                if self.optim_conf.get("set_battery_first_priority", False):
+                    soc_final = self.plant_conf["battery_minimum_state_of_charge"]
+                elif soc_init is not None:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
@@ -4872,6 +4881,7 @@ class Optimization:
         p_pv: pd.Series,
         p_load: pd.Series,
         soc_init: float | None = None,
+        soc_final: float | None = None,
         stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
@@ -4886,6 +4896,18 @@ class Optimization:
         :param p_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type p_load: pandas.DataFrame
+        :param soc_init: Optional initial battery SOC for the optimization. \
+            When ``None`` (the default), falls back to ``soc_final`` if set, \
+            otherwise to ``battery_target_state_of_charge`` from the plant config.
+        :type soc_init: float, optional
+        :param soc_final: Optional final battery SOC for the optimization. \
+            When ``None`` (the default), falls back to ``soc_init`` if set, \
+            otherwise to ``battery_target_state_of_charge``. Passing an explicit \
+            ``soc_final`` distinct from ``soc_init`` is required to plan a \
+            net battery charge / discharge across the horizon — notably when \
+            ``set_battery_first_priority`` is enabled and the horizon starts \
+            at a high SOC.
+        :type soc_final: float, optional
         :param stage_times: Optional dict to record nested sub-stage timings
             (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
         :type stage_times: dict, optional
@@ -4893,7 +4915,9 @@ class Optimization:
         :rtype: pandas.DataFrame
 
         """
-        self.logger.info(f"Perform optimization for the day-ahead with soc_init: {soc_init}")
+        self.logger.info(
+            f"Perform optimization for the day-ahead with soc_init: {soc_init}, soc_final: {soc_final}"
+        )
 
         # Extract cost arrays (ensure they are flat numpy arrays)
         unit_load_cost = df_input_data[self.var_load_cost].values
@@ -4908,6 +4932,7 @@ class Optimization:
             unit_load_cost,
             unit_prod_price,
             soc_init=soc_init,
+            soc_final=soc_final,
             stage_times=stage_times,
         )
         return self.opt_res
