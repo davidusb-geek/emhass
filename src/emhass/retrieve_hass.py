@@ -1730,6 +1730,56 @@ class RetrieveHass:
         self.logger.debug(f"Completed post_data for {entity_id}")
         return mock_response, data
 
+    async def post_scalar_sensor(
+        self,
+        entity_id: str,
+        state: float | str,
+        attributes: dict,
+    ) -> bool:
+        """
+        Publish a single read-only scalar sensor with arbitrary attributes.
+
+        A lightweight sibling of :meth:`post_data` for advisory values that are
+        a single number plus a small metadata dict (confidence interval, sample
+        count, last-fit time), rather than a forecast horizon. Reuses the same
+        URL, auth headers, and persistent session, and honours ``get_data_from_file``
+        so tests and file-mode runs never hit the network.
+
+        :param entity_id: Full sensor entity_id (e.g. ``sensor.battery_identified_capacity``).
+        :param state: The scalar state value to publish.
+        :param attributes: Attribute dict to attach (friendly_name, unit, CI, ...).
+        :return: True if the post succeeded (or was skipped in file mode), else False.
+        """
+        if self.hass_url == hass_url:  # supervisor API
+            url = self.hass_url + "/states/" + entity_id
+        else:  # Home Assistant Core API
+            url = self.hass_url + "api/states/" + entity_id
+        headers = {
+            "Authorization": header_auth + " " + self.long_lived_token,
+            "content-type": header_accept,
+        }
+        data = {"state": state, "attributes": attributes}
+        if self.get_data_from_file:
+            self.logger.debug(f"Skipping scalar POST for {entity_id} (get_data_from_file)")
+            return True
+        try:
+            session = await self._get_session()
+            async with session.post(
+                url,
+                headers=headers,
+                data=orjson.dumps(data).decode("utf-8"),
+                ssl=self.ssl_verify,
+            ) as response:
+                await response.read()
+                if response.ok:
+                    self.logger.info(f"Successfully posted to {entity_id} = {state}")
+                    return True
+                self.logger.warning(f"Failed to post {entity_id}. Status code: {response.status}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Failed to post data to {entity_id}: {e}")
+            return False
+
     def _convert_statistics_to_dataframe(
         self, stats_data: dict[str, Any], var_list: list[str]
     ) -> pd.DataFrame:

@@ -21,6 +21,8 @@
   "weight_battery_charge": 0.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
   "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
+  "sensor_power_battery": "sensor.power_battery",
+  "sensor_battery_state_of_charge": "sensor.battery_state_of_charge",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
   "sensor_replace_zero": ["sensor.power_photovoltaics", "sensor.p_pv_forecast"],
   "sensor_linear_interp": [
@@ -98,6 +100,9 @@
   "adjusted_pv_regression_model": "LassoRegression",
   "adjusted_pv_solar_elevation_threshold": 10,
   "adjusted_pv_model_max_age": 24,
+  "set_use_battery_identification": false,
+  "battery_identification_trust_tier": "observe",
+  "battery_identification_model_max_age": 24,
   "pv_module_model": [
     "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
   ],
