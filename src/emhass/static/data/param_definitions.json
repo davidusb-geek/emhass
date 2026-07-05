@@ -642,7 +642,7 @@
     },
     "set_battery_first_priority": {
       "friendly_name": "Drain battery before grid import",
-      "Description": "Set this to true to forbid importing from the grid while the battery is still above its minimum SoC, so stored energy is used before any import. Useful on a flat (non time-of-use) tariff. Note: this can make the problem infeasible in a timestep where the load minus PV exceeds the battery maximum discharge power.",
+      "Description": "Set this to true to prefer draining stored battery energy before importing from the grid, so the battery is used up before any import while it is still above its minimum SoC. Useful on a flat (non time-of-use) tariff. This is a soft penalty, not a hard constraint: importing while the battery is charged is heavily penalized so drain-first wins on a flat tariff, but the optimizer can still import when that is the only feasible option, so it will not make the problem infeasible.",
       "input": "boolean",
       "default_value": false,
       "unit": "none"
