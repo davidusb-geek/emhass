@@ -1317,12 +1317,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Ample discharge headroom (load << discharge max), so the #834 "load
         # exceeds discharge power" edge does NOT apply here: the only reason for
         # infeasibility on master is the recharge-to-target deadlock.
+        soc_min = 0.1
         self.plant_conf.update(
             {
                 "battery_nominal_energy_capacity": 7700,
                 "battery_discharge_power_max": 20000,
                 "battery_charge_power_max": 20000,
-                "battery_minimum_state_of_charge": 0.1,
+                "battery_minimum_state_of_charge": soc_min,
                 "battery_maximum_state_of_charge": 1.0,
                 "battery_target_state_of_charge": 0.6,
                 "battery_discharge_efficiency": 1.0,
@@ -1343,8 +1344,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
         # The battery still drains before it imports: no PV means the only way to
         # end at least at the terminal target is to import late, so the recharge
-        # import lands after the battery has been run down.
-        drained = res["SOC_opt"] <= 0.1 + 0.02
+        # import lands after the battery has been run down. The 0.02 band clears
+        # the optimizer's internal 1% SoC gate tolerance.
+        drained = res["SOC_opt"] <= soc_min + 0.02
         self.assertGreater(
             res.loc[drained, "P_grid_pos"].sum(),
             1.0,
