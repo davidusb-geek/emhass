@@ -1070,6 +1070,14 @@ class Forecast:
         if ignore_pv_feedback:
             return df_forecast
 
+        # The mix correction blends the latest real sensor value into the first
+        # forecast step. When the forecast was supplied as a runtime list rather
+        # than read from the sensor, df_now holds no column for that sensor, so
+        # there is no live value to blend. Skip the correction and return the
+        # forecast unchanged instead of raising a KeyError (issue #764).
+        if df_now is None or col not in df_now.columns or df_now.empty:
+            return df_forecast
+
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
