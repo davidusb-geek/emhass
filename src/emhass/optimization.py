@@ -3763,16 +3763,7 @@ class Optimization:
                 else:
                     soc_init = self.plant_conf["battery_target_state_of_charge"]
             if soc_final is None:
-                # With set_battery_first_priority enabled, defaulting
-                # soc_final = soc_init collides with the "import only when
-                # SoC <= SOC_min" gate whenever soc_init > SOC_min: the
-                # solver is forced to end at the initial (high) SoC without
-                # ever being allowed to recharge through import, which is
-                # structurally infeasible (#1002). Fall back to SOC_min so
-                # the battery is free to drain naturally under the flag.
-                if self.optim_conf.get("set_battery_first_priority", False):
-                    soc_final = self.plant_conf["battery_minimum_state_of_charge"]
-                elif soc_init is not None:
+                if soc_init is not None:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
