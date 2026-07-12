@@ -2818,6 +2818,43 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fcst_normal.forecast_dates), expected_slots)
 
 
+class TestGetMixForecast(unittest.TestCase):
+    """Unit tests for the static Forecast.get_mix_forecast mix-correction helper.
+
+    The callers pass the forecast as a pandas Series and the current real
+    values as a DataFrame keyed by sensor column (see get_power_from_weather /
+    get_load_forecast).
+    """
+
+    def test_missing_sensor_column_returns_forecast_unchanged(self):
+        # Issue #764: when the forecast is supplied as a runtime list, df_now has
+        # no column for the configured sensor, so there is no live value to blend.
+        # get_mix_forecast must skip the correction, not raise KeyError.
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({"sensor.other": [42]})  # lacks `col`
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col)
+        pd.testing.assert_series_equal(out, forecast)
+
+    def test_empty_df_now_returns_forecast_unchanged(self):
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        out = Forecast.get_mix_forecast(pd.DataFrame(), forecast.copy(), 0.5, 0.5, col)
+        pd.testing.assert_series_equal(out, forecast)
+
+    def test_present_sensor_column_still_blends_first_step(self):
+        # Counterfactual: when df_now HAS the column, the first step is still
+        # blended, so the guard does not disable the normal correction path.
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, 500]})  # latest real value = 500
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col)
+        # first step = round(0.5*1000 + 0.5*500) = 750; the rest are unchanged
+        self.assertEqual(int(out.iloc[0]), 750)
+        self.assertEqual(int(out.iloc[1]), 900)
+        self.assertEqual(int(out.iloc[2]), 800)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
