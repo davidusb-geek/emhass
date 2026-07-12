@@ -1290,12 +1290,120 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # The unavoidable import has simply moved to the drained tail.
         self.assertGreater(res_bf["P_grid_pos"].sum(), 1.0)
 
-    def test_battery_first_priority_infeasible_when_load_exceeds_discharge(self):
-        """Issue #834: ``set_battery_first_priority`` is a hard constraint, so it
-        can make the problem infeasible when the load exceeds the battery's
-        maximum discharge power while the battery is above min SoC (grid import
-        would be the only way to balance power, but the feature forbids it).
-        This pins that documented sharp edge.
+    def test_battery_first_priority_dayahead_feasible_with_soc_target(self):
+        """Issue #1002: with ``set_battery_first_priority`` the day-ahead
+        optimization must stay feasible even when the battery has to import from
+        the grid to recharge to its terminal SoC target with no PV. The old hard
+        import gate forbade any grid import while the battery was above min SoC,
+        which deadlocked the recharge (importing raised SoC above min, which shut
+        the gate) and returned a non-optimal status. The soft penalty lets the
+        recharge happen. The feature-OFF control proves the scenario is otherwise
+        feasible, so a non-optimal ON result is caused by the feature.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 1000.0
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+            }
+        )
+        # Ample discharge headroom (load << discharge max), so the #834 "load
+        # exceeds discharge power" edge does NOT apply here: the only reason for
+        # infeasibility on master is the recharge-to-target deadlock.
+        soc_min = 0.1
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 7700,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": soc_min,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.6,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        # Control: feature OFF solves (the scenario itself is feasible).
+        self.optim_conf["set_battery_first_priority"] = False
+        self.opt = self.create_optimization()
+        self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=1.0)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Feature ON: must also solve now. Fails on master (non-optimal), which
+        # is the #1002 bug; passes with the soft penalty.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
+        res = self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=1.0)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # The battery still drains before it imports: no PV means the only way to
+        # end at least at the terminal target is to import late, so the recharge
+        # import lands after the battery has been run down. The 0.02 band clears
+        # the optimizer's internal 1% SoC gate tolerance.
+        drained = res["SOC_opt"] <= soc_min + 0.02
+        self.assertGreater(
+            res.loc[drained, "P_grid_pos"].sum(),
+            1.0,
+            msg="expected the recharge import to occur once the battery is drained",
+        )
+
+    def test_battery_first_priority_stays_bounded_with_negative_price(self):
+        """Issue #1002: the battery-first penalty must be priced off a
+        non-negative clip of the import tariff. A single negative-price timestep
+        (routine on day-ahead markets) would otherwise flip the penalty term into
+        a reward on the upper-unbounded penalty variable, driving it to infinity
+        and returning an unbounded/non-optimal status. This pins that the
+        optimization stays bounded and optimal through a negative-price slot.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 1000.0
+        cost = np.full(n, 0.20)
+        cost[n // 2] = -0.05  # one negative-price slot
+        df["unit_load_cost"] = cost
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_battery_first_priority": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 7700,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.6,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=1.0)
+        # Fails on the unclipped-tariff version with Infeasible_Or_Unbounded.
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_battery_first_priority_feasible_when_load_exceeds_discharge(self):
+        """Issue #1002: ``set_battery_first_priority`` is a soft penalty, not a
+        hard constraint, so a load that exceeds the battery's maximum discharge
+        power no longer makes the problem infeasible. The solver imports the
+        shortfall it cannot discharge (paying the battery-first penalty) instead
+        of returning non-optimal. This replaces the old
+        ``..._infeasible_when_load_exceeds_discharge`` test, whose assertion
+        pinned exactly the hard-constraint behaviour this change removes.
         """
         df = self.prepare_forecast_data()
         df["p_pv_forecast"] = 0.0
@@ -1323,20 +1431,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "battery_charge_efficiency": 1.0,
             }
         )
-        # Control: the exact same setup is feasible with the feature OFF (the
-        # solver just imports the shortfall), proving the infeasibility below is
-        # caused by the new constraint and not by the scenario itself.
+        # Control: feature OFF is feasible (the solver imports the shortfall).
         self.optim_conf["set_battery_first_priority"] = False
         self.opt = self.create_optimization()
         self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
-        # Feature ON: SoC stays well above min, so import is the only way to
-        # serve the load, which the feature forbids -> no optimal solution.
+        # Feature ON: no longer infeasible. The load exceeds the discharge cap,
+        # so import is unavoidable; the soft penalty lets it import the shortfall
+        # rather than returning non-optimal as the old hard gate did.
         self.optim_conf["set_battery_first_priority"] = True
         self.opt = self.create_optimization()
-        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
-        self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        res_bf = self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # It must import the part of the 2000 W load the 500 W battery cannot
+        # cover, i.e. roughly 1500 W per timestep.
+        self.assertGreater(res_bf["P_grid_pos"].max(), 1000.0)
 
     def test_dayahead_forecast_optim_honours_soc_final(self):
         """Issue #1002: ``perform_dayahead_forecast_optim`` now accepts
