@@ -48,6 +48,17 @@ THERMAL_CONFIG_KEY_HINTS = {
 # curtailment powers in W).
 CURTAILMENT_TIEBREAK_EPS = 1e-7
 
+# Battery-first priority (issue #834/#1002): when set_battery_first_priority is
+# on, importing from the grid while the battery is still above its minimum SoC is
+# penalized at this multiple of the prevailing import tariff. Making it a soft
+# penalty rather than a hard constraint means the optimizer still prefers to drain
+# the battery before importing (the penalty dwarfs any realistic tariff gradient,
+# so drain-first wins at any currency/price scale) but can always fall back to
+# importing when that is the only feasible option (e.g. recharging to a terminal
+# SoC target with no PV), instead of returning infeasible. The gate confines the
+# penalty to genuinely avoidable import, so an aggressive factor is safe.
+BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
+
 
 class Optimization:
     r"""
@@ -176,6 +187,15 @@ class Optimization:
         self.param_pv_forecast = cp.Parameter(self.num_timesteps, name="pv_forecast")
         self.param_load_forecast = cp.Parameter(self.num_timesteps, name="load_forecast")
         self.param_load_cost = cp.Parameter(self.num_timesteps, name="load_cost")
+        # Non-negative clip of the import tariff, used only by the battery-first
+        # priority penalty (issue #1002). Pricing that penalty off the raw signed
+        # tariff would turn it into an unbounded reward in a negative-price slot
+        # (routine on day-ahead markets), making the penalty variable run to
+        # infinity. A dedicated Parameter (rather than max() baked in at build
+        # time) keeps the clip correct across warm-started re-solves.
+        self.param_load_cost_pos = cp.Parameter(
+            self.num_timesteps, nonneg=True, name="load_cost_pos"
+        )
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
         # Per-deferrable-load cost override parameters. When the user supplies a
@@ -1338,11 +1358,18 @@ class Optimization:
             vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
             vars_dict["soc_surplus_cost"] = cp.Variable(n, nonneg=True, name="soc_surplus_cost")
             # Battery-first priority gate (issue #834): binary per timestep,
-            # 1 = grid import allowed in this slot. Only created when the
-            # feature is enabled; otherwise it never enters self.vars.
+            # 1 = grid import is "free" (unpenalized) in this slot. Only created
+            # when the feature is enabled; otherwise it never enters self.vars.
+            # battery_first_penalty (issue #1002): nonneg slack = the amount of
+            # grid import that happens while the battery is still charged (the
+            # gate is 0). Penalized in the objective instead of forbidden, so the
+            # feature can never make the problem infeasible.
             if self.optim_conf.get("set_battery_first_priority", False):
                 vars_dict["battery_first_import_gate"] = cp.Variable(
                     n, boolean=True, name="battery_first_import_gate"
+                )
+                vars_dict["battery_first_penalty"] = cp.Variable(
+                    n, nonneg=True, name="battery_first_penalty"
                 )
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
@@ -1589,6 +1616,23 @@ class Optimization:
                     f"Adding SOC surplus cost {soc_surplus_cost}  to objective function: "
                 )
                 objective_terms.append(-cp.sum(soc_surplus_cost))
+
+        # Battery-first priority penalty (issue #834/#1002). battery_first_penalty
+        # is the grid import that occurs while the battery is still above its
+        # minimum SoC. Priced at BATTERY_FIRST_IMPORT_PENALTY_FACTOR times the
+        # import tariff so draining the battery first is preferred at any tariff
+        # scale, while keeping the feature a soft penalty that can never make the
+        # problem infeasible. Only present when the feature is enabled. The tariff
+        # is clipped to non-negative (param_load_cost_pos): a negative-price slot
+        # must not turn this penalty into an unbounded reward on the otherwise
+        # upper-unbounded penalty variable.
+        battery_first_penalty = self.vars.get("battery_first_penalty")
+        if battery_first_penalty is not None:
+            objective_terms.append(
+                -scale
+                * BATTERY_FIRST_IMPORT_PENALTY_FACTOR
+                * cp.sum(cp.multiply(self.param_load_cost_pos, battery_first_penalty))
+            )
 
         # Capacity / demand charge (issue #623). A one-time cost on the peak grid
         # import over the optimisation, priced in currency per kW. The peak_import
@@ -1925,18 +1969,24 @@ class Optimization:
         # tariff, "drain the battery before importing" and "interleave grid
         # import with discharge" are cost-equivalent, so the solver may plan
         # grid imports while the battery is still well above its minimum SoC.
-        # When enabled, forbid grid import in any timestep where the battery
-        # still has usable energy. This uses a dedicated binary gate, not the
-        # grid-direction binary D: with set_nodischarge_to_grid the constraint
-        # E <= D would otherwise force the battery to stop discharging, which is
-        # exactly what we want to avoid. Same Big-M style as the discharge/import
-        # coupling in #796.
-        # WARNING: this is a hard constraint. It can make the problem infeasible
-        # in a timestep where (load - PV) exceeds the battery maximum discharge
-        # power, since grid import is then the only way to balance power. Only
-        # enable it when the battery discharge power can cover the load.
+        # When enabled, prefer to drain stored energy before importing. This uses
+        # a dedicated binary gate, not the grid-direction binary D: with
+        # set_nodischarge_to_grid the constraint E <= D would otherwise force the
+        # battery to stop discharging, which is exactly what we want to avoid.
+        #
+        # This is a SOFT penalty, not a hard constraint (issue #1002). The gate is
+        # forced to 0 in any slot where the battery is still above min SoC, and
+        # any grid import in such a slot is charged battery_first_penalty and
+        # penalized in the objective at BATTERY_FIRST_IMPORT_PENALTY_FACTOR times
+        # the import tariff. That dwarfs any realistic tariff gradient, so the
+        # solver still drains the battery before importing, but it can always fall
+        # back to importing when that is the only feasible option (recharging to a
+        # terminal SoC target with no PV, or a load that exceeds the battery's
+        # discharge power) instead of returning infeasible as the old hard bound
+        # `p_grid_pos <= max_from_grid * import_gate` did.
         if self.optim_conf.get("set_battery_first_priority", False):
             import_gate = self.vars["battery_first_import_gate"]
+            battery_first_penalty = self.vars["battery_first_penalty"]
             p_grid_pos = self.vars["p_grid_pos"]
             max_from_grid = self._prepare_power_limit_array(
                 self.plant_conf.get("maximum_power_from_grid", 9000),
@@ -1946,13 +1996,17 @@ class Optimization:
             # 1% SoC tolerance so the gate opens cleanly once the battery has
             # numerically reached its minimum, avoiding chatter at the floor.
             soc_tolerance_energy = 0.01 * cap
-            # import_gate = 1 (import allowed) is only possible once the stored
-            # energy is at/below min + tolerance; otherwise the gate is forced
-            # to 0 and no grid import is allowed in that slot.
+            # import_gate = 1 (import unpenalized) is only possible once the
+            # stored energy is at/below min + tolerance; otherwise the gate is
+            # forced to 0 and any grid import in that slot is penalized.
             constraints.append(
                 current_stored_energy - min_energy - soc_tolerance_energy <= cap * (1 - import_gate)
             )
-            constraints.append(p_grid_pos <= cp.multiply(max_from_grid, import_gate))
+            # battery_first_penalty >= import beyond the free (gated) allowance;
+            # nonneg, so it equals max(0, import while the battery is charged).
+            constraints.append(
+                battery_first_penalty >= p_grid_pos - cp.multiply(max_from_grid, import_gate)
+            )
 
         # Stress Cost
         if batt_stress_conf and batt_stress_conf["active"]:
@@ -3728,6 +3782,7 @@ class Optimization:
             self.param_pv_forecast = cp.Parameter(current_n, name="pv_forecast")
             self.param_load_forecast = cp.Parameter(current_n, name="load_forecast")
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
+            self.param_load_cost_pos = cp.Parameter(current_n, nonneg=True, name="load_cost_pos")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
             self.param_cost_per_load = [
                 cp.Parameter(current_n, name=f"cost_per_load_{k}")
@@ -3902,6 +3957,7 @@ class Optimization:
         self.param_pv_forecast.value = p_pv
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
+        self.param_load_cost_pos.value = np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0)
         self.param_prod_price.value = unit_prod_price
 
         # Per-load cost forecast overrides. Default each load's per-timestep cost
