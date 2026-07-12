@@ -1902,7 +1902,10 @@ async def dayahead_forecast_optim(
     """
     _t0 = _time.monotonic()
     soc_init = input_data_dict["params"]["passed_data"].get("soc_init")
-    logger.info(f"Performing day-ahead forecast optimization with soc_init: {soc_init}")
+    soc_final = input_data_dict["params"]["passed_data"].get("soc_final")
+    logger.info(
+        f"Performing day-ahead forecast optimization with soc_init: {soc_init}, soc_final: {soc_final}"
+    )
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
         df_input_data_dayahead = prepare_forecast_and_weather_data(
@@ -1916,6 +1919,7 @@ async def dayahead_forecast_optim(
             input_data_dict["p_pv_forecast"],
             input_data_dict["p_load_forecast"],
             soc_init=soc_init,
+            soc_final=soc_final,
             stage_times=input_data_dict["stage_times"],
         )
     # Save CSV file for publish_data
