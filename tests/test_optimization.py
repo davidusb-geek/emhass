@@ -1481,15 +1481,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.opt = self.create_optimization()
-        res_hi = self.opt.perform_dayahead_forecast_optim(
-            df, pv, load, soc_init=0.9, soc_final=0.9
-        )
+        res_hi = self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=0.9, soc_final=0.9)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
         self.opt = self.create_optimization()
-        res_lo = self.opt.perform_dayahead_forecast_optim(
-            df, pv, load, soc_init=0.9, soc_final=0.1
-        )
+        res_lo = self.opt.perform_dayahead_forecast_optim(df, pv, load, soc_init=0.9, soc_final=0.1)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
         # The lower target must end at a strictly lower SoC — proving the
         # runtime soc_final actually reached the constraint.
