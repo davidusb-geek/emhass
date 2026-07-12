@@ -2912,7 +2912,7 @@ class Optimization:
         penalty_expr = 0
         desired_temps_raw = tank.get("desired_temperatures", [])
         # The compiler may store a scalar desired_temperature; broadcast to horizon.
-        if isinstance(desired_temps_raw, (int, float)):
+        if isinstance(desired_temps_raw, int | float):
             desired_temps_list = [float(desired_temps_raw)] * required_len
         else:
             desired_temps_list = list(desired_temps_raw)

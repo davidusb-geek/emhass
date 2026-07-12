@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.9 - 2026-07-12
+
+### Improvement
+- Make set_battery_first_priority a soft penalty so it cannot cause infeasibility (#1002) (@LesIT1)
+- feat: add forecast-calibration action to compare load forecast methods on your own history (#993) (@LesIT1)
+- feat: Opt-in battery self-identification (learn capacity + round-trip efficiency from HA history) (@LesIT1)
+- feat(api): add GET /api/v1/plan structured plan output (@OptimalNothing90)
+
+### Fix
+- fix: guard get_mix_forecast against a missing sensor column (#764) (@LesIT1)
+- fix: plumb soc_final through dayahead-optim (#1002) (@twobeass)
+- fix: Catch UnicodeDecodeError on torn pickle cache reads in web_server (@hossamnagy)
+- fix: hold-last fill for dict forecasts with pre-horizon points (#1003) (@LesIT1)
+
 ## 0.17.8 - 2026-06-25
 
 ### Improvement
