@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fix
+- fix: encode time of day continuously (sin/cos) in the adjusted PV forecast features - the raw integer hour feature produced a sawtooth (a jump at every hour boundary) in the adjusted forecast at sub-hourly optimization time steps; saved models from older versions are re-fitted automatically
+
 ## 0.17.9 - 2026-07-12
 
 ### Improvement
