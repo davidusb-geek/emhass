@@ -1269,6 +1269,29 @@ class Forecast:
         df["solar_azimuth"] = solpos["azimuth"]
         return df
 
+    @staticmethod
+    def add_cyclic_hour_features(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Encode the time of day as a continuous sin/cos pair.
+
+        A raw integer hour feature is piecewise constant: with sub-hourly
+        optimization time steps a (linear) regression model then produces a
+        discontinuity at every hour boundary, which shows up as a sawtooth in
+        the adjusted PV forecast. The cyclic encoding is computed from the
+        fractional hour (hour + minute/60) so it evolves smoothly within the
+        hour and stays continuous across midnight.
+
+        :param df: DataFrame with a DateTime index.
+        :type df: pd.DataFrame
+        :return: DataFrame with added hour_sin and hour_cos columns.
+        :rtype: pd.DataFrame
+        """
+        df = df.copy()
+        fractional_hour = df.index.hour + df.index.minute / 60.0
+        df["hour_sin"] = np.sin(2 * np.pi * fractional_hour / 24.0)
+        df["hour_cos"] = np.cos(2 * np.pi * fractional_hour / 24.0)
+        return df
+
     def adjust_pv_forecast_data_prep(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Prepare data for adjusting the photovoltaic (PV) forecast.
@@ -1307,8 +1330,15 @@ class Forecast:
         self.data_adjust_pv = pd.concat(
             [P_PV.rename("actual"), p_pv_forecast.rename("forecast")], axis=1
         ).dropna()
-        # Add more features
-        self.data_adjust_pv = add_date_features(self.data_adjust_pv)
+        # Add more features. The raw integer "hour" date feature is deliberately
+        # excluded: it is piecewise constant, so at sub-hourly resolution a linear
+        # regression model turns it into a jump at every hour boundary (sawtooth).
+        # Time of day is encoded by the cyclic hour features and the solar angles.
+        self.data_adjust_pv = add_date_features(
+            self.data_adjust_pv,
+            date_features=["year", "month", "day_of_week", "day_of_year", "day"],
+        )
+        self.data_adjust_pv = Forecast.add_cyclic_hour_features(self.data_adjust_pv)
         self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
         # Features (X) and target (y)
         self.x_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
@@ -1404,8 +1434,13 @@ class Forecast:
         else:
             # Use the validation data stored in `self`
             forecast_data = self.p_pv_forecast_validation.rename("forecast").to_frame()
-        # Prepare the forecasted PV data
-        forecast_data = add_date_features(forecast_data)
+        # Prepare the forecasted PV data (same feature set as the fit side:
+        # calendar features without the raw hour, plus the cyclic hour encoding)
+        forecast_data = add_date_features(
+            forecast_data,
+            date_features=["year", "month", "day_of_week", "day_of_year", "day"],
+        )
+        forecast_data = Forecast.add_cyclic_hour_features(forecast_data)
         forecast_data = Forecast.compute_solar_angles(forecast_data, self.lat, self.lon)
         # Predict the adjusted forecast
         forecast_data["adjusted_forecast"] = self.model_adjust_pv.predict(forecast_data)

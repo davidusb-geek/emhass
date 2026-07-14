@@ -804,10 +804,35 @@ async def adjust_pv_forecast(
             logger.error("Cannot recover from this error")
             return False
     # Call the predict method
-    p_pv_forecast = p_pv_forecast.rename("forecast").to_frame()
-    p_pv_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast)
+    p_pv_forecast_in = p_pv_forecast.rename("forecast").to_frame()
+    try:
+        p_pv_forecast_out = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast_in)
+    except Exception as e:
+        # A model persisted by an older version may have been trained on a
+        # different feature set (e.g. the raw integer "hour" feature that was
+        # replaced by the cyclic hour encoding). scikit-learn then raises on
+        # predict. Re-fit once with the current feature set and retry.
+        logger.warning(
+            f"Adjusted PV model prediction failed ({type(e).__name__}: {e}). "
+            "The saved model may predate a feature-set change. Re-fitting."
+        )
+        success = await _retrieve_and_fit_pv_model(
+            fcst,
+            get_data_from_file,
+            retrieve_hass_conf,
+            optim_conf,
+            rh,
+            emhass_conf,
+            test_df_literal,
+        )
+        if not success:
+            logger.warning(
+                "Could not re-fit the adjusted PV model, falling back to unadjusted PV forecast."
+            )
+            return p_pv_forecast
+        p_pv_forecast_out = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast_in)
     # Update the PV forecast
-    return p_pv_forecast["adjusted_forecast"].rename(None)
+    return p_pv_forecast_out["adjusted_forecast"].rename(None)
 
 
 # Suggest-tier HA sensor entity ids (fixed; not user-configurable).
