@@ -1286,6 +1286,8 @@ class Forecast:
         :return: DataFrame with added hour_sin and hour_cos columns.
         :rtype: pd.DataFrame
         """
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("DataFrame must have a DatetimeIndex to compute cyclic hour features.")
         df = df.copy()
         fractional_hour = df.index.hour + df.index.minute / 60.0
         df["hour_sin"] = np.sin(2 * np.pi * fractional_hour / 24.0)

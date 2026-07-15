@@ -807,11 +807,12 @@ async def adjust_pv_forecast(
     p_pv_forecast_in = p_pv_forecast.rename("forecast").to_frame()
     try:
         p_pv_forecast_out = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast_in)
-    except Exception as e:
+    except ValueError as e:
         # A model persisted by an older version may have been trained on a
         # different feature set (e.g. the raw integer "hour" feature that was
-        # replaced by the cyclic hour encoding). scikit-learn then raises on
-        # predict. Re-fit once with the current feature set and retry.
+        # replaced by the cyclic hour encoding). scikit-learn then raises a
+        # ValueError on predict (feature-name mismatch). Re-fit once with the
+        # current feature set and retry; other exception types propagate.
         logger.warning(
             f"Adjusted PV model prediction failed ({type(e).__name__}: {e}). "
             "The saved model may predate a feature-set change. Re-fitting."

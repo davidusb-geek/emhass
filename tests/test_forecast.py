@@ -261,6 +261,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             f"Adjusted forecast must be >= 0, got: {result['adjusted_forecast'].tolist()}",
         )
 
+    # add_cyclic_hour_features requires a DatetimeIndex, like add_date_features
+    async def test_add_cyclic_hour_features_requires_datetime_index(self):
+        df = pd.DataFrame({"forecast": [100.0, 200.0]}, index=[0, 1])
+        with self.assertRaises(ValueError):
+            Forecast.add_cyclic_hour_features(df)
+
     # Regression test for the hour-boundary sawtooth: the time-of-day features
     # fed to the regressor must be continuous at sub-hourly resolution, so a
     # model with weight on them cannot introduce jumps at :00 that are absent
