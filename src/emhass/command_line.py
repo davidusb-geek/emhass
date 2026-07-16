@@ -680,7 +680,7 @@ async def _retrieve_and_fit_pv_model(
     :rtype: bool
     """
     # Retrieve data from Home Assistant
-    success, df_input_data, _ = await retrieve_home_assistant_data(
+    success, df_input_data, days_list = await retrieve_home_assistant_data(
         "adjust_pv",
         get_data_from_file,
         retrieve_hass_conf,
@@ -691,8 +691,34 @@ async def _retrieve_and_fit_pv_model(
     )
     if not success:
         return False
+    # Best-effort retrieval of the curtailment history: timesteps where PV was
+    # curtailed must not train the adjustment model (issue #1026). Any failure
+    # here (no history, entity missing) falls back to unfiltered training.
+    curtailment_series = None
+    plant_conf = getattr(fcst, "plant_conf", None) or {}
+    if plant_conf.get("compute_curtailment", False) and not get_data_from_file:
+        params = getattr(fcst, "params", None) or {}
+        curtailment_entity = (
+            params.get("passed_data", {})
+            .get("custom_pv_curtailment_id", {})
+            .get("entity_id", "sensor.p_pv_curtailment")
+        )
+        try:
+            success_curtailment = await rh.get_data(days_list, [curtailment_entity])
+            if success_curtailment is not False and curtailment_entity in rh.df_final.columns:
+                curtailment_series = rh.df_final[curtailment_entity].copy()
+            else:
+                fcst.logger.info(
+                    f"No history for curtailment entity {curtailment_entity}, "
+                    "training the PV adjustment on unfiltered data."
+                )
+        except Exception as e:
+            fcst.logger.info(
+                f"Could not retrieve curtailment history ({type(e).__name__}: {e}), "
+                "training the PV adjustment on unfiltered data."
+            )
     # Call data preparation method
-    fcst.adjust_pv_forecast_data_prep(df_input_data)
+    fcst.adjust_pv_forecast_data_prep(df_input_data, curtailment_series=curtailment_series)
     n_splits = 5
     x_adjust_pv = getattr(fcst, "x_adjust_pv", None)
     if x_adjust_pv is not None and len(x_adjust_pv) <= n_splits:
