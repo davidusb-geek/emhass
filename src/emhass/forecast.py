@@ -1269,7 +1269,9 @@ class Forecast:
         df["solar_azimuth"] = solpos["azimuth"]
         return df
 
-    def adjust_pv_forecast_data_prep(self, data: pd.DataFrame) -> pd.DataFrame:
+    def adjust_pv_forecast_data_prep(
+        self, data: pd.DataFrame, curtailment_series: pd.Series | None = None
+    ) -> pd.DataFrame:
         """
         Prepare data for adjusting the photovoltaic (PV) forecast.
 
@@ -1280,6 +1282,13 @@ class Forecast:
         :param data: A DataFrame containing the actual PV production data and the
             forecasted PV production data.
         :type data: pd.DataFrame
+        :param curtailment_series: Optional history of the PV curtailment entity.
+            Timesteps where curtailment was active (> 0), plus a one-timestep
+            margin on either side, are excluded from the training set: during
+            curtailment the measured production is deliberately below the
+            achievable PV power, so those samples would teach the model a
+            downward bias.
+        :type curtailment_series: pd.Series, optional
         :return: DataFrame with data for adjusted PV model train.
         """
         # Extract target and predictor
@@ -1307,6 +1316,23 @@ class Forecast:
         self.data_adjust_pv = pd.concat(
             [P_PV.rename("actual"), p_pv_forecast.rename("forecast")], axis=1
         ).dropna()
+        # Exclude curtailed timesteps (issue #1026): measured production during
+        # curtailment is deliberately below the achievable PV power. A one-step
+        # margin on either side absorbs execution lag between plan and inverter.
+        if curtailment_series is not None:
+            curtailed = curtailment_series.reindex(self.data_adjust_pv.index).fillna(0.0) > 0.0
+            curtailed = (
+                curtailed
+                | curtailed.shift(1, fill_value=False)
+                | curtailed.shift(-1, fill_value=False)
+            )
+            n_curtailed = int(curtailed.sum())
+            if n_curtailed > 0:
+                self.logger.info(
+                    f"Excluding {n_curtailed} curtailed timesteps (incl. one-step margin) "
+                    f"from {len(self.data_adjust_pv)} PV adjustment training samples."
+                )
+                self.data_adjust_pv = self.data_adjust_pv[~curtailed]
         # Add more features
         self.data_adjust_pv = add_date_features(self.data_adjust_pv)
         self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
