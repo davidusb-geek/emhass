@@ -196,6 +196,16 @@ class Optimization:
         self.param_load_cost_pos = cp.Parameter(
             self.num_timesteps, nonneg=True, name="load_cost_pos"
         )
+        # Non-negative PV surplus, max(0, PV - load), used as the export ceiling for
+        # set_nodischarge_to_grid on AC-coupled systems. Bounding export by raw PV
+        # (pre-fix behaviour) lets the battery reach the grid indirectly: it covers
+        # the whole load so PV is freed for export (regression of #795, reintroduced
+        # by #981). Bounding by the surplus blocks battery-to-grid while still
+        # allowing battery-to-load. Dedicated Parameter (not max() baked in at build
+        # time) to stay correct across warm-started re-solves.
+        self.param_export_ceiling = cp.Parameter(
+            self.num_timesteps, nonneg=True, name="export_ceiling"
+        )
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
         # Per-deferrable-load cost override parameters. When the user supplies a
@@ -1858,17 +1868,23 @@ class Optimization:
         # No discharge to grid: prevent battery energy from reaching the grid. Hybrid inverters
         # prioritise PV to the load, so the battery cannot discharge while PV exports (strict E<=D, #796).
         # AC-coupled systems can, so E<=D wrongly forbids battery-to-load during export and makes the
-        # solve infeasible when a large SoC must be shed (#936). For them bound grid export to the
-        # available PV instead (net of curtailment), blocking battery-to-grid while allowing battery-to-load.
+        # solve infeasible when a large SoC must be shed (#936). For them bound grid export to the PV
+        # *surplus* (max(0, PV - load), param_export_ceiling), not raw PV: bounding by raw PV lets the
+        # battery cover the entire load and free PV for export, i.e. battery-to-grid through a PV detour
+        # (#795, reintroduced by #981). Bounding by the surplus blocks battery-to-grid while still
+        # allowing battery-to-load. Curtailment further lowers the exportable surplus.
         if self.optim_conf["set_nodischarge_to_grid"]:
             if self.plant_conf["inverter_is_hybrid"]:
                 constraints.append(E <= D)
             elif self.plant_conf["compute_curtailment"]:
                 constraints.append(
-                    self.vars["p_grid_neg"] + p_pv - self.vars["p_pv_curtailment"] >= 0
+                    self.vars["p_grid_neg"]
+                    + self.param_export_ceiling
+                    - self.vars["p_pv_curtailment"]
+                    >= 0
                 )
             else:
-                constraints.append(self.vars["p_grid_neg"] + p_pv >= 0)
+                constraints.append(self.vars["p_grid_neg"] + self.param_export_ceiling >= 0)
 
         # Dynamic Power Limits (Ramp Rate)
         if self.optim_conf["set_battery_dynamic"]:
@@ -3783,6 +3799,7 @@ class Optimization:
             self.param_load_forecast = cp.Parameter(current_n, name="load_forecast")
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_load_cost_pos = cp.Parameter(current_n, nonneg=True, name="load_cost_pos")
+            self.param_export_ceiling = cp.Parameter(current_n, nonneg=True, name="export_ceiling")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
             self.param_cost_per_load = [
                 cp.Parameter(current_n, name=f"cost_per_load_{k}")
@@ -3958,6 +3975,9 @@ class Optimization:
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
         self.param_load_cost_pos.value = np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0)
+        self.param_export_ceiling.value = np.maximum(
+            np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
+        )
         self.param_prod_price.value = unit_prod_price
 
         # Per-load cost forecast overrides. Default each load's per-timestep cost
