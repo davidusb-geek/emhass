@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fix
+- fix: exclude curtailed timesteps (with a one-step margin) from the adjusted PV forecast training data when compute_curtailment is enabled - training on curtailed production teaches the model a downward bias; ignore_pv_feedback_during_curtailment only protects the step-0 mix, not the training (fixes #1026)
+
 ## 0.17.9 - 2026-07-12
 
 ### Improvement
