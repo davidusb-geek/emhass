@@ -2714,14 +2714,19 @@ def _load_opt_res_latest(
 def _get_closest_index(retrieve_hass_conf: dict, index: pd.DatetimeIndex) -> int:
     """Helper to find the closest index in the DataFrame to the current time."""
     now_precise = datetime.now(retrieve_hass_conf["time_zone"]).replace(second=0, microsecond=0)
-    method = retrieve_hass_conf["method_ts_round"]
+    now_ts = pd.Timestamp(now_precise)
+    if index.tz is None and now_ts.tz is not None:
+        now_ts = now_ts.tz_localize(None)
+    elif index.tz is not None and now_ts.tz is None:
+        now_ts = now_ts.tz_localize(index.tz)
+    method = retrieve_hass_conf.get("method_ts_round", "nearest")
     if method == "nearest":
-        return index.get_indexer([now_precise], method="nearest")[0]
+        return index.get_indexer([now_ts], method="nearest")[0]
     elif method == "first":
-        return index.get_indexer([now_precise], method="ffill")[0]
+        return index.get_indexer([now_ts], method="ffill")[0]
     elif method == "last":
-        return index.get_indexer([now_precise], method="bfill")[0]
-    return index.get_indexer([now_precise], method="nearest")[0]
+        return index.get_indexer([now_ts], method="bfill")[0]
+    return index.get_indexer([now_ts], method="nearest")[0]
 
 
 async def _publish_standard_forecasts(
