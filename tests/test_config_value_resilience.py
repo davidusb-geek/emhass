@@ -99,6 +99,29 @@ _XFAIL_REASON: dict[str, str] = {
         "no stringly-typed guard; raises a contextual error on non-integer timestep "
         "values, consistent with the other per-load deferrable params (see #900)"
     ),
+    # #610: these 4 became "array." typed (per-battery) params. check_batt_params
+    # (utils.py) intentionally raises a ValueError when a list's length does not
+    # match number_of_batteries=1 (the default here) - a deliberate hard error
+    # ("wrong length raises", no silent pad like the per-load deferrable
+    # arrays), not an unguarded bug. The scalar_null shape is a real guard
+    # (coerces to the default) and is excluded below so it stays a live
+    # regression test.
+    "battery_soc_deficit_threshold": (
+        "2-entry list vs number_of_batteries=1 is an intentional ValueError "
+        "by design (#610); scalar_null is guarded"
+    ),
+    "battery_soc_deficit_cost": (
+        "2-entry list vs number_of_batteries=1 is an intentional ValueError "
+        "by design (#610); scalar_null is guarded"
+    ),
+    "battery_soc_surplus_threshold": (
+        "2-entry list vs number_of_batteries=1 is an intentional ValueError "
+        "by design (#610); scalar_null is guarded"
+    ),
+    "battery_soc_surplus_cost": (
+        "2-entry list vs number_of_batteries=1 is an intentional ValueError "
+        "by design (#610); scalar_null is guarded"
+    ),
 }
 
 # Per-param, per-bad-value overrides for the xfail marker.
@@ -115,6 +138,14 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         # short-circuits on None (falsy) and 0.5 only appears as a CVXPY float
         # bound which is valid.  No crash for the [None, 0.5] shape.
         ("set_deferrable_max_startups", "none_element"),
+        # #610: check_batt_params coerces a stringly-typed "null" scalar to the
+        # per-battery default and broadcasts it - a real guard, so this stays a
+        # live regression test even though the same param is xfail'd for the
+        # two list-shaped bad values.
+        ("battery_soc_deficit_threshold", "scalar_null"),
+        ("battery_soc_deficit_cost", "scalar_null"),
+        ("battery_soc_surplus_threshold", "scalar_null"),
+        ("battery_soc_surplus_cost", "scalar_null"),
     }
 )
 

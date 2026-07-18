@@ -349,6 +349,33 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rh.published, {})
         self.assertFalse(self._json_path().exists())
 
+    async def test_n2_config_skips_cleanly_with_warning(self):
+        """Identification only knows how to fit a single battery. With
+        number_of_batteries > 1 the per-battery config values are lists, so it
+        must skip with one clear warning instead of coercing a list with
+        float() and crashing (or masking that crash as a generic failure)."""
+        multi_conf = dict(self.plant_conf)
+        multi_conf["number_of_batteries"] = 2
+        multi_conf["battery_nominal_energy_capacity"] = [10000, 12000]
+        multi_conf["battery_charge_efficiency"] = [0.95, 0.9]
+        original_plant_conf = self.plant_conf
+        self.plant_conf = multi_conf
+        try:
+            with self.assertLogs("test_identify_battery", level="WARNING") as cm:
+                rh = await self._run({"battery_identification_trust_tier": "suggest"})
+        finally:
+            self.plant_conf = original_plant_conf
+        self.assertTrue(
+            any("number_of_batteries=2" in m for m in cm.output),
+            "must name the battery count in a clear skip warning",
+        )
+        self.assertFalse(
+            any("TypeError" in m for m in cm.output),
+            "must skip cleanly, not swallow a TypeError as a generic failure",
+        )
+        self.assertEqual(rh.published, {}, "N>1 must publish nothing")
+        self.assertFalse(self._json_path().exists(), "N>1 must not write a fit result")
+
 
 @unittest.skipUnless(HAVE_CL, "command_line not present (base commit)")
 class TestIsModelOutdatedLabel(unittest.TestCase):
