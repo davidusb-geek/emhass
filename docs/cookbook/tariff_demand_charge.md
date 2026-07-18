@@ -102,4 +102,4 @@ Expected: `peak_on ≤ peak_off`. The gap is your planned peak reduction; if it 
 
 - Feature: opt-in capacity / demand charge with billing-period peak floor — **#623**, implemented by @LesIT1, requested by @matti-oss.
 - Weighted-sum peak/cost LP formulation from the #623 discussion (@Whatsonyourmind).
-- Field names and line numbers verified against `src/emhass/utils.py:treat_runtimeparams`, `src/emhass/optimization.py`, and `src/emhass/data/config_defaults.json` on 2026-07-18 (EMHASS 0.17.9 tree).
+- Field names and line numbers verified against `src/emhass/utils.py:treat_runtimeparams`, `src/emhass/optimization.py`, and `src/emhass/data/config_defaults.json` on 2026-07-18, using the EMHASS 0.17.9 source tree (the then-current release — a verification snapshot only; the feature itself requires just **≥ 0.17.7**, per Prerequisites).
