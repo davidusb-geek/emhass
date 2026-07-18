@@ -59,6 +59,17 @@ CURTAILMENT_TIEBREAK_EPS = 1e-7
 # penalty to genuinely avoidable import, so an aggressive factor is safe.
 BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 
+# Soft terminal-SoC target, the same treatment #1002 gave set_battery_first_priority.
+# A hard equality on the horizon's net energy change turns the solve infeasible
+# whenever the requested soc_final simply cannot be reached. That collides with
+# set_nodischarge_to_grid on AC-coupled systems: when PV already covers the load a
+# large SoC shed has no local deficit to discharge into, and export is (correctly)
+# closed off, so no schedule exists (#936 vs #795). Enforcing the target through
+# non-negative slacks priced far above any realistic tariff keeps it met exactly
+# whenever that is possible, while a contradictory target relaxes to the closest
+# reachable SoC instead of returning infeasible.
+SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+
 
 class Optimization:
     r"""
@@ -206,6 +217,11 @@ class Optimization:
         self.param_export_ceiling = cp.Parameter(
             self.num_timesteps, nonneg=True, name="export_ceiling"
         )
+        # Currency per Wh charged for missing the terminal SoC target. Set per solve
+        # from the horizon's highest import tariff so the target stays dominant at any
+        # price scale; a Parameter (not a baked-in constant) keeps that correct across
+        # warm-started re-solves. See SOC_FINAL_DEVIATION_PENALTY_FACTOR.
+        self.param_soc_final_penalty = cp.Parameter(nonneg=True, name="soc_final_penalty")
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
         # Per-deferrable-load cost override parameters. When the user supplies a
@@ -1367,6 +1383,12 @@ class Optimization:
             )
             vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
             vars_dict["soc_surplus_cost"] = cp.Variable(n, nonneg=True, name="soc_surplus_cost")
+            # Terminal-SoC slacks: the signed miss on the horizon's net energy change,
+            # split into two non-negative parts so the deviation stays linear. Priced in
+            # the objective rather than forbidden, so an unreachable soc_final degrades
+            # to "as close as allowed" instead of infeasible.
+            vars_dict["soc_final_under"] = cp.Variable(nonneg=True, name="soc_final_under")
+            vars_dict["soc_final_over"] = cp.Variable(nonneg=True, name="soc_final_over")
             # Battery-first priority gate (issue #834): binary per timestep,
             # 1 = grid import is "free" (unpenalized) in this slot. Only created
             # when the feature is enabled; otherwise it never enters self.vars.
@@ -1636,6 +1658,16 @@ class Optimization:
         # is clipped to non-negative (param_load_cost_pos): a negative-price slot
         # must not turn this penalty into an unbounded reward on the otherwise
         # upper-unbounded penalty variable.
+        # Terminal-SoC deviation penalty. param_soc_final_penalty is already in currency
+        # per Wh (it folds in the kWh conversion and the dominance factor), so the slacks
+        # enter the objective directly. Charging both directions keeps the target an
+        # equality rather than a one-sided bound.
+        soc_final_under = self.vars.get("soc_final_under")
+        if soc_final_under is not None:
+            objective_terms.append(
+                -self.param_soc_final_penalty * (soc_final_under + self.vars["soc_final_over"])
+            )
+
         battery_first_penalty = self.vars.get("battery_first_penalty")
         if battery_first_penalty is not None:
             objective_terms.append(
@@ -1872,19 +1904,22 @@ class Optimization:
         # *surplus* (max(0, PV - load), param_export_ceiling), not raw PV: bounding by raw PV lets the
         # battery cover the entire load and free PV for export, i.e. battery-to-grid through a PV detour
         # (#795, reintroduced by #981). Bounding by the surplus blocks battery-to-grid while still
-        # allowing battery-to-load. Curtailment further lowers the exportable surplus.
+        # allowing battery-to-load.
         if self.optim_conf["set_nodischarge_to_grid"]:
             if self.plant_conf["inverter_is_hybrid"]:
                 constraints.append(E <= D)
-            elif self.plant_conf["compute_curtailment"]:
-                constraints.append(
-                    self.vars["p_grid_neg"]
-                    + self.param_export_ceiling
-                    - self.vars["p_pv_curtailment"]
-                    >= 0
-                )
             else:
                 constraints.append(self.vars["p_grid_neg"] + self.param_export_ceiling >= 0)
+                if self.plant_conf["compute_curtailment"]:
+                    # Curtailed PV cannot be exported either. This stays a SEPARATE bound:
+                    # folding p_pv_curtailment into the surplus ceiling would additionally
+                    # cap curtailment itself at the surplus, an unrelated restriction that
+                    # removes legitimate curtailment freedom (it may exceed the surplus)
+                    # and breaks the #342 tie-break placement. Together the two bounds give
+                    # export <= min(surplus, PV - curtailment), which is what we want.
+                    constraints.append(
+                        self.vars["p_grid_neg"] + p_pv - self.vars["p_pv_curtailment"] >= 0
+                    )
 
         # Dynamic Power Limits (Ramp Rate)
         if self.optim_conf["set_battery_dynamic"]:
@@ -1970,10 +2005,18 @@ class Optimization:
         )
 
         # Final SOC Constraint
-        # The total energy change over the whole horizon must match init -> final
-        # Total Sum of power flow * dt == (Init - Final) * Capacity
+        # The total energy change over the whole horizon should match init -> final:
+        # Total Sum of power flow * dt == (Init - Final) * Capacity.
+        # Enforced softly (see SOC_FINAL_DEVIATION_PENALTY_FACTOR): the two non-negative
+        # slacks absorb any unreachable remainder and are charged in the objective, so
+        # the equality still holds exactly whenever a schedule exists for it.
         total_energy_change = cp.sum(energy_change)
-        constraints.append(total_energy_change == (soc_init - soc_final) * cap)
+        constraints.append(
+            total_energy_change
+            == (soc_init - soc_final) * cap
+            + self.vars["soc_final_under"]
+            - self.vars["soc_final_over"]
+        )
 
         # Intermediate SOC target (issue #553): require SoC >= target at the
         # requested timestep, leaving the battery free to discharge afterward.
@@ -3977,6 +4020,14 @@ class Optimization:
         self.param_load_cost_pos.value = np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0)
         self.param_export_ceiling.value = np.maximum(
             np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
+        )
+        # Price the terminal-SoC miss well above the dearest import slot so the target is
+        # never traded away for energy cost; the 0.001 converts the Wh slacks to kWh. The
+        # floor keeps the penalty meaningful when every tariff is zero or negative.
+        self.param_soc_final_penalty.value = (
+            0.001
+            * SOC_FINAL_DEVIATION_PENALTY_FACTOR
+            * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
         )
         self.param_prod_price.value = unit_prod_price
 
