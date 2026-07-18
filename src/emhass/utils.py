@@ -1449,6 +1449,22 @@ async def treat_runtimeparams(
         _parse_power_limit("maximum_power_from_grid")
         _parse_power_limit("maximum_power_to_grid")
 
+        # Re-normalise per-battery array params after the generic association
+        # loop above may have overwritten them with a raw runtime value (#610).
+        # N=1 is a no-op (see check_batt_params); this only does real work once
+        # number_of_batteries > 1.
+        num_batteries = validate_num_batteries(params["plant_conf"])
+        for batt_param_name, batt_default in BATT_ARRAY_PARAMS_PLANT_CONF.items():
+            check_batt_params(
+                num_batteries, params["plant_conf"], batt_default, batt_param_name, logger
+            )
+        for batt_param_name, batt_default in BATT_ARRAY_PARAMS_OPTIM_CONF.items():
+            check_batt_params(
+                num_batteries, params["optim_conf"], batt_default, batt_param_name, logger
+            )
+        for batt_param_name in BATT_WEIGHT_PARAMS:
+            check_batt_weight_params(num_batteries, params["optim_conf"], batt_param_name, logger)
+
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
         if "optimization_time_step" in runtimeparams:
@@ -1596,34 +1612,121 @@ async def treat_runtimeparams(
                 forecast_dates = get_forecast_dates(
                     optimization_time_step, delta_forecast, time_zone
                 )
-            if "soc_init" not in runtimeparams.keys():
-                soc_init = params["plant_conf"]["battery_target_state_of_charge"]
+            num_batteries = validate_num_batteries(params["plant_conf"])
+            if num_batteries == 1:
+                # Unchanged from before #610: soc_init/soc_final stay plain
+                # floats, not [x] lists, so downstream consumers written for
+                # the single-battery model (and existing tests pinning this
+                # exact shape) are untouched.
+                if "soc_init" not in runtimeparams.keys():
+                    soc_init = params["plant_conf"]["battery_target_state_of_charge"]
+                else:
+                    soc_init = runtimeparams["soc_init"]
+                    if isinstance(soc_init, list):
+                        # A naive-mpc runtime list is handled symmetrically
+                        # with the num_batteries>1 branch below
+                        # (_resolve_soc_runtime_list) and with the dayahead
+                        # passthrough (_passthrough_soc_runtime): a length-1
+                        # list unwraps to its scalar, any other length is the
+                        # same clear ValueError the N>1 path raises, not an
+                        # opaque TypeError from comparing a list to a float.
+                        if len(soc_init) != 1:
+                            raise ValueError(
+                                f"soc_init has {len(soc_init)} entries but "
+                                f"number_of_batteries=1; provide a scalar (broadcast "
+                                f"to every battery) or a list of exactly 1 entry"
+                            )
+                        soc_init = soc_init[0]
+                if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
+                    logger.warning(
+                        f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
+                    )
+                if soc_init > params["plant_conf"]["battery_maximum_state_of_charge"]:
+                    logger.warning(
+                        f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, keeping real initial SOC for optimization recovery"
+                    )
+                params["passed_data"]["soc_init"] = soc_init
+                if "soc_final" not in runtimeparams.keys():
+                    soc_final = params["plant_conf"]["battery_target_state_of_charge"]
+                else:
+                    soc_final = runtimeparams["soc_final"]
+                    if isinstance(soc_final, list):
+                        # Same symmetric length-1-unwrap / clear-ValueError
+                        # handling as soc_init above.
+                        if len(soc_final) != 1:
+                            raise ValueError(
+                                f"soc_final has {len(soc_final)} entries but "
+                                f"number_of_batteries=1; provide a scalar (broadcast "
+                                f"to every battery) or a list of exactly 1 entry"
+                            )
+                        soc_final = soc_final[0]
+                if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
+                    logger.warning(
+                        f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
+                    )
+                    soc_final = params["plant_conf"]["battery_minimum_state_of_charge"]
+                if soc_final > params["plant_conf"]["battery_maximum_state_of_charge"]:
+                    logger.warning(
+                        f"Passed soc_final={soc_final} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_final=soc_max"
+                    )
+                    soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
+                params["passed_data"]["soc_final"] = soc_final
             else:
-                soc_init = runtimeparams["soc_init"]
-            if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
-                logger.warning(
-                    f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
-                )
-            if soc_init > params["plant_conf"]["battery_maximum_state_of_charge"]:
-                logger.warning(
-                    f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, keeping real initial SOC for optimization recovery"
-                )
-            params["passed_data"]["soc_init"] = soc_init
-            if "soc_final" not in runtimeparams.keys():
-                soc_final = params["plant_conf"]["battery_target_state_of_charge"]
-            else:
-                soc_final = runtimeparams["soc_final"]
-            if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
-                logger.warning(
-                    f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
-                )
-                soc_final = params["plant_conf"]["battery_minimum_state_of_charge"]
-            if soc_final > params["plant_conf"]["battery_maximum_state_of_charge"]:
-                logger.warning(
-                    f"Passed soc_final={soc_final} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_final=soc_max"
-                )
-                soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
-            params["passed_data"]["soc_final"] = soc_final
+                # #610: battery_target_state_of_charge/min/max are now
+                # per-battery lists (check_batt_params already normalised them
+                # above). soc_init/soc_final resolve PER BATTERY k against
+                # target[k]; a runtime scalar broadcasts, a runtime list must
+                # be exactly num_batteries long (hard error otherwise).
+                target_list = params["plant_conf"]["battery_target_state_of_charge"]
+                min_list = params["plant_conf"]["battery_minimum_state_of_charge"]
+                max_list = params["plant_conf"]["battery_maximum_state_of_charge"]
+
+                def _resolve_soc_runtime_list(key: str, fallback_list: list) -> list:
+                    if key not in runtimeparams.keys():
+                        return list(fallback_list)
+                    value = runtimeparams[key]
+                    if isinstance(value, list):
+                        if len(value) != num_batteries:
+                            raise ValueError(
+                                f"{key} has {len(value)} entries but "
+                                f"number_of_batteries={num_batteries}; provide a scalar "
+                                f"(broadcast to every battery) or a list of exactly "
+                                f"{num_batteries} entries"
+                            )
+                        return list(value)
+                    return [value] * num_batteries
+
+                soc_init_list = _resolve_soc_runtime_list("soc_init", target_list)
+                for k in range(num_batteries):
+                    if soc_init_list[k] < min_list[k]:
+                        logger.warning(
+                            f"Passed soc_init[{k}]={soc_init_list[k]} is lower than "
+                            f"soc_min[{k}]={min_list[k]}, keeping real initial SOC for "
+                            "optimization recovery"
+                        )
+                    if soc_init_list[k] > max_list[k]:
+                        logger.warning(
+                            f"Passed soc_init[{k}]={soc_init_list[k]} is greater than "
+                            f"soc_max[{k}]={max_list[k]}, keeping real initial SOC for "
+                            "optimization recovery"
+                        )
+                params["passed_data"]["soc_init"] = soc_init_list
+
+                soc_final_list = _resolve_soc_runtime_list("soc_final", target_list)
+                for k in range(num_batteries):
+                    if soc_final_list[k] < min_list[k]:
+                        logger.warning(
+                            f"Passed soc_final[{k}]={soc_final_list[k]} is lower than "
+                            f"soc_min[{k}]={min_list[k]}, setting soc_final[{k}]=soc_min[{k}]"
+                        )
+                        soc_final_list[k] = min_list[k]
+                    if soc_final_list[k] > max_list[k]:
+                        logger.warning(
+                            f"Passed soc_final[{k}]={soc_final_list[k]} is greater than "
+                            f"soc_max[{k}]={max_list[k]}, setting soc_final[{k}]=soc_max[{k}]"
+                        )
+                        soc_final_list[k] = max_list[k]
+                params["passed_data"]["soc_final"] = soc_final_list
             # Optional intermediate SOC target (issue #553). Both are runtime-only
             # and default to None (no intermediate target); clamping/validation of
             # the value and the timestep is handled in Optimization.perform_optimization.
@@ -1658,12 +1761,23 @@ async def treat_runtimeparams(
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
             params["passed_data"]["prediction_horizon"] = None
-            params["passed_data"]["soc_init"] = (
-                float(runtimeparams["soc_init"]) if "soc_init" in runtimeparams else None
-            )
-            params["passed_data"]["soc_final"] = (
-                float(runtimeparams["soc_final"]) if "soc_final" in runtimeparams else None
-            )
+
+            def _passthrough_soc_runtime(key: str):
+                # The dayahead/perfect branch (this else) never had the
+                # naive-mpc branch's target-fallback/clamp logic - it is (and
+                # stays) a bare passthrough. The only pre-#610 behaviour was
+                # float(scalar); a runtime list must not crash here. Length
+                # validation and the scalar-broadcast/target-fallback for a
+                # multi-battery plant both happen once, downstream, in
+                # Optimization._normalize_soc_arg / perform_optimization - this
+                # layer must not duplicate that logic, only stop crashing on it.
+                if key not in runtimeparams:
+                    return None
+                value = runtimeparams[key]
+                return list(value) if isinstance(value, list) else float(value)
+
+            params["passed_data"]["soc_init"] = _passthrough_soc_runtime("soc_init")
+            params["passed_data"]["soc_final"] = _passthrough_soc_runtime("soc_final")
             params["passed_data"]["soc_target"] = (
                 float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
             )
@@ -3232,6 +3346,23 @@ async def build_params(
                     )
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
+
+    # Normalise per-battery array params against number_of_batteries (#610).
+    # Missing key defaults to 1 (single-battery, the only shape supported
+    # before this parameter existed); N=1 is a true no-op (see
+    # check_batt_params docstring).
+    num_batteries = validate_num_batteries(params["plant_conf"])
+    for batt_param_name, batt_default in BATT_ARRAY_PARAMS_PLANT_CONF.items():
+        check_batt_params(
+            num_batteries, params["plant_conf"], batt_default, batt_param_name, logger
+        )
+    for batt_param_name, batt_default in BATT_ARRAY_PARAMS_OPTIM_CONF.items():
+        check_batt_params(
+            num_batteries, params["optim_conf"], batt_default, batt_param_name, logger
+        )
+    for batt_param_name in BATT_WEIGHT_PARAMS:
+        check_batt_weight_params(num_batteries, params["optim_conf"], batt_param_name, logger)
+
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
         if params["retrieve_hass_conf"]["historic_days_to_retrieve"] < 2:
@@ -3368,6 +3499,233 @@ def check_def_loads(
         result = [v if v is not None else default for v in result]
         parameter[parameter_name] = result
     return result
+
+
+# Per-battery ARRAY parameters (#610): scalar accepted and broadcast to every
+# battery, exact-length-N list accepted as-is. Unlike check_def_loads (deferrable
+# loads), a wrong-length list is a hard error, not padded - silently enlarging a
+# physical-plant array risks masking a genuine per-battery mis-configuration.
+# weight_battery_charge/discharge are intentionally excluded: they nest instead
+# (see check_batt_weight_params) because a flat list there is already a time
+# series today, not a per-battery array.
+BATT_ARRAY_PARAMS_PLANT_CONF: dict[str, bool | int | float] = {
+    "battery_discharge_power_max": 1000,
+    "battery_charge_power_max": 1000,
+    "battery_discharge_efficiency": 0.95,
+    "battery_charge_efficiency": 0.95,
+    "battery_nominal_energy_capacity": 5000,
+    "battery_minimum_state_of_charge": 0.3,
+    "battery_maximum_state_of_charge": 0.9,
+    "battery_target_state_of_charge": 0.6,
+    "battery_stress_cost": 0.0,
+}
+BATT_ARRAY_PARAMS_OPTIM_CONF: dict[str, bool | int | float] = {
+    "battery_soc_deficit_threshold": 0.4,
+    "battery_soc_deficit_cost": 0.0,
+    "battery_soc_surplus_threshold": 0.9,
+    "battery_soc_surplus_cost": 0.0,
+}
+BATT_WEIGHT_PARAMS: tuple[str, ...] = ("weight_battery_charge", "weight_battery_discharge")
+
+
+def _coerce_batt_element(
+    value: bool | float | str | None, default: bool | float, parameter_name: str
+) -> bool | int | float:
+    """Coerce a single per-battery array element (#610).
+
+    None or a stringly-typed "null" resolve to the per-slot default; a numeric
+    string coerces to float; anything else passes through unchanged. A genuinely
+    non-numeric string raises a clear ValueError rather than silently becoming 0.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        if value.strip().lower() == "null":
+            return default
+        try:
+            return float(value)
+        except ValueError as err:
+            raise ValueError(f"{parameter_name}: non-numeric string element {value!r}") from err
+    return value
+
+
+def validate_num_batteries(plant_conf: dict) -> int:
+    """
+    Read and validate plant_conf["number_of_batteries"] (#610).
+
+    Accepts a positive integer (an integral float or numeric string is coerced);
+    zero, negative, fractional, boolean or non-numeric values raise ValueError
+    here, at config time, rather than surfacing as an empty per-battery list
+    deep inside the optimization build.
+
+    :param plant_conf: the plant configuration dict
+    :type plant_conf: dict
+    :return: the validated battery count (missing key -> 1)
+    :rtype: int
+    """
+    raw = plant_conf.get("number_of_batteries", 1)
+    invalid = ValueError(f"number_of_batteries must be a positive integer, got {raw!r}")
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        raise invalid
+    try:
+        value = float(raw)
+    except ValueError:
+        raise invalid from None
+    if not value.is_integer() or value < 1:
+        raise invalid
+    return int(value)
+
+
+def check_batt_params(
+    num_batteries: int,
+    parameter: dict,
+    default: bool | float,
+    parameter_name: str,
+    logger: logging.Logger,
+) -> bool | int | float | list:
+    """
+    Normalise a per-battery plant_conf/optim_conf array parameter (#610).
+
+    N == 1 (the default/off state) is a true no-op: a scalar stays a scalar,
+    byte-identical to master, since optimization.py's per-battery model
+    reduces to reading that same scalar at index 0. For N > 1: a missing key
+    or scalar value broadcasts to ``[value] * num_batteries``; a list must be
+    exactly ``num_batteries`` long (wrong length raises ValueError naming the
+    parameter and the expected length - no silent padding, unlike deferrable
+    loads). List elements are coerced per _coerce_batt_element (None/"null" ->
+    default, numeric string -> float).
+
+    :param num_batteries: plant_conf["number_of_batteries"]
+    :type num_batteries: int
+    :param parameter: parameter config dict containing parameter_name
+    :type parameter: dict
+    :param default: default value used to fill missing/None slots
+    :type default: bool | int | float
+    :param parameter_name: name of parameter
+    :type parameter_name: str
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :return: the normalised value: a scalar at N=1, a length-num_batteries list at N>1
+    :rtype: bool | int | float | list
+    """
+    current = parameter.get(parameter_name, None)
+    if current is None:
+        if num_batteries == 1:
+            return current
+        parameter[parameter_name] = [default] * num_batteries
+        return parameter[parameter_name]
+    if isinstance(current, list):
+        if len(current) != num_batteries:
+            raise ValueError(
+                f"{parameter_name} has {len(current)} entries but "
+                f"number_of_batteries={num_batteries}; provide a scalar (broadcast "
+                f"to every battery) or a list of exactly {num_batteries} entries"
+            )
+        normalized = [_coerce_batt_element(v, default, parameter_name) for v in current]
+        parameter[parameter_name] = normalized[0] if num_batteries == 1 else normalized
+        return parameter[parameter_name]
+    # Scalar (or stringly-typed scalar, e.g. a "null"/"0.0" string from HA).
+    coerced = _coerce_batt_element(current, default, parameter_name)
+    if num_batteries == 1:
+        parameter[parameter_name] = coerced
+        return coerced
+    parameter[parameter_name] = [coerced] * num_batteries
+    return parameter[parameter_name]
+
+
+def _coerce_batt_weight_value(
+    value: bool | float | str | list | None,
+    default: bool | float,
+    parameter_name: str,
+) -> bool | int | float | list:
+    """Recursively coerce a weight_battery_* value/element (#610).
+
+    Applies the same leaf-level rule as _coerce_batt_element (None/"null" ->
+    default, numeric string -> float, non-numeric string -> clear ValueError)
+    at ANY nesting depth: a bare scalar, a flat time series, or a nested
+    per-battery list-of-series. Only leaf elements are coerced - the outer
+    SHAPE is always preserved (a list stays a list of the same length/nesting,
+    a scalar stays a scalar), so this is safe to run unconditionally,
+    including at num_batteries == 1 where check_batt_weight_params must
+    otherwise stay a byte-identical no-op.
+    """
+    if isinstance(value, list):
+        return [_coerce_batt_weight_value(v, default, parameter_name) for v in value]
+    return _coerce_batt_element(value, default, parameter_name)
+
+
+def check_batt_weight_params(
+    num_batteries: int,
+    parameter: dict,
+    parameter_name: str,
+    logger: logging.Logger,
+    default: bool | float = 0.0,
+) -> None:
+    """
+    Normalise weight_battery_charge/weight_battery_discharge into the nested
+    per-battery form for N > 1 (#610). Mutates parameter[parameter_name] in
+    place; returns nothing (mirrors the value being read back via ``parameter``).
+
+    A stringly-typed guard runs FIRST, at every num_batteries (including 1):
+    every leaf element is coerced via _coerce_batt_weight_value (None/"null"
+    -> default, numeric string -> float, non-numeric string -> clear
+    ValueError naming the parameter). Before #610 these two params had zero
+    validation of any kind at N=1 (the default and only value every
+    non-adopting user has), unlike every other per-battery array param. Only
+    leaf VALUES are coerced; the shape is untouched, so the N=1 no-op still
+    holds for any already-well-typed value.
+
+    Disambiguation, in priority order:
+    1. num_batteries == 1: no-op (beyond the stringly-typed guard above),
+       exactly today's behaviour (scalar or series, no nesting) -
+       optimization.py's existing np.array(...) broadcast handles both shapes
+       unchanged.
+    2. Scalar value: broadcast, every battery gets the same scalar -> [v] * N.
+    3. List of length num_batteries whose elements are themselves scalars or
+       lists: already per-battery (entry k -> battery k); passed through as-is.
+    4. Any other list (a flat time series not of length N): shared by every
+       battery, today's semantics preserved -> [v] * N (each battery gets an
+       identical copy of the series).
+    5. Ambiguous corner: a flat NUMERIC list whose length happens to equal
+       num_batteries is caught by rule 3 (per-battery), not rule 4 (shared
+       series). Documented in docs/config.md: nest explicitly ([series] * N,
+       or distinct per-battery entries) if a shared series of that exact
+       length was intended.
+
+    :param num_batteries: plant_conf["number_of_batteries"]
+    :type num_batteries: int
+    :param parameter: the optim_conf dict containing parameter_name
+    :type parameter: dict
+    :param parameter_name: "weight_battery_charge" or "weight_battery_discharge"
+    :type parameter_name: str
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :param default: fallback value for a None/"null" leaf (config_defaults.json
+        value for both weight params is 0.0)
+    :type default: bool | int | float
+    """
+    current = parameter.get(parameter_name, None)
+    if current is None:
+        return
+    current = _coerce_batt_weight_value(current, default, parameter_name)
+    parameter[parameter_name] = current
+    if num_batteries == 1:
+        return
+    if not isinstance(current, list):
+        parameter[parameter_name] = [current] * num_batteries
+        return
+    if len(current) == num_batteries and all(
+        isinstance(v, list) or (isinstance(v, int | float) and not isinstance(v, bool))
+        for v in current
+    ):
+        # Already per-battery nested (rule 3, including the ambiguous rule-5
+        # corner), pass through unchanged.
+        return
+    # Flat list not of length num_batteries -> shared time series (rule 4). Each
+    # battery gets its OWN copy: [current] * N would alias one list object
+    # across every battery, so a later in-place mutation of one battery's
+    # series would silently rewrite them all.
+    parameter[parameter_name] = [list(current) for _ in range(num_batteries)]
 
 
 def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:

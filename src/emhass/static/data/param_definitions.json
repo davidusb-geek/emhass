@@ -626,6 +626,13 @@
       "default_value": false,
       "unit": "none"
     },
+    "number_of_batteries": {
+      "friendly_name": "Number of batteries",
+      "Description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics.",
+      "input": "int",
+      "default_value": 1,
+      "unit": "count"
+    },
     "set_nocharge_from_grid": {
       "friendly_name": "Forbid charging battery from grid",
       "Description": "Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV",
@@ -676,78 +683,78 @@
     },
     "weight_battery_discharge": {
       "friendly_name": "Add cost weight for battery discharge",
-      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging",
-      "input": "float",
+      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules.",
+      "input": "array.float",
       "default_value": 0.0,
       "unit": "¤/kWh"
     },
     "weight_battery_charge": {
       "friendly_name": "Add cost weight for battery charge",
-      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging",
-      "input": "float",
+      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules.",
+      "input": "array.float",
       "default_value": 0.0,
       "unit": "¤/kWh"
     },
     "battery_discharge_power_max": {
       "friendly_name": "Max battery discharge power",
-      "Description": "The maximum discharge power in Watts",
-      "input": "int",
+      "Description": "The maximum discharge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.int",
       "default_value": 1000,
       "unit": "W"
     },
     "battery_charge_power_max": {
       "friendly_name": "Max battery charge power",
-      "Description": "The maximum charge power in Watts",
-      "input": "int",
+      "Description": "The maximum charge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.int",
       "default_value": 1000,
       "unit": "W"
     },
     "battery_discharge_efficiency": {
       "friendly_name": "Battery discharge efficiency",
-      "Description": "The discharge efficiency. (percentage/100)",
-      "input": "float",
+      "Description": "The discharge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.95,
       "unit": "fraction"
     },
     "battery_charge_efficiency": {
       "friendly_name": "Battery charge efficiency",
-      "Description": "The charge efficiency. (percentage/100)",
-      "input": "float",
+      "Description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.95,
       "unit": "fraction"
     },
     "battery_nominal_energy_capacity": {
       "friendly_name": "Battery total capacity",
-      "Description": "The total capacity of the battery stack in Wh",
-      "input": "int",
+      "Description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.int",
       "default_value": 5000,
       "unit": "Wh"
     },
     "battery_minimum_state_of_charge": {
       "friendly_name": "Minimum Battery charge percentage",
-      "Description": "The minimum allowable battery state of charge. (percentage/100)",
-      "input": "float",
+      "Description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.3,
       "unit": "fraction"
     },
     "battery_maximum_state_of_charge": {
       "friendly_name": "Maximum Battery charge percentage",
-      "Description": "The maximum allowable battery state of charge. (percentage/100)",
-      "input": "float",
+      "Description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.9,
       "unit": "fraction"
     },
     "battery_target_state_of_charge": {
       "friendly_name": "Battery desired percentage after optimization",
-      "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
-      "input": "float",
+      "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
+      "input": "array.float",
       "default_value": 0.6,
       "unit": "fraction"
     },
     "battery_stress_cost": {
       "friendly_name": "Battery Stress Cost",
-      "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
-      "input": "float",
+      "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.0,
       "unit": "¤/kWh"
     },
@@ -760,8 +767,8 @@
     },
     "battery_soc_deficit_threshold": {
     "friendly_name": "Battery SOC deficit threshold",
-    "Description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value.",
-    "input": "float",
+    "Description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+    "input": "array.float",
     "default_value": 0.4,
     "requires": {
       "set_use_battery": true
@@ -769,8 +776,8 @@
     },
     "battery_soc_deficit_cost": {
       "friendly_name": "Battery SOC deficit cost",
-      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold.",
-      "input": "float",
+      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.0,
       "requires": {
         "set_use_battery": true
@@ -778,8 +785,8 @@
     },
     "battery_soc_surplus_threshold": {
       "friendly_name": "Battery SOC surplus threshold",
-      "Description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge.",
-      "input": "float",
+      "Description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.9,
       "requires": {
         "set_use_battery": true
@@ -787,8 +794,8 @@
     },
     "battery_soc_surplus_cost": {
       "friendly_name": "Battery SOC surplus cost",
-      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled).",
-      "input": "float",
+      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "input": "array.float",
       "default_value": 0.0,
       "requires": {
         "set_use_battery": true
