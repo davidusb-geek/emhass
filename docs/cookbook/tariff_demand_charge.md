@@ -58,17 +58,19 @@ Expected: no action this step — this is the mental model for why raising `capa
 
 A demand charge is billed on the **month's** peak, but one optimization only sees its own horizon. If you already hit, say, 6 kW earlier this month, there is no point spending battery/deferrable flexibility to keep this afternoon under 6 kW — that peak is already paid for. Pass the running monthly peak as `current_period_peak` (in **Watts**) so the solver floors `peak_import` there and only fights *new* peaks above it.
 
-This is a runtime param, honored on the `naive-mpc-optim` (prediction-horizon) path:
+This is a runtime param, honored on the `naive-mpc-optim` (prediction-horizon) path. POST it to `/action/naive-mpc-optim` in the `runtime_params` body (strictly valid JSON, copy-paste as-is):
 
-```jsonc
-// POST /action/naive-mpc-optim  — runtime_params
+```json
 {
   "prediction_horizon": 24,
-  "capacity_cost_per_kw": 8.0,      // optional per-call override of Step 1
-  "current_period_peak": 6000        // Watts; the highest grid import seen so far this billing month
-  // length-note: current_period_peak is a SCALAR, not an array — no horizon_steps sizing
+  "capacity_cost_per_kw": 8.0,
+  "current_period_peak": 6000
 }
 ```
+
+- `current_period_peak` is in **Watts** — the highest grid import measured so far this billing month.
+- `capacity_cost_per_kw` here is an optional per-call override of the Step 1 config value.
+- Both are **scalars, not arrays**, so the template's array-length / `horizon_steps` sizing rule does not apply — nothing to pad or truncate.
 
 Your orchestrator maintains the running peak: on each cycle, `current_period_peak = max(previous_stored_peak, latest_measured_grid_import_W)`, reset to `0` at the start of each billing period.
 
