@@ -1102,7 +1102,7 @@ class Optimization:
             ),
             "stress_cost": self._batt_list(self.plant_conf, "battery_stress_cost", default=0),
             "soc_deficit_threshold": self._batt_list(
-                self.optim_conf, "battery_soc_deficit_threshold", default=0.2
+                self.optim_conf, "battery_soc_deficit_threshold", default=0.4
             ),
             "soc_deficit_cost": self._batt_list(
                 self.optim_conf, "battery_soc_deficit_cost", default=0.0
@@ -2464,6 +2464,24 @@ class Optimization:
             aggregate_stored_energy = sum(current_stored_energy_list)
             aggregate_min_energy = sum(soc_min_list[k] * cap_list[k] for k in range(self.n_batt))
             aggregate_cap = sum(cap_list)
+            # For a very lopsided fleet the 1% aggregate tolerance below can
+            # exceed the smallest battery's entire usable SoC swing, so its
+            # charge state barely moves the shared gate (see docs/config.md).
+            if self.n_batt > 1:
+                usable_swings = [
+                    (soc_max_list[k] - soc_min_list[k]) * cap_list[k] for k in range(self.n_batt)
+                ]
+                min_swing = min(usable_swings)
+                max_swing = max(usable_swings)
+                if max_swing > 10 * min_swing:
+                    ratio_txt = f"{max_swing / min_swing:.0f}x" if min_swing > 0 else "inf"
+                    self.logger.warning(
+                        "Batteries are very different in size (%s usable SoC swing); "
+                        "the battery-first import gate tracks the fleet's aggregate "
+                        "SoC, so the smaller battery may not be drained before grid "
+                        "import is allowed. See docs/config.md.",
+                        ratio_txt,
+                    )
             # 1% aggregate-SoC tolerance so the gate opens cleanly once the
             # fleet has numerically reached its combined minimum, avoiding
             # chatter at the floor (mirrors the single-battery 1% tolerance).
