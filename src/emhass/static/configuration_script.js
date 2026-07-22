@@ -16,6 +16,31 @@
   </div>
 </div>; */
 
+//#610: the 15 per-battery array params in the "Battery" section (plant_conf +
+//optim_conf, see utils.py BATT_ARRAY_PARAMS_PLANT_CONF/BATT_ARRAY_PARAMS_OPTIM_CONF/
+//BATT_WEIGHT_PARAMS). Kept as an explicit list (not "every array.* param in the
+//Battery section") because number_of_batteries itself is int (not array.*), so a
+//generic filter would already exclude it - this list exists so the
+//"number_of_batteries" header case below only grows/shrinks these, never the
+//section's other array.* siblings if any get added later.
+const BATTERY_ARRAY_PARAMS = [
+  "weight_battery_discharge",
+  "weight_battery_charge",
+  "battery_discharge_power_max",
+  "battery_charge_power_max",
+  "battery_discharge_efficiency",
+  "battery_charge_efficiency",
+  "battery_nominal_energy_capacity",
+  "battery_minimum_state_of_charge",
+  "battery_maximum_state_of_charge",
+  "battery_target_state_of_charge",
+  "battery_stress_cost",
+  "battery_soc_deficit_threshold",
+  "battery_soc_deficit_cost",
+  "battery_soc_surplus_threshold",
+  "battery_soc_surplus_cost",
+];
+
 //on page reload
 window.onload = async function () {
   ///fetch configuration parameters from definitions json file
@@ -121,7 +146,9 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   }
 
   //list parameters used in the section headers
-  let header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads"];
+  //#610: number_of_batteries added to auto-sync the 15 per-battery array params
+  //(mirrors number_of_deferrable_loads), see the "number_of_batteries" case in headerElement
+  let header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads", "number_of_batteries"];
 
   //get the main container and append list template html
   document.getElementById("configuration-container").innerHTML = list_html;
@@ -284,11 +311,17 @@ function buildParamContainers(
       continue;
     }
 
-    //if parameter type == array.* and not in "Deferrable Loads" section, append plus and minus buttons in param div
+    //if parameter type == array.* and not in "Deferrable Loads" or "Battery" section,
+    //append plus and minus buttons in param div. Battery is excluded the same way
+    //Deferrable Loads is (#610): the 15 per-battery array params
+    //(BATTERY_ARRAY_PARAMS) are length-managed exclusively by the
+    //number_of_batteries header count below, so no free +/- button can desync a
+    //param's length from number_of_batteries and crash check_batt_params on save.
     let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
-      section != "Deferrable Loads"
+      section != "Deferrable Loads" &&
+      section != "Battery"
     ) {
       array_buttons = `
                   <button type="button" class="input-plus ${parameter_definition_name}">+</button>
@@ -641,8 +674,14 @@ function headerElement(element, param_definitions, config) {
     case "set_use_battery":
       if (element.checked) {
         param_container.innerHTML = "";
+        //#610: also exclude number_of_batteries here (its own header case below
+        //owns it) - otherwise this rebuild would render a SECOND, duplicate
+        //"number_of_batteries" .param row inside the section body alongside the
+        //real header input, since this rebuild's own exclusion list is separate
+        //from the outer header_input_list used at initial page load.
         buildParamContainers("Battery", param_definitions["Battery"], config, [
           "set_use_battery",
+          "number_of_batteries",
         ]);
         element.checked = true;
       } else {
@@ -683,6 +722,47 @@ function headerElement(element, param_definitions, config) {
           for (const param of param_list) {
             //append element, do not pass config to obtain default parameter from definitions file
             plusElements(param.id, param_definitions, "Deferrable Loads", {});
+          }
+        }
+      }
+      //subtract elements based how many elements its over
+      if (difference < 0) {
+        for (let i = difference; i <= -1; i++) {
+          for (const param of param_list) {
+            minusElements(param.id);
+          }
+        }
+      }
+      break;
+
+    //#610: the 15 per-battery array params
+    //(BATTERY_ARRAY_PARAMS) in the "Battery" section should add up to
+    //number_of_batteries, mirroring the number_of_deferrable_loads case above.
+    //Unlike "Deferrable Loads", "Battery" also holds global scalar flags
+    //(set_use_battery, set_nocharge_from_grid, set_battery_dynamic, ...) that
+    //must NOT be grown/shrunk by this count, so param_list is filtered down to
+    //BATTERY_ARRAY_PARAMS rather than every ".param" in the section.
+    case "number_of_batteries":
+      //get a list of only the battery array params in section
+      param_list = Array.from(
+        param_container.getElementsByClassName("param")
+      ).filter((p) => BATTERY_ARRAY_PARAMS.includes(p.id));
+      if (param_list.length <= 0) {
+        console.log(
+          "There has been an issue counting the amount of params in number_of_batteries"
+        );
+        return 1;
+      }
+      //calculate how much off the first battery array param's input elements amount to is, comparing to the number_of_batteries value
+      difference =
+        Number.parseInt(element.value) -
+        param_list[0].querySelectorAll("input").length;
+      //add elements based on how many elements are missing
+      if (difference > 0) {
+        for (let i = difference; i >= 1; i--) {
+          for (const param of param_list) {
+            //append element, do not pass config to obtain default parameter from definitions file
+            plusElements(param.id, param_definitions, "Battery", {});
           }
         }
       }

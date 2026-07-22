@@ -4210,8 +4210,11 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         opt_2 = (await self._run_set_input({**base_rt, "battery_discharge_power_max": 9999}))["opt"]
 
         self.assertIs(opt_1, opt_2, "battery_discharge_power_max change must keep cache HIT")
-        # And the new value has been propagated to the CVXPY Parameter
-        self.assertAlmostEqual(float(opt_2.param_battery_discharge_power_max.value), 9999.0)
+        # And the new value has been propagated to the CVXPY Parameter.
+        # #610: param_battery_discharge_power_max is now a per-battery list
+        # (index 0 at number_of_batteries==1, uniformly indexed like every
+        # other per-battery Parameter/Variable in optimization.py).
+        self.assertAlmostEqual(float(opt_2.param_battery_discharge_power_max[0].value), 9999.0)
 
 
 if __name__ == "__main__":

@@ -1027,6 +1027,13 @@ async def _identify_battery_impl(
     test_df_literal: str,
 ) -> None:
     """Implementation of :func:`identify_battery`; wrapped for the never-raise guarantee."""
+    num_batteries = utils.validate_num_batteries(plant_conf)
+    if num_batteries > 1:
+        logger.warning(
+            "Battery identification supports a single battery only; skipping "
+            f"(number_of_batteries={num_batteries})."
+        )
+        return
     data_path = pathlib.Path(emhass_conf["data_path"])
     json_path = data_path / "battery_identification.json"
     max_age_hours = optim_conf.get("battery_identification_model_max_age", 24)
@@ -2998,15 +3005,22 @@ async def _publish_thermal_loads(ctx: PublishContext, opt_res_latest: pd.DataFra
     return cols
 
 
+_BATTERY_POWER_ENTITY_TEMPLATE = "sensor.p_batt_forecast_battery{k}"
+_BATTERY_SOC_ENTITY_TEMPLATE = "sensor.soc_batt_forecast_battery{k}"
+_DEFAULT_SOC_ENTITY_ID = "sensor.soc_batt_forecast"
+
+
 async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
-    """Publish Battery Power and SOC."""
+    """Publish Battery Power (fleet total; per-battery at N>1) and SOC
+    (bare at N=1, per-battery only at N>1)."""
     cols = []
     if not ctx.optim_conf["set_use_battery"]:
         return cols
     if "P_batt" not in opt_res_latest.columns:
         ctx.logger.error("P_batt was not found in results DataFrame.")
         return cols
-    # Power
+    # Power - fleet total. custom_batt_forecast_id overrides this one entity at
+    # any N: unchanged code path, so this stays a true no-op at N=1.
     custom_batt = ctx.params["passed_data"]["custom_batt_forecast_id"]
     await ctx.rh.post_data(
         opt_res_latest["P_batt"],
@@ -3019,19 +3033,82 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
         **ctx.common_kwargs,
     )
     cols.append("P_batt")
-    # SOC
-    custom_soc = ctx.params["passed_data"]["custom_batt_soc_forecast_id"]
-    await ctx.rh.post_data(
-        opt_res_latest["SOC_opt"] * 100,
-        ctx.idx,
-        custom_soc["entity_id"],
-        "battery",
-        custom_soc["unit_of_measurement"],
-        custom_soc["friendly_name"],
-        type_var="SOC",
-        **ctx.common_kwargs,
-    )
-    cols.append("SOC_opt")
+
+    n_batt = utils.validate_num_batteries(ctx.plant_conf)
+    if n_batt == 1:
+        # N=1: exactly today's entity set, zero new entities. Still
+        # overridable via custom_batt_soc_forecast_id.
+        # Guard the bare SOC_opt read the same way P_batt is guarded above: a
+        # stale N>1 results frame (fleet P_batt + SOC_opt_0/1, no bare
+        # SOC_opt) replayed under a config reverted to N=1 must warn+skip
+        # SOC, never KeyError.
+        if "SOC_opt" not in opt_res_latest.columns:
+            ctx.logger.error("SOC_opt was not found in results DataFrame.")
+            return cols
+        custom_soc = ctx.params["passed_data"]["custom_batt_soc_forecast_id"]
+        await ctx.rh.post_data(
+            opt_res_latest["SOC_opt"] * 100,
+            ctx.idx,
+            custom_soc["entity_id"],
+            "battery",
+            custom_soc["unit_of_measurement"],
+            custom_soc["friendly_name"],
+            type_var="SOC",
+            **ctx.common_kwargs,
+        )
+        cols.append("SOC_opt")
+        return cols
+
+    # N > 1: no bare fleet SOC sensor - SOC has no meaningful fleet aggregate.
+    # custom_batt_soc_forecast_id has no natural single target here (it
+    # customizes the bare sensor that no longer exists at N>1), so a runtime
+    # override is ignored with a one-time warning rather than silently
+    # reinterpreted as a prefix. This keeps every per-battery entity id
+    # exactly the pinned sensor.*_battery<K> name regardless of a legacy
+    # single-battery override, adding no new config surface.
+    custom_soc = ctx.params["passed_data"].get("custom_batt_soc_forecast_id") or {}
+    if custom_soc.get("entity_id") not in (None, _DEFAULT_SOC_ENTITY_ID):
+        ctx.logger.warning(
+            "custom_batt_soc_forecast_id override (%s) has no effect when "
+            "number_of_batteries=%d: SOC has no meaningful fleet aggregate, so "
+            "per-battery SOC always publishes on the fixed "
+            "sensor.soc_batt_forecast_battery<K> entity ids.",
+            custom_soc.get("entity_id"),
+            n_batt,
+        )
+
+    for k in range(n_batt):
+        p_col = f"P_batt_{k}"
+        if p_col in opt_res_latest.columns:
+            await ctx.rh.post_data(
+                opt_res_latest[p_col],
+                ctx.idx,
+                _BATTERY_POWER_ENTITY_TEMPLATE.format(k=k),
+                "power",
+                "W",
+                f"Battery Power Forecast Battery {k}",
+                type_var="batt",
+                **ctx.common_kwargs,
+            )
+            cols.append(p_col)
+        else:
+            ctx.logger.error(f"{p_col} was not found in results DataFrame.")
+
+        soc_col = f"SOC_opt_{k}"
+        if soc_col in opt_res_latest.columns:
+            await ctx.rh.post_data(
+                opt_res_latest[soc_col] * 100,
+                ctx.idx,
+                _BATTERY_SOC_ENTITY_TEMPLATE.format(k=k),
+                "battery",
+                "%",
+                f"Battery SOC Forecast Battery {k}",
+                type_var="SOC",
+                **ctx.common_kwargs,
+            )
+            cols.append(soc_col)
+        else:
+            ctx.logger.error(f"{soc_col} was not found in results DataFrame.")
     return cols
 
 

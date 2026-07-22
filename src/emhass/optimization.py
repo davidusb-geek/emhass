@@ -48,6 +48,29 @@ THERMAL_CONFIG_KEY_HINTS = {
 # curtailment powers in W).
 CURTAILMENT_TIEBREAK_EPS = 1e-7
 
+# Multi-battery symmetry-breaking tie-break (issue #610): with N>1 batteries of
+# identical (or near-identical) cost/efficiency, the LP has many equally-optimal
+# ways to split charge/discharge across batteries. A tiny index-scaled usage
+# tilt breaks the tie at the LP/MILP optimum: it penalizes total throughput
+# (charge + discharge combined) scaled by battery index, so on an exact tie
+# the lowest-index battery is preferred for both charging and discharging.
+# It never overrides a real cost/efficiency difference.
+#
+# Sizing: the smallest realistic difference this must stay dominated by is a
+# 0.1% round-trip-efficiency delta between two otherwise-identical batteries
+# (see test_epsilon_dominance in test_multi_battery_optimization.py) at the
+# cheapest realistic tariff; 1e-9 is ~5 orders of magnitude below that.
+#
+# This only guarantees a unique mathematical optimum, not that the solver
+# reports it: HiGHS is a MILP solver and stops once it is within
+# lp_solver_mip_rel_gap of that optimum (default 0.01), several orders larger
+# than this tilt's own contribution to the objective. Within that gap the
+# solver is free to return any plan it likes, so strict run-to-run
+# determinism needs a tight (or zero) lp_solver_mip_rel_gap - the same knob
+# that governs general schedule repeatability, not something specific to
+# multi-battery.
+BATTERY_TIEBREAK_EPS = 1e-9
+
 # Battery-first priority (issue #834/#1002): when set_battery_first_priority is
 # on, importing from the grid while the battery is still above its minimum SoC is
 # penalized at this multiple of the prevailing import tariff. Making it a soft
@@ -132,6 +155,14 @@ class Optimization:
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
+        # Number of batteries (#610). Read defensively: plant_conf may come
+        # from a hand-built dict (tests, or a config predating this feature)
+        # that never sets the key, in which case a single battery is the only
+        # sensible default. Structural: a change to this count alters the
+        # number of decision variables/constraints, so (like
+        # number_of_deferrable_loads) it must invalidate any cached problem
+        # rather than update a cp.Parameter in place.
+        self.n_batt = int(self.plant_conf.get("number_of_batteries", 1))
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.time_step = self.freq.seconds / 3600  # in hours
@@ -237,24 +268,42 @@ class Optimization:
             for k in range(num_def_loads)
         ]
 
-        # Scalar Parameters
-        self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
-        self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
+        # Per-battery Scalar Parameters (#610). A list of length self.n_batt,
+        # one cp.Parameter per battery, indexed k in range(self.n_batt) - this
+        # is the uniform indexing scheme the whole battery model below follows.
+        # At n_batt == 1 this is a 1-element list, so the N=1 solve is
+        # mathematically identical to before (single scalar per Parameter);
+        # only the Python container shape differs internally.
+        self.param_soc_init = [
+            cp.Parameter(nonneg=True, name=f"soc_init_{k}") for k in range(self.n_batt)
+        ]
+        self.param_soc_final = [
+            cp.Parameter(nonneg=True, name=f"soc_final_{k}") for k in range(self.n_batt)
+        ]
 
         # Battery power limits — parameterised so SoC-derated values arriving
         # via runtimeparams update without invalidating the OptimizationCache.
-        self.param_battery_charge_power_max = cp.Parameter(
-            nonneg=True, name="battery_charge_power_max"
+        # One Parameter per battery (update_battery_power_limits loops over k).
+        self.param_battery_charge_power_max = [
+            cp.Parameter(nonneg=True, name=f"battery_charge_power_max_{k}")
+            for k in range(self.n_batt)
+        ]
+        self.param_battery_discharge_power_max = [
+            cp.Parameter(nonneg=True, name=f"battery_discharge_power_max_{k}")
+            for k in range(self.n_batt)
+        ]
+        # Read only the two power-limit keys here (not the full
+        # _battery_conf_as_lists(), which also reads weight_battery_charge/
+        # discharge - those are irrelevant to Parameter seeding and, unlike
+        # the power limits, are not guaranteed present on a hand-built
+        # set_use_battery=False config).
+        _charge_max_list = self._batt_list(self.plant_conf, "battery_charge_power_max", default=0)
+        _discharge_max_list = self._batt_list(
+            self.plant_conf, "battery_discharge_power_max", default=0
         )
-        self.param_battery_discharge_power_max = cp.Parameter(
-            nonneg=True, name="battery_discharge_power_max"
-        )
-        self.param_battery_charge_power_max.value = float(
-            plant_conf.get("battery_charge_power_max", 0)
-        )
-        self.param_battery_discharge_power_max.value = float(
-            plant_conf.get("battery_discharge_power_max", 0)
-        )
+        for k in range(self.n_batt):
+            self.param_battery_charge_power_max[k].value = float(_charge_max_list[k])
+            self.param_battery_discharge_power_max[k].value = float(_discharge_max_list[k])
 
         # SOC recovery parameters
         self._init_soc_recovery_params()
@@ -275,15 +324,29 @@ class Optimization:
         self.prob = None
 
     def _init_soc_recovery_params(self) -> None:
-        """Initialize CVXPY parameters used for out-of-band SOC recovery."""
-        self.param_soc_low_gap = cp.Parameter(nonneg=True, name="soc_low_gap")
-        self.param_soc_high_gap = cp.Parameter(nonneg=True, name="soc_high_gap")
-        self.param_soc_low_required = cp.Parameter(nonneg=True, name="soc_low_required")
-        self.param_soc_high_required = cp.Parameter(nonneg=True, name="soc_high_required")
-        self.param_soc_low_gap.value = 0.0
-        self.param_soc_high_gap.value = 0.0
-        self.param_soc_low_required.value = 0.0
-        self.param_soc_high_required.value = 0.0
+        """Initialize CVXPY parameters used for out-of-band SOC recovery.
+
+        One set per battery (#610): each battery can independently start out
+        of its own [min, max] band and recover once. Lists of length
+        self.n_batt, indexed k like every other per-battery Parameter.
+        """
+        self.param_soc_low_gap = [
+            cp.Parameter(nonneg=True, name=f"soc_low_gap_{k}") for k in range(self.n_batt)
+        ]
+        self.param_soc_high_gap = [
+            cp.Parameter(nonneg=True, name=f"soc_high_gap_{k}") for k in range(self.n_batt)
+        ]
+        self.param_soc_low_required = [
+            cp.Parameter(nonneg=True, name=f"soc_low_required_{k}") for k in range(self.n_batt)
+        ]
+        self.param_soc_high_required = [
+            cp.Parameter(nonneg=True, name=f"soc_high_required_{k}") for k in range(self.n_batt)
+        ]
+        for k in range(self.n_batt):
+            self.param_soc_low_gap[k].value = 0.0
+            self.param_soc_high_gap[k].value = 0.0
+            self.param_soc_low_required[k].value = 0.0
+            self.param_soc_high_required[k].value = 0.0
 
     def _init_soc_target_params(self) -> None:
         """Initialize CVXPY parameters for the optional intermediate SOC target (#553).
@@ -298,11 +361,20 @@ class Optimization:
         unless a target is explicitly requested. It is a vector param so it must
         be (re)created whenever the horizon length changes. Called from __init__
         and when resizing the optimization problem.
+
+        One vector per battery (#610), list of length self.n_batt: the target
+        itself is not yet a per-battery runtime input, so every battery's floor
+        is fed the identical target fraction, applied against ITS OWN capacity
+        in perform_optimization. The per-battery Parameter exists now so a
+        future per-battery target only has to change the value each entry
+        receives, not the model structure.
         """
-        self.param_soc_target_floor = cp.Parameter(
-            self.num_timesteps, nonneg=True, name="soc_target_floor"
-        )
-        self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
+        self.param_soc_target_floor = [
+            cp.Parameter(self.num_timesteps, nonneg=True, name=f"soc_target_floor_{k}")
+            for k in range(self.n_batt)
+        ]
+        for k in range(self.n_batt):
+            self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
 
     def _init_current_period_peak_param(self) -> None:
         """Initialize the CVXPY parameter for the peak grid import already
@@ -939,22 +1011,182 @@ class Optimization:
             if k < len(self.param_current_operating_timesteps):
                 self.param_current_operating_timesteps[k].value = float(elapsed)
 
+    def _batt_list(
+        self,
+        source: dict,
+        key: str,
+        *,
+        required: bool = False,
+        default: float | None = None,
+    ) -> list:
+        """
+        Normalise one plant_conf/optim_conf battery value into a length
+        self.n_batt list.
+
+        utils.check_batt_params has already normalised these values before
+        they reach this class: at number_of_batteries == 1 the value is left
+        a bare scalar (single-battery math untouched); at N > 1 it is already
+        an exact-length-N list. This helper only wraps the N==1 scalar into a
+        1-element list so the rest of this module can iterate uniformly over
+        ``for k in range(self.n_batt)``. It never mutates ``source``.
+
+        ``required=True`` mirrors an existing direct ``source[key]`` read
+        (KeyError if missing); ``required=False`` mirrors an existing
+        ``source.get(key, default)`` read.
+        """
+        value = source[key] if required else source.get(key, default)
+        if isinstance(value, list):
+            if len(value) != self.n_batt:
+                raise ValueError(
+                    f"{key} has {len(value)} entries but number_of_batteries={self.n_batt}"
+                )
+            return value
+        return [value] * self.n_batt
+
+    def _batt_weight_list(self, value) -> list:
+        """
+        Normalise weight_battery_charge/weight_battery_discharge into a
+        length self.n_batt list, mirroring utils.check_batt_weight_params'
+        disambiguation at this module's own boundary.
+
+        At n_batt == 1 the single entry IS the original value untouched
+        (scalar or a flat time-series list): wrapping it as index 0 of a
+        1-element list is a no-op for every existing single-battery read site
+        (they all did ``np.array(weight_dis)`` on the raw value; now they do the
+        exact same thing on ``weight_list[0]``).
+
+        At n_batt > 1, utils.check_batt_weight_params has already resolved the
+        value into a length-n_batt nested list (each entry a per-battery
+        scalar or time series) before it reaches here, so the common case is
+        just a pass-through. The remaining branches are a defensive fallback
+        for a hand-built config that bypassed utils.py (e.g. a unit test
+        constructing plant_conf/optim_conf directly): a bare scalar or a flat
+        list not of length n_batt is broadcast/shared to every battery.
+        """
+        if self.n_batt == 1:
+            return [value]
+        if isinstance(value, list) and len(value) == self.n_batt:
+            return list(value)
+        return [value] * self.n_batt
+
+    def _battery_conf_as_lists(self) -> dict:
+        """
+        Read every per-battery plant_conf/optim_conf value as a length
+        self.n_batt list. Called from variable/parameter construction,
+        constraint building, the objective, and results extraction, so every
+        caller stays in lockstep on the same normalised view. Read-only:
+        never mutates self.plant_conf/self.optim_conf.
+        """
+        return {
+            "charge_power_max": self._batt_list(
+                self.plant_conf, "battery_charge_power_max", default=0
+            ),
+            "discharge_power_max": self._batt_list(
+                self.plant_conf, "battery_discharge_power_max", default=0
+            ),
+            "cap": self._batt_list(
+                self.plant_conf, "battery_nominal_energy_capacity", required=True
+            ),
+            "eff_dis": self._batt_list(
+                self.plant_conf, "battery_discharge_efficiency", required=True
+            ),
+            "eff_chg": self._batt_list(self.plant_conf, "battery_charge_efficiency", required=True),
+            "soc_min": self._batt_list(
+                self.plant_conf, "battery_minimum_state_of_charge", required=True
+            ),
+            "soc_max": self._batt_list(
+                self.plant_conf, "battery_maximum_state_of_charge", required=True
+            ),
+            "soc_target": self._batt_list(
+                self.plant_conf, "battery_target_state_of_charge", required=True
+            ),
+            "stress_cost": self._batt_list(self.plant_conf, "battery_stress_cost", default=0),
+            "soc_deficit_threshold": self._batt_list(
+                self.optim_conf, "battery_soc_deficit_threshold", default=0.4
+            ),
+            "soc_deficit_cost": self._batt_list(
+                self.optim_conf, "battery_soc_deficit_cost", default=0.0
+            ),
+            "soc_surplus_threshold": self._batt_list(
+                self.optim_conf, "battery_soc_surplus_threshold", default=0.9
+            ),
+            "soc_surplus_cost": self._batt_list(
+                self.optim_conf, "battery_soc_surplus_cost", default=0.0
+            ),
+            "weight_dis": self._batt_weight_list(self.optim_conf["weight_battery_discharge"]),
+            "weight_chg": self._batt_weight_list(self.optim_conf["weight_battery_charge"]),
+        }
+
+    def _normalize_soc_arg(self, value: float | list | None) -> list:
+        """
+        Normalise a perform_optimization soc_init/soc_final argument into a
+        length self.n_batt list (#610). A bare float (or None) broadcasts to
+        every battery - the pre-#610 call convention, still exactly what a
+        single-battery caller passes today, so at n_batt == 1 this is a true
+        no-op ([value] round-trips to the same value at index 0). An explicit
+        list must be exactly self.n_batt long (hard error otherwise, matching
+        check_batt_params' no-silent-padding stance).
+        """
+        if value is None:
+            return [None] * self.n_batt
+        if isinstance(value, list):
+            if len(value) != self.n_batt:
+                raise ValueError(
+                    f"soc_init/soc_final list must have {self.n_batt} entries "
+                    f"(number_of_batteries), got {len(value)}"
+                )
+            return list(value)
+        return [value] * self.n_batt
+
+    def _setup_battery_stress_cost(self, k: int, stress_unit_cost: float, max_power: float) -> dict:
+        """
+        Per-battery variant of _setup_stress_cost (#610). battery_stress_cost is
+        a per-battery array but battery_stress_segments stays a single global
+        PWL-discretisation knob (a discretisation choice, not a physical
+        battery property), so this cannot reuse the generic key-based lookup
+        verbatim: it takes the
+        already-resolved per-battery stress-cost value directly, reads the
+        shared segments knob under the unqualified "battery" key, and gives the
+        created Variable a battery-index-qualified name (mirrors the
+        deferrable-load ``f"..._{k}"`` naming idiom).
+        """
+        active = stress_unit_cost > 0 and max_power > 0
+        stress_cost_var = None
+        if active:
+            stress_cost_var = cp.Variable(
+                self.num_timesteps, nonneg=True, name=f"battery_stress_cost_{k}"
+            )
+        return {
+            "active": active,
+            "vars": stress_cost_var,
+            "unit_cost": stress_unit_cost,
+            "max_power": max_power,
+            "segments": self.plant_conf.get("battery_stress_segments", 10),
+        }
+
     def update_battery_power_limits(self, plant_conf: dict) -> None:
         """
         Update battery charge/discharge power-limit Parameters from plant_conf.
 
         Called on cache hit to sync runtime power-limit values without
-        rebuilding constraints. Mirrors update_thermal_start_temps.
+        rebuilding constraints. Mirrors update_thermal_start_temps. One
+        Parameter pair per battery (#610); ``plant_conf`` here is the
+        possibly-refreshed runtime config, so values are read from it (not
+        ``self.plant_conf``) via the same ``_batt_list`` normaliser used
+        everywhere else, keyed off the structural ``self.n_batt``.
 
         :param plant_conf: The plant configuration containing
             battery_charge_power_max / battery_discharge_power_max
         """
-        new_charge_max = float(plant_conf.get("battery_charge_power_max", 0) or 0)
-        new_discharge_max = float(plant_conf.get("battery_discharge_power_max", 0) or 0)
-        if self.param_battery_charge_power_max.value != new_charge_max:
-            self.param_battery_charge_power_max.value = new_charge_max
-        if self.param_battery_discharge_power_max.value != new_discharge_max:
-            self.param_battery_discharge_power_max.value = new_discharge_max
+        charge_list = self._batt_list(plant_conf, "battery_charge_power_max", default=0)
+        discharge_list = self._batt_list(plant_conf, "battery_discharge_power_max", default=0)
+        for k in range(self.n_batt):
+            new_charge_max = float(charge_list[k] or 0)
+            new_discharge_max = float(discharge_list[k] or 0)
+            if self.param_battery_charge_power_max[k].value != new_charge_max:
+                self.param_battery_charge_power_max[k].value = new_charge_max
+            if self.param_battery_discharge_power_max[k].value != new_discharge_max:
+                self.param_battery_discharge_power_max[k].value = new_discharge_max
 
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
@@ -1368,34 +1600,65 @@ class Optimization:
 
         # Binary indicators for Grid and Battery direction
         vars_dict["D"] = cp.Variable(n, boolean=True, name="D")
-        vars_dict["E"] = cp.Variable(n, boolean=True, name="E")
 
-        # Battery power variables
+        # Battery power variables (#610: one set PER BATTERY, k in
+        # range(self.n_batt), mirroring the deferrable-load f"..._{k}" naming
+        # idiom at the top of this method). "E" (direction binary) is likewise
+        # per-battery; "D" (grid direction) above stays a single shared binary
+        # - there is only one grid connection regardless of battery count.
         if self.optim_conf["set_use_battery"]:
-            vars_dict["p_sto_pos"] = cp.Variable(n, nonneg=True, name="p_sto_pos")
-            constraints.append(vars_dict["p_sto_pos"] <= self.param_battery_discharge_power_max)
+            vars_dict["E"] = [
+                cp.Variable(n, boolean=True, name=f"E_{k}") for k in range(self.n_batt)
+            ]
+            vars_dict["p_sto_pos"] = []
+            vars_dict["p_sto_neg"] = []
+            vars_dict["soc_low_recovered"] = []
+            vars_dict["soc_high_recovered"] = []
+            vars_dict["soc_deficit_cost"] = []
+            vars_dict["soc_surplus_cost"] = []
+            for k in range(self.n_batt):
+                p_sto_pos_k = cp.Variable(n, nonneg=True, name=f"p_sto_pos_{k}")
+                constraints.append(p_sto_pos_k <= self.param_battery_discharge_power_max[k])
+                vars_dict["p_sto_pos"].append(p_sto_pos_k)
 
-            vars_dict["p_sto_neg"] = cp.Variable(n, nonpos=True, name="p_sto_neg")
-            constraints.append(vars_dict["p_sto_neg"] >= -self.param_battery_charge_power_max)
-            vars_dict["soc_low_recovered"] = cp.Variable(n, boolean=True, name="soc_low_recovered")
-            vars_dict["soc_high_recovered"] = cp.Variable(
-                n, boolean=True, name="soc_high_recovered"
-            )
-            vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
-            vars_dict["soc_surplus_cost"] = cp.Variable(n, nonneg=True, name="soc_surplus_cost")
+                p_sto_neg_k = cp.Variable(n, nonpos=True, name=f"p_sto_neg_{k}")
+                constraints.append(p_sto_neg_k >= -self.param_battery_charge_power_max[k])
+                vars_dict["p_sto_neg"].append(p_sto_neg_k)
+
+                vars_dict["soc_low_recovered"].append(
+                    cp.Variable(n, boolean=True, name=f"soc_low_recovered_{k}")
+                )
+                vars_dict["soc_high_recovered"].append(
+                    cp.Variable(n, boolean=True, name=f"soc_high_recovered_{k}")
+                )
+                vars_dict["soc_deficit_cost"].append(
+                    cp.Variable(n, nonneg=True, name=f"soc_deficit_cost_{k}")
+                )
+                vars_dict["soc_surplus_cost"].append(
+                    cp.Variable(n, nonneg=True, name=f"soc_surplus_cost_{k}")
+                )
             # Terminal-SoC slacks: the signed miss on the horizon's net energy change,
             # split into two non-negative parts so the deviation stays linear. Priced in
             # the objective rather than forbidden, so an unreachable soc_final degrades
-            # to "as close as allowed" instead of infeasible.
-            vars_dict["soc_final_under"] = cp.Variable(nonneg=True, name="soc_final_under")
-            vars_dict["soc_final_over"] = cp.Variable(nonneg=True, name="soc_final_over")
+            # to "as close as allowed" instead of infeasible. One pair PER BATTERY
+            # (#610): each battery's own target relaxes independently; an aggregate
+            # slack would let one battery's overshoot cancel another's undershoot
+            # at zero cost.
+            vars_dict["soc_final_under"] = [
+                cp.Variable(nonneg=True, name=f"soc_final_under_{k}") for k in range(self.n_batt)
+            ]
+            vars_dict["soc_final_over"] = [
+                cp.Variable(nonneg=True, name=f"soc_final_over_{k}") for k in range(self.n_batt)
+            ]
             # Battery-first priority gate (issue #834): binary per timestep,
             # 1 = grid import is "free" (unpenalized) in this slot. Only created
             # when the feature is enabled; otherwise it never enters self.vars.
             # battery_first_penalty (issue #1002): nonneg slack = the amount of
             # grid import that happens while the battery is still charged (the
             # gate is 0). Penalized in the objective instead of forbidden, so the
-            # feature can never make the problem infeasible.
+            # feature can never make the problem infeasible. Stays a SINGLE
+            # aggregate gate/penalty for N batteries (#610): it gates on
+            # aggregate stored energy vs aggregate minimum, not per-battery.
             if self.optim_conf.get("set_battery_first_priority", False):
                 vars_dict["battery_first_import_gate"] = cp.Variable(
                     n, boolean=True, name="battery_first_import_gate"
@@ -1404,19 +1667,25 @@ class Optimization:
                     n, nonneg=True, name="battery_first_penalty"
                 )
         else:
-            # Create dummy zero variables to preserve logic structure without conditional checks everywhere
-            vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
-            vars_dict["p_sto_neg"] = cp.Variable(n, name="p_sto_neg_dummy")
-            constraints.append(vars_dict["p_sto_pos"] == 0)
-            constraints.append(vars_dict["p_sto_neg"] == 0)
-            vars_dict["soc_low_recovered"] = cp.Variable(n, name="soc_low_recovered_dummy")
-            vars_dict["soc_high_recovered"] = cp.Variable(n, name="soc_high_recovered_dummy")
-            constraints.append(vars_dict["soc_low_recovered"] == 0)
-            constraints.append(vars_dict["soc_high_recovered"] == 0)
-            vars_dict["soc_deficit_cost"] = cp.Variable(n, name="soc_deficit_cost_dummy")
-            constraints.append(vars_dict["soc_deficit_cost"] == 0)
-            vars_dict["soc_surplus_cost"] = cp.Variable(n, name="soc_surplus_cost_dummy")
-            constraints.append(vars_dict["soc_surplus_cost"] == 0)
+            # Create dummy zero variables to preserve logic structure without
+            # conditional checks everywhere. A SINGLE dummy set regardless of
+            # self.n_batt (#610): downstream code that must stay branch-free
+            # (the power balance / DC-bus sums) iterates over the actual list
+            # length rather than self.n_batt, so a 1-element all-zero list
+            # contributes exactly zero either way.
+            vars_dict["E"] = [cp.Variable(n, boolean=True, name="E_dummy")]
+            vars_dict["p_sto_pos"] = [cp.Variable(n, name="p_sto_pos_dummy")]
+            vars_dict["p_sto_neg"] = [cp.Variable(n, name="p_sto_neg_dummy")]
+            constraints.append(vars_dict["p_sto_pos"][0] == 0)
+            constraints.append(vars_dict["p_sto_neg"][0] == 0)
+            vars_dict["soc_low_recovered"] = [cp.Variable(n, name="soc_low_recovered_dummy")]
+            vars_dict["soc_high_recovered"] = [cp.Variable(n, name="soc_high_recovered_dummy")]
+            constraints.append(vars_dict["soc_low_recovered"][0] == 0)
+            constraints.append(vars_dict["soc_high_recovered"][0] == 0)
+            vars_dict["soc_deficit_cost"] = [cp.Variable(n, name="soc_deficit_cost_dummy")]
+            constraints.append(vars_dict["soc_deficit_cost"][0] == 0)
+            vars_dict["soc_surplus_cost"] = [cp.Variable(n, name="soc_surplus_cost_dummy")]
+            constraints.append(vars_dict["soc_surplus_cost"][0] == 0)
 
         # Self-consumption variable
         if self.costfun == "self-consumption":
@@ -1538,23 +1807,50 @@ class Optimization:
                 # Maximize SC
                 objective_terms.append(scale * cp.sum(cp.multiply(unit_load_cost, SC)))
 
-        # Battery Cycle Cost and SOC Penalty
+        # Battery Cycle Cost and SOC Penalty (#610: summed over every battery
+        # k, each with its own weight_dis[k]/weight_chg[k] - a flat scalar or
+        # time-series per battery, sliced/broadcast exactly like the single-
+        # battery code did on the whole config value).
         if self.optim_conf["set_use_battery"]:
-            # p_sto_neg is negative. -weight*p_sto_neg is a positive penalty value.
-            # We subtract this positive penalty from the maximization objective.
-            weight_dis = self.optim_conf["weight_battery_discharge"]
-            weight_chg = self.optim_conf["weight_battery_charge"]
+            batt_conf = self._battery_conf_as_lists()
+            cycle_cost_terms = []
+            for k in range(len(p_sto_pos)):
+                # p_sto_neg is negative. -weight*p_sto_neg is a positive penalty value.
+                # We subtract this positive penalty from the maximization objective.
+                weight_dis_k = batt_conf["weight_dis"][k]
+                weight_chg_k = batt_conf["weight_chg"][k]
 
-            # Handle time-varying weights with slicing for resized horizons
-            if isinstance(weight_dis, list | np.ndarray) and len(weight_dis) > self.num_timesteps:
-                weight_dis = weight_dis[: self.num_timesteps]
-            if isinstance(weight_chg, list | np.ndarray) and len(weight_chg) > self.num_timesteps:
-                weight_chg = weight_chg[: self.num_timesteps]
+                # Handle time-varying weights with slicing for resized horizons
+                if (
+                    isinstance(weight_dis_k, list | np.ndarray)
+                    and len(weight_dis_k) > self.num_timesteps
+                ):
+                    weight_dis_k = weight_dis_k[: self.num_timesteps]
+                if (
+                    isinstance(weight_chg_k, list | np.ndarray)
+                    and len(weight_chg_k) > self.num_timesteps
+                ):
+                    weight_chg_k = weight_chg_k[: self.num_timesteps]
 
-            cycle_cost = cp.multiply(np.array(weight_dis), p_sto_pos) - cp.multiply(
-                np.array(weight_chg), p_sto_neg
-            )
-            objective_terms.append(-scale * cp.sum(cycle_cost))
+                cycle_cost_terms.append(
+                    cp.multiply(np.array(weight_dis_k), p_sto_pos[k])
+                    - cp.multiply(np.array(weight_chg_k), p_sto_neg[k])
+                )
+            objective_terms.append(-scale * cp.sum(sum(cycle_cost_terms)))
+
+            # Multi-battery symmetry-breaking tie-break (#610). Skipped at
+            # n_batt == 1, where the k==0 term would be an exact-zero no-op.
+            # p_sto_neg is negative-signed, so (p_sto_pos - p_sto_neg) is total
+            # throughput and this term penalizes higher-index usage in BOTH
+            # directions: charge and discharge ties alike resolve to the
+            # lowest-index battery. Deterministic, and never overrides a real
+            # cost/efficiency difference (magnitude derivation on
+            # BATTERY_TIEBREAK_EPS at the top of this module).
+            if self.n_batt > 1:
+                tiebreak_terms = [
+                    k * cp.sum(p_sto_pos[k] - p_sto_neg[k]) for k in range(len(p_sto_pos))
+                ]
+                objective_terms.append(-BATTERY_TIEBREAK_EPS * cp.sum(sum(tiebreak_terms)))
 
         # Deferrable Load Startup Penalties
         if (
@@ -1627,18 +1923,23 @@ class Optimization:
         if inv_stress_conf and inv_stress_conf["active"]:
             objective_terms.append(-cp.sum(inv_stress_conf["vars"]))
 
-        if batt_stress_conf and batt_stress_conf["active"]:
-            self.logger.debug("Adding battery stress cost to objective function")
-            objective_terms.append(-cp.sum(batt_stress_conf["vars"]))
+        # batt_stress_conf is now a list of one per-battery stress config dict
+        # (#610); each entry is only "active" (has a Variable) when that
+        # battery's own battery_stress_cost > 0.
+        if batt_stress_conf:
+            active_batt_stress_vars = [c["vars"] for c in batt_stress_conf if c["active"]]
+            if active_batt_stress_vars:
+                self.logger.debug("Adding battery stress cost to objective function")
+                objective_terms.append(-cp.sum(sum(active_batt_stress_vars)))
 
-        # SOC Deficit Cost (convert to per Wh)
+        # SOC Deficit Cost (convert to per Wh) - summed over every battery
         if self.optim_conf["set_use_battery"]:
             soc_deficit_cost = self.vars.get("soc_deficit_cost")
             if soc_deficit_cost is not None:
                 self.logger.debug(
                     f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: "
                 )
-                objective_terms.append(-cp.sum(soc_deficit_cost))
+                objective_terms.append(-cp.sum(sum(soc_deficit_cost)))
 
         # SOC Surplus Cost (high-SoC dwell penalty, mirror of the deficit term)
         if self.optim_conf["set_use_battery"]:
@@ -1647,7 +1948,19 @@ class Optimization:
                 self.logger.debug(
                     f"Adding SOC surplus cost {soc_surplus_cost}  to objective function: "
                 )
-                objective_terms.append(-cp.sum(soc_surplus_cost))
+                objective_terms.append(-cp.sum(sum(soc_surplus_cost)))
+
+        # Terminal-SoC deviation penalty. param_soc_final_penalty is already in currency
+        # per Wh (it folds in the kWh conversion and the dominance factor), so the slacks
+        # enter the objective directly. Charging both directions keeps the target an
+        # equality rather than a one-sided bound. Summed over the per-battery slack
+        # pairs (#610); every battery's miss is priced at the same rate.
+        soc_final_under = self.vars.get("soc_final_under")
+        if soc_final_under is not None:
+            objective_terms.append(
+                -self.param_soc_final_penalty
+                * (sum(soc_final_under) + sum(self.vars["soc_final_over"]))
+            )
 
         # Battery-first priority penalty (issue #834/#1002). battery_first_penalty
         # is the grid import that occurs while the battery is still above its
@@ -1658,16 +1971,6 @@ class Optimization:
         # is clipped to non-negative (param_load_cost_pos): a negative-price slot
         # must not turn this penalty into an unbounded reward on the otherwise
         # upper-unbounded penalty variable.
-        # Terminal-SoC deviation penalty. param_soc_final_penalty is already in currency
-        # per Wh (it folds in the kWh conversion and the dominance factor), so the slacks
-        # enter the objective directly. Charging both directions keeps the target an
-        # equality rather than a one-sided bound.
-        soc_final_under = self.vars.get("soc_final_under")
-        if soc_final_under is not None:
-            objective_terms.append(
-                -self.param_soc_final_penalty * (soc_final_under + self.vars["soc_final_over"])
-            )
-
         battery_first_penalty = self.vars.get("battery_first_penalty")
         if battery_first_penalty is not None:
             objective_terms.append(
@@ -1712,8 +2015,16 @@ class Optimization:
         p_grid_neg = self.vars["p_grid_neg"]
         p_grid_pos = self.vars["p_grid_pos"]
         p_pv_curtailment = self.vars["p_pv_curtailment"]
-        p_sto_pos = self.vars["p_sto_pos"]
-        p_sto_neg = self.vars["p_sto_neg"]
+        # p_sto_pos/p_sto_neg are lists (#610), one entry per battery when
+        # set_use_battery is on, a single always-zero dummy entry when off.
+        # This choke point folds every battery's power into the shared
+        # balance by summing over the ACTUAL list length (never self.n_batt
+        # directly), so it stays branch-free regardless of whether the
+        # battery feature is on.
+        p_sto_pos_list = self.vars["p_sto_pos"]
+        p_sto_neg_list = self.vars["p_sto_neg"]
+        p_sto_pos_total = sum(p_sto_pos_list)
+        p_sto_neg_total = sum(p_sto_neg_list)
         D = self.vars["D"]
 
         # Retrieve parameters
@@ -1744,13 +2055,20 @@ class Optimization:
                     - p_load
                     + p_grid_neg
                     + p_grid_pos
-                    + p_sto_pos
-                    + p_sto_neg
+                    + p_sto_pos_total
+                    + p_sto_neg_total
                     == 0
                 )
             else:
                 constraints.append(
-                    p_pv - p_def_sum - p_load + p_grid_neg + p_grid_pos + p_sto_pos + p_sto_neg == 0
+                    p_pv
+                    - p_def_sum
+                    - p_load
+                    + p_grid_neg
+                    + p_grid_pos
+                    + p_sto_pos_total
+                    + p_sto_neg_total
+                    == 0
                 )
 
         # Grid Constraints (Vectorized with Time-Varying Limits)
@@ -1768,8 +2086,11 @@ class Optimization:
         # Retrieve main interface variables
         p_hybrid_inverter = self.vars["p_hybrid_inverter"]
         p_pv_curtailment = self.vars["p_pv_curtailment"]
-        p_sto_pos = self.vars["p_sto_pos"]
-        p_sto_neg = self.vars["p_sto_neg"]
+        # #610: fold every battery's power into the DC-bus balance the same
+        # way the main balance does - sum over the actual list length so the
+        # off-case single dummy entry contributes exactly zero.
+        p_sto_pos_total = sum(self.vars["p_sto_pos"])
+        p_sto_neg_total = sum(self.vars["p_sto_neg"])
         p_pv = self.param_pv_forecast
 
         # Determine Inverter Capacity (Configuration Logic)
@@ -1832,9 +2153,11 @@ class Optimization:
 
         # DC Bus Balance
         if self.plant_conf["compute_curtailment"]:
-            e_dc_balance = (p_pv - p_pv_curtailment + p_sto_pos + p_sto_neg) - (p_dc_ac - p_ac_dc)
+            e_dc_balance = (p_pv - p_pv_curtailment + p_sto_pos_total + p_sto_neg_total) - (
+                p_dc_ac - p_ac_dc
+            )
         else:
-            e_dc_balance = (p_pv + p_sto_pos + p_sto_neg) - (p_dc_ac - p_ac_dc)
+            e_dc_balance = (p_pv + p_sto_pos_total + p_sto_neg_total) - (p_dc_ac - p_ac_dc)
 
         constraints.append(e_dc_balance == 0)
 
@@ -1863,39 +2186,41 @@ class Optimization:
             )
 
     def _add_battery_constraints(self, constraints, batt_stress_conf):
-        """Add all battery-related constraints (Vectorized)."""
+        """Add all battery-related constraints (Vectorized).
+
+        #610: replicated per battery, k in range(self.n_batt) - this method
+        only runs when set_use_battery is True (the early return below), so
+        every list read here (self.vars["p_sto_pos"], etc.) is the real
+        per-battery list, never the off-case single dummy. batt_stress_conf is
+        a list of one per-battery stress config dict (see
+        _setup_battery_stress_cost), aligned index-for-index with the battery
+        lists. Two things stay a SINGLE shared quantity across the whole
+        fleet, not per-battery: "D" (grid direction - one grid connection)
+        and the battery-first priority gate/penalty (#610: gates on
+        AGGREGATE stored energy vs aggregate minimum).
+        """
         if not self.optim_conf["set_use_battery"]:
             return
 
         p_sto_pos = self.vars["p_sto_pos"]
         p_sto_neg = self.vars["p_sto_neg"]
-        E = self.vars["E"]  # Binary: 1=Discharge, 0=Charge
-        D = self.vars["D"]  # Binary: 1=Import, 0=Export
+        E = self.vars["E"]  # Binary per battery: 1=Discharge, 0=Charge
+        D = self.vars["D"]  # Binary: 1=Import, 0=Export (shared - one grid connection)
         p_pv = self.param_pv_forecast
 
-        # Parameters (Scalars)
-        soc_init = self.param_soc_init
-        soc_final = self.param_soc_final
+        batt_conf = self._battery_conf_as_lists()
+        cap_list = batt_conf["cap"]
+        eff_dis_list = batt_conf["eff_dis"]
+        eff_chg_list = batt_conf["eff_chg"]
+        soc_min_list = batt_conf["soc_min"]
+        soc_max_list = batt_conf["soc_max"]
 
-        # Constants
-        cap = self.plant_conf["battery_nominal_energy_capacity"]
-        eff_dis = self.plant_conf["battery_discharge_efficiency"]
-        eff_chg = self.plant_conf["battery_charge_efficiency"]
-        max_dis = self.param_battery_discharge_power_max
-        max_chg = self.param_battery_charge_power_max  # nonneg cp.Parameter
-        soc_low_recovered = self.vars["soc_low_recovered"]
-        soc_high_recovered = self.vars["soc_high_recovered"]
-        min_energy = self.plant_conf["battery_minimum_state_of_charge"] * cap
-        max_energy = self.plant_conf["battery_maximum_state_of_charge"] * cap
-        recovery_margin = max(cap * 1e-6, 1e-3)
-        recovery_big_m_low = cap - min_energy + recovery_margin
-        recovery_big_m_high = max_energy + recovery_margin
+        # Grid Interaction Constraints (shared: one grid connection for the
+        # whole fleet, so these sum battery power over k).
 
-        # Grid Interaction Constraints
-
-        # No charge from grid: The battery charge power cannot exceed the PV production
+        # No charge from grid: total battery charge power cannot exceed PV production
         if self.optim_conf["set_nocharge_from_grid"]:
-            constraints.append(p_sto_neg + p_pv >= 0)
+            constraints.append(sum(p_sto_neg) + p_pv >= 0)
 
         # No discharge to grid: prevent battery energy from reaching the grid. Hybrid inverters
         # prioritise PV to the load, so the battery cannot discharge while PV exports (strict E<=D, #796).
@@ -1907,7 +2232,8 @@ class Optimization:
         # allowing battery-to-load.
         if self.optim_conf["set_nodischarge_to_grid"]:
             if self.plant_conf["inverter_is_hybrid"]:
-                constraints.append(E <= D)
+                for k in range(self.n_batt):
+                    constraints.append(E[k] <= D)
             else:
                 constraints.append(self.vars["p_grid_neg"] + self.param_export_ceiling >= 0)
                 if self.plant_conf["compute_curtailment"]:
@@ -1921,108 +2247,186 @@ class Optimization:
                         self.vars["p_grid_neg"] + p_pv - self.vars["p_pv_curtailment"] >= 0
                     )
 
-        # Dynamic Power Limits (Ramp Rate)
-        if self.optim_conf["set_battery_dynamic"]:
-            # Use slicing for vectorized ramp constraints: var[t+1] - var[t]
-            # p_sto_pos ramp
-            ramp_up_limit = self.time_step * self.optim_conf["battery_dynamic_max"] * max_dis
-            ramp_down_limit = self.time_step * self.optim_conf["battery_dynamic_min"] * max_dis
+        # Per-battery constraints. current_stored_energy_list is kept around
+        # for the aggregate battery-first gate below. This SOC recursion is
+        # hand-duplicated a second time in _build_results_dataframe (there in
+        # numpy space over realized values, here as CVXPY expressions) and
+        # must stay in lockstep with it.
+        current_stored_energy_list = []
+        for k in range(self.n_batt):
+            cap = cap_list[k]
+            eff_dis = eff_dis_list[k]
+            eff_chg = eff_chg_list[k]
+            max_dis = self.param_battery_discharge_power_max[k]
+            max_chg = self.param_battery_charge_power_max[k]  # nonneg cp.Parameter
+            soc_init_k = self.param_soc_init[k]
+            soc_final_k = self.param_soc_final[k]
+            soc_low_recovered_k = self.vars["soc_low_recovered"][k]
+            soc_high_recovered_k = self.vars["soc_high_recovered"][k]
+            min_energy = soc_min_list[k] * cap
+            max_energy = soc_max_list[k] * cap
+            recovery_margin = max(cap * 1e-6, 1e-3)
+            recovery_big_m_low = cap - min_energy + recovery_margin
+            recovery_big_m_high = max_energy + recovery_margin
 
-            diff_pos = p_sto_pos[1:] - p_sto_pos[:-1]
-            constraints.append(diff_pos <= ramp_up_limit)
-            constraints.append(diff_pos >= ramp_down_limit)
+            # Dynamic Power Limits (Ramp Rate) - each battery against ITS OWN power max
+            if self.optim_conf["set_battery_dynamic"]:
+                # Use slicing for vectorized ramp constraints: var[t+1] - var[t]
+                # p_sto_pos ramp
+                ramp_up_limit = self.time_step * self.optim_conf["battery_dynamic_max"] * max_dis
+                ramp_down_limit = self.time_step * self.optim_conf["battery_dynamic_min"] * max_dis
 
-            # p_sto_neg ramp (Note: p_sto_neg is negative, max_chg is positive magnitude)
-            ramp_up_limit_neg = self.time_step * self.optim_conf["battery_dynamic_max"] * max_chg
-            ramp_down_limit_neg = self.time_step * self.optim_conf["battery_dynamic_min"] * max_chg
+                diff_pos = p_sto_pos[k][1:] - p_sto_pos[k][:-1]
+                constraints.append(diff_pos <= ramp_up_limit)
+                constraints.append(diff_pos >= ramp_down_limit)
 
-            diff_neg = p_sto_neg[1:] - p_sto_neg[:-1]
-            constraints.append(diff_neg <= ramp_up_limit_neg)
-            constraints.append(diff_neg >= ramp_down_limit_neg)
+                # p_sto_neg ramp (Note: p_sto_neg is negative, max_chg is positive magnitude)
+                ramp_up_limit_neg = (
+                    self.time_step * self.optim_conf["battery_dynamic_max"] * max_chg
+                )
+                ramp_down_limit_neg = (
+                    self.time_step * self.optim_conf["battery_dynamic_min"] * max_chg
+                )
 
-        # Power & Binary Constraints
-        # Discharge limit based on binary E
-        constraints.append(p_sto_pos <= eff_dis * max_dis * E)
+                diff_neg = p_sto_neg[k][1:] - p_sto_neg[k][:-1]
+                constraints.append(diff_neg <= ramp_up_limit_neg)
+                constraints.append(diff_neg >= ramp_down_limit_neg)
 
-        # Charge limit based on binary E (1-E)
-        # p_sto_neg >= -1/eff * max * (1-E)  --> (p_sto_neg is negative)
-        constraints.append(p_sto_neg >= -(1 / eff_chg) * max_chg * (1 - E))
+            # Power & Binary Constraints
+            # Discharge limit based on binary E[k]
+            constraints.append(p_sto_pos[k] <= eff_dis * max_dis * E[k])
 
-        # SOC Constraints (Vectorized Accumulation)
+            # Charge limit based on binary E[k] (1-E[k])
+            # p_sto_neg[k] >= -1/eff * max * (1-E[k])  --> (p_sto_neg is negative)
+            constraints.append(p_sto_neg[k] >= -(1 / eff_chg) * max_chg * (1 - E[k]))
 
-        # Calculate Energy Change per timestep (kWh)
-        # Energy out = p_sto_pos / eff_dis
-        # Energy in  = p_sto_neg * eff_chg  (p_sto_neg is negative, so this adds negative energy)
-        power_flow = (p_sto_pos * (1 / eff_dis)) + (p_sto_neg * eff_chg)
-        energy_change = power_flow * self.time_step
+            # SOC Constraints (Vectorized Accumulation)
 
-        # Calculate Cumulative Energy used/added
-        cumulative_energy = cp.cumsum(energy_change)
+            # Calculate Energy Change per timestep (kWh)
+            # Energy out = p_sto_pos / eff_dis
+            # Energy in  = p_sto_neg * eff_chg  (p_sto_neg is negative, so this adds negative energy)
+            power_flow = (p_sto_pos[k] * (1 / eff_dis)) + (p_sto_neg[k] * eff_chg)
+            energy_change = power_flow * self.time_step
 
-        # SOC State (kWh) at every timestep t
-        # SOC_t = SOC_init - Cumulative_Change
-        # (Subtracting because positive flow is Discharge/Depletion)
-        current_stored_energy = (soc_init * cap) - cumulative_energy
+            # Calculate Cumulative Energy used/added
+            cumulative_energy = cp.cumsum(energy_change)
 
-        # Min/Max SOC bounds with a single recovery transition.
-        # Before recovery the trajectory stays on the initial out-of-band side.
-        # After recovery the usual hard SOC limits apply and cannot be violated again.
-        constraints.append(
-            current_stored_energy >= min_energy - self.param_soc_low_gap * (1 - soc_low_recovered)
-        )
-        constraints.append(
-            current_stored_energy <= max_energy + self.param_soc_high_gap * (1 - soc_high_recovered)
-        )
-        constraints.append(soc_low_recovered[1:] >= soc_low_recovered[:-1])
-        constraints.append(soc_high_recovered[1:] >= soc_high_recovered[:-1])
-        constraints.append(soc_low_recovered <= self.param_soc_low_required)
-        constraints.append(soc_high_recovered <= self.param_soc_high_required)
-        constraints.append(soc_low_recovered[-1] == self.param_soc_low_required)
-        constraints.append(soc_high_recovered[-1] == self.param_soc_high_required)
-        constraints.append(
-            current_stored_energy[1:]
-            >= current_stored_energy[:-1]
-            - recovery_big_m_low * (soc_low_recovered[:-1] + (1 - self.param_soc_low_required))
-        )
-        constraints.append(
-            current_stored_energy[1:]
-            <= current_stored_energy[:-1]
-            + recovery_big_m_high * (soc_high_recovered[:-1] + (1 - self.param_soc_high_required))
-        )
-        constraints.append(
-            current_stored_energy
-            <= min_energy
-            - recovery_margin
-            + recovery_big_m_low * soc_low_recovered
-            + recovery_big_m_low * (1 - self.param_soc_low_required)
-        )
-        constraints.append(
-            current_stored_energy
-            >= max_energy
-            + recovery_margin
-            - recovery_big_m_high * soc_high_recovered
-            - recovery_big_m_high * (1 - self.param_soc_high_required)
-        )
+            # SOC State (kWh) at every timestep t
+            # SOC_t = SOC_init - Cumulative_Change
+            # (Subtracting because positive flow is Discharge/Depletion)
+            current_stored_energy = (soc_init_k * cap) - cumulative_energy
+            current_stored_energy_list.append(current_stored_energy)
 
-        # Final SOC Constraint
-        # The total energy change over the whole horizon should match init -> final:
-        # Total Sum of power flow * dt == (Init - Final) * Capacity.
-        # Enforced softly (see SOC_FINAL_DEVIATION_PENALTY_FACTOR): the two non-negative
-        # slacks absorb any unreachable remainder and are charged in the objective, so
-        # the equality still holds exactly whenever a schedule exists for it.
-        total_energy_change = cp.sum(energy_change)
-        constraints.append(
-            total_energy_change
-            == (soc_init - soc_final) * cap
-            + self.vars["soc_final_under"]
-            - self.vars["soc_final_over"]
-        )
+            # Min/Max SOC bounds with a single recovery transition.
+            # Before recovery the trajectory stays on the initial out-of-band side.
+            # After recovery the usual hard SOC limits apply and cannot be violated again.
+            constraints.append(
+                current_stored_energy
+                >= min_energy - self.param_soc_low_gap[k] * (1 - soc_low_recovered_k)
+            )
+            constraints.append(
+                current_stored_energy
+                <= max_energy + self.param_soc_high_gap[k] * (1 - soc_high_recovered_k)
+            )
+            constraints.append(soc_low_recovered_k[1:] >= soc_low_recovered_k[:-1])
+            constraints.append(soc_high_recovered_k[1:] >= soc_high_recovered_k[:-1])
+            constraints.append(soc_low_recovered_k <= self.param_soc_low_required[k])
+            constraints.append(soc_high_recovered_k <= self.param_soc_high_required[k])
+            constraints.append(soc_low_recovered_k[-1] == self.param_soc_low_required[k])
+            constraints.append(soc_high_recovered_k[-1] == self.param_soc_high_required[k])
+            constraints.append(
+                current_stored_energy[1:]
+                >= current_stored_energy[:-1]
+                - recovery_big_m_low
+                * (soc_low_recovered_k[:-1] + (1 - self.param_soc_low_required[k]))
+            )
+            constraints.append(
+                current_stored_energy[1:]
+                <= current_stored_energy[:-1]
+                + recovery_big_m_high
+                * (soc_high_recovered_k[:-1] + (1 - self.param_soc_high_required[k]))
+            )
+            constraints.append(
+                current_stored_energy
+                <= min_energy
+                - recovery_margin
+                + recovery_big_m_low * soc_low_recovered_k
+                + recovery_big_m_low * (1 - self.param_soc_low_required[k])
+            )
+            constraints.append(
+                current_stored_energy
+                >= max_energy
+                + recovery_margin
+                - recovery_big_m_high * soc_high_recovered_k
+                - recovery_big_m_high * (1 - self.param_soc_high_required[k])
+            )
 
-        # Intermediate SOC target (issue #553): require SoC >= target at the
-        # requested timestep, leaving the battery free to discharge afterward.
-        # Single precomputed floor vector; zero = no-op, so behaviour is
-        # unchanged unless a target is explicitly requested.
-        constraints.append(current_stored_energy >= self.param_soc_target_floor)
+            # Final SOC Constraint
+            # The total energy change over the whole horizon should match init -> final:
+            # Total Sum of power flow * dt == (Init - Final) * Capacity.
+            # Enforced softly (see SOC_FINAL_DEVIATION_PENALTY_FACTOR): the two non-negative
+            # slacks absorb any unreachable remainder and are charged in the objective, so
+            # the equality still holds exactly whenever a schedule exists for it. Per
+            # battery: each battery's own target relaxes independently.
+            total_energy_change = cp.sum(energy_change)
+            constraints.append(
+                total_energy_change
+                == (soc_init_k - soc_final_k) * cap
+                + self.vars["soc_final_under"][k]
+                - self.vars["soc_final_over"][k]
+            )
+
+            # Intermediate SOC target (issue #553): require SoC >= target at the
+            # requested timestep, leaving the battery free to discharge afterward.
+            # Per-battery precomputed floor vector; zero = no-op, so behaviour is
+            # unchanged unless a target is explicitly requested. The identical
+            # target fraction is currently applied to every battery's own
+            # capacity; param_soc_target_floor is already a per-battery
+            # Parameter so a future per-battery target only needs a different
+            # value per entry, not a model change.
+            constraints.append(current_stored_energy >= self.param_soc_target_floor[k])
+
+            # Stress Cost (per battery: battery_stress_cost[k] gates this battery only)
+            stress_conf_k = batt_stress_conf[k] if batt_stress_conf else None
+            if stress_conf_k and stress_conf_k["active"]:
+                seg_params = self._build_stress_segments(
+                    stress_conf_k["max_power"],
+                    stress_conf_k["unit_cost"],
+                    stress_conf_k["segments"],
+                )
+                self._add_stress_constraints(
+                    constraints,
+                    p_sto_pos[k] - p_sto_neg[k],  # Total power magnitude expression
+                    stress_conf_k["vars"],
+                    seg_params,
+                )
+
+            # SOC Deficit Cost (per battery, own threshold/cost)
+            soc_deficit_threshold = batt_conf["soc_deficit_threshold"][k]
+            soc_deficit_cost_rate = batt_conf["soc_deficit_cost"][k] / 1000.0  # kWh to Wh
+            if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
+                threshold_energy = soc_deficit_threshold * cap
+                soc_deficit_cost_k = self.vars["soc_deficit_cost"][k]
+                constraints.append(
+                    soc_deficit_cost_k
+                    >= (threshold_energy - current_stored_energy)
+                    * soc_deficit_cost_rate
+                    * self.time_step
+                )
+
+            # SOC Surplus Cost (mirror of the deficit penalty above: penalize SoC
+            # ABOVE a high threshold to discourage long dwell near full charge).
+            soc_surplus_threshold = batt_conf["soc_surplus_threshold"][k]
+            soc_surplus_cost_rate = batt_conf["soc_surplus_cost"][k] / 1000.0  # kWh to Wh
+            if soc_surplus_threshold > 0 and soc_surplus_cost_rate > 0:
+                threshold_energy = soc_surplus_threshold * cap
+                soc_surplus_cost_k = self.vars["soc_surplus_cost"][k]
+                constraints.append(
+                    soc_surplus_cost_k
+                    >= (current_stored_energy - threshold_energy)
+                    * soc_surplus_cost_rate
+                    * self.time_step
+                )
 
         # Battery-first priority (issue #834): on a flat (non time-of-use)
         # tariff, "drain the battery before importing" and "interleave grid
@@ -2043,6 +2447,11 @@ class Optimization:
         # terminal SoC target with no PV, or a load that exceeds the battery's
         # discharge power) instead of returning infeasible as the old hard bound
         # `p_grid_pos <= max_from_grid * import_gate` did.
+        #
+        # #610: with N batteries there is one shared gate/penalty (not
+        # per-battery), gated on AGGREGATE stored energy vs AGGREGATE minimum -
+        # "is the fleet as a whole still above its combined floor". At N=1 the
+        # sums below collapse to exactly the single-battery expressions.
         if self.optim_conf.get("set_battery_first_priority", False):
             import_gate = self.vars["battery_first_import_gate"]
             battery_first_penalty = self.vars["battery_first_penalty"]
@@ -2052,64 +2461,43 @@ class Optimization:
                 "maximum_power_from_grid",
                 self.num_timesteps,
             )
-            # 1% SoC tolerance so the gate opens cleanly once the battery has
-            # numerically reached its minimum, avoiding chatter at the floor.
-            soc_tolerance_energy = 0.01 * cap
+            aggregate_stored_energy = sum(current_stored_energy_list)
+            aggregate_min_energy = sum(soc_min_list[k] * cap_list[k] for k in range(self.n_batt))
+            aggregate_cap = sum(cap_list)
+            # For a very lopsided fleet the 1% aggregate tolerance below can
+            # exceed the smallest battery's entire usable SoC swing, so its
+            # charge state barely moves the shared gate (see docs/config.md).
+            if self.n_batt > 1:
+                usable_swings = [
+                    (soc_max_list[k] - soc_min_list[k]) * cap_list[k] for k in range(self.n_batt)
+                ]
+                min_swing = min(usable_swings)
+                max_swing = max(usable_swings)
+                if max_swing > 10 * min_swing:
+                    ratio_txt = f"{max_swing / min_swing:.0f}x" if min_swing > 0 else "inf"
+                    self.logger.warning(
+                        "Batteries are very different in size (%s usable SoC swing); "
+                        "the battery-first import gate tracks the fleet's aggregate "
+                        "SoC, so the smaller battery may not be drained before grid "
+                        "import is allowed. See docs/config.md.",
+                        ratio_txt,
+                    )
+            # 1% aggregate-SoC tolerance so the gate opens cleanly once the
+            # fleet has numerically reached its combined minimum, avoiding
+            # chatter at the floor (mirrors the single-battery 1% tolerance).
+            soc_tolerance_energy = 0.01 * aggregate_cap
             # import_gate = 1 (import unpenalized) is only possible once the
-            # stored energy is at/below min + tolerance; otherwise the gate is
-            # forced to 0 and any grid import in that slot is penalized.
+            # AGGREGATE stored energy is at/below the aggregate min + tolerance;
+            # otherwise the gate is forced to 0 and any grid import in that slot
+            # is penalized.
             constraints.append(
-                current_stored_energy - min_energy - soc_tolerance_energy <= cap * (1 - import_gate)
+                aggregate_stored_energy - aggregate_min_energy - soc_tolerance_energy
+                <= aggregate_cap * (1 - import_gate)
             )
             # battery_first_penalty >= import beyond the free (gated) allowance;
-            # nonneg, so it equals max(0, import while the battery is charged).
+            # nonneg, so it equals max(0, import while the fleet is charged).
             constraints.append(
                 battery_first_penalty >= p_grid_pos - cp.multiply(max_from_grid, import_gate)
-            )
-
-        # Stress Cost
-        if batt_stress_conf and batt_stress_conf["active"]:
-            seg_params = self._build_stress_segments(
-                batt_stress_conf["max_power"],
-                batt_stress_conf["unit_cost"],
-                batt_stress_conf["segments"],
-            )
-            self._add_stress_constraints(
-                constraints,
-                p_sto_pos - p_sto_neg,  # Total power magnitude expression
-                batt_stress_conf["vars"],
-                seg_params,
-            )
-
-        # SOC Deficit Cost
-        soc_deficit_threshold = self.optim_conf.get("battery_soc_deficit_threshold", 0.2)
-        soc_deficit_cost_rate = (
-            self.optim_conf.get("battery_soc_deficit_cost", 0.0) / 1000.0
-        )  # kWh to Wh
-        if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
-            threshold_energy = soc_deficit_threshold * cap
-            soc_deficit_cost = self.vars["soc_deficit_cost"]
-            constraints.append(
-                soc_deficit_cost
-                >= (threshold_energy - current_stored_energy)
-                * soc_deficit_cost_rate
-                * self.time_step
-            )
-
-        # SOC Surplus Cost (mirror of the deficit penalty above: penalize SoC
-        # ABOVE a high threshold to discourage long dwell near full charge).
-        soc_surplus_threshold = self.optim_conf.get("battery_soc_surplus_threshold", 0.9)
-        soc_surplus_cost_rate = (
-            self.optim_conf.get("battery_soc_surplus_cost", 0.0) / 1000.0
-        )  # kWh to Wh
-        if soc_surplus_threshold > 0 and soc_surplus_cost_rate > 0:
-            threshold_energy = soc_surplus_threshold * cap
-            soc_surplus_cost = self.vars["soc_surplus_cost"]
-            constraints.append(
-                soc_surplus_cost
-                >= (current_stored_energy - threshold_energy)
-                * soc_surplus_cost_rate
-                * self.time_step
             )
 
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
@@ -3668,33 +4056,65 @@ class Optimization:
             opt_tp[f"P_deferrable{k}"] = p_def_k
             p_def_sum += p_def_k
 
-        # Battery Results
+        # Battery Results (#610). This independently recomputes the SOC/P_batt
+        # recursion per battery in numpy space over realized values; it must
+        # stay in lockstep with the CVXPY-expression cumsum recursion in
+        # _add_battery_constraints (the per-k cap/eff_dis/eff_chg reads below
+        # mirror that method exactly). ``soc_init`` is a scalar at n_batt==1
+        # (unchanged from today) or a length-n_batt list at n_batt>1 (see
+        # perform_optimization).
         if self.optim_conf["set_use_battery"]:
-            p_sto_pos = get_val(self.vars["p_sto_pos"])
-            p_sto_neg = get_val(self.vars["p_sto_neg"])
-            opt_tp["P_batt"] = p_sto_pos + p_sto_neg
+            batt_conf = self._battery_conf_as_lists()
+            p_sto_pos_list = [get_val(v) for v in self.vars["p_sto_pos"]]
+            p_sto_neg_list = [get_val(v) for v in self.vars["p_sto_neg"]]
+            batt_stress_vars = self.vars.get("batt_stress_cost")
+            soc_deficit_vars = self.vars.get("soc_deficit_cost")
+            soc_surplus_vars = self.vars.get("soc_surplus_cost")
 
-            # Reconstruct SOC
-            eff_dis = self.plant_conf["battery_discharge_efficiency"]
-            eff_chg = self.plant_conf["battery_charge_efficiency"]
-            cap = self.plant_conf["battery_nominal_energy_capacity"]
+            p_batt_fleet_total = np.zeros(self.num_timesteps)
+            soc_opt_list = []
+            for k in range(self.n_batt):
+                p_batt_k = p_sto_pos_list[k] + p_sto_neg_list[k]
+                p_batt_fleet_total = p_batt_fleet_total + p_batt_k
 
-            power_flow = (p_sto_pos * (1 / eff_dis)) + (p_sto_neg * eff_chg)
-            energy_change = power_flow * self.time_step
-            cumulative_change = np.cumsum(energy_change)
-            opt_tp["SOC_opt"] = soc_init - (cumulative_change / cap)
+                # Reconstruct SOC for this battery
+                eff_dis_k = batt_conf["eff_dis"][k]
+                eff_chg_k = batt_conf["eff_chg"][k]
+                cap_k = batt_conf["cap"][k]
+                power_flow_k = (p_sto_pos_list[k] * (1 / eff_dis_k)) + (
+                    p_sto_neg_list[k] * eff_chg_k
+                )
+                energy_change_k = power_flow_k * self.time_step
+                cumulative_change_k = np.cumsum(energy_change_k)
+                soc_init_k = soc_init[k] if isinstance(soc_init, list) else soc_init
+                soc_opt_k = soc_init_k - (cumulative_change_k / cap_k)
+                soc_opt_list.append(soc_opt_k)
 
-            # Stress Cost
-            if "batt_stress_cost" in self.vars:
-                opt_tp["batt_stress_cost"] = get_val(self.vars["batt_stress_cost"])
+                if self.n_batt > 1:
+                    # N>1 (#610): per-battery columns; no bare "SOC_opt" -
+                    # SOC has no meaningful fleet aggregate.
+                    opt_tp[f"P_batt_{k}"] = p_batt_k
+                    opt_tp[f"SOC_opt_{k}"] = soc_opt_k
+                    if batt_stress_vars is not None:
+                        opt_tp[f"batt_stress_cost_{k}"] = get_val(batt_stress_vars[k])
+                    if soc_deficit_vars is not None:
+                        opt_tp[f"soc_deficit_cost_{k}"] = get_val(soc_deficit_vars[k])
+                    if soc_surplus_vars is not None:
+                        opt_tp[f"soc_surplus_cost_{k}"] = get_val(soc_surplus_vars[k])
 
-            # SOC Deficit Results
-            if "soc_deficit_cost" in self.vars:
-                opt_tp["soc_deficit_cost"] = get_val(self.vars["soc_deficit_cost"])
-
-            # SOC Surplus Results
-            if "soc_surplus_cost" in self.vars:
-                opt_tp["soc_surplus_cost"] = get_val(self.vars["soc_surplus_cost"])
+            # Fleet-total P_batt always present (#610); at n_batt==1 this is
+            # byte-identical to today's single "P_batt" column.
+            opt_tp["P_batt"] = p_batt_fleet_total
+            if self.n_batt == 1:
+                # N=1: byte-identical to today - bare column names, and
+                # SOC_opt is the only SOC column (no per-battery suffix).
+                opt_tp["SOC_opt"] = soc_opt_list[0]
+                if batt_stress_vars is not None:
+                    opt_tp["batt_stress_cost"] = get_val(batt_stress_vars[0])
+                if soc_deficit_vars is not None:
+                    opt_tp["soc_deficit_cost"] = get_val(soc_deficit_vars[0])
+                if soc_surplus_vars is not None:
+                    opt_tp["soc_surplus_cost"] = get_val(soc_surplus_vars[0])
 
         # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:
@@ -3803,8 +4223,8 @@ class Optimization:
         p_load: np.array,
         unit_load_cost: np.array,
         unit_prod_price: np.array,
-        soc_init: float | None = None,
-        soc_final: float | None = None,
+        soc_init: float | list | None = None,
+        soc_final: float | list | None = None,
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
@@ -3826,6 +4246,13 @@ class Optimization:
         ``optim_solve.solve`` and ``optim_solve.extract``. These nest under
         the existing ``optim_solve`` parent timer in ``command_line.py`` and
         sum to it within a few milliseconds.
+
+        ``soc_init``/``soc_final`` accept either a bare float (broadcast to
+        every battery - the single-battery calling convention, unchanged at
+        ``number_of_batteries == 1``) or a list of exactly
+        ``number_of_batteries`` entries (#610); passing per-battery values
+        through from command_line.py at runtime is command_line.py's job -
+        this signature already accepts the list shape today.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Dynamic Resizing
@@ -3870,21 +4297,33 @@ class Optimization:
             # Force problem rebuild
             self.prob = None
 
-        # Data Validation & Defaults
+        # Data Validation & Defaults (#610: per-battery lists, k in
+        # range(self.n_batt); a bare scalar/None argument broadcasts to every
+        # battery via _normalize_soc_arg, so at n_batt==1 this is exactly
+        # today's single-battery cross-fallback logic applied to a 1-element
+        # list).
+        batt_conf = self._battery_conf_as_lists() if self.optim_conf["set_use_battery"] else None
         if self.optim_conf["set_use_battery"]:
-            if soc_init is None:
-                if soc_final is not None:
-                    soc_init = soc_final
-                else:
-                    soc_init = self.plant_conf["battery_target_state_of_charge"]
-            if soc_final is None:
-                if soc_init is not None:
-                    soc_final = soc_init
-                else:
-                    soc_final = self.plant_conf["battery_target_state_of_charge"]
+            soc_init_list = self._normalize_soc_arg(soc_init)
+            soc_final_list = self._normalize_soc_arg(soc_final)
+            target_list = batt_conf["soc_target"]
+            for k in range(self.n_batt):
+                if soc_init_list[k] is None:
+                    if soc_final_list[k] is not None:
+                        soc_init_list[k] = soc_final_list[k]
+                    else:
+                        soc_init_list[k] = target_list[k]
+                if soc_final_list[k] is None:
+                    if soc_init_list[k] is not None:
+                        soc_final_list[k] = soc_init_list[k]
+                    else:
+                        soc_final_list[k] = target_list[k]
             self.logger.debug(
-                f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}"
+                f"Battery usage enabled. Initial SOC: {soc_init_list}, Final SOC: {soc_final_list}"
             )
+        else:
+            soc_init_list = None
+            soc_final_list = None
 
         # Optional intermediate SOC target (issue #553).
         # Reset the floor on EVERY call so a target from a previous run is
@@ -3893,50 +4332,58 @@ class Optimization:
         # numerically (target energy at the requested horizon timestep, 0.0
         # elsewhere). The np multiply happens here at set-time, so the problem
         # stays DPP / warm-start safe.
+        #
+        # #610: soc_target itself is not yet a per-battery runtime input, so
+        # the identical target FRACTION is applied to every battery's floor,
+        # each against ITS OWN capacity/charge-power (param_soc_target_floor
+        # is already a per-battery Parameter list, so a future per-battery
+        # target only needs to change the value each entry receives).
         if self.optim_conf["set_use_battery"] and soc_target is not None:
-            soc_min = self.plant_conf["battery_minimum_state_of_charge"]
-            soc_max = self.plant_conf["battery_maximum_state_of_charge"]
             soc_target_raw = float(soc_target)
-            soc_target_clamped = min(max(soc_target_raw, soc_min), soc_max)
-            if soc_target_timestep is None:
-                k_target = self.num_timesteps - 1
-            else:
-                k_target = min(max(int(float(soc_target_timestep)), 0), self.num_timesteps - 1)
-            # Observability: warn (do not change the constraint) when the request
-            # was out of range or appears unreachable in time given charge power.
-            if soc_target_raw < soc_min or soc_target_raw > soc_max:
-                self.logger.warning(
-                    f"Passed soc_target={soc_target_raw} is outside "
-                    f"[{soc_min}, {soc_max}], clamping to soc_target={soc_target_clamped}"
+            for k in range(self.n_batt):
+                soc_min_k = batt_conf["soc_min"][k]
+                soc_max_k = batt_conf["soc_max"][k]
+                soc_target_clamped = min(max(soc_target_raw, soc_min_k), soc_max_k)
+                if soc_target_timestep is None:
+                    k_target = self.num_timesteps - 1
+                else:
+                    k_target = min(max(int(float(soc_target_timestep)), 0), self.num_timesteps - 1)
+                # Observability: warn (do not change the constraint) when the request
+                # was out of range or appears unreachable in time given charge power.
+                if soc_target_raw < soc_min_k or soc_target_raw > soc_max_k:
+                    self.logger.warning(
+                        f"Battery {k}: passed soc_target={soc_target_raw} is outside "
+                        f"[{soc_min_k}, {soc_max_k}], clamping to soc_target={soc_target_clamped}"
+                    )
+                cap_k = batt_conf["cap"][k]
+                # Max stored-energy gain per step is battery_charge_power_max * time_step:
+                # the charge constraint caps grid-side power at max_chg / eff so the
+                # battery-side energy added (grid * eff) is max_chg * time_step, i.e. the
+                # charge efficiency cancels. (Do not multiply by efficiency again here, or
+                # the bound under-estimates reach and warns spuriously when eff < 1.)
+                reach = (
+                    soc_init_list[k]
+                    + (batt_conf["charge_power_max"][k] * self.time_step * (k_target + 1)) / cap_k
                 )
-            cap = self.plant_conf["battery_nominal_energy_capacity"]
-            # Max stored-energy gain per step is battery_charge_power_max * time_step:
-            # the charge constraint caps grid-side power at max_chg / eff so the
-            # battery-side energy added (grid * eff) is max_chg * time_step, i.e. the
-            # charge efficiency cancels. (Do not multiply by efficiency again here, or
-            # the bound under-estimates reach and warns spuriously when eff < 1.)
-            reach = (
-                soc_init
-                + (self.plant_conf["battery_charge_power_max"] * self.time_step * (k_target + 1))
-                / cap
-            )
-            if soc_target_clamped > reach + 1e-6:
-                self.logger.warning(
-                    f"Intermediate soc_target={soc_target_clamped} may be unreachable "
-                    f"by timestep {k_target}: from soc_init={soc_init} the maximum "
-                    f"reachable SoC is ~{reach:.3f} given battery_charge_power_max; "
-                    "the optimization may be infeasible."
+                if soc_target_clamped > reach + 1e-6:
+                    self.logger.warning(
+                        f"Battery {k}: intermediate soc_target={soc_target_clamped} may be "
+                        f"unreachable by timestep {k_target}: from "
+                        f"soc_init={soc_init_list[k]} the maximum reachable SoC is "
+                        f"~{reach:.3f} given battery_charge_power_max; the optimization "
+                        "may be infeasible."
+                    )
+                floor = np.zeros(self.num_timesteps)
+                floor[k_target] = soc_target_clamped * cap_k
+                self.param_soc_target_floor[k].value = floor
+                self.logger.debug(
+                    f"Battery {k}: intermediate SOC target enabled: SoC >= "
+                    f"{soc_target_clamped} by timestep {k_target} (requested "
+                    f"soc_target={soc_target}, soc_target_timestep={soc_target_timestep})."
                 )
-            floor = np.zeros(self.num_timesteps)
-            floor[k_target] = soc_target_clamped * cap
-            self.param_soc_target_floor.value = floor
-            self.logger.debug(
-                f"Intermediate SOC target enabled: SoC >= {soc_target_clamped} "
-                f"by timestep {k_target} (requested soc_target={soc_target}, "
-                f"soc_target_timestep={soc_target_timestep})."
-            )
         else:
-            self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
+            for k in range(self.n_batt):
+                self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
 
         # Peak grid import already incurred this billing period (issue #623,
         # Phase 2). Reset on EVERY call so a value from a previous MPC tick does
@@ -4079,28 +4526,30 @@ class Optimization:
                 param.value = override_arr
 
         if self.optim_conf["set_use_battery"]:
-            self.param_soc_init.value = soc_init
-            self.param_soc_final.value = soc_final
-            self.param_battery_charge_power_max.value = float(
-                self.plant_conf["battery_charge_power_max"]
-            )
-            self.param_battery_discharge_power_max.value = float(
-                self.plant_conf["battery_discharge_power_max"]
-            )
-            low_gap_wh = max(
-                0.0,
-                (self.plant_conf["battery_minimum_state_of_charge"] - soc_init)
-                * self.plant_conf["battery_nominal_energy_capacity"],
-            )
-            high_gap_wh = max(
-                0.0,
-                (soc_init - self.plant_conf["battery_maximum_state_of_charge"])
-                * self.plant_conf["battery_nominal_energy_capacity"],
-            )
-            self.param_soc_low_gap.value = low_gap_wh
-            self.param_soc_high_gap.value = high_gap_wh
-            self.param_soc_low_required.value = 1.0 if low_gap_wh > 0 else 0.0
-            self.param_soc_high_required.value = 1.0 if high_gap_wh > 0 else 0.0
+            # #610: per battery k, mirroring the pre-#610 single-battery
+            # assignments below exactly (at n_batt==1 this loop runs once with
+            # k==0, byte-identical values).
+            for k in range(self.n_batt):
+                self.param_soc_init[k].value = soc_init_list[k]
+                self.param_soc_final[k].value = soc_final_list[k]
+                self.param_battery_charge_power_max[k].value = float(
+                    batt_conf["charge_power_max"][k]
+                )
+                self.param_battery_discharge_power_max[k].value = float(
+                    batt_conf["discharge_power_max"][k]
+                )
+                low_gap_wh = max(
+                    0.0,
+                    (batt_conf["soc_min"][k] - soc_init_list[k]) * batt_conf["cap"][k],
+                )
+                high_gap_wh = max(
+                    0.0,
+                    (soc_init_list[k] - batt_conf["soc_max"][k]) * batt_conf["cap"][k],
+                )
+                self.param_soc_low_gap[k].value = low_gap_wh
+                self.param_soc_high_gap[k].value = high_gap_wh
+                self.param_soc_low_required[k].value = 1.0 if low_gap_wh > 0 else 0.0
+                self.param_soc_high_required[k].value = 1.0 if high_gap_wh > 0 else 0.0
 
         # Update Window Mask Parameters for Deferrable Loads
         # This allows warm-starting even when time windows change
@@ -4623,18 +5072,28 @@ class Optimization:
             constraints = self.constraints[:]
 
             if self.optim_conf["set_use_battery"]:
-                # Raw plant_conf read: stress cost is gated on battery_stress_cost>0
-                # (off by default) and the value is only used to size PWL segments
-                # at build time, so runtime parameterisation isn't needed here.
-                p_batt_max = max(
-                    self.plant_conf.get("battery_discharge_power_max", 0),
-                    self.plant_conf.get("battery_charge_power_max", 0),
-                )
-                batt_stress_conf = self._setup_stress_cost(
-                    "battery_stress_cost", p_batt_max, "battery"
-                )
-                if batt_stress_conf["active"]:
-                    self.vars["batt_stress_cost"] = batt_stress_conf["vars"]
+                # #610: one stress config per battery (raw plant_conf read via
+                # _battery_conf_as_lists: stress cost is gated per-battery on
+                # battery_stress_cost[k] > 0, off by default, and the value is
+                # only used to size PWL segments at build time, so runtime
+                # parameterisation isn't needed here). batt_stress_conf becomes
+                # a list aligned with the battery lists; self.vars["batt_stress_cost"]
+                # is only set at all if at least one battery has it active
+                # (matches the pre-#610 "key absent when inactive" behavior).
+                batt_conf_for_stress = self._battery_conf_as_lists()
+                batt_stress_conf = []
+                for k in range(self.n_batt):
+                    p_batt_max_k = max(
+                        batt_conf_for_stress["discharge_power_max"][k],
+                        batt_conf_for_stress["charge_power_max"][k],
+                    )
+                    batt_stress_conf.append(
+                        self._setup_battery_stress_cost(
+                            k, batt_conf_for_stress["stress_cost"][k], p_batt_max_k
+                        )
+                    )
+                if any(c["active"] for c in batt_stress_conf):
+                    self.vars["batt_stress_cost"] = [c["vars"] for c in batt_stress_conf]
 
             if self.plant_conf["inverter_is_hybrid"]:
                 P_nom_inverter_max = max(
@@ -4900,13 +5359,20 @@ class Optimization:
             )
 
         # Results Extraction
+        # #610: pass the per-battery soc_init list built above, except at
+        # n_batt==1 where the bare scalar is passed (byte-identical to today's
+        # single-battery call, and _build_results_dataframe's own N==1 branch
+        # expects a scalar here, not a 1-element list).
+        soc_init_for_results = (
+            soc_init_list[0] if soc_init_list is not None and self.n_batt == 1 else soc_init_list
+        )
         results_df = self._build_results_dataframe(
             data_opt,
             unit_load_cost,
             unit_prod_price,
             p_load,
             p_pv,
-            soc_init,
+            soc_init_for_results,
             self.predicted_temps,
             self.heating_demands,
             debug,
@@ -4998,8 +5464,8 @@ class Optimization:
         df_input_data: pd.DataFrame,
         p_pv: pd.Series,
         p_load: pd.Series,
-        soc_init: float | None = None,
-        soc_final: float | None = None,
+        soc_init: float | list | None = None,
+        soc_final: float | list | None = None,
         stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
@@ -5014,18 +5480,22 @@ class Optimization:
         :param p_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type p_load: pandas.DataFrame
-        :param soc_init: Optional initial battery SOC for the optimization. \
+        :param soc_init: Optional initial battery SOC for the optimization, as a \
+            single float (broadcast to every battery) or a list of exactly \
+            ``number_of_batteries`` entries for a per-battery initial SOC. \
             When ``None`` (the default), falls back to ``soc_final`` if set, \
             otherwise to ``battery_target_state_of_charge`` from the plant config.
-        :type soc_init: float, optional
-        :param soc_final: Optional final battery SOC for the optimization. \
+        :type soc_init: float | list, optional
+        :param soc_final: Optional final battery SOC for the optimization, as a \
+            single float (broadcast to every battery) or a list of exactly \
+            ``number_of_batteries`` entries for a per-battery final SOC. \
             When ``None`` (the default), falls back to ``soc_init`` if set, \
             otherwise to ``battery_target_state_of_charge``. Passing an explicit \
             ``soc_final`` distinct from ``soc_init`` is required to plan a \
             net battery charge / discharge across the horizon — notably when \
             ``set_battery_first_priority`` is enabled and the horizon starts \
             at a high SOC.
-        :type soc_final: float, optional
+        :type soc_final: float | list, optional
         :param stage_times: Optional dict to record nested sub-stage timings
             (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
         :type stage_times: dict, optional
@@ -5061,8 +5531,8 @@ class Optimization:
         p_pv: pd.Series,
         p_load: pd.Series,
         prediction_horizon: int,
-        soc_init: float | None = None,
-        soc_final: float | None = None,
+        soc_init: float | list | None = None,
+        soc_final: float | list | None = None,
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
@@ -5089,12 +5559,18 @@ class Optimization:
         :param prediction_horizon: The prediction horizon of the MPC controller in number \
             of optimization time steps.
         :type prediction_horizon: int
-        :param soc_init: The initial battery SOC for the optimization. This parameter \
-            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
-        :type soc_init: float
-        :param soc_final: The final battery SOC for the optimization. This parameter \
-            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
-        :type soc_final:
+        :param soc_init: The initial battery SOC for the optimization, as a single \
+            float (broadcast to every battery) or a list of exactly \
+            ``number_of_batteries`` entries for a per-battery initial SOC. This \
+            parameter is optional, if not given soc_init = soc_final = soc_target \
+            from the configuration file.
+        :type soc_init: float | list
+        :param soc_final: The final battery SOC for the optimization, as a single \
+            float (broadcast to every battery) or a list of exactly \
+            ``number_of_batteries`` entries for a per-battery final SOC. This \
+            parameter is optional, if not given soc_init = soc_final = soc_target \
+            from the configuration file.
+        :type soc_final: float | list
         :param soc_target: An optional intermediate minimum battery SOC (fraction in [0, 1]) that \
             must be reached by ``soc_target_timestep``, after which the battery is free to \
             discharge again. When ``None`` (the default) no intermediate target is imposed and \
