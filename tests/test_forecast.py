@@ -214,6 +214,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.fcst.data_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.x_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
+        # Time of day must be encoded continuously (no raw integer hour): the
+        # raw hour feature caused hour-boundary sawtooth in the adjusted forecast
+        self.assertNotIn("hour", self.fcst.x_adjust_pv.columns)
+        self.assertIn("hour_sin", self.fcst.x_adjust_pv.columns)
+        self.assertIn("hour_cos", self.fcst.x_adjust_pv.columns)
         # Call the fit method
         await self.fcst.adjust_pv_forecast_fit(
             n_splits=5, regression_model="LassoRegression", debug=False
@@ -254,6 +259,37 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             (result["adjusted_forecast"] >= 0).all(),
             f"Adjusted forecast must be >= 0, got: {result['adjusted_forecast'].tolist()}",
+        )
+
+    # add_cyclic_hour_features requires a DatetimeIndex, like add_date_features
+    async def test_add_cyclic_hour_features_requires_datetime_index(self):
+        df = pd.DataFrame({"forecast": [100.0, 200.0]}, index=[0, 1])
+        with self.assertRaises(ValueError):
+            Forecast.add_cyclic_hour_features(df)
+
+    # Regression test for the hour-boundary sawtooth: the time-of-day features
+    # fed to the regressor must be continuous at sub-hourly resolution, so a
+    # model with weight on them cannot introduce jumps at :00 that are absent
+    # from its input. With the raw integer hour feature a constant input curve
+    # produced steps of the full hour-coefficient at every hour boundary.
+    async def test_pv_forecast_adjust_no_hour_boundary_jump(self):
+        idx = pd.date_range("2026-04-19 10:00:00", periods=17, freq="15min", tz=self.fcst.time_zone)
+        forecasted_pv = pd.DataFrame({"forecast": np.full(len(idx), 1000.0)}, index=idx)
+
+        class _TimeFeatureModel:
+            # Mimics a fitted linear model with weight on the time-of-day features
+            def predict(self, X):
+                return 1000.0 + 500.0 * X["hour_sin"].to_numpy() + 500.0 * X["hour_cos"].to_numpy()
+
+        self.fcst.model_adjust_pv = _TimeFeatureModel()
+        result = self.fcst.adjust_pv_forecast_predict(forecasted_pv=forecasted_pv)
+        steps = result["adjusted_forecast"].diff().dropna()
+        at_hour = steps[steps.index.minute == 0].abs()
+        within_hour = steps[steps.index.minute != 0].abs()
+        self.assertLessEqual(
+            at_hour.max(),
+            within_hour.max() * 1.5,
+            "Adjusted forecast jumps at hour boundaries (sawtooth regression)",
         )
 
     # Issue #1026: curtailed timesteps (plus a one-step margin) must be excluded
