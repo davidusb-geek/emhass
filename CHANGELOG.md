@@ -4,6 +4,7 @@
 
 ### Fix
 - fix: encode time of day continuously (sin/cos) in the adjusted PV forecast features - the raw integer hour feature produced a sawtooth (a jump at every hour boundary) in the adjusted forecast at sub-hourly optimization time steps; saved models from older versions are re-fitted automatically
+- fix: exclude curtailed timesteps (with a one-step margin) from the adjusted PV forecast training data when compute_curtailment is enabled - training on curtailed production teaches the model a downward bias; ignore_pv_feedback_during_curtailment only protects the step-0 mix, not the training (fixes #1026)
 
 ## 0.17.9 - 2026-07-12
 

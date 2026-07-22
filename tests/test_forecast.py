@@ -292,6 +292,31 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             "Adjusted forecast jumps at hour boundaries (sawtooth regression)",
         )
 
+    # Issue #1026: curtailed timesteps (plus a one-step margin) must be excluded
+    # from the PV adjustment training set; without a curtailment series the
+    # training set is unchanged.
+    async def test_pv_forecast_adjust_drops_curtailed_timesteps(self):
+        idx = pd.date_range("2026-04-19 10:00:00", periods=16, freq="30min", tz=self.fcst.time_zone)
+        data = pd.DataFrame(
+            {
+                self.fcst.var_pv: np.full(len(idx), 1000.0),
+                self.fcst.var_pv_forecast: np.full(len(idx), 1100.0),
+            },
+            index=idx,
+        )
+        curtailment = pd.Series(0.0, index=idx)
+        curtailment.iloc[5] = 500.0
+        self.fcst.adjust_pv_forecast_data_prep(data, curtailment_series=curtailment)
+        self.assertEqual(len(self.fcst.data_adjust_pv), len(idx) - 3)
+        for pos in (4, 5, 6):
+            self.assertNotIn(idx[pos], self.fcst.data_adjust_pv.index)
+        # a curtailment series on a different index is aligned (missing -> 0)
+        self.fcst.adjust_pv_forecast_data_prep(data, curtailment_series=curtailment.iloc[:2])
+        self.assertEqual(len(self.fcst.data_adjust_pv), len(idx))
+        # and without a curtailment series nothing is dropped
+        self.fcst.adjust_pv_forecast_data_prep(data)
+        self.assertEqual(len(self.fcst.data_adjust_pv), len(idx))
+
     # Test output weather forecast using openmeteo with mock get request data
     async def test_get_weather_forecast_openmeteo_method_mock(self):
         test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
