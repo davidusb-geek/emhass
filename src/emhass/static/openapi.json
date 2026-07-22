@@ -878,6 +878,13 @@
             "title": "Enable Battery",
             "description": "Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False"
           },
+          "number_of_batteries": {
+            "type": "integer",
+            "default": 1,
+            "title": "Number of batteries",
+            "x-unit": "count",
+            "description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. (unit: count)"
+          },
           "set_nocharge_from_grid": {
             "type": "boolean",
             "default": false,
@@ -917,81 +924,114 @@
             "description": "The maximum negative (for charge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration. (unit: fraction)"
           },
           "weight_battery_discharge": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Add cost weight for battery discharge",
             "x-unit": "¤/kWh",
-            "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging (unit: ¤/kWh)"
+            "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules. (unit: ¤/kWh)"
           },
           "weight_battery_charge": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Add cost weight for battery charge",
             "x-unit": "¤/kWh",
-            "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging (unit: ¤/kWh)"
+            "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules. (unit: ¤/kWh)"
           },
           "battery_discharge_power_max": {
-            "type": "integer",
-            "default": 1000,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 1000
+            },
             "title": "Max battery discharge power",
             "x-unit": "W",
-            "description": "The maximum discharge power in Watts (unit: W)"
+            "description": "The maximum discharge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: W)"
           },
           "battery_charge_power_max": {
-            "type": "integer",
-            "default": 1000,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 1000
+            },
             "title": "Max battery charge power",
             "x-unit": "W",
-            "description": "The maximum charge power in Watts (unit: W)"
+            "description": "The maximum charge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: W)"
           },
           "battery_discharge_efficiency": {
-            "type": "number",
-            "default": 0.95,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.95
+            },
             "title": "Battery discharge efficiency",
             "x-unit": "fraction",
-            "description": "The discharge efficiency. (percentage/100) (unit: fraction)"
+            "description": "The discharge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_charge_efficiency": {
-            "type": "number",
-            "default": 0.95,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.95
+            },
             "title": "Battery charge efficiency",
             "x-unit": "fraction",
-            "description": "The charge efficiency. (percentage/100) (unit: fraction)"
+            "description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_nominal_energy_capacity": {
-            "type": "integer",
-            "default": 5000,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 5000
+            },
             "title": "Battery total capacity",
             "x-unit": "Wh",
-            "description": "The total capacity of the battery stack in Wh (unit: Wh)"
+            "description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: Wh)"
           },
           "battery_minimum_state_of_charge": {
-            "type": "number",
-            "default": 0.3,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.3
+            },
             "title": "Minimum Battery charge percentage",
             "x-unit": "fraction",
-            "description": "The minimum allowable battery state of charge. (percentage/100) (unit: fraction)"
+            "description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_maximum_state_of_charge": {
-            "type": "number",
-            "default": 0.9,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.9
+            },
             "title": "Maximum Battery charge percentage",
             "x-unit": "fraction",
-            "description": "The maximum allowable battery state of charge. (percentage/100) (unit: fraction)"
+            "description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_target_state_of_charge": {
-            "type": "number",
-            "default": 0.6,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.6
+            },
             "title": "Battery desired percentage after optimization",
             "x-unit": "fraction",
-            "description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100) (unit: fraction)"
+            "description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain. (unit: fraction)"
           },
           "battery_stress_cost": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Battery Stress Cost",
             "x-unit": "¤/kWh",
-            "description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. (unit: ¤/kWh)"
+            "description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: ¤/kWh)"
           },
           "battery_stress_segments": {
             "type": "integer",
@@ -1001,28 +1041,40 @@
             "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
           },
           "battery_soc_deficit_threshold": {
-            "type": "number",
-            "default": 0.4,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.4
+            },
             "title": "Battery SOC deficit threshold",
-            "description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value."
+            "description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_deficit_cost": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Battery SOC deficit cost",
-            "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold."
+            "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_surplus_threshold": {
-            "type": "number",
-            "default": 0.9,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.9
+            },
             "title": "Battery SOC surplus threshold",
-            "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge."
+            "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_surplus_cost": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Battery SOC surplus cost",
-            "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled)."
+            "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "capacity_cost_per_kw": {
             "type": "number",

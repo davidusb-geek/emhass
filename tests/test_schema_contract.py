@@ -30,9 +30,28 @@ _KNOWN_UNDECLARED_DEFAULTS = frozenset(
 
 # Keys whose default value type doesn't match their declared input type.
 # Pre-existing mismatches outside the scope of the #876/#879 bug-wave.
+# The battery_* / weight_battery_* block (#610): declared array.* because they
+# accept per-battery lists, but their defaults stay bare scalars on purpose -
+# a scalar broadcasts to every battery and keeps existing single-battery
+# configs byte-identical (number_of_batteries defaults to 1).
 _KNOWN_TYPE_MISMATCHES = frozenset(
     {
         "load_peak_hour_periods",  # declared array.time, default is dict
+        "battery_discharge_power_max",
+        "battery_charge_power_max",
+        "battery_discharge_efficiency",
+        "battery_charge_efficiency",
+        "battery_nominal_energy_capacity",
+        "battery_minimum_state_of_charge",
+        "battery_maximum_state_of_charge",
+        "battery_target_state_of_charge",
+        "battery_stress_cost",
+        "weight_battery_discharge",
+        "weight_battery_charge",
+        "battery_soc_deficit_threshold",
+        "battery_soc_deficit_cost",
+        "battery_soc_surplus_threshold",
+        "battery_soc_surplus_cost",
     }
 )
 

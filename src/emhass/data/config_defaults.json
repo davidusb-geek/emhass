@@ -122,6 +122,7 @@
   "inverter_stress_segments": 10,
   "compute_curtailment": false,
   "set_use_battery": false,
+  "number_of_batteries": 1,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
   "battery_discharge_efficiency": 0.95,
