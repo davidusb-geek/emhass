@@ -41,7 +41,9 @@ No recipes yet. Topics that would fit: ML vs naive load forecaster selection, cu
 
 ### Tariff
 
-No recipes yet. Topics that would fit: dynamic-price (EPEX, Tibber, etc.) injection, multi-tier tariffs, sell-vs-self-consume thresholds. Contributions welcome.
+- [Demand / capacity charge on peak grid import](tariff_demand_charge.md) — shave the kW demand / capacity charge in the same optimization as energy cost via the opt-in `capacity_cost_per_kw`, with an optional billing-period peak floor for MPC.
+
+Additional tariff recipes welcome: dynamic-price (EPEX, Tibber, etc.) injection, multi-tier tariffs, sell-vs-self-consume thresholds.
 
 ### Transport / integration
 
