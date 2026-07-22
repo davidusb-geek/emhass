@@ -1399,6 +1399,23 @@ async def treat_runtimeparams(
         if type(runtimeparams) is str:
             runtimeparams = orjson.loads(runtimeparams)
 
+        # Remember which per-battery array params were configured with genuinely
+        # distinct per-battery entries: the association loop below overwrites the
+        # configured value with the raw runtime one, and the re-normalisation
+        # step further down warns when a runtime scalar masks such a list
+        # (its broadcast silently flattens the per-battery values, #1032).
+        batt_distinct_config_lists: dict[str, list] = {}
+        for batt_conf_key, batt_param_names in (
+            ("plant_conf", BATT_ARRAY_PARAMS_PLANT_CONF),
+            ("optim_conf", BATT_ARRAY_PARAMS_OPTIM_CONF),
+        ):
+            for batt_param_name in batt_param_names:
+                configured = params[batt_conf_key].get(batt_param_name)
+                if isinstance(configured, list) and any(
+                    element != configured[0] for element in configured[1:]
+                ):
+                    batt_distinct_config_lists[batt_param_name] = list(configured)
+
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
@@ -1455,10 +1472,24 @@ async def treat_runtimeparams(
         # number_of_batteries > 1.
         num_batteries = validate_num_batteries(params["plant_conf"])
         for batt_param_name, batt_default in BATT_ARRAY_PARAMS_PLANT_CONF.items():
+            _warn_if_runtime_scalar_masks_batt_list(
+                num_batteries,
+                params["plant_conf"],
+                batt_param_name,
+                batt_distinct_config_lists,
+                logger,
+            )
             check_batt_params(
                 num_batteries, params["plant_conf"], batt_default, batt_param_name, logger
             )
         for batt_param_name, batt_default in BATT_ARRAY_PARAMS_OPTIM_CONF.items():
+            _warn_if_runtime_scalar_masks_batt_list(
+                num_batteries,
+                params["optim_conf"],
+                batt_param_name,
+                batt_distinct_config_lists,
+                logger,
+            )
             check_batt_params(
                 num_batteries, params["optim_conf"], batt_default, batt_param_name, logger
             )
@@ -3631,6 +3662,54 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+def _warn_if_runtime_scalar_masks_batt_list(
+    num_batteries: int,
+    parameter: dict,
+    parameter_name: str,
+    distinct_config_lists: dict[str, list],
+    logger: logging.Logger,
+) -> None:
+    """
+    Warn when a runtime scalar masks a configured per-battery list (#1032).
+
+    Runtime values override configured ones by design, and a scalar broadcasts
+    to every battery. When the configured value was a list with genuinely
+    distinct per-battery entries, that broadcast silently flattens them - a
+    documented but easy-to-miss interaction (a real two-battery deployment
+    lost its per-unit power limits to an aggregate runtime scalar this way).
+    The resulting values are unchanged; this only makes the override visible.
+
+    Uniform configured lists stay silent on purpose: build_params normalises a
+    configured scalar to ``[value] * N`` before this runs, so a warning keyed
+    on "configured value is a list" alone would fire on every runtime scalar
+    a broadcast-config user sends, every MPC cycle.
+
+    :param num_batteries: plant_conf["number_of_batteries"]
+    :type num_batteries: int
+    :param parameter: the plant_conf/optim_conf dict AFTER the runtime
+        association loop has applied any override
+    :type parameter: dict
+    :param parameter_name: name of the per-battery array parameter
+    :type parameter_name: str
+    :param distinct_config_lists: parameter name -> configured list, captured
+        BEFORE the association loop, only for lists with distinct entries
+    :type distinct_config_lists: dict[str, list]
+    :param logger: The logger object
+    :type logger: logging.Logger
+    """
+    if num_batteries <= 1 or parameter_name not in distinct_config_lists:
+        return
+    current = parameter.get(parameter_name)
+    if current is None or isinstance(current, list):
+        return
+    logger.warning(
+        f"{parameter_name}: runtime scalar {current} overrides the configured "
+        f"per-battery list {distinct_config_lists[parameter_name]} and will "
+        f"broadcast to all {num_batteries} batteries; pass a list of "
+        f"{num_batteries} entries to keep per-battery values"
+    )
 
 
 def _coerce_batt_weight_value(

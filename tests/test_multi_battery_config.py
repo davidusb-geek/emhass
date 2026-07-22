@@ -16,6 +16,7 @@ AttributeError - the behavioural gap IS that the function is missing.
 
 import asyncio
 import json
+import logging
 import pathlib
 
 import numpy as np
@@ -545,6 +546,83 @@ def test_treat_runtimeparams_n1_scalar_override_stays_scalar():
     _, optim_conf, plant_conf = treat_runtime({"battery_charge_power_max": 4321}, base)
     assert plant_conf["battery_charge_power_max"] == 4321
     assert not isinstance(plant_conf["battery_charge_power_max"], list)
+
+
+# ──────────── runtime scalar masking a configured per-battery list ──────────
+# A runtime scalar overrides a configured value and broadcasts to every
+# battery. When the configured value was a list with distinct per-battery
+# entries, the broadcast silently flattens them (a real two-battery deployment
+# lost its per-unit power limits this way, see PR #1032). The values stay
+# exactly the documented override semantics; the only new behaviour is a
+# warning making the mask visible.
+
+
+def _mask_warnings(caplog, parameter_name: str) -> list:
+    return [
+        rec
+        for rec in caplog.records
+        if rec.levelname == "WARNING"
+        and parameter_name in rec.message
+        and "overrides the configured per-battery list" in rec.message
+    ]
+
+
+def test_runtime_scalar_over_distinct_config_list_warns(caplog):
+    base = build_params({"number_of_batteries": 2, "battery_charge_power_max": [2500, 2400]})
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"battery_charge_power_max": 4200}, base)
+    warnings = _mask_warnings(caplog, "battery_charge_power_max")
+    assert len(warnings) == 1, "expected exactly one mask warning"
+    assert "[2500, 2400]" in warnings[0].message
+    assert "4200" in warnings[0].message
+    # The override semantics themselves are unchanged: scalar still broadcasts.
+    assert plant_conf["battery_charge_power_max"] == [4200, 4200]
+
+
+def test_runtime_scalar_over_distinct_optim_conf_list_warns(caplog):
+    base = build_params({"number_of_batteries": 2, "battery_soc_deficit_cost": [0.1, 0.3]})
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"battery_soc_deficit_cost": 0.2}, base)
+    assert len(_mask_warnings(caplog, "battery_soc_deficit_cost")) == 1
+    assert optim_conf["battery_soc_deficit_cost"] == [0.2, 0.2]
+
+
+def test_runtime_list_over_distinct_config_list_no_warning(caplog):
+    base = build_params({"number_of_batteries": 2, "battery_charge_power_max": [2500, 2400]})
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"battery_charge_power_max": [3000, 2900]}, base)
+    assert _mask_warnings(caplog, "battery_charge_power_max") == []
+    assert plant_conf["battery_charge_power_max"] == [3000, 2900]
+
+
+def test_runtime_scalar_over_uniform_config_no_warning(caplog):
+    """A scalar config broadcasts to a uniform list before treat_runtimeparams
+    runs; a runtime scalar over it is exactly what the caller meant and MPC
+    re-sends it every cycle - it must stay silent."""
+    base = build_params({"number_of_batteries": 2, "battery_charge_power_max": 2500})
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"battery_charge_power_max": 4200}, base)
+    assert _mask_warnings(caplog, "battery_charge_power_max") == []
+    assert plant_conf["battery_charge_power_max"] == [4200, 4200]
+
+
+def test_runtime_scalar_via_legacy_name_over_distinct_config_list_warns(caplog):
+    """The association loop also applies overrides passed under the legacy
+    parameter name (Pc_max -> battery_charge_power_max); detection reads the
+    post-loop state, so the mask warning must fire for those too."""
+    base = build_params({"number_of_batteries": 2, "battery_charge_power_max": [2500, 2400]})
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"Pc_max": 4200}, base)
+    assert len(_mask_warnings(caplog, "battery_charge_power_max")) == 1
+    assert plant_conf["battery_charge_power_max"] == [4200, 4200]
+
+
+def test_runtime_scalar_n1_never_warns(caplog):
+    base = build_params()
+    with caplog.at_level(logging.WARNING):
+        _, optim_conf, plant_conf = treat_runtime({"battery_charge_power_max": 4200}, base)
+    assert _mask_warnings(caplog, "battery_charge_power_max") == []
+    assert plant_conf["battery_charge_power_max"] == 4200
 
 
 # ─────────────────────── soc_init / soc_final runtime ──────────────────────
