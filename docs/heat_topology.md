@@ -96,6 +96,10 @@ Each storage object requires:
 | `min_temperature` or `min_temperatures` | degrees Celsius | Per-timestep lower bounds. |
 | `max_temperature` or `max_temperatures` | degrees Celsius | Per-timestep upper bounds. |
 
+The graph compiler currently expects a list for either spelling. The singular
+key name does not make a scalar valid: use `"min_temperature": [48.0]`, not
+`"min_temperature": 48.0`.
+
 Optional physical fields are `density` in kg/m3, `heat_capacity` in
 kJ/(kg degree Celsius), and `thermal_loss`. Water defaults are approximately
 `density: 1000` and `heat_capacity: 4.186`.
@@ -233,6 +237,16 @@ that cannot serve all targets simultaneously:
 ```
 
 Each flow pair must exactly match an entry in `flows`.
+
+`max_combined_power` adds a per-timestep cap on the sum of the member flows. It
+does not replace their individual `min_power` and `nominal_power` limits.
+`mutual_exclusion: true` additionally allows at most one member to be active.
+For semi-continuous sources, an active flow runs at its nominal power, so the
+group cap must be at least as large as every member that may run. For
+continuous sources, the optimizer may modulate each active flow between its
+individual minimum and nominal limits while respecting the group cap. A group
+cap below a required member's feasible power can make the thermal problem
+infeasible.
 
 ## Validation and troubleshooting
 
