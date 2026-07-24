@@ -1341,7 +1341,7 @@ class Forecast:
         self.data_adjust_pv = pd.concat(
             [P_PV.rename("actual"), p_pv_forecast.rename("forecast")], axis=1
         ).dropna()
-        
+
         # Exclude curtailed timesteps (issue #1026): measured production during
         # curtailment is deliberately below the achievable PV power. A one-step
         # margin on either side absorbs execution lag between plan and inverter.
@@ -1369,7 +1369,7 @@ class Forecast:
             date_features=["year", "month", "day_of_week", "day_of_year", "day"],
         )
         self.data_adjust_pv = Forecast.add_cyclic_hour_features(self.data_adjust_pv)
-        
+
         self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
         # Features (X) and target (y)
         self.x_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
