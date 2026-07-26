@@ -1304,6 +1304,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"{_range}, got {raw!r}"
                 )
             tank[_zone_key] = value
+        # prior_heat is the lag model's initial condition (thermal kWh per step
+        # already in flight from previous rolling-MPC runs), so unlike the scalars
+        # above it is a per-step list and is passed through unconverted. Usually
+        # supplied per run via runtimeparams rather than written into the topology.
+        if s.get("prior_heat") is not None:
+            tank["prior_heat"] = s["prior_heat"]
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -3701,6 +3707,55 @@ async def treat_runtimeparams(
                         for k in range(len(ids), final_num_def_loads)
                     ]
 
+    # Per-tank in-flight heat for a lagged tank (thermal_inertia), keyed by tank id:
+    # the thermal kWh already delivered per step by previous rolling-MPC runs but not
+    # yet arrived. Sibling of shared_tank_start_temperatures - both are per-run state,
+    # not configuration - and likewise tolerant: bad entries warn and are skipped so a
+    # flaky feed degrades to the previous cold-start behaviour instead of failing.
+    if runtimeparams and "shared_tank_prior_heat" in runtimeparams:
+        overrides = runtimeparams["shared_tank_prior_heat"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_prior_heat must be an object mapping tank id to a list "
+                "of per-step thermal kWh, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            tank_ids = {t.get("id") for t in tanks if isinstance(t, dict)}
+            for tank_id, series in overrides.items():
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                if isinstance(series, str) or not isinstance(series, list | tuple):
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] must be a list of numbers, got %s; ignoring.",
+                        tank_id,
+                        type(series).__name__,
+                    )
+                    continue
+                try:
+                    values = [float(v) for v in series]
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "shared_tank_prior_heat['%s']=%r is not all numeric; ignoring.",
+                        tank_id,
+                        series,
+                    )
+                    continue
+                if any(v < 0 or not np.isfinite(v) for v in values):
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] must be finite and >= 0; ignoring.",
+                        tank_id,
+                    )
+                    continue
+                for tank in tanks:
+                    if isinstance(tank, dict) and tank.get("id") == tank_id:
+                        tank["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,

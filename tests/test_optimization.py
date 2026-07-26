@@ -3460,10 +3460,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(p_def[6:].sum(), 0.0)
         self.assertEqual(Optimization.validate_def_timewindow(6, 0, 2, 10), (6, 10, None))
 
-    def test_thermal_inertia_not_flagged_unknown(self):
-        """Issue #943 linter: thermal_inertia is read from the per-load
-        thermal_config dict (hc.get("thermal_inertia")), so warning that it is
-        "ignored" is wrong."""
+    def test_thermal_inertia_and_prior_heat_not_flagged_unknown(self):
+        """Issue #943 linter: thermal_inertia and prior_heat are read from the
+        same per-load thermal_config dict (hc.get("thermal_inertia") /
+        hc.get("prior_heat")), so warning that they are "ignored" is wrong."""
         self.optim_conf["number_of_deferrable_loads"] = 1
         self.optim_conf["def_load_config"] = [
             {
@@ -3474,6 +3474,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     "min_temperatures": [20.0] * 48,
                     "max_temperatures": [24.0] * 48,
                     "thermal_inertia": 1.5,
+                    "prior_heat": 0.3,
                 }
             }
         ]
@@ -3484,6 +3485,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.create_optimization()
         joined = "\n".join(logs.output)
         self.assertNotIn("unknown key 'thermal_inertia'", joined)
+        self.assertNotIn("unknown key 'prior_heat'", joined)
 
     def test_thermal_battery_no_demand_model_raises(self):
         """A thermal_battery load that configures NONE of the three demand models
@@ -16473,6 +16475,114 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 opt._warn_capped_level_below_min_power("t", 0, cop, 15000, 4, after_dp=True), 2
             )
         self.assertIn("after the DP COP refinement", logs.output[0])
+
+    def test_per_load_prior_heat_seeds_the_dead_zone(self):
+        """The same dead-zone defect exists on the per-load thermal path (which
+        ships upstream), so it takes the same initial condition - expressed in the
+        input power (W) that path already speaks."""
+
+        def run(prior_heat=None):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+            self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+            self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+            thermal_config = {
+                "heating_rate": 10.0,
+                "cooling_constant": 0.5,
+                "start_temperature": 20.0,
+                "thermal_inertia": 1.0,  # L=2 at 30-min steps
+                "sense": "heat",
+                "min_temperatures": [0] * 48,
+                "max_temperatures": [30.0] * 48,
+            }
+            if prior_heat is not None:
+                thermal_config["prior_heat"] = prior_heat
+            self.optim_conf["def_load_config"] = [{}, {"thermal_config": thermal_config}]
+            self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+            return res["predicted_temp_heater1"].to_numpy()
+
+        base = run()
+        seeded = run(prior_heat=[3000.0, 3000.0])
+        # heat_factor = heating_rate * dt / nominal = 10*0.5/3000 -> 3000 W = +5 K/step
+        self.assertGreater(
+            seeded[1], base[1] + 1.0, "per-load dead zone must honour in-flight heat"
+        )
+
+    def test_shared_tank_prior_heat_rejects_invalid_values(self):
+        """prior_heat is runtime state fed from a plan or a sensor, so bad values
+        must fail loudly at build time rather than silently skewing the trajectory
+        into a plausible-but-wrong 'Optimal' plan."""
+        for bad in (["not-a-number", 1.0], [-5.0, 1.0]):
+            with self.assertRaises(ValueError) as cm:
+                self._run_shared_tank_lag(prior_heat=bad)
+            self.assertIn("prior_heat", str(cm.exception))
+
+    def test_shared_tank_prior_heat_absent_is_unchanged(self):
+        """Backwards compatibility: no prior_heat must reproduce today's behaviour
+        exactly (a zero initial condition), so existing configs are untouched."""
+        _, base = self._run_shared_tank_lag()
+        _, explicit_zero = self._run_shared_tank_lag(prior_heat=[0.0, 0.0])
+        np.testing.assert_allclose(base, explicit_zero, atol=1e-6)
+
+    def test_shared_tank_prior_heat_seeds_the_dead_zone(self):
+        """Heat committed by PREVIOUS rolling-MPC runs is still in transit when the
+        next run starts. Without an initial condition the first L steps carry no
+        source term at all, so predicted_temp there is independent of any power the
+        optimizer chose - it re-plans against a state that ignores its own past
+        actions and systematically over-injects (#539, reported with a
+        96-run rolling-MPC repro on a real install).
+
+        prior_heat supplies that missing initial condition: thermal kWh already
+        delivered per step, oldest first. Seeding it must raise the dead-zone
+        trajectory above the no-prior-heat baseline."""
+        _, base = self._run_shared_tank_lag()
+        _, seeded = self._run_shared_tank_lag(prior_heat=[8.0, 8.0])
+        # conversion = 1/8 kWh/K, so 8 kWh in flight is +1.0 K per dead-zone step
+        self.assertGreater(
+            seeded[1],
+            base[1] + 0.5,
+            "in-flight heat from the previous run must warm the first dead-zone step",
+        )
+        self.assertGreater(seeded[2], base[2] + 0.5, "the second dead-zone step must be seeded too")
+
+    def _run_shared_tank_lag(self, prior_heat=None):
+        """Solve a lagged zone tank with a wide comfort band (nothing forces
+        heating), so the dead-zone trajectory is pure physics: loss only, plus
+        whatever prior_heat seeds. Returns the predicted temperature array."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        self._setup_single_hp(supply_temperature=40.0)
+        tank = {
+            "id": "house",
+            "load_ids": [0],
+            "thermal_mass": 8.0,  # kWh/K -> conversion 0.125 K/kWh
+            "loss_coefficient": 0.3,
+            "thermal_inertia": 1.0,  # L=2 at 30-min steps
+            "start_temperature": 20.5,
+            "min_temperatures": [15.0] * 48,
+            "max_temperatures": [25.0] * 48,
+        }
+        if prior_heat is not None:
+            tank["prior_heat"] = prior_heat
+        self.optim_conf["shared_thermal_tanks"] = [tank]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        tcol = [c for c in res.columns if "temp_shared_house" in c or "temp_heater" in c][0]
+        return opt, res[tcol].to_numpy()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ THERMAL_CONFIG_KNOWN_KEYS = frozenset(
         "penalty_factor",
         "sense",
         "thermal_inertia",
+        "prior_heat",
     }
 )
 # Common singular typo -> (correct list key, what that key controls). The role
@@ -3631,10 +3632,17 @@ class Optimization:
             )
 
         # Startup "Dead Zone" Dynamics
+        # This horizon's own power has not arrived yet, but heat committed before the
+        # horizon still can: prior_heat is that in-flight input power (W, oldest
+        # first), converted by the same heat_factor as p_deferrable. Zero when absent,
+        # so a plain day-ahead solve keeps its cold-start assumption.
         if L > 0:
+            prior_heat = self._resolve_prior_heat(hc.get("prior_heat"), L, f"Load {k}")
             constraints.append(
                 predicted_temp[1 : 1 + L]
-                == predicted_temp[:L] - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
+                == predicted_temp[:L]
+                + (prior_heat * sense_coeff * heat_factor)
+                - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
             )
 
         # Hard min/max temperature bounds (shared helper).
@@ -3718,6 +3726,47 @@ class Optimization:
         unchanged. Accepts a scalar or a NumPy array.
         """
         return loss_kw * self.time_step
+
+    @staticmethod
+    def _resolve_prior_heat(raw, lag_steps, label):
+        """Return the length-`lag_steps` initial condition for a lagged thermal model.
+
+        With `thermal_inertia` the heat produced at step t only reaches the store at
+        t+1+L, so the first L steps of a fresh solve have no source term. That is
+        self-consistent for a one-shot day-ahead plan (nothing precedes the horizon),
+        but a rolling MPC re-solve starts mid-flight: heat committed by the previous
+        runs is physically still on its way. Without it the model's temperature over
+        that window is independent of any power choice, so the optimizer cannot see
+        the effect of its own past actions and keeps re-injecting (#539).
+
+        `raw` is that in-flight heat, oldest first, in the unit the caller's model
+        speaks (thermal kWh per step for shared tanks, input W for the per-load
+        path). A short list is right-aligned - it is the MOST RECENT steps that are
+        still in flight - and a long one keeps its last `lag_steps` entries. None or
+        empty yields zeros, i.e. exactly the previous behaviour.
+        """
+        prior = np.zeros(max(int(lag_steps), 0))
+        if raw is None or prior.size == 0:
+            return prior
+        if isinstance(raw, str) or not isinstance(raw, list | tuple | np.ndarray):
+            raise ValueError(
+                f"{label}: prior_heat must be a list of numbers, got {type(raw).__name__}"
+            )
+        try:
+            vals = [float(v) for v in raw]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}: prior_heat entries must be numeric ({exc})") from exc
+        if any(not np.isfinite(v) for v in vals):
+            raise ValueError(f"{label}: prior_heat entries must be finite")
+        if any(v < 0 for v in vals):
+            raise ValueError(
+                f"{label}: prior_heat entries must be >= 0 (magnitude of delivered heat; "
+                "the tank's sense already sets the direction)"
+            )
+        vals = vals[-prior.size :]
+        if vals:
+            prior[prior.size - len(vals) :] = vals
+        return prior
 
     def _resolve_draw_off_demand(self, hc, base_loss, required_len):
         """Return (demand_arr, loss_arr) if hot-water-tank mode (draw_off_demand present), else None."""
@@ -4863,12 +4912,19 @@ class Optimization:
                 * (sense_coeff * _raw_heat(-1) + xfer_net - heating_demand[:-1] - loss_vec[:-1])
             )
         else:
-            # Dead zone: the first L steps cool/draw with no source heat delivered
-            # yet (transfers still apply - they are not subject to the source lag).
+            # Dead zone: the first L steps receive no heat from THIS horizon's own
+            # sources yet (transfers still apply - they are not subject to the source
+            # lag). They do receive heat committed BEFORE the horizon that is still in
+            # flight: prior_heat (thermal kWh per step, oldest first). Zero when absent,
+            # which reproduces the previous cold-start behaviour exactly.
+            prior_heat = self._resolve_prior_heat(
+                tank.get("prior_heat"), L, f"Shared tank {tank_id}"
+            )
             constraints.append(
                 predicted_temp[1 : 1 + L]
                 == predicted_temp[:L]
-                + conversion * (xfer_net[:L] - heating_demand[:L] - loss_vec[:L])
+                + conversion
+                * (sense_coeff * prior_heat + xfer_net[:L] - heating_demand[:L] - loss_vec[:L])
             )
             # At the top of the clamp (L == required_len - 1) the dead zone above
             # already covers the whole remaining horizon, so this block spans zero
