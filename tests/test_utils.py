@@ -2884,6 +2884,58 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertFalse(out.get("shared_thermal_tanks"))
                 self.assertTrue(any("load_ids" in m for m in log_cm.output))
+    async def test_treat_runtimeparams_shared_tank_prior_heat_patch(self):
+        """shared_tank_prior_heat feeds the lag model's initial condition (thermal
+        kWh already in flight from previous MPC runs) by tank id."""
+        out = await self._run_treat_runtimeparams(
+            {
+                "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                "shared_tank_prior_heat": {"dhw": [0.4, 1.2]},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["prior_heat"], [0.4, 1.2])
+
+    async def test_treat_runtimeparams_shared_tank_prior_heat_rejects_bad_feeds(self):
+        """A stale or malformed feed must degrade to the previous cold-start
+        behaviour (no prior_heat) with a warning, never a wrong-but-plausible plan."""
+        for payload, needle in (
+            ({"no_such_tank": [1.0]}, "no_such_tank"),
+            ({"dhw": "1.0,2.0"}, "must be a list"),
+            ({"dhw": [1.0, "warm"]}, "not all numeric"),
+            ({"dhw": [-1.0, 2.0]}, ">= 0"),
+        ):
+            with self.assertLogs(logger, level="WARNING") as log_cm:
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                        "shared_tank_prior_heat": payload,
+                    }
+                )
+            self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
+            self.assertTrue(any(needle in m for m in log_cm.output), f"expected {needle!r} warning")
+
+    async def test_compile_heat_topology_passes_prior_heat_through(self):
+        """prior_heat is a per-step list, so the compiler must pass it through
+        unconverted (the sibling zone keys are coerced to scalar floats)."""
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3000, "supply_temperature": 45}
+            ],
+            "storage": [
+                {
+                    "id": "zone",
+                    "thermal_mass": 8.0,
+                    "thermal_inertia": 1.0,
+                    "prior_heat": [0.5, 1.5],
+                    "start_temperature": 20.0,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "zone"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        tank = compiled["shared_thermal_tanks"][0]
+        self.assertEqual(tank["prior_heat"], [0.5, 1.5])
+        self.assertEqual(tank["thermal_inertia"], 1.0)
 
     async def test_treat_runtimeparams_shared_tank_start_temperature_patches_compiled(self):
         """The override applies AFTER the heat_topology compile, so a tank that
