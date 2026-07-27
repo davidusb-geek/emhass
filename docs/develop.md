@@ -349,15 +349,15 @@ Add your parameter to the `OptimizationCacheKey` dataclass and the `_compute_cac
 ```python
 @dataclass(frozen=True)
 class OptimizationCacheKey:
-# ... existing parameters ...
-       this_parameter_is_amazing: tuple
+    # ... existing parameters ...
+    this_parameter_is_amazing: tuple
 
 
-   # Inside _compute_cache_key:
-   return OptimizationCacheKey(
-       # ... existing parameters ...
-       this_parameter_is_amazing=to_tuple(optim_conf.get("this_parameter_is_amazing", [])),
-   )
+# Inside _compute_cache_key:
+return OptimizationCacheKey(
+    # ... existing parameters ...
+    this_parameter_is_amazing=to_tuple(optim_conf.get("this_parameter_is_amazing", [])),
+)
 ```
 
 #### Note on Deferrable Load Lists
