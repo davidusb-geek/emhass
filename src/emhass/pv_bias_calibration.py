@@ -59,6 +59,15 @@ costs on clear days) can be supplied through ``score_fn`` without changing the
 recursion, which is the hook for the "merit-function" tie-breaker discussed on
 the issue. This module intentionally ships only the single *shift* scalar (v1);
 a second *shrink* degree of freedom on the band width is a separate follow-up.
+
+The realised PV fed in must be **uncensored**: a curtailed step reports less
+than the panels could have produced, so comparing the forecast against it reads
+as a spurious shortfall and pushes the bias up for the wrong reason. Curtailed
+steps must be excluded from the history (with a one-step margin, as EMHASS
+already does for the adjusted-PV training data in #1026), and ``realised``
+should be the available / pre-curtailment PV rather than metered export. This is
+a precondition on the caller building the history, not something the recursion
+can detect on its own.
 """
 
 from __future__ import annotations
@@ -175,7 +184,9 @@ def compute_pv_bias_calibration(
 
     :param p10: ordered P10 (conservative) PV forecasts, one per update step.
     :param p50: ordered P50 (central) PV forecasts, same order/length.
-    :param actual: ordered realised PV, same order/length.
+    :param actual: ordered realised PV, same order/length. Must be uncensored —
+        exclude curtailed steps and prefer available (pre-curtailment) PV over
+        metered export, so curtailment is not misread as a forecast shortfall.
     :param target_shortfall_rate: target one-sided shortfall rate ``alpha`` in
         (0, 1) — the fraction of steps realised PV may fall below the plan.
     :param gamma: ACI learning rate (> 0). 0.05-0.10 is the daily-update sweet
