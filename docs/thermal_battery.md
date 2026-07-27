@@ -373,25 +373,25 @@ This example shows a well-insulated modern home with underfloor heating, using t
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 35.0,
-        "volume": 18.0,
-        "start_temperature": 22.0,
-        "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
-        "max_temperatures": [28.0] * 48,  # Constant 28°C maximum
-        "carnot_efficiency": 0.45,
-        "u_value": 0.35,
-        "envelope_area": 380.0,
-        "ventilation_rate": 0.4,
-        "heated_volume": 240.0,
-        "window_area": 28.0,
-        "shgc": 0.6,
-        "internal_gains_factor": 0.7
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 35.0,
+                "volume": 18.0,
+                "start_temperature": 22.0,
+                "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
+                "max_temperatures": [28.0] * 48,  # Constant 28°C maximum
+                "carnot_efficiency": 0.45,
+                "u_value": 0.35,
+                "envelope_area": 380.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 240.0,
+                "window_area": 28.0,
+                "shgc": 0.6,
+                "internal_gains_factor": 0.7,
+            }
+        }
+    ]
 }
 ```
 
@@ -410,22 +410,22 @@ This example uses the simpler HDD-based approach for an older home with radiator
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 50.0,
-        "volume": 12.0,
-        "start_temperature": 45.0,
-        "min_temperatures": [40.0] * 48,  # Constant 40°C minimum
-        "max_temperatures": [65.0] * 48,  # Constant 65°C maximum
-        "carnot_efficiency": 0.38,
-        "specific_heating_demand": 95.0,
-        "area": 120.0,
-        "base_temperature": 18.0,
-        "annual_reference_hdd": 2800.0
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 50.0,
+                "volume": 12.0,
+                "start_temperature": 45.0,
+                "min_temperatures": [40.0] * 48,  # Constant 40°C minimum
+                "max_temperatures": [65.0] * 48,  # Constant 65°C maximum
+                "carnot_efficiency": 0.38,
+                "specific_heating_demand": 95.0,
+                "area": 120.0,
+                "base_temperature": 18.0,
+                "annual_reference_hdd": 2800.0,
+            }
+        }
+    ]
 }
 ```
 
@@ -443,23 +443,23 @@ This example shows how to use the thermal inertia filter for a system where ther
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 35.0,
-        "volume": 18.0,
-        "start_temperature": 22.0,
-        "min_temperatures": [20.0] * 48,
-        "max_temperatures": [28.0] * 48,
-        "carnot_efficiency": 0.45,
-        "u_value": 0.35,
-        "envelope_area": 380.0,
-        "ventilation_rate": 0.4,
-        "heated_volume": 240.0,
-        "thermal_inertia_time_constant": 2.0
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 35.0,
+                "volume": 18.0,
+                "start_temperature": 22.0,
+                "min_temperatures": [20.0] * 48,
+                "max_temperatures": [28.0] * 48,
+                "carnot_efficiency": 0.45,
+                "u_value": 0.35,
+                "envelope_area": 380.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 240.0,
+                "thermal_inertia_time_constant": 2.0,
+            }
+        }
+    ]
 }
 ```
 
@@ -475,23 +475,23 @@ If you have other deferrable loads (EV charger, dishwasher, etc.) along with you
 
 ```python
 {
-  "def_load_config": [
-    {},
-    {
-      "thermal_battery": {
-        "supply_temperature": 35.0,
-        "volume": 15.0,
-        "start_temperature": 22.0,
-        "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
-        "max_temperatures": [26.0] * 48,  # Constant 26°C maximum
-        "u_value": 0.45,
-        "envelope_area": 320.0,
-        "ventilation_rate": 0.5,
-        "heated_volume": 200.0
-      }
-    },
-    {}
-  ]
+    "def_load_config": [
+        {},
+        {
+            "thermal_battery": {
+                "supply_temperature": 35.0,
+                "volume": 15.0,
+                "start_temperature": 22.0,
+                "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
+                "max_temperatures": [26.0] * 48,  # Constant 26°C maximum
+                "u_value": 0.45,
+                "envelope_area": 320.0,
+                "ventilation_rate": 0.5,
+                "heated_volume": 200.0,
+            }
+        },
+        {},
+    ]
 }
 ```
 
@@ -506,25 +506,71 @@ A 200-liter hot water tank heated by a heat pump, with a daily shower profile.
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 45.0,
-        "volume": 0.2,
-        "density": 997,
-        "heat_capacity": 4.184,
-        "thermal_loss": 0.035,
-        "start_temperature": 50.0,
-        "min_temperatures": [40.0] * 48,
-        "max_temperatures": [60.0] * 48,
-        "carnot_efficiency": 0.40,
-        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
-                            0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 45.0,
+                "volume": 0.2,
+                "density": 997,
+                "heat_capacity": 4.184,
+                "thermal_loss": 0.035,
+                "start_temperature": 50.0,
+                "min_temperatures": [40.0] * 48,
+                "max_temperatures": [60.0] * 48,
+                "carnot_efficiency": 0.40,
+                "draw_off_demand": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.8,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            }
+        }
+    ]
 }
 ```
 
@@ -542,23 +588,23 @@ A 200-liter hot water tank heated by a heat pump, without any `draw_off_demand`.
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 45.0,
-        "volume": 0.2,
-        "density": 997,
-        "heat_capacity": 4.184,
-        "thermal_loss": 0.035,
-        "start_temperature": 50.0,
-        "min_temperatures": [40.0] * 48,
-        "max_temperatures": [60.0] * 48,
-        "carnot_efficiency": 0.40,
-        "specific_heating_demand": 0.0,
-        "area": 1.0
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 45.0,
+                "volume": 0.2,
+                "density": 997,
+                "heat_capacity": 4.184,
+                "thermal_loss": 0.035,
+                "start_temperature": 50.0,
+                "min_temperatures": [40.0] * 48,
+                "max_temperatures": [60.0] * 48,
+                "carnot_efficiency": 0.40,
+                "specific_heating_demand": 0.0,
+                "area": 1.0,
+            }
+        }
+    ]
 }
 ```
 
@@ -577,29 +623,30 @@ Without a `draw_off_demand`, the thermal_battery automatically switches to space
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        # The building is the thermal mass. Sizing rules of thumb:
-        # concrete equivalent ~ 0.05 m^3 per m^3 of heated volume
-        # for a typical brick / concrete envelope (heavier construction -> more).
-        "volume": 12.0,            # m^3 equivalent
-        "density": 2400, "heat_capacity": 0.88,  # concrete defaults
-        "thermal_loss": 0.05,
-        "start_temperature": 20.0,      # current measured indoor T
-        "min_temperatures": [19.0]*48,  # comfort lower bound
-        "max_temperatures": [22.0]*48,  # comfort upper bound
-        # Building envelope physics drives the demand each slot.
-        "u_value": 0.45,
-        "envelope_area": 180.0,
-        "ventilation_rate": 0.4,
-        "heated_volume": 240.0,
-        "indoor_target_temperature": 21.0,
-        # Source: constant-efficiency for gas, supply_temperature/heating_curve for HP
-        "efficiency": 0.92
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                # The building is the thermal mass. Sizing rules of thumb:
+                # concrete equivalent ~ 0.05 m^3 per m^3 of heated volume
+                # for a typical brick / concrete envelope (heavier construction -> more).
+                "volume": 12.0,  # m^3 equivalent
+                "density": 2400,
+                "heat_capacity": 0.88,  # concrete defaults
+                "thermal_loss": 0.05,
+                "start_temperature": 20.0,  # current measured indoor T
+                "min_temperatures": [19.0] * 48,  # comfort lower bound
+                "max_temperatures": [22.0] * 48,  # comfort upper bound
+                # Building envelope physics drives the demand each slot.
+                "u_value": 0.45,
+                "envelope_area": 180.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 240.0,
+                "indoor_target_temperature": 21.0,
+                # Source: constant-efficiency for gas, supply_temperature/heating_curve for HP
+                "efficiency": 0.92,
+            }
+        }
+    ]
 }
 ```
 
@@ -617,29 +664,75 @@ Same hot water tank but with soft constraints to target 50°C while allowing dev
 
 ```python
 {
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "supply_temperature": 45.0,
-        "volume": 0.2,
-        "density": 997,
-        "heat_capacity": 4.184,
-        "thermal_loss": 0.035,
-        "start_temperature": 50.0,
-        "min_temperatures": [40.0] * 48,
-        "max_temperatures": [60.0] * 48,
-        "desired_temperatures": [50.0] * 48,
-        "overshoot_temperature": 55.0,
-        "penalty_factor": 10,
-        "sense": "heat",
-        "carnot_efficiency": 0.40,
-        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
-                            0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
-      }
-    }
-  ]
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "supply_temperature": 45.0,
+                "volume": 0.2,
+                "density": 997,
+                "heat_capacity": 4.184,
+                "thermal_loss": 0.035,
+                "start_temperature": 50.0,
+                "min_temperatures": [40.0] * 48,
+                "max_temperatures": [60.0] * 48,
+                "desired_temperatures": [50.0] * 48,
+                "overshoot_temperature": 55.0,
+                "penalty_factor": 10,
+                "sense": "heat",
+                "carnot_efficiency": 0.40,
+                "draw_off_demand": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.8,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            }
+        }
+    ]
 }
 ```
 
@@ -654,44 +747,89 @@ A single heat pump serving both underfloor heating and a hot water tank. The opt
 
 ```python
 {
-  "num_def_loads": 2,
-  "nominal_power_of_deferrable_loads": [1000, 2000],
-  "treat_deferrable_load_as_semi_cont": [true, false],
-  "def_load_config": [
-    {
-      "thermal_battery": {
-        "indoor_target_temperature": 22,
-        "volume": 8,
-        "u_value": 0.3,
-        "envelope_area": 400.0,
-        "ventilation_rate": 0.5,
-        "heated_volume": 450.0,
-        "carnot_efficiency": 0.32,
-        "supply_temperature": 30.0,
-        "min_temperatures": [20.0] * 48,
-        "max_temperatures": [22.0] * 48,
-        "start_temperature": 20.0
-      }
-    },
-    {
-      "thermal_battery": {
-        "supply_temperature": 45.0,
-        "volume": 0.2,
-        "density": 997,
-        "heat_capacity": 4.184,
-        "thermal_loss": 0.035,
-        "carnot_efficiency": 0.32,
-        "start_temperature": 50.0,
-        "min_temperatures": [40.0] * 48,
-        "max_temperatures": [60.0] * 48,
-        "carnot_efficiency": 0.40,
-        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
-                            0,0,0,0,0,0, 0,0,0,0,0,0,
-                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
-      }
-    }
-  ]
+    "num_def_loads": 2,
+    "nominal_power_of_deferrable_loads": [1000, 2000],
+    "treat_deferrable_load_as_semi_cont": [true, false],
+    "def_load_config": [
+        {
+            "thermal_battery": {
+                "indoor_target_temperature": 22,
+                "volume": 8,
+                "u_value": 0.3,
+                "envelope_area": 400.0,
+                "ventilation_rate": 0.5,
+                "heated_volume": 450.0,
+                "carnot_efficiency": 0.32,
+                "supply_temperature": 30.0,
+                "min_temperatures": [20.0] * 48,
+                "max_temperatures": [22.0] * 48,
+                "start_temperature": 20.0,
+            }
+        },
+        {
+            "thermal_battery": {
+                "supply_temperature": 45.0,
+                "volume": 0.2,
+                "density": 997,
+                "heat_capacity": 4.184,
+                "thermal_loss": 0.035,
+                "carnot_efficiency": 0.40,
+                "start_temperature": 50.0,
+                "min_temperatures": [40.0] * 48,
+                "max_temperatures": [60.0] * 48,
+                "draw_off_demand": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.8,
+                    0.5,
+                    0.3,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            }
+        },
+    ],
 }
 ```
 
