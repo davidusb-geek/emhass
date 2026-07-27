@@ -54,10 +54,19 @@ Reference Python sketch for the deadline profile (30-minute timesteps, 24 h hori
 ```python
 from datetime import datetime, timedelta
 
-def build_dhw_profile(now, horizon=48, timestep_min=30,
-                      base=45.0,
-                      morning_temp=48.0, morning_hour=7, morning_window_slots=1,
-                      evening_temp=50.0, evening_hour=18, evening_window_slots=2):
+
+def build_dhw_profile(
+    now,
+    horizon=48,
+    timestep_min=30,
+    base=45.0,
+    morning_temp=48.0,
+    morning_hour=7,
+    morning_window_slots=1,
+    evening_temp=50.0,
+    evening_hour=18,
+    evening_window_slots=2,
+):
     """Return a list of length `horizon` with the deadline-driven target temps.
 
     Each spike fires in the last `*_window_slots` timesteps that end at or
