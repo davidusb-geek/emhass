@@ -127,6 +127,8 @@ A run of shortfalls pushes the bias toward P10 (more conservative); quiet stretc
 This ships the recommendation engine (the algorithm). Automatically logging the per-period P10/P50 you planned against versus the realised PV — the input this engine consumes — is a companion step; until that history is available you can feed the engine your own logged series.
 ```
 
+**Curtailment.** If your system curtails (export limiting, inverter clipping), the realised PV you log is capped below what the array could have produced. A plan that was actually met then looks like a shortfall, and the tuner pushes the bias up for the wrong reason. Flag those steps with the `censored` argument — they are dropped from the recursion — and prefer available (pre-curtailment) PV over metered export where your inverter reports it. On raw timesteps, `censored_margin=1` also drops the neighbouring steps, since curtailment ramps in and out. The result reports `n_censored_excluded`, and warns when so much was dropped that the recommendation only describes your non-curtailed operating regime.
+
 **References**
 
 * I. Gibbs and E. Candès (2021), *Adaptive Conformal Inference Under Distribution Shift*, NeurIPS 2021, [arXiv:2106.00170](https://arxiv.org/abs/2106.00170) — the fixed-`gamma` recursion used here.

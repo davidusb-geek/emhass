@@ -40,6 +40,34 @@ def _hot_forecast_history(n=500, seed=42, p50=100.0, p10=60.0, mean=85.0, sd=15.
     )
 
 
+def _history_with_curtailed_days(n=200, seed=11, every=10):
+    """A clean history with curtailed days spliced in every ``every`` steps.
+
+    A curtailed day reports realised PV far below what the array could have
+    made, so it looks like a severe forecast shortfall while carrying no
+    information about the forecast at all.
+
+    :return: ``(clean_triple, spliced_triple, censored_mask)``.
+    """
+    p10c, p50c, actualc = _hot_forecast_history(n=n, seed=seed)
+    p10, p50, actual, censored = [], [], [], []
+    for i in range(len(actualc)):
+        p10.append(p10c[i])
+        p50.append(p50c[i])
+        actual.append(actualc[i])
+        censored.append(False)
+        if i % every == 0:
+            p10.append(60.0)
+            p50.append(100.0)
+            actual.append(1.0)  # export-limited to nearly nothing
+            censored.append(True)
+    return (
+        (p10c, p50c, actualc),
+        (np.array(p10), np.array(p50), np.array(actual)),
+        np.array(censored, dtype=bool),
+    )
+
+
 @unittest.skipIf(pbc is None, "pv_bias_calibration module not present")
 class TestPvBiasCalibration(unittest.TestCase):
     # ── Convergence ──────────────────────────────────────────────────────────
@@ -136,6 +164,65 @@ class TestPvBiasCalibration(unittest.TestCase):
             score_fn=lambda planned, act: np.zeros_like(np.atleast_1d(act), dtype=float),
         )
         self.assertEqual(res["final_bias"], 0.0)
+
+    # ── Curtailment / censored observations ──────────────────────────────────
+    def test_masking_curtailed_steps_reproduces_the_clean_history(self):
+        (p10c, p50c, actualc), (p10, p50, actual), censored = _history_with_curtailed_days()
+        clean = pbc.compute_pv_bias_calibration(p10c, p50c, actualc, gamma=0.10)
+        masked = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored, gamma=0.10)
+        # Masking the curtailed steps must recover the clean answer exactly.
+        self.assertEqual(masked["n_observations"], clean["n_observations"])
+        self.assertEqual(masked["recommended_bias"], clean["recommended_bias"])
+        self.assertEqual(masked["bias_trajectory"], clean["bias_trajectory"])
+        self.assertEqual(masked["n_censored_excluded"], int(np.count_nonzero(censored)))
+
+    def test_unmasked_curtailment_over_tightens_the_bias(self):
+        # The failure mode the mask exists to prevent: left unflagged, curtailed
+        # steps read as forecast shortfalls and ratchet the bias up for the
+        # wrong reason (reviewer point on PR #1043).
+        (p10c, p50c, actualc), (p10, p50, actual), censored = _history_with_curtailed_days()
+        clean = pbc.compute_pv_bias_calibration(p10c, p50c, actualc, gamma=0.10)
+        unmasked = pbc.compute_pv_bias_calibration(p10, p50, actual, gamma=0.10)
+        self.assertGreater(unmasked["recommended_bias"], clean["recommended_bias"])
+        self.assertGreater(unmasked["achieved_shortfall_rate"], clean["achieved_shortfall_rate"])
+
+    def test_censored_margin_widens_the_exclusion(self):
+        # Curtailment ramps in and out, so the neighbours can be partly capped.
+        n = 9
+        p10 = np.zeros(n)
+        p50 = np.full(n, 10.0)
+        actual = np.full(n, 20.0)
+        censored = np.zeros(n, dtype=bool)
+        censored[4] = True
+        r0 = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored)
+        r1 = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored, censored_margin=1)
+        self.assertEqual(r0["n_censored_excluded"], 1)
+        self.assertEqual(r0["n_observations"], n - 1)
+        self.assertEqual(r1["n_censored_excluded"], 3)  # the step plus both neighbours
+        self.assertEqual(r1["n_observations"], n - 3)
+
+    def test_heavy_censoring_warns_and_is_reported(self):
+        p10, p50, actual = _hot_forecast_history(n=100, seed=13)
+        censored = np.zeros(100, dtype=bool)
+        censored[:40] = True
+        with self.assertLogs("test_pv_bias_calibration", level="WARNING"):
+            res = pbc.compute_pv_bias_calibration(
+                p10, p50, actual, censored=censored, gamma=0.10, logger=logger
+            )
+        self.assertEqual(res["n_censored_excluded"], 40)
+        self.assertEqual(res["n_observations"], 60)
+        self.assertAlmostEqual(res["censored_fraction"], 0.40, places=6)
+
+    def test_censored_validation(self):
+        p10, p50, actual = _hot_forecast_history(n=20)
+        with self.assertRaises(ValueError):  # mask length mismatch
+            pbc.compute_pv_bias_calibration(p10, p50, actual, censored=[True, False])
+        with self.assertRaises(ValueError):  # nothing uncensored left
+            pbc.compute_pv_bias_calibration(p10, p50, actual, censored=np.ones(20, dtype=bool))
+        with self.assertRaises(ValueError):  # negative margin
+            pbc.compute_pv_bias_calibration(
+                p10, p50, actual, censored=np.zeros(20, dtype=bool), censored_margin=-1
+            )
 
     # ── Input validation ─────────────────────────────────────────────────────
     def test_length_mismatch_raises(self):
