@@ -84,8 +84,8 @@ Expected: with a non-zero `current_period_peak`, the plan stops shaving below th
 
 ```python
 # From the EMHASS optimization result DataFrame `opt_res`:
-peak_off = opt_res["P_grid"].clip(lower=0).max()   # capacity_cost_per_kw = 0.0
-peak_on  = opt_res["P_grid"].clip(lower=0).max()   # capacity_cost_per_kw = 8.0
+peak_off = opt_res["P_grid"].clip(lower=0).max()  # capacity_cost_per_kw = 0.0
+peak_on = opt_res["P_grid"].clip(lower=0).max()  # capacity_cost_per_kw = 8.0
 # Expect peak_on <= peak_off, at the cost of a small rise in the energy-only cost_fun term.
 ```
 
