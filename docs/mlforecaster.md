@@ -41,14 +41,14 @@ The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default.
 The default values for these parameters are:
 ```python
 runtimeparams = {
-    'historic_days_to_retrieve': 9,
+    "historic_days_to_retrieve": 9,
     "model_type": "long_train_data",
     "var_model": "sensor.power_load_no_var_loads",
     "sklearn_model": "KNeighborsRegressor",
     "num_lags": 48,
-    "split_date_delta": '48h',
+    "split_date_delta": "48h",
     "perform_backtest": False,
-    "mlforecaster_weather_features": []
+    "mlforecaster_weather_features": [],
 }
 ```
 
@@ -203,7 +203,7 @@ runtimeparams = {
     "model_predict_publish": False,
     "model_predict_entity_id": "sensor.p_load_forecast_custom_model",
     "model_predict_unit_of_measurement": "W",
-    "model_predict_friendly_name": "Load Power Forecast custom ML model"
+    "model_predict_friendly_name": "Load Power Forecast custom ML model",
 }
 ```
 
@@ -218,9 +218,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.pow
 It is possible to pass the `n_trials` parameter to define the number of trials to perform during the optimization.
 The default value for this parameter is:
 ```python
-runtimeparams = {
-    "n_trials": 10
-}
+runtimeparams = {"n_trials": 10}
 ```
 This will launch the optimization routine and optimize the internal hyperparameters of the `scikit-learn` regressor and it will find the optimal number of lags.
 The following are the logs with the results obtained after the optimization for a KNN regressor:
