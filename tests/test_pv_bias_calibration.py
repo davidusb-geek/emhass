@@ -165,63 +165,88 @@ class TestPvBiasCalibration(unittest.TestCase):
         )
         self.assertEqual(res["final_bias"], 0.0)
 
-    # ── Curtailment / censored observations ──────────────────────────────────
+    # ── Curtailment (censored observations) ──────────────────────────────────
     def test_masking_curtailed_steps_reproduces_the_clean_history(self):
-        (p10c, p50c, actualc), (p10, p50, actual), censored = _history_with_curtailed_days()
+        (p10c, p50c, actualc), (p10, p50, actual), curtailed = _history_with_curtailed_days()
         clean = pbc.compute_pv_bias_calibration(p10c, p50c, actualc, gamma=0.10)
-        masked = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored, gamma=0.10)
+        masked = pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=curtailed, gamma=0.10)
         # Masking the curtailed steps must recover the clean answer exactly.
         self.assertEqual(masked["n_observations"], clean["n_observations"])
         self.assertEqual(masked["recommended_bias"], clean["recommended_bias"])
         self.assertEqual(masked["bias_trajectory"], clean["bias_trajectory"])
-        self.assertEqual(masked["n_censored_excluded"], int(np.count_nonzero(censored)))
+        self.assertEqual(masked["n_curtailed_excluded"], int(np.count_nonzero(curtailed)))
 
     def test_unmasked_curtailment_over_tightens_the_bias(self):
         # The failure mode the mask exists to prevent: left unflagged, curtailed
         # steps read as forecast shortfalls and ratchet the bias up for the
         # wrong reason (reviewer point on PR #1043).
-        (p10c, p50c, actualc), (p10, p50, actual), censored = _history_with_curtailed_days()
+        (p10c, p50c, actualc), (p10, p50, actual), _ = _history_with_curtailed_days()
         clean = pbc.compute_pv_bias_calibration(p10c, p50c, actualc, gamma=0.10)
         unmasked = pbc.compute_pv_bias_calibration(p10, p50, actual, gamma=0.10)
         self.assertGreater(unmasked["recommended_bias"], clean["recommended_bias"])
         self.assertGreater(unmasked["achieved_shortfall_rate"], clean["achieved_shortfall_rate"])
 
-    def test_censored_margin_widens_the_exclusion(self):
+    def test_accepts_a_curtailment_power_series(self):
+        # EMHASS publishes curtailment as a power series (W), not a bool mask;
+        # it is thresholded at > 0 exactly as the adjusted-PV path does.
+        (_, _, _), (p10, p50, actual), curtailed = _history_with_curtailed_days()
+        watts = np.where(curtailed, 1500.0, 0.0)
+        watts[2] = np.nan  # a gap in the curtailment sensor is "not curtailed"
+        from_bool = pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=curtailed)
+        from_watts = pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=watts)
+        self.assertEqual(from_watts["n_curtailed_excluded"], from_bool["n_curtailed_excluded"])
+        self.assertEqual(from_watts["recommended_bias"], from_bool["recommended_bias"])
+
+    def test_curtailment_margin_widens_the_exclusion(self):
         # Curtailment ramps in and out, so the neighbours can be partly capped.
         n = 9
         p10 = np.zeros(n)
         p50 = np.full(n, 10.0)
         actual = np.full(n, 20.0)
-        censored = np.zeros(n, dtype=bool)
-        censored[4] = True
-        r0 = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored)
-        r1 = pbc.compute_pv_bias_calibration(p10, p50, actual, censored=censored, censored_margin=1)
-        self.assertEqual(r0["n_censored_excluded"], 1)
+        curtailed = np.zeros(n, dtype=bool)
+        curtailed[4] = True
+        r0 = pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=curtailed)
+        r1 = pbc.compute_pv_bias_calibration(
+            p10, p50, actual, curtailed=curtailed, curtailment_margin=1
+        )
+        self.assertEqual(r0["n_curtailed_excluded"], 1)
         self.assertEqual(r0["n_observations"], n - 1)
-        self.assertEqual(r1["n_censored_excluded"], 3)  # the step plus both neighbours
+        self.assertEqual(r1["n_curtailed_excluded"], 3)  # the step plus both neighbours
         self.assertEqual(r1["n_observations"], n - 3)
 
-    def test_heavy_censoring_warns_and_is_reported(self):
+    def test_excluded_count_is_finite_rows_only(self):
+        # A row that is BOTH non-finite and curtailed is dropped once, as a
+        # non-finite row -- the curtailed count reports real data loss only.
+        res = pbc.compute_pv_bias_calibration(
+            p10=[0.0, 0.0, 0.0, np.nan],
+            p50=[10.0, 10.0, 10.0, 10.0],
+            actual=[5.0, 20.0, 5.0, 7.0],
+            curtailed=[False, True, False, True],
+        )
+        self.assertEqual(res["n_curtailed_excluded"], 1)  # not 2
+        self.assertEqual(res["n_observations"], 2)
+
+    def test_heavy_curtailment_warns_and_is_reported(self):
         p10, p50, actual = _hot_forecast_history(n=100, seed=13)
-        censored = np.zeros(100, dtype=bool)
-        censored[:40] = True
+        curtailed = np.zeros(100, dtype=bool)
+        curtailed[:40] = True
         with self.assertLogs("test_pv_bias_calibration", level="WARNING"):
             res = pbc.compute_pv_bias_calibration(
-                p10, p50, actual, censored=censored, gamma=0.10, logger=logger
+                p10, p50, actual, curtailed=curtailed, gamma=0.10, logger=logger
             )
-        self.assertEqual(res["n_censored_excluded"], 40)
+        self.assertEqual(res["n_curtailed_excluded"], 40)
         self.assertEqual(res["n_observations"], 60)
-        self.assertAlmostEqual(res["censored_fraction"], 0.40, places=6)
+        self.assertAlmostEqual(res["curtailed_fraction"], 0.40, places=6)
 
-    def test_censored_validation(self):
+    def test_curtailment_validation(self):
         p10, p50, actual = _hot_forecast_history(n=20)
         with self.assertRaises(ValueError):  # mask length mismatch
-            pbc.compute_pv_bias_calibration(p10, p50, actual, censored=[True, False])
-        with self.assertRaises(ValueError):  # nothing uncensored left
-            pbc.compute_pv_bias_calibration(p10, p50, actual, censored=np.ones(20, dtype=bool))
+            pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=[True, False])
+        with self.assertRaises(ValueError):  # nothing uncurtailed left
+            pbc.compute_pv_bias_calibration(p10, p50, actual, curtailed=np.ones(20, dtype=bool))
         with self.assertRaises(ValueError):  # negative margin
             pbc.compute_pv_bias_calibration(
-                p10, p50, actual, censored=np.zeros(20, dtype=bool), censored_margin=-1
+                p10, p50, actual, curtailed=np.zeros(20, dtype=bool), curtailment_margin=-1
             )
 
     # ── Input validation ─────────────────────────────────────────────────────

@@ -63,21 +63,36 @@ a second *shrink* degree of freedom on the band width is a separate follow-up.
 Curtailment **censors** the signal and has to be handled before the recursion
 sees it. When production is curtailed the metered value is capped below what the
 array could have produced, so a plan that was actually met reads as a shortfall
-and ratchets ``bias`` up for the wrong reason. Pass a ``censored`` mask (plus
-``censored_margin`` when calibrating on raw timesteps) and those steps are
+and ratchets ``bias`` up for the wrong reason. Pass a ``curtailed`` mask (plus
+``curtailment_margin`` when calibrating on raw timesteps) and those steps are
 dropped; ``realised`` should be the available / pre-curtailment PV rather than
-metered export wherever the inverter reports it. Detecting curtailment is the
-caller's job — the recursion cannot see it in the numbers alone.
+metered export wherever the inverter reports it. This mirrors what EMHASS
+already does when building the adjusted-PV training set, where curtailed
+timesteps plus a one-step margin are excluded (issue #1026, PR #1027).
+
+The mask must come from an **independent** curtailment signal — EMHASS publishes
+one as ``P_PV_curtailment`` / ``custom_pv_curtailment_id`` — and never from the
+residual itself. A detector of the form "realised came in far below the forecast,
+so it must have been curtailed" would delete precisely the shortfall
+observations the recursion is counting, drive ``bias`` to zero and remove all
+protection: the exact opposite of what flagging curtailment is for.
 
 Dropping the censored steps is deliberate rather than partially crediting them.
 A censored step that still clears the plan is genuinely informative (true PV >=
 metered >= planned, so it cannot have been a shortfall) while a censored step
 below the plan is ambiguous, but keeping only the informative half would retain
 censored non-shortfalls and discard censored shortfalls, biasing the estimated
-rate *downward* — worse than dropping both. Dropping is not free either:
-curtailment is not missing-at-random (it concentrates on high-irradiance,
-high-production days), so under heavy curtailment the recommendation describes
-the non-curtailed regime. ``n_censored_excluded`` is returned to make that
+rate *downward* — worse than dropping both. (That half-way policy is really the
+optimistic endpoint of the identified interval reported as if it were a point
+estimate; the honest version of it is a bound, noted as a possible follow-up.)
+
+Dropping is not free either. Curtailment is not missing-at-random: when it is
+triggered by output (export limit, inverter clipping) it concentrates on
+high-irradiance, high-production steps, so the retained history describes the
+non-curtailed regime. Note the direction of that selection reverses if
+curtailment is *scheduled from the forecast* instead, because the dropped steps
+are then selected on a high planned value — the same quantity the shortfall test
+compares against. ``n_curtailed_excluded`` is returned to make the data loss
 visible, and a large excluded fraction is warned about rather than hidden.
 """
 
@@ -102,9 +117,9 @@ _TAIL_FRACTION = 0.5
 # A run is called "converged" when the settled shortfall rate sits within this
 # many percentage points of the target (and the bias is off both clip bounds).
 _CONVERGENCE_TOL = 0.05
-# Warn once the censored (curtailed) steps dropped from the history exceed this
-# fraction: what is left no longer describes the site's normal operating regime.
-_CENSORED_WARN_FRACTION = 0.20
+# Warn once the curtailed steps dropped from the history exceed this fraction:
+# what is left no longer describes the site's normal operating regime.
+_CURTAILED_WARN_FRACTION = 0.20
 
 
 def _planned_forecast(p10: np.ndarray, p50: np.ndarray, bias: float) -> np.ndarray:
@@ -162,7 +177,9 @@ def _widen_mask(mask: np.ndarray, margin: int) -> np.ndarray:
     """Widen a boolean mask by ``margin`` steps on either side.
 
     Curtailment ramps in and out, so the steps either side of a flagged one are
-    often partly capped as well.
+    often partly capped as well. Widening is by array *position*, not by
+    timestamp, so on a history with gaps the neighbours dropped are the adjacent
+    rows rather than the adjacent moments in time.
     """
     if margin <= 0:
         return mask
@@ -173,17 +190,35 @@ def _widen_mask(mask: np.ndarray, margin: int) -> np.ndarray:
     return widened
 
 
+def _coerce_curtailed(curtailed, n: int) -> np.ndarray:
+    """Coerce a curtailment flag series to a boolean mask of length ``n``.
+
+    Accepts either a boolean mask or the curtailed-power series EMHASS already
+    publishes (``P_PV_curtailment`` / ``custom_pv_curtailment_id``, in W), which
+    is thresholded at ``> 0`` exactly as the adjusted-PV path does. A non-finite
+    entry counts as "not curtailed" rather than propagating.
+    """
+    mask = np.asarray(curtailed)
+    if mask.ndim != 1 or mask.size != n:
+        raise ValueError(f"curtailed length {mask.size} does not match history length {n}")
+    if mask.dtype == bool:
+        return mask
+    values = mask.astype(float)
+    return np.isfinite(values) & (values > 0.0)
+
+
 def _coerce_history(
-    p10, p50, actual, censored=None, censored_margin: int = 0
+    p10, p50, actual, curtailed=None, curtailment_margin: int = 0
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Validate and align the history arrays, dropping unusable rows.
 
     Rows with any non-finite value are dropped (a missing P10/actual is not a
-    silent zero), as are rows flagged ``censored`` (and their ``censored_margin``
-    neighbours). Raises ``ValueError`` on length mismatch or empty input so a
-    caller cannot get a confidently-wrong recommendation from garbage.
+    silent zero), as are rows flagged ``curtailed`` (and their
+    ``curtailment_margin`` neighbours). Raises ``ValueError`` on length mismatch
+    or empty input so a caller cannot get a confidently-wrong recommendation
+    from garbage.
 
-    :return: ``(p10, p50, actual, n_censored_excluded)`` where the count covers
+    :return: ``(p10, p50, actual, n_curtailed_excluded)`` where the count covers
         only rows that were otherwise usable, so it reflects real data loss.
     """
     p10 = np.asarray(p10, dtype=float)
@@ -197,24 +232,21 @@ def _coerce_history(
     if not finite.any():
         raise ValueError("no finite observations in history")
 
-    if censored is None:
-        censored_mask = np.zeros(len(p10), dtype=bool)
+    if curtailed is None:
+        curtailed_mask = np.zeros(len(p10), dtype=bool)
     else:
-        censored_mask = np.asarray(censored, dtype=bool)
-        if censored_mask.shape != p10.shape:
-            raise ValueError(
-                f"censored length {censored_mask.size} does not match history length {len(p10)}"
-            )
-        censored_mask = _widen_mask(censored_mask, int(censored_margin))
+        curtailed_mask = _widen_mask(
+            _coerce_curtailed(curtailed, len(p10)), int(curtailment_margin)
+        )
 
-    keep = finite & ~censored_mask
-    n_censored_excluded = int(np.count_nonzero(finite & censored_mask))
+    keep = finite & ~curtailed_mask
+    n_curtailed_excluded = int(np.count_nonzero(finite & curtailed_mask))
     if not keep.any():
         raise ValueError(
-            "no usable observations left: every finite step is flagged as censored "
-            "(curtailed). Calibration needs uncensored production to compare against."
+            "no usable observations left: every finite step is flagged as curtailed. "
+            "Calibration needs uncensored production to compare the forecast against."
         )
-    return p10[keep], p50[keep], actual[keep], n_censored_excluded
+    return p10[keep], p50[keep], actual[keep], n_curtailed_excluded
 
 
 def compute_pv_bias_calibration(
@@ -222,8 +254,8 @@ def compute_pv_bias_calibration(
     p50,
     actual,
     *,
-    censored=None,
-    censored_margin: int = 0,
+    curtailed=None,
+    curtailment_margin: int = 0,
     target_shortfall_rate: float = DEFAULT_TARGET_SHORTFALL_RATE,
     gamma: float = DEFAULT_GAMMA,
     bias0: float = 0.0,
@@ -240,20 +272,25 @@ def compute_pv_bias_calibration(
     :param p10: ordered P10 (conservative) PV forecasts, one per update step.
     :param p50: ordered P50 (central) PV forecasts, same order/length.
     :param actual: ordered realised PV, same order/length. Must be uncensored —
-        flag curtailed steps through ``censored`` and prefer available
+        flag curtailed steps through ``curtailed`` and prefer available
         (pre-curtailment) PV over metered export, so curtailment is not misread
         as a forecast shortfall.
-    :param censored: optional boolean mask, same length as the history, marking
+    :param curtailed: optional flag series, same length as the history, marking
         steps whose realised PV was capped below what the array could have
-        produced (curtailment, export limiting, inverter clipping). Those steps
-        are dropped from the recursion — see the module notes for why they are
-        dropped rather than partially credited.
-    :param censored_margin: also drop this many steps either side of a censored
-        one, since curtailment ramps in and out. EMHASS applies a one-step
-        margin around curtailed steps when building adjusted-PV training data
-        (#1026); the default here is 0 because one step in this history is
-        whatever the caller aggregates (often a whole day), so set it to 1 when
-        calibrating on raw timesteps.
+        produced (curtailment, export limiting, inverter clipping). Either a
+        boolean mask or the curtailed-power series EMHASS publishes (thresholded
+        at ``> 0``, as the adjusted-PV path does). Those steps are dropped from
+        the recursion — see the module notes for why they are dropped rather
+        than partially credited, and why the flag must not be derived from the
+        forecast residual.
+    :param curtailment_margin: also drop this many steps either side of a
+        curtailed one, since curtailment ramps in and out. EMHASS hardcodes a
+        one-step margin around curtailed timesteps when building adjusted-PV
+        training data (#1026 / PR #1027), where a step is one optimization
+        timestep (30 min by default). The default here is 0 because a step in
+        this history is whatever the caller aggregates — often a whole day, where
+        a margin would discard two good days per curtailed one. Set it to 1 when
+        calibrating on raw timesteps to match the adjusted-PV behaviour.
     :param target_shortfall_rate: target one-sided shortfall rate ``alpha`` in
         (0, 1) — the fraction of steps realised PV may fall below the plan.
     :param gamma: ACI learning rate (> 0). 0.05-0.10 is the daily-update sweet
@@ -274,29 +311,35 @@ def compute_pv_bias_calibration(
         raise ValueError(f"gamma must be > 0, got {gamma}")
     if not 0.0 <= bias0 <= 1.0:
         raise ValueError(f"bias0 must be in [0, 1], got {bias0}")
-    if censored_margin < 0:
-        raise ValueError(f"censored_margin must be >= 0, got {censored_margin}")
+    if curtailment_margin < 0:
+        raise ValueError(f"curtailment_margin must be >= 0, got {curtailment_margin}")
 
-    p10, p50, actual, n_censored_excluded = _coerce_history(
-        p10, p50, actual, censored=censored, censored_margin=censored_margin
+    p10, p50, actual, n_curtailed_excluded = _coerce_history(
+        p10, p50, actual, curtailed=curtailed, curtailment_margin=curtailment_margin
     )
     score = score_fn if score_fn is not None else _default_shortfall_score
     alpha = float(target_shortfall_rate)
     n = len(p10)
 
+    # Mirror the adjusted-PV path, which logs its exclusion count on every fit.
+    curtailed_fraction = n_curtailed_excluded / (n + n_curtailed_excluded)
+    if n_curtailed_excluded and logger is not None:
+        logger.info(
+            "Excluding %s curtailed observations from the PV bias calibration, %s remaining.",
+            n_curtailed_excluded,
+            n,
+        )
     # Curtailment is not missing-at-random: it concentrates on the sunniest,
     # highest-production steps. Dropping a lot of them leaves a history that no
     # longer describes the site's normal regime, so say so rather than returning
     # a confident-looking number.
-    censored_fraction = n_censored_excluded / (n + n_censored_excluded)
-    if censored_fraction > _CENSORED_WARN_FRACTION and logger is not None:
+    if curtailed_fraction > _CURTAILED_WARN_FRACTION and logger is not None:
         logger.warning(
-            "%.0f%% of usable observations were dropped as censored (curtailed). "
-            "Curtailment concentrates on high-production steps, so the "
-            "recommendation describes the non-curtailed regime rather than the "
-            "site as a whole; treat it as indicative until more uncensored "
-            "history accumulates.",
-            100.0 * censored_fraction,
+            "%.0f%% of usable observations were dropped as curtailed. Curtailment "
+            "concentrates on high-production steps, so the recommendation "
+            "describes the non-curtailed regime rather than the site as a whole; "
+            "treat it as indicative until more uncensored history accumulates.",
+            100.0 * curtailed_fraction,
         )
 
     feasible = feasible_shortfall_range(p10, p50, actual)
@@ -347,8 +390,8 @@ def compute_pv_bias_calibration(
         "target_feasible": target_feasible,
         "converged": converged,
         "n_observations": int(n),
-        "n_censored_excluded": n_censored_excluded,
-        "censored_fraction": round(float(censored_fraction), 4),
+        "n_curtailed_excluded": n_curtailed_excluded,
+        "curtailed_fraction": round(float(curtailed_fraction), 4),
         "gamma": float(gamma),
         "bias_trajectory": [round(float(b), 4) for b in trajectory],
         "static_shortfall_curve": static_shortfall_curve(p10, p50, actual),
