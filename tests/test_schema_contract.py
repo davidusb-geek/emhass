@@ -52,6 +52,14 @@ _KNOWN_TYPE_MISMATCHES = frozenset(
         "battery_soc_deficit_cost",
         "battery_soc_surplus_threshold",
         "battery_soc_surplus_cost",
+        # #1042: declared array.string because they accept per-battery entity-id
+        # lists at number_of_batteries > 1, but their defaults stay bare scalar
+        # strings on purpose - a single sensor name is not broadcast to every
+        # battery (unlike the numeric params above), so the scalar default is
+        # only ever valid at N=1 and keeps existing single-battery configs
+        # byte-identical.
+        "sensor_power_battery",
+        "sensor_battery_state_of_charge",
     }
 )
 

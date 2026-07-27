@@ -24,15 +24,15 @@
     },
     "sensor_power_battery": {
       "friendly_name": "Sensor signed battery power",
-      "Description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’.",
-      "input": "string",
+      "Description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery.",
+      "input": "array.string",
       "default_value": "sensor.power_battery",
       "unit": "none"
     },
     "sensor_battery_state_of_charge": {
       "friendly_name": "Sensor battery state of charge",
-      "Description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’.",
-      "input": "string",
+      "Description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery.",
+      "input": "array.string",
       "default_value": "sensor.battery_state_of_charge",
       "unit": "none"
     },
