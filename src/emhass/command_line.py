@@ -532,6 +532,25 @@ async def _retrieve_from_file(
     return True, days_list
 
 
+def _append_entity_ids(var_list: list, value) -> None:
+    """
+    Append a battery_id sensor config value to ``var_list``.
+
+    A list (N>1, already resolved and duplicate-checked by
+    :func:`_resolve_battery_sensor_lists`) is appended element-wise, deduped
+    against ``var_list``. The resolver only rejects a within-list or
+    cross-list duplicate, not a battery sensor equal to the load sensor
+    already at ``var_list[0]``, so this guard is genuinely reachable there,
+    not redundant with it. A bare string (N=1) is appended unconditionally.
+    """
+    if isinstance(value, list):
+        for entity_id in value:
+            if entity_id not in var_list:
+                var_list.append(entity_id)
+    else:
+        var_list.append(value)
+
+
 async def _retrieve_from_hass(
     set_type: str,
     retrieve_hass_conf: dict,
@@ -549,11 +568,18 @@ async def _retrieve_from_hass(
         days_list = None  # Not needed for dayahead
     var_list = [retrieve_hass_conf["sensor_power_load_no_var_loads"]]
     if set_type == "battery_id":
-        # Battery identification needs signed battery power and measured SoC.
-        # The load sensor stays at var_list[0] so prepare_data's load handling
-        # is unchanged; the battery columns pass through untouched.
-        var_list.append(retrieve_hass_conf["sensor_power_battery"])
-        var_list.append(retrieve_hass_conf["sensor_battery_state_of_charge"])
+        # Battery identification needs signed battery power and measured SoC,
+        # one pair per battery. The load sensor stays at var_list[0] so
+        # prepare_data's load handling is unchanged (its set_zero_min clip, on
+        # by default, still applies to every retrieved column including
+        # these - a pre-existing limitation tracked upstream separately). A
+        # list value (N>1, already resolved by _identify_battery_impl) is
+        # appended per-id, deduped against var_list; a bare string (N=1) is
+        # the plain single-sensor case.
+        power_cfg = retrieve_hass_conf["sensor_power_battery"]
+        soc_cfg = retrieve_hass_conf["sensor_battery_state_of_charge"]
+        _append_entity_ids(var_list, power_cfg)
+        _append_entity_ids(var_list, soc_cfg)
         if logger:
             logger.debug(f"Variable list for battery_id retrieval: {var_list}")
     elif optim_conf.get("set_use_pv", True):
@@ -867,17 +893,293 @@ BATTERY_ID_CAPACITY_SENSOR = "sensor.battery_identified_capacity"
 BATTERY_ID_RTE_SENSOR = "sensor.battery_identified_round_trip_efficiency"
 
 
-def _log_battery_identification_summary(
-    logger: logging.Logger, payload: dict, plant_conf: dict
+def _batt_conf_val(value, k: int | None):
+    """
+    Scalar-or-list read for a plant_conf battery value (#1032 array-ifies 9
+    plant_conf battery params at number_of_batteries > 1).
+
+    k=None (N=1) always returns ``value`` unchanged, so every call site's N=1
+    output is identical to master regardless of this helper's existence. This
+    is unrelated to the sensor-key list/bare-string ambiguity (CONTRACT.md's
+    SCOPE NOTE on invariant 1): this helper only ever reads plant_conf battery
+    params, which keep #1032's own scalar-at-N=1 normalisation. At N>1, k
+    selects index k of a per-battery list; a value that is still a bare
+    scalar despite k being given is returned as-is (defensive: normal configs
+    are already array-ified by check_batt_params before plant_conf reaches
+    here, but a hand-built plant_conf, e.g. in a test fixture, may not be).
+    """
+    if k is None or not isinstance(value, list):
+        return value
+    return value[k]
+
+
+def _resolve_battery_sensor_lists(
+    retrieve_hass_conf: dict, num_batteries: int, logger: logging.Logger
+) -> tuple[list, list] | None:
+    """
+    Resolve sensor_power_battery / sensor_battery_state_of_charge into exact-
+    length per-battery lists, index-matched to the battery config lists.
+
+    Deliberately NO scalar broadcast at num_batteries > 1: one HA sensor
+    cannot identify two independent batteries, unlike the numeric plant_conf
+    params check_batt_params fans out. At N=1 a bare scalar (today's only
+    supported shape) and a length-1 list both resolve to a single-element
+    list. Anything else at N>1 (a scalar, or a list of the wrong length) is a
+    misconfiguration. So is any list entry that is not a non-empty entity-id
+    string, a duplicate id within one list (two batteries sharing a meter), or
+    an id shared between the power and SOC lists (one entity cannot be both
+    signals). Every rejection returns None after logging one precise warning
+    naming the offending key and what's wrong, so the caller can skip cleanly
+    before ever touching retrieval.
+    """
+    resolved: dict[str, list] = {}
+    for key in ("sensor_power_battery", "sensor_battery_state_of_charge"):
+        raw = retrieve_hass_conf.get(key)
+        if isinstance(raw, list):
+            if len(raw) != num_batteries:
+                logger.warning(
+                    "Battery identification: '%s' is a list of length %d but "
+                    "number_of_batteries=%d requires exactly %d entity ids "
+                    "(one per battery); skipping.",
+                    key,
+                    len(raw),
+                    num_batteries,
+                    num_batteries,
+                )
+                return None
+            for idx, entry in enumerate(raw):
+                if not isinstance(entry, str) or not entry:
+                    logger.warning(
+                        "Battery identification: '%s'[%d] is %r, expected a "
+                        "non-empty entity-id string; skipping.",
+                        key,
+                        idx,
+                        entry,
+                    )
+                    return None
+            if num_batteries > 1:
+                seen: set[str] = set()
+                for entry in raw:
+                    if entry in seen:
+                        logger.warning(
+                            "Battery identification: '%s' has duplicate entity id "
+                            "%r; one sensor cannot identify two batteries; skipping.",
+                            key,
+                            entry,
+                        )
+                        return None
+                    seen.add(entry)
+            resolved[key] = list(raw)
+        else:
+            if num_batteries > 1:
+                logger.warning(
+                    "Battery identification: '%s' is a single value (%r) but "
+                    "number_of_batteries=%d requires a list of %d entity ids "
+                    "(one per battery, no broadcast for per-battery sensors); "
+                    "skipping.",
+                    key,
+                    raw,
+                    num_batteries,
+                    num_batteries,
+                )
+                return None
+            resolved[key] = [raw]
+    power_list = resolved["sensor_power_battery"]
+    soc_list = resolved["sensor_battery_state_of_charge"]
+    if num_batteries > 1:
+        overlap = set(power_list) & set(soc_list)
+        if overlap:
+            logger.warning(
+                "Battery identification: entity id(s) %s used as both a power "
+                "and a state-of-charge sensor; one entity cannot be both "
+                "signals; skipping.",
+                sorted(overlap),
+            )
+            return None
+    return power_list, soc_list
+
+
+# On-disk persistence: flat v1 payload at N=1 (same JSON shape as master for
+# both a bare-string and a length-1-list sensor config - see CONTRACT.md's
+# SCOPE NOTE on invariant 1); a schema_version=2 container of per-battery
+# v1-style payloads at N>1, keyed by str(k), so one battery's freshness/
+# failure never touches another's entry.
+_BATTERY_ID_SCHEMA_VERSION_V2 = 2
+
+
+def _load_battery_identification_container(json_path: pathlib.Path, logger: logging.Logger) -> dict:
+    """
+    Read the persisted battery-identification JSON as a v2 per-battery container.
+
+    Tolerant of every "not a usable v2 container" shape: missing file,
+    unreadable JSON, a flat v1 payload (has "status" at top level, no
+    "batteries" dict), and a foreign/future schema_version all normalise to an
+    empty container, so every battery in the per-k loop is treated as
+    absent/stale and re-fits - exactly like a missing file does today. A v1
+    (or v3+) file is never partially parsed as v2.
+    """
+    empty = {"schema_version": _BATTERY_ID_SCHEMA_VERSION_V2, "batteries": {}}
+    if not json_path.exists():
+        return empty
+    try:
+        payload = json.loads(json_path.read_bytes())
+    except (KeyError, ValueError, OSError) as e:
+        logger.warning(
+            f"Battery identification result unreadable ({type(e).__name__}); will re-fit."
+        )
+        return empty
+    if not isinstance(payload, dict) or not isinstance(payload.get("batteries"), dict):
+        return empty
+    if payload.get("schema_version") != _BATTERY_ID_SCHEMA_VERSION_V2:
+        return empty
+    return {
+        "schema_version": _BATTERY_ID_SCHEMA_VERSION_V2,
+        "batteries": dict(payload["batteries"]),
+    }
+
+
+def _atomic_json_write(json_path: pathlib.Path, data: dict) -> None:
+    """
+    Write ``data`` as JSON to ``json_path`` atomically (tmp + os.replace).
+
+    Unique temp name (pid + uuid) so overlapping identify_battery calls in
+    the same process never share a tmp file before the replace.
+    """
+    tmp_path = json_path.with_name(
+        f"battery_identification.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    with open(tmp_path, "w", encoding="utf-8") as outp:
+        json.dump(data, outp, indent=2)
+    os.replace(tmp_path, json_path)
+
+
+def _write_battery_identification_container(
+    json_path: pathlib.Path, logger: logging.Logger, k: int, entry: dict
 ) -> None:
-    """Log the identified values and, in reported units, how they compare to config."""
+    """
+    Read-modify-write a single battery's entry into the on-disk v2 container.
+
+    Re-reads the container from disk immediately before merging, rather than
+    writing back an in-memory copy loaded at the start of the run: two
+    concurrent identify_battery runs (e.g. a dayahead call racing an MPC cron)
+    both loading before either writes would otherwise let the second writer's
+    whole-container overwrite silently drop the first writer's entry. Re-
+    reading here shrinks that lost-update window to the time between this
+    read and this write, not the whole per-k loop. The write itself is still
+    atomic (tmp + os.replace), so a crash mid-write can never corrupt the file
+    or lose any OTHER battery's already-persisted entry.
+    """
+    container = _load_battery_identification_container(json_path, logger)
+    container["batteries"][str(k)] = entry
+    _atomic_json_write(json_path, container)
+
+
+def _battery_fit_is_stale(
+    logger: logging.Logger,
+    entry,
+    current_power: str,
+    current_soc: str,
+    max_age_hours: float,
+    k: int,
+) -> bool:
+    """
+    Per-battery counterpart to :func:`is_model_outdated`: freshness comes from
+    the stored entry's own ``fitted_at`` field, not the shared file's mtime, so
+    one battery's fresh fit can never suppress another battery's retry.
+
+    ``entry`` is whatever the persisted container has under ``batteries[str(k)]``
+    - possibly ``None`` (missing), possibly corrupt (hand-edited or from a
+    future incompatible writer). Any shape other than a well-formed dict with
+    ``status == "ok"`` is treated as absent/stale for THIS battery only: this
+    function must never raise, since it runs inside an eager per-k scan
+    (`stale_ks`) computed before the main loop, and one corrupt entry must not
+    abort every other battery's fresh-cache read for the whole cycle. This
+    mirrors the N=1 cache-hit branch's own ``payload.get("status") == "ok"``
+    gate, which a persisted entry always satisfies today (only a successful
+    fit is ever written) but a hand-edited or foreign entry may not.
+
+    The stored ``sensors`` pair is compared against the currently resolved
+    (power, soc) entity ids: missing (e.g. an entry written before this field
+    existed) or mismatched (the lists were edited or reordered since the fit)
+    both count as stale, so a cached result is never served for a different
+    sensor pair than it was fitted from.
+    """
+    label = f"Battery {k} identification model"
+    if not isinstance(entry, dict):
+        if entry is not None:
+            logger.warning(
+                f"{label} persisted entry is not a usable object "
+                f"({type(entry).__name__}); will re-fit."
+            )
+        else:
+            logger.info(f"{label} has no recorded fit, will train new model")
+        return True
+    if entry.get("status") != "ok":
+        logger.warning(
+            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok'; will re-fit."
+        )
+        return True
+    sensors = entry.get("sensors")
+    if (
+        not isinstance(sensors, dict)
+        or sensors.get("power") != current_power
+        or sensors.get("soc") != current_soc
+    ):
+        logger.info(f"{label} sensor binding is missing or changed, will re-fit")
+        return True
+    fitted_at = entry.get("fitted_at")
+    if not fitted_at:
+        logger.info(f"{label} has no recorded fit, will train new model")
+        return True
+    if max_age_hours <= 0:
+        logger.info(f"{label} max age is set to 0, forcing model re-fit")
+        return True
+    try:
+        fitted_dt = datetime.fromisoformat(fitted_at)
+    except (ValueError, TypeError):
+        logger.warning(f"{label} fitted_at is unparsable ({fitted_at!r}); will re-fit.")
+        return True
+    if fitted_dt.tzinfo is None:
+        fitted_dt = fitted_dt.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - fitted_dt
+    max_age = timedelta(hours=max_age_hours)
+    if age > max_age:
+        logger.info(
+            f"{label} is outdated (age: {age.total_seconds() / 3600:.1f}h, "
+            f"max: {max_age_hours}h), will train new model"
+        )
+        return True
+    logger.info(
+        f"Using existing {label} (age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h)"
+    )
+    return False
+
+
+def _log_battery_identification_summary(
+    logger: logging.Logger, payload: dict, plant_conf: dict, k: int | None = None
+) -> None:
+    """
+    Log the identified values and, in reported units, how they compare to config.
+
+    k=None: N=1, wording byte-identical to master for a bare-string sensor
+    config; a length-1-list config (e.g. the config UI's saved shape, see
+    CONTRACT.md's SCOPE NOTE) reaches this with the same payload and produces
+    the same wording either way. k=<int>: N>1, per-battery plant_conf reads
+    via :func:`_batt_conf_val` and a "Battery {k} " infix, matching every
+    other per-battery log line in this module (e.g. the guardrail-failure
+    warning in the N>1 loop).
+    """
     cap = payload.get("capacity_kwh", {})
     rte = payload.get("round_trip_efficiency", {})
-    configured_cap_kwh = float(plant_conf.get("battery_nominal_energy_capacity", 0)) / 1000.0
-    configured_eta = float(plant_conf.get("battery_charge_efficiency", 0))
+    configured_cap_kwh = (
+        float(_batt_conf_val(plant_conf.get("battery_nominal_energy_capacity", 0), k)) / 1000.0
+    )
+    configured_eta = float(_batt_conf_val(plant_conf.get("battery_charge_efficiency", 0), k))
+    battery_tag = "" if k is None else f" {k}"
     logger.info(
-        "Battery identification: capacity %.2f kWh (CI [%s, %s]) vs configured %.2f kWh; "
+        "Battery%s identification: capacity %.2f kWh (CI [%s, %s]) vs configured %.2f kWh; "
         "round-trip efficiency %.3f (one-way %.3f) vs configured one-way %.3f.",
+        battery_tag,
         cap.get("value") or float("nan"),
         cap.get("ci_low"),
         cap.get("ci_high"),
@@ -889,19 +1191,30 @@ def _log_battery_identification_summary(
 
 
 def _log_battery_identification_recommendation(
-    logger: logging.Logger, payload: dict, plant_conf: dict
+    logger: logging.Logger, payload: dict, plant_conf: dict, k: int | None = None
 ) -> None:
-    """Log a plain 'consider updating X from A to B' recommendation (suggest tier)."""
+    """
+    Log a plain 'consider updating X from A to B' recommendation (suggest tier).
+
+    k=None: N=1, log wording unchanged from master (independent of whether the
+    sensor config is a bare string or a length-1 list). k=<int>: N>1,
+    per-battery plant_conf reads via :func:`_batt_conf_val` and the same
+    "Battery {k} " infix as :func:`_log_battery_identification_summary`.
+    """
     cap = payload.get("capacity_kwh", {})
     identified_cap_kwh = cap.get("value")
-    configured_cap_kwh = float(plant_conf.get("battery_nominal_energy_capacity", 0) or 0) / 1000.0
+    configured_cap_kwh = (
+        float(_batt_conf_val(plant_conf.get("battery_nominal_energy_capacity", 0), k) or 0) / 1000.0
+    )
     identified_eta = payload.get("eta_charge_symmetric")
-    configured_eta = plant_conf.get("battery_charge_efficiency")
+    configured_eta = _batt_conf_val(plant_conf.get("battery_charge_efficiency"), k)
+    battery_tag = "" if k is None else f" {k}"
     logger.info(
-        "Battery identification recommendation: consider updating "
+        "Battery%s identification recommendation: consider updating "
         "battery_nominal_energy_capacity from %.2f kWh to %.2f kWh, and "
         "battery_charge_efficiency / battery_discharge_efficiency from %s to %s "
         "(symmetric sqrt of the identified round-trip efficiency).",
+        battery_tag,
         configured_cap_kwh,
         identified_cap_kwh if identified_cap_kwh is not None else float("nan"),
         configured_eta,
@@ -910,7 +1223,7 @@ def _log_battery_identification_recommendation(
 
 
 async def _publish_battery_identification(
-    rh: RetrieveHass, payload: dict, logger: logging.Logger
+    rh: RetrieveHass, payload: dict, logger: logging.Logger, k: int | None = None
 ) -> None:
     """
     Publish the two read-only advisory sensors (suggest tier only).
@@ -918,6 +1231,13 @@ async def _publish_battery_identification(
     Attributes carry the confidence interval, sample counts, the last successful
     fit time, and the assumptions, so a user can judge trust from the sensor
     itself. ``fitted_at`` reflects the last SUCCESSFUL fit, never the publish time.
+
+    k=None: N=1, exactly today's two fixed entity ids (zero new entities) -
+    true for both a bare-string and a length-1-list sensor config, since
+    publish only depends on ``k``, never on the sensor config itself.
+    k=<int>: N>1, entity ids suffixed ``_battery<k>`` and friendly names
+    suffixed ``Battery {k}``, mirroring the #1032 ``_publish_battery_data``
+    per-battery convention (no separator before the digit).
     """
     cap = payload.get("capacity_kwh", {})
     rte = payload.get("round_trip_efficiency", {})
@@ -927,11 +1247,16 @@ async def _publish_battery_identification(
         "n_charge_segments": payload.get("n_charge_segments"),
         "n_discharge_segments": payload.get("n_discharge_segments"),
     }
+    cap_entity = (
+        BATTERY_ID_CAPACITY_SENSOR if k is None else f"{BATTERY_ID_CAPACITY_SENSOR}_battery{k}"
+    )
+    rte_entity = BATTERY_ID_RTE_SENSOR if k is None else f"{BATTERY_ID_RTE_SENSOR}_battery{k}"
+    name_suffix = "" if k is None else f" Battery {k}"
     await rh.post_scalar_sensor(
-        BATTERY_ID_CAPACITY_SENSOR,
+        cap_entity,
         cap.get("value"),
         {
-            "friendly_name": "Battery identified capacity",
+            "friendly_name": f"Battery identified capacity{name_suffix}",
             "unit_of_measurement": "kWh",
             "device_class": "energy_storage",
             "ci_low": cap.get("ci_low"),
@@ -942,10 +1267,10 @@ async def _publish_battery_identification(
         },
     )
     await rh.post_scalar_sensor(
-        BATTERY_ID_RTE_SENSOR,
+        rte_entity,
         rte.get("value"),
         {
-            "friendly_name": "Battery identified round-trip efficiency",
+            "friendly_name": f"Battery identified round-trip efficiency{name_suffix}",
             "one_way_efficiency_sqrt": payload.get("eta_charge_symmetric"),
             "ci_low": rte.get("ci_low"),
             "ci_high": rte.get("ci_high"),
@@ -972,8 +1297,15 @@ async def identify_battery(
     logs a warning and returns, leaving the configured battery values in force.
 
     v1 never touches ``plant_conf``. In the ``observe`` tier it writes the
-    estimate to a JSON under ``data_path`` and logs it; in the ``suggest`` tier
-    it additionally publishes two read-only HA sensors.
+    estimate to a JSON under ``data_path`` and logs it; in the ``suggest``
+    tier it additionally publishes two read-only HA sensors at N=1, or 2N of
+    them (one capacity + one round-trip-efficiency sensor per battery) at
+    N>1.
+
+    At ``number_of_batteries`` > 1 each battery is identified independently
+    (own config reads, own retrieval columns, own persisted entry, own
+    publish): one pack can fit and publish while another still lacks enough
+    cycles. See :func:`_identify_battery_impl` for the per-battery loop.
 
     :param logger: Logger.
     :type logger: logging.Logger
@@ -982,7 +1314,13 @@ async def identify_battery(
     :param plant_conf: Plant config; read-only here, used for the sanity bound
         and the "configured vs identified" comparison.
     :type plant_conf: dict
-    :param retrieve_hass_conf: Retrieve config (holds the two sensor entity ids).
+    :param retrieve_hass_conf: Retrieve config (holds sensor_power_battery and
+        sensor_battery_state_of_charge - a bare entity-id string at N=1, or a
+        list of ``number_of_batteries`` entity ids at N>1). At N>1,
+        ``_identify_battery_impl`` temporarily mutates these two keys in place
+        for the duration of the retrieval ``await`` and restores the original
+        values in a ``finally``, so this dict is briefly not what the caller
+        put in it if this coroutine is inspected concurrently.
     :type retrieve_hass_conf: dict
     :param rh: RetrieveHass instance.
     :type rh: RetrieveHass
@@ -1028,96 +1366,235 @@ async def _identify_battery_impl(
 ) -> None:
     """Implementation of :func:`identify_battery`; wrapped for the never-raise guarantee."""
     num_batteries = utils.validate_num_batteries(plant_conf)
-    if num_batteries > 1:
-        logger.warning(
-            "Battery identification supports a single battery only; skipping "
-            f"(number_of_batteries={num_batteries})."
-        )
-        return
+
     data_path = pathlib.Path(emhass_conf["data_path"])
     json_path = data_path / "battery_identification.json"
     max_age_hours = optim_conf.get("battery_identification_model_max_age", 24)
     tier = optim_conf.get("battery_identification_trust_tier", "observe")
 
-    # Cadence: reuse the fresh estimate if it is not stale.
-    if not is_model_outdated(
-        json_path, max_age_hours, logger, label="Battery identification model"
-    ):
-        try:
-            with open(json_path, "rb") as inp:
-                payload = json.loads(inp.read())
-        except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
-            logger.warning(
-                f"Battery identification result unreadable ({type(e).__name__}); will re-fit."
-            )
-            payload = None
-        if payload is not None and payload.get("status") == "ok":
-            _log_battery_identification_summary(logger, payload, plant_conf)
-            if tier == "suggest":
-                _log_battery_identification_recommendation(logger, payload, plant_conf)
-                await _publish_battery_identification(rh, payload, logger)
+    if num_batteries == 1:
+        # Flat v1 shape, same as master for a bare-string sensor config (a
+        # length-1-list config, e.g. the config UI's saved shape, takes the
+        # equivalent list-handling path further below - see CONTRACT.md's
+        # SCOPE NOTE on invariant 1). In particular: the freshness gate and
+        # cached publish come FIRST, exactly like base, WITHOUT ever
+        # consulting sensor_power_battery/sensor_battery_state_of_charge -
+        # base only read those after a successful retrieval, on the re-fit
+        # path, so a cache hit must stay indifferent to whatever (even
+        # malformed) shape those two keys happen to be in.
+        if not is_model_outdated(
+            json_path, max_age_hours, logger, label="Battery identification model"
+        ):
+            try:
+                with open(json_path, "rb") as inp:
+                    payload = json.loads(inp.read())
+            except (KeyError, ValueError, OSError) as e:
+                logger.warning(
+                    f"Battery identification result unreadable ({type(e).__name__}); will re-fit."
+                )
+                payload = None
+            if payload is not None and payload.get("status") == "ok":
+                _log_battery_identification_summary(logger, payload, plant_conf)
+                if tier == "suggest":
+                    _log_battery_identification_recommendation(logger, payload, plant_conf)
+                    await _publish_battery_identification(rh, payload, logger)
+                return
+            # Fall through to a re-fit on an unreadable or non-ok cached file
+            # (also covers a v2 container left over from a reverted N>1 run:
+            # it has no top-level "status", so it reads as not-ok here).
+
+        # Refit path only: resolve the sensor keys now, matching where base
+        # first read power_col (after a successful retrieval was decided on,
+        # never on the cache-hit path above).
+        resolved = _resolve_battery_sensor_lists(retrieve_hass_conf, num_batteries, logger)
+        if resolved is None:
             return
-        # Fall through to a re-fit on an unreadable or non-ok cached file.
+        power_list, soc_list = resolved
 
-    # Retrieve history and run a fresh fit.
-    logger.info("Battery identification: retrieving history for a fresh fit")
-    success, df, _ = await retrieve_home_assistant_data(
-        "battery_id",
-        get_data_from_file,
-        retrieve_hass_conf,
-        optim_conf,
-        rh,
-        emhass_conf,
-        test_df_literal,
-        logger,
-    )
-    if not success or df is None:
-        logger.warning(
-            "Battery identification: could not retrieve history; keeping configured battery values."
+        logger.info("Battery identification: retrieving history for a fresh fit")
+        success, df, _ = await retrieve_home_assistant_data(
+            "battery_id",
+            get_data_from_file,
+            retrieve_hass_conf,
+            optim_conf,
+            rh,
+            emhass_conf,
+            test_df_literal,
+            logger,
         )
-        return
-    power_col = retrieve_hass_conf.get("sensor_power_battery")
-    soc_col = retrieve_hass_conf.get("sensor_battery_state_of_charge")
-    if power_col not in df.columns or soc_col not in df.columns:
-        logger.warning(
-            f"Battery identification: sensors '{power_col}'/'{soc_col}' missing from retrieved "
-            "history; keeping configured battery values."
+        if not success or df is None:
+            logger.warning(
+                "Battery identification: could not retrieve history; keeping configured battery values."
+            )
+            return
+        power_col = power_list[0]
+        soc_col = soc_list[0]
+        if power_col not in df.columns or soc_col not in df.columns:
+            logger.warning(
+                f"Battery identification: sensors '{power_col}'/'{soc_col}' missing from retrieved "
+                "history; keeping configured battery values."
+            )
+            return
+        configured_capacity_wh = float(plant_conf.get("battery_nominal_energy_capacity", 0) or 0)
+        result = BatteryIdentification(logger).identify(
+            df, power_col, soc_col, configured_capacity_wh
         )
-        return
-    configured_capacity_wh = float(plant_conf.get("battery_nominal_energy_capacity", 0) or 0)
-    result = BatteryIdentification(logger).identify(df, power_col, soc_col, configured_capacity_wh)
-    for msg in result.messages:
-        logger.info("Battery identification: %s", msg)
-    if not result.is_ok:
-        logger.warning(
-            f"Battery identification did not pass guardrails (status={result.status}); "
-            "keeping configured battery values. Existing results file left untouched."
-        )
+        for msg in result.messages:
+            logger.info("Battery identification: %s", msg)
+        if not result.is_ok:
+            logger.warning(
+                f"Battery identification did not pass guardrails (status={result.status}); "
+                "keeping configured battery values. Existing results file left untouched."
+            )
+            return
+
+        # Persist ONLY a successful estimate, atomically. A failed fit must not
+        # bump the file mtime (which would suppress retries for max_age_hours).
+        payload = result.to_dict()
+        payload["fitted_at"] = datetime.now(UTC).isoformat()
+        payload["trust_tier"] = tier
+        payload["configured_at_fit_time"] = {
+            "battery_nominal_energy_capacity": plant_conf.get("battery_nominal_energy_capacity"),
+            "battery_charge_efficiency": plant_conf.get("battery_charge_efficiency"),
+            "battery_discharge_efficiency": plant_conf.get("battery_discharge_efficiency"),
+        }
+        _atomic_json_write(json_path, payload)
+
+        _log_battery_identification_summary(logger, payload, plant_conf)
+        if tier == "suggest":
+            _log_battery_identification_recommendation(logger, payload, plant_conf)
+            await _publish_battery_identification(rh, payload, logger)
         return
 
-    # Persist ONLY a successful estimate, atomically. A failed fit must not bump
-    # the file mtime (which would suppress retries for max_age_hours).
-    payload = result.to_dict()
-    payload["fitted_at"] = datetime.now(UTC).isoformat()
-    payload["trust_tier"] = tier
-    payload["configured_at_fit_time"] = {
-        "battery_nominal_energy_capacity": plant_conf.get("battery_nominal_energy_capacity"),
-        "battery_charge_efficiency": plant_conf.get("battery_charge_efficiency"),
-        "battery_discharge_efficiency": plant_conf.get("battery_discharge_efficiency"),
-    }
-    # Unique temp name (pid + uuid) so overlapping identify_battery calls in the
-    # same process never share a tmp file before the atomic os.replace.
-    tmp_path = json_path.with_name(
-        f"battery_identification.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    )
-    with open(tmp_path, "w", encoding="utf-8") as outp:
-        json.dump(payload, outp, indent=2)
-    os.replace(tmp_path, json_path)
+    # N > 1: schema_version=2 container, one entry per battery. Each battery is
+    # independent end to end (own freshness, own fit, own persisted entry, own
+    # publish) under the one global trust tier; a v1 flat file left over from a
+    # reverted N=1 run is treated as absent (re-fit every battery), never
+    # partially parsed. Resolver-first here (unlike N=1): the mutation below
+    # needs the resolved lists before any retrieval, and the sensor pair is
+    # also an input to the per-battery freshness check.
+    resolved = _resolve_battery_sensor_lists(retrieve_hass_conf, num_batteries, logger)
+    if resolved is None:
+        # Warning already logged by the resolver, naming the offending key.
+        return
+    power_list, soc_list = resolved
 
-    _log_battery_identification_summary(logger, payload, plant_conf)
-    if tier == "suggest":
-        _log_battery_identification_recommendation(logger, payload, plant_conf)
-        await _publish_battery_identification(rh, payload, logger)
+    container = _load_battery_identification_container(json_path, logger)
+    batteries = container["batteries"]
+    stale_ks = [
+        k
+        for k in range(num_batteries)
+        if _battery_fit_is_stale(
+            logger, batteries.get(str(k)), power_list[k], soc_list[k], max_age_hours, k
+        )
+    ]
+
+    df = None
+    if stale_ks:
+        # One batched retrieval covering only the currently-stale batteries'
+        # sensors, not the full lists: the per-k loop below only ever reads
+        # power_list[k]/soc_list[k] for a stale k, so an already-fresh
+        # battery's columns would just be fetched and never read. Restricting
+        # the mutation to the stale subset means a fresh battery's sensor
+        # going away (or lacking history) can never affect a stale sibling's
+        # re-fit, and an unreachable sensor among the stale batteries defers
+        # only those batteries, not the fresh ones (which are never part of
+        # this batch). _retrieve_from_hass's append site reads
+        # sensor_power_battery/sensor_battery_state_of_charge straight off
+        # retrieve_hass_conf; presenting the resolved subset here - restored
+        # immediately after - is the narrowest way to get the stale
+        # batteries' entity ids into one var_list without threading a new
+        # argument through retrieve_home_assistant_data/_retrieve_from_hass,
+        # which are shared with every other set_type.
+        logger.info("Battery identification: retrieving history for a fresh fit")
+        stale_power = [power_list[k] for k in stale_ks]
+        stale_soc = [soc_list[k] for k in stale_ks]
+        original_power = retrieve_hass_conf.get("sensor_power_battery")
+        original_soc = retrieve_hass_conf.get("sensor_battery_state_of_charge")
+        retrieve_hass_conf["sensor_power_battery"] = stale_power
+        retrieve_hass_conf["sensor_battery_state_of_charge"] = stale_soc
+        try:
+            success, df, _ = await retrieve_home_assistant_data(
+                "battery_id",
+                get_data_from_file,
+                retrieve_hass_conf,
+                optim_conf,
+                rh,
+                emhass_conf,
+                test_df_literal,
+                logger,
+            )
+        finally:
+            retrieve_hass_conf["sensor_power_battery"] = original_power
+            retrieve_hass_conf["sensor_battery_state_of_charge"] = original_soc
+        if not success:
+            df = None
+
+    for k in range(num_batteries):
+        if k not in stale_ks:
+            # Fresh cached entry: log/publish from it, no re-fit.
+            entry = batteries[str(k)]
+            _log_battery_identification_summary(logger, entry, plant_conf, k=k)
+            if tier == "suggest":
+                _log_battery_identification_recommendation(logger, entry, plant_conf, k=k)
+                await _publish_battery_identification(rh, entry, logger, k=k)
+            continue
+        if df is None:
+            logger.warning(
+                f"Battery {k} identification: could not retrieve history; "
+                "keeping configured battery values."
+            )
+            continue
+        power_col = power_list[k]
+        soc_col = soc_list[k]
+        if power_col not in df.columns or soc_col not in df.columns:
+            logger.warning(
+                f"Battery {k} identification: sensors '{power_col}'/'{soc_col}' missing from "
+                "retrieved history; keeping configured battery values."
+            )
+            continue
+        configured_capacity_wh = float(
+            _batt_conf_val(plant_conf.get("battery_nominal_energy_capacity", 0), k) or 0
+        )
+        result = BatteryIdentification(logger).identify(
+            df, power_col, soc_col, configured_capacity_wh
+        )
+        for msg in result.messages:
+            logger.info("Battery %d identification: %s", k, msg)
+        if not result.is_ok:
+            logger.warning(
+                f"Battery {k} identification did not pass guardrails (status={result.status}); "
+                "keeping configured battery values. Existing entry left untouched."
+            )
+            continue
+
+        # Persist ONLY a successful estimate for battery k, read-modify-write,
+        # atomic. A failed fit for battery k (above) never touches battery k's
+        # (or any other battery's) previously stored entry. "sensors" binds
+        # this entry to the exact pair it was fitted from, so a later run
+        # that edits or reorders the lists can never serve it as a stale-free
+        # cache hit for the wrong sensor pair (see _battery_fit_is_stale).
+        new_entry = result.to_dict()
+        new_entry["fitted_at"] = datetime.now(UTC).isoformat()
+        new_entry["trust_tier"] = tier
+        new_entry["sensors"] = {"power": power_col, "soc": soc_col}
+        new_entry["configured_at_fit_time"] = {
+            "battery_nominal_energy_capacity": _batt_conf_val(
+                plant_conf.get("battery_nominal_energy_capacity"), k
+            ),
+            "battery_charge_efficiency": _batt_conf_val(
+                plant_conf.get("battery_charge_efficiency"), k
+            ),
+            "battery_discharge_efficiency": _batt_conf_val(
+                plant_conf.get("battery_discharge_efficiency"), k
+            ),
+        }
+        _write_battery_identification_container(json_path, logger, k, new_entry)
+
+        _log_battery_identification_summary(logger, new_entry, plant_conf, k=k)
+        if tier == "suggest":
+            _log_battery_identification_recommendation(logger, new_entry, plant_conf, k=k)
+            await _publish_battery_identification(rh, new_entry, logger, k=k)
 
 
 async def _prepare_perfect_optim(ctx: SetupContext):
