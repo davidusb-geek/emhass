@@ -232,16 +232,22 @@
             "description": "This is the name of the photovoltaic forecast sensor in Watts from Home Assistant. For example: ‘sensor.p_pv_forecast’."
           },
           "sensor_power_battery": {
-            "type": "string",
-            "default": "sensor.power_battery",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": "sensor.power_battery"
+            },
             "title": "Sensor signed battery power",
-            "description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’."
+            "description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery."
           },
           "sensor_battery_state_of_charge": {
-            "type": "string",
-            "default": "sensor.battery_state_of_charge",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": "sensor.battery_state_of_charge"
+            },
             "title": "Sensor battery state of charge",
-            "description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’."
+            "description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery."
           },
           "sensor_power_load_no_var_loads": {
             "type": "string",
