@@ -107,6 +107,35 @@ This parameter is Solcast-only; it has no effect when `weather_forecast_method` 
 When the Solcast cache is enabled (`weather_forecast_cache: true`), the blended forecast is what gets cached. Changing `weather_forecast_pv_quantile_bias` therefore only takes effect on the next cache refresh; to apply a new value immediately, refresh the weather-forecast cache or run with the cache disabled.
 ```
 
+#### Self-tuning the bias (adaptive conformal inference)
+
+Choosing a good fixed value for `weather_forecast_pv_quantile_bias` by hand is awkward: the value that delivers a given level of caution depends on your site, the season, and any forecast post-processing, and it drifts over time. The `emhass.pv_bias_calibration` module turns the knob into a *self-calibrating* parameter using **adaptive conformal inference (ACI)**.
+
+You pick an interpretable target instead of a blend weight — a **shortfall rate** `α`, i.e. how often you are willing to have realised PV come in below the forecast you planned against (e.g. `0.10`). Given a logged history of `(P10, P50, realised PV)`, a one-scalar online recursion walks the bias toward the value that holds that rate:
+
+```
+planned_t   = bias_t * P10_t + (1 - bias_t) * P50_t
+shortfall_t = 1 if realised_t < planned_t else 0
+bias_{t+1}  = clip(bias_t + gamma * (shortfall_t - α), 0, 1)
+```
+
+A run of shortfalls pushes the bias toward P10 (more conservative); quiet stretches relax it back toward P50. The realised shortfall rate converges to `α` as long as the target is inside the range the P10–P50 blend can actually express, and it keeps tracking `α` as conditions drift, which is the ACI guarantee. The update is asymmetric by design — it ramps protection up quickly when the forecast starts over-calling and releases it slowly afterwards.
+
+`compute_pv_bias_calibration(...)` is a **side-effect-free recommendation engine**: it returns a recommended `bias` plus diagnostics (the achieved shortfall rate, the feasible range, the static shortfall-vs-bias curve, and the full bias trajectory) and never changes the live forecast or the optimization. It reports the value you can then set as `weather_forecast_pv_quantile_bias`. It also accepts a pluggable per-step *score* so a cost-aware objective (for example a threshold-weighted CRPS, which prices how much conservatism costs on clear days) can replace the plain shortfall indicator without changing the recursion.
+
+```{note}
+This ships the recommendation engine (the algorithm). Automatically logging the per-period P10/P50 you planned against versus the realised PV — the input this engine consumes — is a companion step; until that history is available you can feed the engine your own logged series.
+```
+
+**Curtailment.** If your system curtails (export limiting, inverter clipping), the realised PV you log is capped below what the array could have produced. A plan that was actually met then looks like a shortfall, and the tuner pushes the bias up for the wrong reason — the same contamination that is already excluded from the adjusted-PV training data (see [Adjusting PV Forecasts using machine learning](#adjusting-pv-forecasts-using-machine-learning)). Flag those steps with the `curtailed` argument and they are dropped from the recursion; you can pass either a boolean mask or the published curtailment power series (`custom_pv_curtailment_id`, by default `sensor.p_pv_curtailment`), which is thresholded at `> 0` just as the adjusted-PV path does. Prefer available (pre-curtailment) PV over metered export where your inverter reports it. On raw timesteps, `curtailment_margin=1` also drops the neighbouring steps to absorb execution lag, matching the adjusted-PV behaviour; it defaults to 0 here because a step in this history is often a whole day, where a margin would discard two good days per curtailed one. The result reports `n_curtailed_excluded`, and warns when so much was dropped that the recommendation only describes your non-curtailed operating regime.
+
+The flag must come from the curtailment entity, never from the forecast error itself: a rule like "realised came in far below forecast, so it must have been curtailed" would delete exactly the shortfall observations the tuner counts and drive the bias to zero.
+
+**References**
+
+* I. Gibbs and E. Candès (2021), *Adaptive Conformal Inference Under Distribution Shift*, NeurIPS 2021, [arXiv:2106.00170](https://arxiv.org/abs/2106.00170) — the fixed-`gamma` recursion used here.
+* I. Gibbs and E. Candès (2024), *Conformal Inference for Online Prediction with Arbitrary Distribution Shifts*, JMLR, [arXiv:2208.08401](https://arxiv.org/abs/2208.08401) — the parameter-free (DtACI) refinement that removes the `gamma` choice, noted as a future extension.
+
 ### solar.forecast 
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
