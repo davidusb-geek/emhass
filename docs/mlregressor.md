@@ -37,8 +37,8 @@ runtimeparams = {
     "regression_model": "RandomForestRegression",
     "model_type": "heating_hours_degreeday",
     "timestamp": "timestamp",
-    "date_features": ["month", "day_of_week"]
-    }
+    "date_features": ["month", "day_of_week"],
+}
 ```
 
 A correct `curl` call to launch a model fit can look like this:
@@ -102,7 +102,7 @@ runtimeparams = {
     "mlr_predict_unit_of_measurement": None,
     "mlr_predict_friendly_name": "mlr predictor",
     "new_values": [8.2, 7.23, 2, 6],
-    "model_type": "heating_hours_degreeday"
+    "model_type": "heating_hours_degreeday",
 }
 ```
 

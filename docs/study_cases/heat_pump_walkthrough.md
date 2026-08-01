@@ -33,24 +33,24 @@ Add `set_use_pv: true`, `set_use_battery: true` plus the standard battery parame
 
 ```python
 {
-  "def_load_config": [
-    {},
-    {
-      "thermal_battery": {
-        "supply_temperature": 35.0,
-        "volume": 20.0,
-        "start_temperature": 22.0,
-        "min_temperatures": [20.0] * 48,
-        "max_temperatures": [26.0] * 48,
-        "carnot_efficiency": 0.45,
-        "u_value": 0.35,
-        "envelope_area": 280.0,
-        "ventilation_rate": 0.4,
-        "heated_volume": 320.0,
-        "thermal_inertia_time_constant": 2.0
-      }
-    }
-  ]
+    "def_load_config": [
+        {},
+        {
+            "thermal_battery": {
+                "supply_temperature": 35.0,
+                "volume": 20.0,
+                "start_temperature": 22.0,
+                "min_temperatures": [20.0] * 48,
+                "max_temperatures": [26.0] * 48,
+                "carnot_efficiency": 0.45,
+                "u_value": 0.35,
+                "envelope_area": 280.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 320.0,
+                "thermal_inertia_time_constant": 2.0,
+            }
+        },
+    ]
 }
 ```
 
