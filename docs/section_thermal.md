@@ -4,4 +4,5 @@
 :maxdepth: 2
 thermal_model
 thermal_battery
+heat_topology
 ```

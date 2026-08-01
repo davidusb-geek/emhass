@@ -120,6 +120,8 @@ The default thermal battery model uses a Carnot-based COP that varies with outdo
 
 Configure one `thermal_battery` per source-target pair to model hybrid systems. For example, a gas boiler serving both a heating buffer and a DHW tank is two `def_load_config` entries (one per target), grouped via `deferrable_load_groups` with `mutual_exclusion: true` and `max_power` equal to the boiler's modulating maximum if the two targets share the same physical actuator.
 
+For multi-source storage, the [heat topology graph model](heat_topology.md) can compile the sources, storage, flows, per-source tariffs, and actuator groups into these flat fields automatically.
+
 ### Heating demand calculation
 
 EMHASS needs to know how much heat your building requires. There are two methods to calculate this, and EMHASS automatically selects the appropriate method based on which parameters you provide.
