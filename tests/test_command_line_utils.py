@@ -1594,6 +1594,69 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_logger.debug.assert_called()
         call_args = str(mock_logger.debug.call_args)
         self.assertIn("Variable list for data retrieval", call_args)
+        # Non-battery_id retrieval must not protect any column from the
+        # set_zero_min treatment (#1041)
+        self.assertIsNone(mock_rh.prepare_data.call_args.kwargs.get("protected_columns"))
+
+    async def test_retrieve_from_hass_battery_id_protected_columns(self):
+        """
+        battery_id retrieval must pass the battery power and SoC sensors to
+        prepare_data as protected_columns, so the set_zero_min clip cannot
+        destroy the discharge direction or a measured 0% SoC (#1041).
+        Covers the bare-string (N=1) and list (N>1) config forms.
+        """
+        optim_conf = {"set_use_pv": True, "set_use_adjusted_pv": True}
+        base_conf = {
+            "historic_days_to_retrieve": 2,
+            "sensor_power_load_no_var_loads": "sensor.load",
+            "sensor_power_photovoltaics": "sensor.pv",
+            "sensor_power_photovoltaics_forecast": "sensor.pv_forecast",
+            "load_negative": False,
+            "set_zero_min": True,
+            "sensor_replace_zero": [],
+            "sensor_linear_interp": [],
+        }
+        cases = [
+            (
+                "sensor.batt_power",
+                "sensor.batt_soc",
+                ["sensor.batt_power", "sensor.batt_soc"],
+            ),
+            (
+                ["sensor.batt_power1", "sensor.batt_power2"],
+                ["sensor.batt_soc1", "sensor.batt_soc2"],
+                [
+                    "sensor.batt_power1",
+                    "sensor.batt_power2",
+                    "sensor.batt_soc1",
+                    "sensor.batt_soc2",
+                ],
+            ),
+        ]
+        for power_cfg, soc_cfg, expected in cases:
+            with self.subTest(power_cfg=power_cfg, soc_cfg=soc_cfg):
+                retrieve_hass_conf = dict(base_conf)
+                retrieve_hass_conf["sensor_power_battery"] = power_cfg
+                retrieve_hass_conf["sensor_battery_state_of_charge"] = soc_cfg
+                mock_rh = Mock()
+                mock_rh.get_data = AsyncMock(return_value=True)
+                mock_rh.prepare_data = Mock()
+                mock_rh.df_final = pd.DataFrame()
+                success, _, _ = await retrieve_home_assistant_data(
+                    set_type="battery_id",
+                    get_data_from_file=False,
+                    retrieve_hass_conf=retrieve_hass_conf,
+                    optim_conf=optim_conf,
+                    rh=mock_rh,
+                    emhass_conf={},
+                    test_df_literal="test.pkl",
+                    logger=Mock(),
+                )
+                self.assertTrue(success)
+                self.assertEqual(
+                    mock_rh.prepare_data.call_args.kwargs.get("protected_columns"),
+                    expected,
+                )
 
     async def test_adjust_pv_forecast_generic_exception(self):
         """
