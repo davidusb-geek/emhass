@@ -144,13 +144,7 @@ This example models one 200 L DHW tank supplied by a 3.5 kW heat pump and a
 ```python
 HORIZON = 48
 
-draw_off = (
-    [0.0] * 12
-    + [0.5, 0.3]
-    + [0.0] * 22
-    + [0.8, 0.5, 0.3]
-    + [0.0] * 9
-)
+draw_off = [0.0] * 12 + [0.5, 0.3] + [0.0] * 22 + [0.8, 0.5, 0.3] + [0.0] * 9
 
 heat_topology = {
     "sources": [
