@@ -2359,6 +2359,79 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
+    # Re-normalise per-load deferrable array params against the FINAL
+    # number_of_deferrable_loads (#1040). This has to run last: the
+    # association loop above, the def_load_config handling, and the
+    # heat_topology compile step can each change number_of_deferrable_loads
+    # or one of these arrays, and heat_topology runs even when runtimeparams
+    # is None. Mirrors the per-battery re-normalisation above (#610), but
+    # pads short arrays rather than truncating or erroring, matching
+    # check_def_loads's existing pad-to-fit semantics.
+    raw_num_def_loads = optim_conf.get("number_of_deferrable_loads", None)
+    if raw_num_def_loads is not None:
+        try:
+            final_num_def_loads = int(raw_num_def_loads)
+        except (TypeError, ValueError):
+            logger.warning(
+                "number_of_deferrable_loads is not a valid integer "
+                f"({raw_num_def_loads!r}); skipping deferrable load array "
+                "re-normalisation"
+            )
+            final_num_def_loads = None
+        if final_num_def_loads is not None:
+            # Write the cast int back: downstream readers of
+            # optim_conf["number_of_deferrable_loads"] need an int, not
+            # whatever raw value (e.g. a numeric string) the association
+            # loop copied in.
+            optim_conf["number_of_deferrable_loads"] = final_num_def_loads
+            runtime_source = runtimeparams or {}
+            for def_array_name, def_array_default in DEF_LOAD_ARRAY_PARAMS.items():
+                legacy_name = DEF_LOAD_ARRAY_LEGACY_NAMES.get(def_array_name)
+                runtime_value = runtime_source.get(def_array_name)
+                if runtime_value is None and legacy_name is not None:
+                    runtime_value = runtime_source.get(legacy_name)
+                # A JSON null is treated as "not provided", matching the
+                # association loop's own null-skipping - a padded config
+                # array should never be reported as a runtime override.
+                was_provided = runtime_value is not None
+
+                if was_provided and not isinstance(runtime_value, list):
+                    # A runtime scalar means every load, not "pad with the
+                    # default" - mirrors check_batt_params's silent
+                    # broadcast, and overrides any earlier partial handling
+                    # (e.g. set_deferrable_load_single_constant's own scalar
+                    # broadcast above, which doesn't know the final count).
+                    optim_conf[def_array_name] = [runtime_value] * final_num_def_loads
+                    continue
+
+                current_value = optim_conf.get(def_array_name)
+                if isinstance(current_value, list):
+                    # Copy before padding: check_def_loads mutates in place,
+                    # and this list may be the same object as
+                    # runtimeparams[name] or a passed_data alias set earlier
+                    # in this function - only optim_conf's own value should
+                    # change.
+                    before_value = list(current_value)
+                    optim_conf[def_array_name] = list(current_value)
+                else:
+                    before_value = current_value
+                optim_conf[def_array_name] = check_def_loads(
+                    final_num_def_loads,
+                    optim_conf,
+                    def_array_default,
+                    def_array_name,
+                    logger,
+                )
+                _warn_if_runtime_def_array_too_short(
+                    was_provided,
+                    def_array_name,
+                    before_value,
+                    optim_conf[def_array_name],
+                    final_num_def_loads,
+                    logger,
+                )
+            params["optim_conf"] = optim_conf
+
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
     return params, retrieve_hass_conf, optim_conf, plant_conf
@@ -3259,69 +3332,17 @@ async def build_params(
     # If not, set defaults it fill in gaps
     if params["optim_conf"].get("number_of_deferrable_loads", None) is not None:
         num_def_loads = params["optim_conf"]["number_of_deferrable_loads"]
-        params["optim_conf"]["start_timesteps_of_each_deferrable_load"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "start_timesteps_of_each_deferrable_load",
-            logger,
-        )
-        params["optim_conf"]["end_timesteps_of_each_deferrable_load"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "end_timesteps_of_each_deferrable_load",
-            logger,
-        )
-        params["optim_conf"]["set_deferrable_load_single_constant"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            False,
-            "set_deferrable_load_single_constant",
-            logger,
-        )
-        params["optim_conf"]["treat_deferrable_load_as_semi_cont"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            True,
-            "treat_deferrable_load_as_semi_cont",
-            logger,
-        )
-        params["optim_conf"]["set_deferrable_startup_penalty"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0.0,
-            "set_deferrable_startup_penalty",
-            logger,
-        )
-        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0.0,
-            "deferrable_load_max_cost",
-            logger,
-        )
-        params["optim_conf"]["set_deferrable_max_startups"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "set_deferrable_max_startups",
-            logger,
-        )
-        params["optim_conf"]["operating_hours_of_each_deferrable_load"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "operating_hours_of_each_deferrable_load",
-            logger,
-        )
-        params["optim_conf"]["nominal_power_of_deferrable_loads"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "nominal_power_of_deferrable_loads",
-            logger,
-        )
+        # Looped over DEF_LOAD_ARRAY_PARAMS (name -> default) instead of 9
+        # repeated calls (#1040) - same order, same defaults, same call
+        # signature per entry, so behaviour is unchanged.
+        for def_array_name, def_array_default in DEF_LOAD_ARRAY_PARAMS.items():
+            params["optim_conf"][def_array_name] = check_def_loads(
+                num_def_loads,
+                params["optim_conf"],
+                def_array_default,
+                def_array_name,
+                logger,
+            )
         # Validate deferrable_load_groups
         groups = params["optim_conf"].get("deferrable_load_groups", [])
         if groups:
@@ -3476,6 +3497,41 @@ async def build_params(
     return params
 
 
+# Per-deferrable-load ARRAY parameters normalised against
+# number_of_deferrable_loads via check_def_loads (#929, #1040). build_params
+# loops over this table to pad each one from config; treat_runtimeparams's
+# re-normalisation pass reuses it to re-apply the same padding after a
+# runtime override may have replaced one of these arrays with a raw,
+# potentially short, value (the per-battery arrays already get an equivalent
+# pass via check_batt_params, #610).
+DEF_LOAD_ARRAY_PARAMS: dict[str, bool | int | float] = {
+    "start_timesteps_of_each_deferrable_load": 0,
+    "end_timesteps_of_each_deferrable_load": 0,
+    "set_deferrable_load_single_constant": False,
+    "treat_deferrable_load_as_semi_cont": True,
+    "set_deferrable_startup_penalty": 0.0,
+    "deferrable_load_max_cost": 0.0,
+    "set_deferrable_max_startups": 0,
+    "operating_hours_of_each_deferrable_load": 0,
+    "nominal_power_of_deferrable_loads": 0,
+}
+# Legacy (pre-#342) names for the same 9 arrays, from
+# src/emhass/data/associations.csv column 2. The association loop accepts
+# either the modern name (column 3) or this legacy one, so the
+# runtime-provided check in treat_runtimeparams has to match both.
+DEF_LOAD_ARRAY_LEGACY_NAMES: dict[str, str] = {
+    "start_timesteps_of_each_deferrable_load": "def_start_timestep",
+    "end_timesteps_of_each_deferrable_load": "def_end_timestep",
+    "set_deferrable_load_single_constant": "set_def_constant",
+    "treat_deferrable_load_as_semi_cont": "treat_def_as_semi_cont",
+    "set_deferrable_startup_penalty": "def_start_penalty",
+    "deferrable_load_max_cost": "deferrable_load_max_cost",
+    "set_deferrable_max_startups": "set_deferrable_max_startups",
+    "operating_hours_of_each_deferrable_load": "def_total_hours",
+    "nominal_power_of_deferrable_loads": "P_deferrable_nom",
+}
+
+
 def check_def_loads(
     num_def_loads: int,
     parameter: list[dict],
@@ -3530,6 +3586,75 @@ def check_def_loads(
         result = [v if v is not None else default for v in result]
         parameter[parameter_name] = result
     return result
+
+
+def _warn_if_runtime_def_array_too_short(
+    was_provided: bool,
+    def_array_name: str,
+    before_value: object,
+    after_value: object,
+    final_num_def_loads: int,
+    logger: logging.Logger,
+) -> None:
+    """
+    Warn when the re-normalisation pass actually changed a runtime-provided
+    per-load deferrable array (#1040).
+
+    check_def_loads pads a short array (and heals a None element) silently at
+    debug level (#929) - correct for a config-sourced array, e.g. a config
+    predating a load-count bump. A runtime-provided array is different: a
+    stale/short one is the foot-gun #1040 reports (an MPC caller resending an
+    old, shorter array after the load count changed elsewhere), so it gets a
+    visible warning instead. The values are unchanged either way - this only
+    makes a runtime-sourced change visible.
+
+    Fires only when the caller has established the value was genuinely
+    provided at runtime (`was_provided`) AND check_def_loads actually changed
+    it. The comparison is by value, not identity, since check_def_loads
+    always returns a freshly built list even when nothing changed - so an
+    identity check would report "changed" even when heat_topology's own
+    compiled value replaced the runtime one and nothing was really padded.
+
+    Describes the outcome rather than the input shape: a length increase says
+    how many entries were padded; a same-length change (a None element
+    healed) says that instead of overclaiming padding.
+
+    :param was_provided: whether the modern or legacy name carried a
+        non-null value in runtimeparams
+    :type was_provided: bool
+    :param def_array_name: the modern per-load array parameter name
+    :type def_array_name: str
+    :param before_value: optim_conf[def_array_name] immediately before this
+        call's check_def_loads (an independent copy, never mutated by it)
+    :type before_value: object
+    :param after_value: optim_conf[def_array_name] immediately after
+    :type after_value: object
+    :param final_num_def_loads: number_of_deferrable_loads after every reset
+        inside treat_runtimeparams has been applied
+    :type final_num_def_loads: int
+    :param logger: The logger object
+    :type logger: logging.Logger
+    """
+    if not was_provided or before_value == after_value:
+        return
+    if (
+        isinstance(before_value, list)
+        and isinstance(after_value, list)
+        and len(before_value) < len(after_value)
+    ):
+        logger.warning(
+            f"{def_array_name}: padded from {len(before_value)} to "
+            f"{len(after_value)} entries to match "
+            f"number_of_deferrable_loads={final_num_def_loads}. Pass a "
+            "full-length array to avoid this warning."
+        )
+    else:
+        logger.warning(
+            f"{def_array_name}: a None/null entry was replaced with the "
+            f"parameter default (number_of_deferrable_loads="
+            f"{final_num_def_loads}). Pass a fully populated array to avoid "
+            "this warning."
+        )
 
 
 # Per-battery ARRAY parameters (#610): scalar accepted and broadcast to every
