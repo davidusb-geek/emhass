@@ -138,6 +138,17 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         # short-circuits on None (falsy) and 0.5 only appears as a CVXPY float
         # bound which is valid.  No crash for the [None, 0.5] shape.
         ("set_deferrable_max_startups", "none_element"),
+        # #1040: treat_runtimeparams now re-runs check_def_loads over every
+        # DEF_LOAD_ARRAY_PARAMS entry after the runtime association loop, and
+        # check_def_loads has always replaced None elements with the param's
+        # default (see its docstring). That second pass now guards the
+        # [None, 0.5] shape for these 4 params too - only the none_element
+        # case; scalar_null and str_element still crash (unguarded, no
+        # change) so those stay xfail.
+        ("nominal_power_of_deferrable_loads", "none_element"),
+        ("operating_hours_of_each_deferrable_load", "none_element"),
+        ("set_deferrable_startup_penalty", "none_element"),
+        ("deferrable_load_max_cost", "none_element"),
         # #610: check_batt_params coerces a stringly-typed "null" scalar to the
         # per-battery default and broadcasts it - a real guard, so this stays a
         # live regression test even though the same param is xfail'd for the
