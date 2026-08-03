@@ -3217,7 +3217,14 @@ def _load_opt_res_latest(
     opt_res_latest.index = pd.to_datetime(opt_res_latest.index, utc=True).tz_convert(
         input_data_dict["retrieve_hass_conf"]["time_zone"]
     )
-    opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["optimization_time_step"]
+    # Infer the index frequency from the saved data itself rather than asserting
+    # the current request's optimization_time_step onto it (#976): the CSV may
+    # have been written by a run with a different runtime optimization_time_step,
+    # and pandas raises on the mismatch. The publish path only needs the
+    # timestamps for nearest-index matching. Frames with fewer than 2 rows carry
+    # no inferable spacing, so leave their freq unset.
+    if len(opt_res_latest.index) > 1:
+        opt_res_latest = utils.set_df_index_freq(opt_res_latest)
     return opt_res_latest
 
 
