@@ -95,6 +95,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `set_deferrable_load_single_constant` to define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task.
 
+- Note: for the per-load array parameters above (and also `deferrable_load_max_cost`), a value shorter than `number_of_deferrable_loads` is padded with that parameter's default, whether it came from your configuration or from this runtime payload. A runtime-supplied short array also logs a warning naming the parameter and how many entries were added; a config-sourced one stays silent. Pass a full-length array to avoid the warning.
+
 - `solcast_api_key` for the SolCast API key if you want to use this service for PV power production forecast.
 
 - `solcast_rooftop_id` for the ID of your rooftop for the SolCast service implementation.
