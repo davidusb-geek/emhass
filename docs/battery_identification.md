@@ -11,7 +11,7 @@ This is opt-in and default off. In this first version it is advisory only: it re
 - The measured battery state of charge, set as `sensor_battery_state_of_charge` (in percent).
 - Enough history. The fit needs weeks of signed power and state of charge with enough reasonably deep charge and discharge cycles. If the data is too shallow, or the fit fails an internal sanity check, it publishes nothing and keeps your configured values.
 
-The two sensors are only retrieved when battery self-identification is enabled, so they cost nothing on a normal run.
+The two sensors are only retrieved when battery self-identification is enabled, so they cost nothing on a normal run. Their signed values are kept intact on this retrieval regardless of the `set_zero_min` data cleaning setting, which continues to sanitize the load data as usual.
 
 ## Enabling it
 

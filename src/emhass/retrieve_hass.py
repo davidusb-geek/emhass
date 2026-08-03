@@ -1224,6 +1224,7 @@ class RetrieveHass:
         var_replace_zero: list[str],
         var_interp: list[str],
         skip_renaming: bool = False,
+        protected_columns: list[str] | None = None,
     ) -> bool:
         r"""
         Apply some data treatment in preparation for the optimization task.
@@ -1242,6 +1243,13 @@ class RetrieveHass:
         :param var_interp: A list of retrived variables that we would want to \
             interpolate nan values using linear interpolation, defaults to None
         :type var_interp: list, optional
+        :param protected_columns: Columns excluded from the ``set_zero_min`` \
+            clip and zero-to-nan replacement, for signed data that must keep \
+            both directions (e.g. battery power) or legitimate zero readings \
+            (e.g. a measured 0% state of charge). All other treatment \
+            (timezone conversion, duplicate-index cleanup) still applies to \
+            them, defaults to None
+        :type protected_columns: list, optional
         :return: The DataFrame populated with the retrieved data from hass and \
             after the data treatment
         :rtype: pandas.DataFrame
@@ -1267,8 +1275,16 @@ class RetrieveHass:
             return False
         # Apply Zero Saturation (Min value clipping)
         if set_zero_min:
-            self.df_final.clip(lower=0.0, inplace=True, axis=1)
-            self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
+            protected = [c for c in (protected_columns or []) if c in self.df_final.columns]
+            if not protected:
+                self.df_final.clip(lower=0.0, inplace=True, axis=1)
+                self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
+            else:
+                unprotected = [c for c in self.df_final.columns if c not in protected]
+                self.df_final[unprotected] = self.df_final[unprotected].clip(lower=0.0)
+                self.df_final[unprotected] = self.df_final[unprotected].replace(
+                    to_replace=0.0, value=np.nan
+                )
         # Map Variable Names (Update lists to match new column names)
         # Only call mapping if the list is not empty to avoid spurious warnings
         new_var_replace_zero = None

@@ -551,6 +551,12 @@ def _append_entity_ids(var_list: list, value) -> None:
         var_list.append(value)
 
 
+def _append_battery_id_sensors(var_list: list, retrieve_hass_conf: dict) -> None:
+    """Append the battery power and SoC sensor config values to ``var_list``."""
+    _append_entity_ids(var_list, retrieve_hass_conf["sensor_power_battery"])
+    _append_entity_ids(var_list, retrieve_hass_conf["sensor_battery_state_of_charge"])
+
+
 async def _retrieve_from_hass(
     set_type: str,
     retrieve_hass_conf: dict,
@@ -570,16 +576,13 @@ async def _retrieve_from_hass(
     if set_type == "battery_id":
         # Battery identification needs signed battery power and measured SoC,
         # one pair per battery. The load sensor stays at var_list[0] so
-        # prepare_data's load handling is unchanged (its set_zero_min clip, on
-        # by default, still applies to every retrieved column including
-        # these - a pre-existing limitation tracked upstream separately). A
-        # list value (N>1, already resolved by _identify_battery_impl) is
+        # prepare_data's load handling is unchanged; the battery columns are
+        # passed to prepare_data as protected_columns so its set_zero_min clip
+        # cannot destroy the discharge direction or a measured 0% SoC (#1041).
+        # A list value (N>1, already resolved by _identify_battery_impl) is
         # appended per-id, deduped against var_list; a bare string (N=1) is
         # the plain single-sensor case.
-        power_cfg = retrieve_hass_conf["sensor_power_battery"]
-        soc_cfg = retrieve_hass_conf["sensor_battery_state_of_charge"]
-        _append_entity_ids(var_list, power_cfg)
-        _append_entity_ids(var_list, soc_cfg)
+        _append_battery_id_sensors(var_list, retrieve_hass_conf)
         if logger:
             logger.debug(f"Variable list for battery_id retrieval: {var_list}")
     elif optim_conf.get("set_use_pv", True):
@@ -616,12 +619,21 @@ async def retrieve_home_assistant_data(
         )
     if not success:
         return False, None, days_list
+    protected_columns = None
+    if set_type == "battery_id":
+        # The identifier needs both flow directions of the signed battery
+        # power sensor and any legitimately measured 0% SoC sample, so these
+        # columns are exempt from the set_zero_min clip (#1041). Columns not
+        # present in the retrieved frame are ignored by prepare_data.
+        protected_columns = []
+        _append_battery_id_sensors(protected_columns, retrieve_hass_conf)
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
         set_zero_min=retrieve_hass_conf["set_zero_min"],
         var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
+        protected_columns=protected_columns,
     )
     return True, rh.df_final.copy(), days_list
 
