@@ -1,13 +1,39 @@
 # Changelog
 
-## Unreleased
+## 0.18.0 - 2026-08-03
+
+### EMHASS: The Multi-Battery Update
+
+We are thrilled to announce the next version of EMHASS! The headliner for this release is a massive step forward for advanced energy management: **Multi-Battery Support**.
+
+This highly requested feature allows EMHASS to model and optimize multiple independent batteries simultaneously. This is a game-changer for homes with an Electric Vehicle (EV) alongside stationary home storage, allowing you to manage and optimize their charge/discharge cycles independently.
+
+Alongside multi-battery support, this release brings adaptive conformal inference for PV forecasting, new documentation recipes, and a healthy dose of bug fixes and stability improvements.
+
+A huge thank you to all the contributors who made this release possible!
 
 ### Improvement
-- feat: self-tuning of the conservative PV forecast bias via adaptive conformal inference — `pv_bias_calibration` recommends `weather_forecast_pv_quantile_bias` from a logged history of P10/P50-vs-realised PV so it holds a target shortfall rate and tracks drift, instead of hand-setting the knob (side-effect-free recommendation engine, Phase 1 of #841) (@Whatsonyourmind)
+- feat: per-battery identification at number_of_batteries > 1 (@LesIT1)
+- feat: self-tune PV forecast bias via adaptive conformal inference (#841) (@Whatsonyourmind)
+- feat: support N stationary batteries via the deferrable-loads array pattern (#610 phase 1) (@LesIT1)
+
+### Documentation
+- docs: re-green Code Quality by formatting the heat topology example (@LesIT1)
+- docs: fix ruff formatting  (@JoshC1994)
+- docs: add the missing heat topology guide (@mohammadrezwankhan)
+- docs(cookbook): demand / capacity charge recipe (#623) (@Whatsonyourmind)
 
 ### Fix
-- fix: encode time of day continuously (sin/cos) in the adjusted PV forecast features - the raw integer hour feature produced a sawtooth (a jump at every hour boundary) in the adjusted forecast at sub-hourly optimization time steps; saved models from older versions are re-fitted automatically
-- fix: exclude curtailed timesteps (with a one-step margin) from the adjusted PV forecast training data when compute_curtailment is enabled - training on curtailed production teaches the model a downward bias; ignore_pv_feedback_during_curtailment only protects the step-0 mix, not the training (fixes #1026)
+- fix: keep the optim path load history index tz-aware (#1036) (@LesIT1)
+- fix: exempt battery identification sensors from the set_zero_min clip (@LesIT1)
+- fix: infer publish-data index frequency from the saved CSV (#976) (@LesIT1)
+- fix: re-normalise per-load deferrable arrays after runtime overrides (#1040) (@LesIT1)
+- fix: warn when a runtime scalar masks a configured per-battery list (#1032 follow-up) (@LesIT1)
+- fix: Fix datetime TypeError in _get_closest_index (@davidusb-geek)
+- fix: bound set_nodischarge_to_grid export by PV surplus, not raw PV (#795 regression) (@petrister)
+- fix: exclude curtailed timesteps from the adjusted PV forecast training data (@scruysberghs)
+- fix: continuous time-of-day encoding for the adjusted PV forecast (removes hour-boundary sawtooth) (@scruysberghs)
+- fix: weather-forecast-cache never refreshes a stale Solcast cache (#1016) (@SpengeSec)
 
 ## 0.17.9 - 2026-07-12
 
