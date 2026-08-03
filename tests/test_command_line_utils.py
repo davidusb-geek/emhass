@@ -3142,6 +3142,85 @@ class TestDstFixes(unittest.TestCase):
         self.assertEqual(zones, {"Europe/Paris"}, f"Unexpected timezone(s) in result: {zones}")
 
 
+class TestLoadOptResLatestFreqInference(unittest.TestCase):
+    """Unit tests for #976: _load_opt_res_latest must infer the index frequency
+    from the saved CSV instead of asserting the current request's
+    optimization_time_step onto it.
+
+    An optimization run with a runtime optimization_time_step (e.g. 60) writes
+    an hourly CSV; a later publish-data call whose body does not repeat that
+    key falls back to the config value (e.g. 30 min) and the old freq
+    assignment raised 'Inferred frequency h from passed values does not
+    conform to passed frequency 30min'. The publish path only uses the
+    timestamps for nearest-index matching, so the frequency baked into the
+    saved data is the correct one.
+    """
+
+    @staticmethod
+    def _write_csv(tmp_path: pathlib.Path, periods: int, freq: str) -> pd.DataFrame:
+        idx = pd.date_range("2026-08-01 00:00", periods=periods, freq=freq, tz="UTC")
+        df = pd.DataFrame({"P_Load": range(periods)}, index=idx)
+        df.index.name = "timestamp"
+        df.to_csv(tmp_path / "opt_res_latest.csv")
+        return df
+
+    @staticmethod
+    def _input_data_dict(tmp_path: pathlib.Path, step_minutes: int) -> dict:
+        import pytz
+
+        return {
+            "emhass_conf": {"data_path": tmp_path},
+            "retrieve_hass_conf": {
+                "time_zone": pytz.timezone("Europe/Paris"),
+                "optimization_time_step": pd.Timedelta(minutes=step_minutes),
+            },
+        }
+
+    def _load_result(self, periods: int, freq: str, step_minutes: int) -> pd.DataFrame | None:
+        """Write a CSV and load it back through _load_opt_res_latest."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            self._write_csv(tmp_path, periods=periods, freq=freq)
+            return _load_opt_res_latest(
+                self._input_data_dict(tmp_path, step_minutes=step_minutes),
+                logger,
+                save_data_to_file=False,
+            )
+
+    def test_mismatched_step_loads_and_infers_freq(self):
+        """An hourly CSV must load under a 30-min config instead of raising.
+
+        This is the #976 repro: naive-mpc-optim wrote the CSV with a runtime
+        optimization_time_step of 60; publish-data then arrived using the
+        config default of 30 min.
+        """
+        result = self._load_result(periods=8, freq="60min", step_minutes=30)
+
+        self.assertIsNotNone(result, "_load_opt_res_latest returned None for an hourly CSV")
+        self.assertEqual(len(result), 8)
+        # The frequency must come from the data, not the request config.
+        self.assertEqual(result.index.freq, pd.tseries.frequencies.to_offset("60min"))
+        self.assertListEqual(list(result["P_Load"]), list(range(8)))
+
+    def test_matching_step_keeps_frame_and_freq(self):
+        """Counterfactual: the healthy matching-step path must be unchanged."""
+        result = self._load_result(periods=8, freq="30min", step_minutes=30)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 8)
+        self.assertEqual(result.index.freq, pd.tseries.frequencies.to_offset("30min"))
+        self.assertListEqual(list(result["P_Load"]), list(range(8)))
+
+    def test_single_row_csv_does_not_crash(self):
+        """A frame with fewer than 2 rows carries no inferable spacing; it must
+        load without crashing (the downstream P_Load/optim_status guard in
+        publish_data handles degenerate frames)."""
+        result = self._load_result(periods=1, freq="30min", step_minutes=30)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+
+
 class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
     """Integration tests for CLI warm-start flow using actual naive_mpc_optim calls."""
 
