@@ -3811,13 +3811,15 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # NOT reflect load 1's draw. Find such a slot and assert.
         only_l1_slots = (p_load0 == 0) & (p_load1 > 0)
         if only_l1_slots.any():
-            # Grid import in these slots should be just baseload, not 3 kW.
             grid_in_l1_only = p_grid_pos[only_l1_slots]
-            # Baseline household load is < 1 kW in the typical fixture; if our
-            # flag works, grid_pos here is roughly baseload, not 3000 W.
+            # Compare against actual baseload at these slots instead of a fixed
+            # ceiling, since self.p_load_forecast varies with the real calendar
+            # date/time (typical-curve method).
+            baseline_at_slots = self.p_load_forecast[only_l1_slots]
+            leaked_power = (grid_in_l1_only - baseline_at_slots.values).max()
             self.assertLess(
-                grid_in_l1_only.max(),
-                2000,
+                leaked_power,
+                500,  # tolerance for solver/rounding noise, not baseload magnitude
                 "Non-electric load (load 1) appears to be pulling from the grid",
             )
 
