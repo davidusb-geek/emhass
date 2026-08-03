@@ -575,6 +575,131 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError, msg="Expected ValueError for non-uniform index"):
             await self.fcst._build_weather_future(data_last_window, mock_mlf)
 
+    @staticmethod
+    def _open_meteo_covariate_payload(full: pd.DatetimeIndex) -> dict:
+        """Synthetic Open-Meteo minutely_15 payload covering the ``full`` (tz-aware) index."""
+        times = (full.tz_convert("UTC").astype("int64") // 10**9).tolist()
+        n = len(full)
+        return {
+            "minutely_15": {
+                "time": times,
+                "temperature_2m": [20.0] * n,
+                "relative_humidity_2m": [50.0] * n,
+                "cloud_cover": [30.0] * n,
+                "wind_speed_10m": [5.0] * n,
+                "shortwave_radiation": [200.0] * n,
+                "direct_radiation": [150.0] * n,
+                "diffuse_radiation": [50.0] * n,
+                "precipitation": [0.0] * n,
+            }
+        }
+
+    async def test_build_weather_future_localizes_naive_window_index(self):
+        """A tz-naive last-window index no longer crashes the weather horizon build (#1036).
+
+        The optim path's websocket statistics retrieval used to hand this method a tz-naive
+        index, and the naive future horizon crashed get_weather_covariates with
+        'Cannot subtract tz-naive and tz-aware datetime-like objects'. The horizon must now
+        reach get_weather_covariates as tz-aware, in the configured time zone.
+        """
+        from unittest.mock import MagicMock, patch
+
+        num_lags = 16
+        naive_window_index = self.fcst.forecast_dates[:8].tz_localize(None)
+        data_last_window = pd.DataFrame(index=naive_window_index)
+        # Naive wall times are interpreted as the configured local time zone.
+        expected_index = pd.date_range(
+            start=naive_window_index[-1] + self.fcst.freq,
+            periods=num_lags,
+            freq=self.fcst.freq,
+        ).tz_localize(self.fcst.time_zone)
+        full = pd.date_range(
+            start=expected_index[0] - 4 * self.fcst.freq,
+            end=expected_index[-1] + 4 * self.fcst.freq,
+            freq=self.fcst.freq,
+        )
+        payload = self._open_meteo_covariate_payload(full)
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = num_lags
+
+        with patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload):
+            weather_future = await self.fcst._build_weather_future(data_last_window, mock_mlf)
+
+        self.assertIsNotNone(weather_future)
+        self.assertEqual(len(weather_future), num_lags)
+        self.assertIsNotNone(weather_future.index.tz)
+        self.assertEqual(weather_future.index.tz, self.fcst.time_zone)
+        self.assertTrue(weather_future.index.equals(expected_index))
+
+    async def test_build_weather_future_converts_aware_window_index(self):
+        """A tz-aware last-window index in another zone keeps its instants.
+
+        Cross-zone tz-aware input never crashed; the horizon is now normalized to the
+        configured time zone, which must not move the instants.
+        """
+        from unittest.mock import MagicMock, patch
+
+        num_lags = 16
+        utc_window_index = self.fcst.forecast_dates[:8].tz_convert("UTC")
+        data_last_window = pd.DataFrame(index=utc_window_index)
+        expected_index = pd.date_range(
+            start=utc_window_index[-1] + self.fcst.freq,
+            periods=num_lags,
+            freq=self.fcst.freq,
+            tz="UTC",
+        ).tz_convert(self.fcst.time_zone)
+        full = pd.date_range(
+            start=expected_index[0] - 4 * self.fcst.freq,
+            end=expected_index[-1] + 4 * self.fcst.freq,
+            freq=self.fcst.freq,
+        )
+        payload = self._open_meteo_covariate_payload(full)
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = num_lags
+
+        with patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload):
+            weather_future = await self.fcst._build_weather_future(data_last_window, mock_mlf)
+
+        self.assertIsNotNone(weather_future)
+        self.assertEqual(len(weather_future), num_lags)
+        self.assertEqual(weather_future.index.tz, self.fcst.time_zone)
+        self.assertTrue(weather_future.index.equals(expected_index))
+
+    async def test_prepare_hass_load_data_uses_configured_time_zone(self):
+        """_prepare_hass_load_data builds its internal RetrieveHass with the configured tz (#1036).
+
+        With time_zone=None the websocket statistics retrieval path strips the index tz
+        (tz_convert(None)), producing the naive index behind the #1036 crash.
+        """
+        from unittest.mock import patch
+
+        # self.fcst.get_data_from_file is True by default, so after construction the code
+        # takes the aiofiles-pickle branch, not rh.get_data() -- there's no natural await
+        # failure to stop on. Raise a sentinel from the constructor itself to capture its
+        # args without also mocking the unrelated file-read/prepare_data pipeline.
+        class _CtorCapture(Exception):
+            pass
+
+        captured = {}
+
+        def _capture_ctor(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            raise _CtorCapture()
+
+        with patch.object(forecast_module, "RetrieveHass", side_effect=_capture_ctor):
+            with self.assertRaises(_CtorCapture):
+                await self.fcst._prepare_hass_load_data(3, "mlforecaster")
+
+        # Signature: (hass_url, long_lived_token, freq, time_zone, params, emhass_conf, logger)
+        passed_time_zone = captured["args"][3]
+        self.assertIsNotNone(passed_time_zone)
+        self.assertEqual(passed_time_zone, self.fcst.time_zone)
+
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):
         self.fcst.params = {
