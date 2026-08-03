@@ -325,6 +325,90 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rh.df_final[actual_pv_sensor].isna().sum(), 0)
         self.assertEqual(self.rh.df_final[forecast_pv_sensor].isna().sum(), 0)
 
+    # Battery identification needs the signed battery power and a possible
+    # measured 0% SoC to survive prepare_data's set_zero_min treatment (#1041).
+    # Base-safe: the protected_columns kwarg is only passed when the running
+    # source accepts it, so on a source without the fix this test fails on the
+    # behavioural assertions below, not on a TypeError.
+    def test_prepare_data_protected_columns(self):
+        import inspect
+
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        power_col = "sensor.power_battery_test"
+        soc_col = "sensor.battery_soc_test"
+        probe_col = "sensor.unprotected_probe"
+        n = len(self.rh.df_final)
+        # Signed battery power: both flow directions present
+        power = np.full(n, 300.0)
+        power[: n // 2] = -400.0
+        self.rh.df_final[power_col] = power
+        # SoC sweep including a legitimately measured 0% sample
+        soc = np.linspace(0.0, 100.0, n)
+        soc[0] = 0.0
+        self.rh.df_final[soc_col] = soc
+        # Counterfactual: an unprotected negative column must still be clipped
+        self.rh.df_final[probe_col] = np.full(n, -1.0)
+        self.rh.var_list = list(self.var_list) + [power_col, soc_col, probe_col]
+        neg_before = int((self.rh.df_final[power_col] < 0).sum())
+        self.assertGreater(neg_before, 0)
+        kwargs = {}
+        if "protected_columns" in inspect.signature(self.rh.prepare_data).parameters:
+            kwargs["protected_columns"] = [power_col, soc_col]
+        self.rh.prepare_data(
+            load_sensor,
+            load_negative=self.retrieve_hass_conf["load_negative"],
+            set_zero_min=True,
+            var_replace_zero=self.retrieve_hass_conf["sensor_replace_zero"],
+            var_interp=self.retrieve_hass_conf["sensor_linear_interp"],
+            **kwargs,
+        )
+        # Protected columns: discharge samples and the 0% SoC sample survive
+        self.assertEqual(int((self.rh.df_final[power_col] < 0).sum()), neg_before)
+        self.assertEqual(self.rh.df_final[power_col].isna().sum(), 0)
+        self.assertEqual(int((self.rh.df_final[soc_col] == 0.0).sum()), 1)
+        self.assertEqual(self.rh.df_final[soc_col].isna().sum(), 0)
+        # Counterfactual: the unprotected probe column was clipped then NaN'd
+        self.assertEqual(int((self.rh.df_final[probe_col] < 0).sum()), 0)
+        self.assertTrue(self.rh.df_final[probe_col].isna().all())
+        # Load handling is unchanged: renamed column present, no negatives
+        self.assertIn(load_sensor + "_positive", self.rh.df_final.columns)
+        self.assertFalse((self.rh.df_final[load_sensor + "_positive"] < 0).any())
+
+    # protected_columns=None, an omitted kwarg, and a list naming no column in
+    # the frame must all reproduce today's clipping behaviour exactly.
+    def test_prepare_data_protected_columns_default_noop(self):
+        import inspect
+
+        if "protected_columns" not in inspect.signature(self.rh.prepare_data).parameters:
+            self.skipTest("running source has no protected_columns support")
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        signed_col = "sensor.signed_probe"
+        df_raw = self.rh.df_final.copy()
+        df_raw[signed_col] = np.linspace(-100.0, 100.0, len(df_raw))
+        var_list_raw = list(self.var_list) + [signed_col]
+        runs = {}
+        for label, protected in (
+            ("omitted", "OMIT"),
+            ("none", None),
+            ("absent", ["sensor.not_in_frame"]),
+        ):
+            self.rh.df_final = df_raw.copy()
+            self.rh.var_list = list(var_list_raw)
+            kwargs = {} if protected == "OMIT" else {"protected_columns": protected}
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=self.retrieve_hass_conf["load_negative"],
+                set_zero_min=True,
+                var_replace_zero=self.retrieve_hass_conf["sensor_replace_zero"],
+                var_interp=self.retrieve_hass_conf["sensor_linear_interp"],
+                **kwargs,
+            )
+            runs[label] = self.rh.df_final.copy()
+        pd.testing.assert_frame_equal(runs["omitted"], runs["none"])
+        pd.testing.assert_frame_equal(runs["omitted"], runs["absent"])
+        # And the clip really ran: no negatives survive anywhere
+        self.assertEqual(int((runs["omitted"][signed_col] < 0).sum()), 0)
+
     # Proposed new test method for InfluxDB
     @patch("influxdb.InfluxDBClient", autospec=True)
     async def test_get_data_influxdb_mock(self, mock_influx_client_class):
