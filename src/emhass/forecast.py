@@ -563,7 +563,21 @@ class Forecast:
 
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
-        cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
+        # The explicit `weather-forecast-cache` action sets weather_forecast_cache
+        # and is meant to refresh the cache from the Solcast API. Reading the cache
+        # first here would return a stale-but-present cache early (for Solcast,
+        # get_cached_forecast_data serves reindexed/zero-filled stale data instead
+        # of returning None), so the refresh action would never fetch and the cache
+        # would freeze permanently once it aged past its coverage window. Bypass the
+        # cache read for that action so it always fetches fresh; normal cache_only
+        # MPC runs still read the cache. The fetch stays quota-guarded by
+        # _solcast_rate_limit_ok.
+        force_refresh = self.params["passed_data"].get("weather_forecast_cache", False)
+        cached_data = (
+            None
+            if force_refresh
+            else await self._get_cached_forecast_or_none(w_forecast_cache_path)
+        )
         if cached_data is not None:
             return cached_data
         # Incompatible/stale cache was discarded (issue #932); fall through
