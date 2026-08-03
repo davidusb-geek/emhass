@@ -1774,7 +1774,10 @@ class Forecast:
         var_list = [self.var_load]
         var_replace_zero = None
         var_interp = [self.var_load]
-        time_zone_load_forecast = None
+        # Pass the configured time zone so the retrieved index stays tz-aware: with None,
+        # the websocket statistics path runs the index through tz_convert(None), which
+        # strips the tz entirely and later crashes the weather covariate horizon build.
+        time_zone_load_forecast = self.time_zone
         rh = RetrieveHass(
             self.retrieve_hass_conf["hass_url"],
             self.retrieve_hass_conf["long_lived_token"],
@@ -1946,6 +1949,17 @@ class Forecast:
             start=data_last_window.index[-1] + window_freq,
             periods=steps,
             freq=window_freq,
+        )
+        # get_weather_covariates subtracts a tz-aware "now" from this index, so it must be
+        # tz-aware; date_range inherits tz-naivety from data_last_window's index.
+        future_index = (
+            future_index.tz_localize(
+                self.time_zone,
+                ambiguous="infer",
+                nonexistent="shift_forward",
+            )
+            if future_index.tz is None
+            else future_index.tz_convert(self.time_zone)
         )
         return await self.get_weather_covariates(future_index, weather_features)
 
