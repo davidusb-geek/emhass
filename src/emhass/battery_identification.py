@@ -58,6 +58,13 @@ POWER_DEADBAND_W = 25.0  # |power| below this is treated as idle (sign hysteresi
 SOC_REVERSAL_HYSTERESIS = 1.0  # SoC points of counter-move tolerated before a run splits
 MIN_SEGMENT_DURATION = pd.Timedelta(minutes=20)
 MIN_SOC_SWING_PER_SEGMENT = 10.0  # a segment must move at least this many SoC points to be "deep"
+# A step between consecutive observed samples longer than this many multiples of
+# the expected sample step is a recorder GAP (#1051): the battery state across it
+# is unobserved, so the step must contribute neither throughput nor dSoC. Gaps
+# end the current run at the last observed sample. Up to two consecutive missing
+# resample buckets (dt == 3x step) are tolerated as benign recorder jitter and
+# still bridged by the trapezoid.
+MAX_GAP_STEP_MULTIPLE = 3.0
 
 # Sufficiency floors
 MIN_DEEP_SEGMENTS = 3  # per direction, before a capacity fit is attempted
@@ -224,8 +231,18 @@ def _intercept_diag(x: np.ndarray, y: np.ndarray) -> float:
 class BatteryIdentification:
     """Pure estimator: history in, :class:`BatteryIdentificationResult` out."""
 
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger, time_step: pd.Timedelta | None = None):
+        """
+        :param logger: Logger for diagnostics.
+        :param time_step: The expected spacing of the history samples (the
+            retrieval resample step, ``optimization_time_step`` in production).
+            Used to tell recorder gaps apart from ordinary steps. When ``None``
+            the step is inferred as the median spacing of the data itself,
+            which keeps the estimator usable standalone but is only reliable
+            while most consecutive samples are actually adjacent.
+        """
         self.logger = logger
+        self.time_step = time_step
 
     # -- segmentation ---------------------------------------------------------
     def _segment(self, df: pd.DataFrame, power_col: str, soc_col: str) -> list[_Segment]:
@@ -246,15 +263,49 @@ class BatteryIdentification:
         # Float hours since the first sample (tz-safe, resolution-independent).
         hours_axis = (times - times[0]).total_seconds().to_numpy() / 3600.0
 
+        # Recorder gaps (#1051): after the retrieval resample, missing history
+        # shows up as NaN buckets which the dropna above removes, leaving one
+        # oversized step between the samples on either side of the gap. The
+        # battery state across that step is UNOBSERVED, so it must contribute
+        # neither throughput (the trapezoid would fabricate p_avg * gap_hours)
+        # nor dSoC. Oversized steps are treated as run boundaries below and are
+        # excluded from the sign vote here.
+        # Compare spacings in integer nanoseconds, not float hours: a dropout of
+        # exactly MAX_GAP_STEP_MULTIPLE missing-plus-one buckets must stay
+        # bridged on EVERY grid, and float division (1 min = 1/60 h) turns that
+        # equality into a spurious ">" on steps that are not a binary fraction
+        # of an hour. The index is normalized to nanoseconds first: asi8 counts
+        # in the index's own resolution (microseconds by default on pandas 3),
+        # while Timedelta.value is always nanoseconds.
+        dt_ns = np.diff(times.as_unit("ns").asi8)
+        if self.time_step is not None:
+            base_step_ns = float(pd.Timedelta(self.time_step).as_unit("ns").value)
+        else:
+            base_step_ns = float(np.median(dt_ns)) if len(dt_ns) else 0.0
+        if base_step_ns > 0:
+            gap_mask = dt_ns > MAX_GAP_STEP_MULTIPLE * base_step_ns
+        else:
+            # Degenerate spacing (e.g. duplicate timestamps dominating the
+            # median): no reliable notion of a "normal" step, so no gap logic.
+            gap_mask = np.zeros(len(dt_ns), dtype=bool)
+        n_gaps = int(gap_mask.sum())
+        if n_gaps:
+            self.logger.debug(
+                "battery_identification: %d recorder gap(s) longer than %.2g h "
+                "excluded from segmentation",
+                n_gaps,
+                MAX_GAP_STEP_MULTIPLE * base_step_ns / 3.6e12,  # ns -> h (3600 s/h * 1e9 ns/s)
+            )
+
         # Auto-detect the sign convention from the data itself. Each rising-SoC
         # interval [k, k+1] is CAUSED by the power held over it, power[k] (the
         # same convention the trapezoid integral uses), NOT power[k+1] - pairing
         # with the end sample mislabels pulsed charge-then-discharge data. Over
         # charging intervals the causing power must be positive; if the net vote
         # is negative the meter reports charge as negative and we flip so that
-        # positive = charge.
+        # positive = charge. Gap steps are unobserved and do not vote.
         d_soc_step = np.diff(soc)
-        rising = d_soc_step > 0
+        rising = (d_soc_step > 0) & ~gap_mask
         if rising.any():
             charge_power_vote = float(np.sum(power[:-1][rising]))
             self.logger.debug(
@@ -284,6 +335,19 @@ class BatteryIdentification:
             step_dir = 0
             if abs(power[i]) >= POWER_DEADBAND_W:
                 step_dir = 1 if power[i] > 0 else -1
+            if gap_mask[i - 1]:
+                # The step into sample i spans a recorder gap. The current run
+                # (if any) ends at the last observed sample, mirroring the
+                # end-of-data flush. Any new run starts AT the first post-gap
+                # sample - never at i-1, which would bridge the gap back into
+                # a segment's dSoC and duration.
+                _flush(i - 1)
+                run_dir = step_dir
+                if run_dir != 0:
+                    run_start = i
+                    run_soc_extreme = soc[i]
+                    run_extreme_idx = i
+                continue
             if run_dir == 0:
                 if step_dir != 0:
                     run_dir = step_dir
