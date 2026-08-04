@@ -323,6 +323,14 @@ class Optimization:
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
 
+        # Stress configs built alongside self.prob, kept for the relaxed-retry
+        # path: a solve failure on a cached problem rebuilds constraints and
+        # objective, and must reuse the same stress configs (same CVXPY
+        # variables) the cached problem was built with (issue #1048). Refreshed
+        # unconditionally whenever the build block runs.
+        self._batt_stress_conf = None
+        self._inv_stress_conf = None
+
     def _init_soc_recovery_params(self) -> None:
         """Initialize CVXPY parameters used for out-of-band SOC recovery.
 
@@ -5059,14 +5067,19 @@ class Optimization:
                         f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
                     )
 
-        # Initialize stress config variables (needed by retry path even when
-        # self.prob is cached from a previous call, see #770)
-        inv_stress_conf = None
-        batt_stress_conf = None
+        # Stress configs are needed by the retry path even when self.prob is
+        # cached from a previous call (see #770). Start from the configs built
+        # with the cached problem so a cached-retry rebuild keeps the stress
+        # constraints and objective terms instead of silently dropping them
+        # (issue #1048); they reference the same CVXPY variables as self.vars.
+        inv_stress_conf = self._inv_stress_conf
+        batt_stress_conf = self._batt_stress_conf
 
         # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
+            inv_stress_conf = None
+            batt_stress_conf = None
 
             # Start with bound constraints
             constraints = self.constraints[:]
@@ -5149,6 +5162,18 @@ class Optimization:
                 objective_expr.args[0] += penalty_terms_total
 
             self.prob = cp.Problem(objective_expr, constraints)
+            # Keep the stress configs paired with the problem they were built
+            # for, so cached-retry rebuilds see them (issue #1048).
+            self._batt_stress_conf = batt_stress_conf
+            self._inv_stress_conf = inv_stress_conf
+
+        # Thermal artifacts read by the extraction below. Locals so a relaxed
+        # retry can swap in its own rebuilt artifacts for this run only, while
+        # the instance attributes stay paired with the cached problem
+        # (issue #1048).
+        predicted_temps = self.predicted_temps
+        heating_demands = self.heating_demands
+        q_inputs = self.q_inputs
 
         # Solver Configuration
         solver_opts = {"verbose": False}
@@ -5234,6 +5259,13 @@ class Optimization:
                 f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
             )
 
+        # The problem whose status/value the extraction below reads. Stays
+        # self.prob on a clean solve; points at the relaxed problem after a
+        # retry WITHOUT replacing self.prob, so the cached problem survives
+        # intact for the next run (issue #1048: caching prob_relaxed made the
+        # stress-free, binary-relaxed rescue permanent).
+        solved_prob = self.prob
+
         # Check for failure or "bad" status
         # Note: "user_limit" often means timeout. "infeasible" means configuration conflict.
         fail_statuses = ["infeasible", "unbounded", "user_limit", None]
@@ -5251,6 +5283,23 @@ class Optimization:
                 self.optim_conf.get("set_deferrable_load_single_constant", [])
             )
 
+            # The rebuild below replaces a few instance-held references with new
+            # objects that only live in the relaxed problem (the hybrid inverter
+            # transfer variables and the thermal q_input persistence hooks).
+            # Snapshot them so they can be restored after the rescue: instance
+            # state must keep pointing at the cached problem's objects, or later
+            # cache-hit runs would read variables the solver no longer touches
+            # (issue #1048).
+            hybrid_var_keys = ("p_dc_ac", "p_ac_dc", "is_dc_sourcing")
+            original_hybrid_vars = {
+                key: self.vars[key] for key in hybrid_var_keys if key in self.vars
+            }
+            original_q_input_vars = {
+                k: params["q_input_var"]
+                for k, params in self.param_thermal.items()
+                if "q_input_var" in params
+            }
+
             # Relax Configuration: Disable Binary Logic
             n_def = self.optim_conf["number_of_deferrable_loads"]
             self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * n_def
@@ -5261,11 +5310,12 @@ class Optimization:
 
             # Re-apply main constraints
             self._add_main_power_balance_constraints(constraints_relaxed)
-            # (Note: We reuse previous stress configs as they don't change with relaxation)
-            # Guard on feature flags, not on the stress conf objects: stress conf is None
-            # on cached-problem retry paths (self.prob is not None), so guarding on the
-            # object itself would silently skip these constraints on every retry after the
-            # first call, leaving the relaxed problem without battery/inverter constraints.
+            # (Note: We reuse previous stress configs as they don't change with relaxation.
+            # On a cached-problem retry they come from self._*_stress_conf, the configs
+            # the cached problem was built with, see issue #1048.)
+            # Guard on feature flags, matching the build block's own gating: these
+            # builders also add the non-stress battery/inverter constraints, so they
+            # must run whenever the feature is on, stress cost or not.
             if self.plant_conf.get("inverter_is_hybrid", False):
                 self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
             if self.optim_conf.get("set_use_battery", False):
@@ -5279,8 +5329,11 @@ class Optimization:
                     self.vars["SC"] <= self.param_load_forecast + self.vars["p_def_sum"]
                 )
 
-            # Re-call deferrable load constraints (Skipping binary logic due to config change)
-            self.predicted_temps, self.heating_demands, penalty_terms_total, self.q_inputs = (
+            # Re-call deferrable load constraints (Skipping binary logic due to
+            # config change). The rebuilt thermal artifacts go into the LOCALS
+            # used by this run's extraction; the instance attributes keep the
+            # build-time artifacts paired with the cached problem (issue #1048).
+            predicted_temps, heating_demands, penalty_terms_total, q_inputs = (
                 self._add_deferrable_load_constraints(
                     constraints_relaxed,
                     data_opt,
@@ -5310,14 +5363,16 @@ class Optimization:
 
                 if prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                     self.logger.info("Relaxed optimization successful!")
-                    self.prob = prob_relaxed  # Use this result
                     # Mark status so user knows it was relaxed
-                    self.prob._status = "Optimal (Relaxed)"
+                    prob_relaxed._status = "Optimal (Relaxed)"
                 else:
                     self.logger.error(
                         f"Relaxed optimization also failed with status: {prob_relaxed.status}"
                     )
-                    self.prob = prob_relaxed
+                # Use the relaxed result for this run only. self.prob keeps
+                # pointing at the clean cached problem: the relaxed solve is a
+                # one-shot rescue, never a permanent replacement (issue #1048).
+                solved_prob = prob_relaxed
             except Exception as e:
                 self.logger.error(f"Relaxed optimization crashed: {e}")
 
@@ -5325,17 +5380,26 @@ class Optimization:
             self.optim_conf["treat_deferrable_load_as_semi_cont"] = original_semi_cont
             self.optim_conf["set_deferrable_load_single_constant"] = original_single_const
 
+            # Restore the instance-held references the rebuild replaced, so the
+            # next run reads the cached problem's own objects (issue #1048).
+            self.vars.update(original_hybrid_vars)
+            for k, params in self.param_thermal.items():
+                if k in original_q_input_vars:
+                    params["q_input_var"] = original_q_input_vars[k]
+                else:
+                    params.pop("q_input_var", None)
+
         # Stage-timer breadcrumb: end of solve phase, start of extract phase.
         _extract_start_perf = time.perf_counter() if stage_times is not None else 0.0
         if stage_times is not None:
             stage_times["optim_solve.solve"] = _extract_start_perf - _solve_start_perf
 
         # Fix for Status Case: Map "optimal" -> "Optimal"
-        status_raw = self.prob.status
+        status_raw = solved_prob.status
         self.optim_status = status_raw.title() if status_raw else "Failure"
 
         # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
-        if self.prob.value is None or self.prob.status not in [
+        if solved_prob.value is None or solved_prob.status not in [
             cp.OPTIMAL,
             cp.OPTIMAL_INACCURATE,
             "Optimal (Relaxed)",
@@ -5355,7 +5419,7 @@ class Optimization:
         else:
             self.logger.info(
                 "Total value of the Cost function = %.02f",
-                self.prob.value,
+                solved_prob.value,
             )
 
         # Results Extraction
@@ -5373,10 +5437,10 @@ class Optimization:
             p_load,
             p_pv,
             soc_init_for_results,
-            self.predicted_temps,
-            self.heating_demands,
+            predicted_temps,
+            heating_demands,
             debug,
-            q_inputs=self.q_inputs,
+            q_inputs=q_inputs,
         )
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf

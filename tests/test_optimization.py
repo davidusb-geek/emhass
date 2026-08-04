@@ -8982,6 +8982,475 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"{bin2.sum():.1f}. bin2={bin2}",
         )
 
+    # ------------------------------------------------------------------
+    # Issue #1048: cache-hit relaxed-LP rescue must not poison the cache
+    # ------------------------------------------------------------------
+
+    def _rescued_solve_patch(self, fail_status="user_limit"):
+        """Return a context manager that fails the FIRST ``cvxpy.Problem.solve()``
+        call inside the ``with`` block and lets every later call run for real.
+
+        Simulates e.g. a HiGHS timeout (mapped to status "user_limit" by cvxpy
+        1.7.5), which is the trigger the #1048 reporter hit. Deterministic and
+        instant -- no actual solver timeout is needed. Setting ``prob._status``/
+        ``prob._value`` directly follows the same pattern the production retry
+        code itself uses to mark the relaxed rescue's status (optimization.py,
+        ``prob_relaxed._status = "Optimal (Relaxed)"``), so this is in-repo
+        precedent, not a cvxpy internals hack invented for the test.
+        """
+        import cvxpy as cp
+
+        real_solve = cp.Problem.solve
+        calls = {"n": 0}
+
+        def fake_solve(prob_self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                prob_self._status = fail_status
+                prob_self._value = None
+                return None
+            return real_solve(prob_self, *args, **kwargs)
+
+        return mock.patch.object(cp.Problem, "solve", new=fake_solve)
+
+    def test_relaxed_rescue_keeps_cached_problem(self):
+        """Issue #1048: a relaxed-LP rescue on a cache-HIT run must not replace
+        ``self.prob``.
+
+        Before the fix, a successful (or failed) relaxed retry did
+        ``self.prob = prob_relaxed``, permanently swapping the cached MILP
+        for the stress-free, binary-relaxed LP: every later cache-hit run
+        then re-solved that degraded problem and reported plain "Optimal"
+        (title-cased), hiding the fact it was never the real MILP again.
+
+        Solve 1 builds and caches the problem normally. Solve 2 has its first
+        solver call forced to fail (`self._rescued_solve_patch`), triggering
+        the one-shot relaxed rescue: status must read "Optimal (Relaxed)" but
+        ``self.opt.prob`` must still be the SAME object built in solve 1
+        (``assertIs``, not just equal). Solve 3 runs clean again on that same
+        cached problem and must report plain "Optimal" -- proving the rescue
+        was one-shot, not a permanent replacement.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+        mpc_kwargs = {
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "def_total_hours": None,
+            "def_total_timestep": [4, 3],
+            "def_start_timestep": [0, 0],
+            "def_end_timestep": [0, 0],
+        }
+
+        # Solve 1: clean build, establishes the cached problem.
+        self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            **mpc_kwargs,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        prob_before = self.opt.prob
+        self.assertIsNotNone(prob_before)
+
+        # Solve 2: cache-HIT run whose first solve() call is forced to fail,
+        # triggering the relaxed rescue.
+        with self._rescued_solve_patch():
+            self.opt.perform_naive_mpc_optim(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast,
+                self.p_load_forecast,
+                prediction_horizon,
+                **mpc_kwargs,
+            )
+        self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
+        self.assertIs(
+            self.opt.prob,
+            prob_before,
+            "self.prob must never be replaced by the relaxed rescue problem (#1048)",
+        )
+
+        # Solve 3: clean cache-hit run again, on the SAME cached problem.
+        self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            **mpc_kwargs,
+        )
+        self.assertEqual(
+            self.opt.optim_status,
+            "Optimal",
+            "A follow-up clean run must re-attempt the real MILP, not the "
+            "retained relaxed LP from solve 2 (#1048 poisoning).",
+        )
+        self.assertIs(self.opt.prob, prob_before)
+
+    def test_relaxed_rescue_does_not_poison_followup_runs(self):
+        """Issue #1048 headline behaviour: a rescued cache-hit run must not
+        change the DISPATCH of later clean runs.
+
+        Discrimination logic: one deferrable load, 3000 W nominal,
+        ``set_deferrable_load_single_constant=True`` (MILP: exactly one
+        contiguous ON block) with ``treat_deferrable_load_as_semi_cont=False``
+        (so the relaxed-LP retry -- which forces both flags off -- turns this
+        load into a plain continuous variable, box-capped at nominal power per
+        step, with total energy still pinned to 4 timesteps' worth). Over a
+        10-step horizon the load cost is [0.1, 0.1, 9, 9, 9, 9, 9, 9, 0.1, 0.1]
+        (production price pinned to a flat 0.05 for the same rows so the
+        sell side never competes for these values):
+
+        - MILP (single-constant): must run ONE contiguous 4-step block. The
+          two cheapest *contiguous* 4-step windows are the edges (steps
+          0-3 or 6-9, cost 0.1+0.1+9+9=18.2); nothing else contiguous is
+          cheaper, so the solve is forced into one of those blocks.
+        - Relaxed LP (binary/single-constant forced off): with the box cap at
+          nominal power and 4 timesteps of energy required, the cheapest
+          answer is to run flat-out at the 4 individually cheapest steps
+          {0, 1, 8, 9} (cost 0.1*4=0.4) -- a NON-contiguous split across the
+          two cheap valleys. This is strictly cheaper than any contiguous
+          block, so an unconstrained LP always prefers it.
+
+        On the un-fixed base, solve 2's rescue caches prob_relaxed permanently
+        (self.prob = prob_relaxed), so solve 3 -- a clean call with no forced
+        failure -- would still solve that retained relaxed/binary-off problem
+        and reproduce the non-contiguous {0,1,8,9} split. With the fix, solve
+        3 re-attempts the real cached MILP and is back to a single contiguous
+        block.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [3000],
+                "treat_deferrable_load_as_semi_cont": [False],
+                "set_deferrable_load_single_constant": [True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+
+        price_vector = [0.1, 0.1, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 0.1, 0.1]
+        horizon_index = self.df_input_data_dayahead.index[:prediction_horizon]
+        self.df_input_data_dayahead.loc[horizon_index, self.opt.var_load_cost] = price_vector
+        self.df_input_data_dayahead.loc[horizon_index, self.opt.var_prod_price] = 0.05
+
+        mpc_kwargs = {
+            "def_total_hours": None,
+            "def_total_timestep": [4],
+            "def_start_timestep": [0],
+            "def_end_timestep": [0],
+        }
+
+        def active_block(power_series):
+            active_idx = np.where(power_series.to_numpy() > 1e-3)[0]
+            span = (active_idx[-1] - active_idx[0] + 1) if len(active_idx) else 0
+            return active_idx, span
+
+        # Solve 1: clean MILP build -- must be a single contiguous block.
+        opt_res_1 = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            **mpc_kwargs,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        active_idx_1, span_1 = active_block(opt_res_1["P_deferrable0"])
+        self.assertEqual(
+            len(active_idx_1), 4, f"Solve 1: expected 4 active steps, got {active_idx_1}"
+        )
+        self.assertEqual(
+            span_1,
+            4,
+            f"Solve 1: MILP dispatch must be one contiguous block, got indices {active_idx_1}",
+        )
+
+        # Solve 2: cache-HIT run, first solve() forced to fail -> relaxed rescue.
+        with self._rescued_solve_patch():
+            self.opt.perform_naive_mpc_optim(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast,
+                self.p_load_forecast,
+                prediction_horizon,
+                **mpc_kwargs,
+            )
+        self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
+
+        # Solve 3: clean run again -- the poisoning check. Must be back to a
+        # single contiguous MILP block, not the relaxed {0,1,8,9} split.
+        opt_res_3 = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            **mpc_kwargs,
+        )
+        self.assertEqual(
+            self.opt.optim_status,
+            "Optimal",
+            "Solve 3 must re-attempt the real MILP, not report the retained relaxed status.",
+        )
+        active_idx_3, span_3 = active_block(opt_res_3["P_deferrable0"])
+        self.assertEqual(
+            len(active_idx_3), 4, f"Solve 3: expected 4 active steps, got {active_idx_3}"
+        )
+        self.assertEqual(
+            span_3,
+            4,
+            f"Solve 3: dispatch must be one contiguous block again (#1048 poisoning check), "
+            f"got indices {active_idx_3} (a {{0,1,8,9}}-style split means the relaxed problem "
+            "from solve 2 was retained).",
+        )
+
+    def test_cached_retry_rebuilds_stress_configs(self):
+        """Issue #1048: on a cache-HIT retry, the relaxed rebuild's objective
+        call must receive the SAME (non-None) battery stress conf the cached
+        problem was built with.
+
+        Before the fix, ``batt_stress_conf``/``inv_stress_conf`` were only
+        populated inside the ``self.prob is None`` build block, so on a
+        cache-HIT call they stayed ``None`` and the relaxed rebuild silently
+        dropped the stress constraints/objective terms. The fix caches them
+        on the instance (``self._batt_stress_conf``) so a cache-hit retry
+        rebuild reads the same confs the original build produced.
+
+        Spies on ``_build_objective_function`` (wrapped, not replaced) across
+        a rescued cache-hit run: it must be called exactly once (the retry's
+        rebuild -- the initial build block is skipped on a cache hit) with a
+        non-None ``batt_stress_conf`` that IS (identity) ``self.opt._batt_stress_conf``.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.plant_conf["battery_stress_cost"] = 0.05
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+        mpc_kwargs = {
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "def_total_hours": None,
+            "def_total_timestep": [4, 3],
+            "def_start_timestep": [0, 0],
+            "def_end_timestep": [0, 0],
+        }
+
+        # Solve 1: clean build -- populates self._batt_stress_conf.
+        self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            **mpc_kwargs,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # getattr keeps this test base-safe: on the un-fixed base the attribute
+        # does not exist, and the RED proof must fail on the behavioural
+        # assertion below, not on an AttributeError.
+        cached_batt_stress_conf = getattr(self.opt, "_batt_stress_conf", None)
+        self.assertIsNotNone(
+            cached_batt_stress_conf,
+            "The build block must cache the battery stress conf on the instance (#1048)",
+        )
+        self.assertTrue(
+            cached_batt_stress_conf[0]["active"],
+            "battery_stress_cost > 0 with a positive max power must yield an active stress conf",
+        )
+
+        # Solve 2: cache-HIT run, first solve() forced to fail -> relaxed retry
+        # rebuilds the objective. Spy (wraps=real method) on the rebuild call.
+        with mock.patch.object(
+            self.opt, "_build_objective_function", wraps=self.opt._build_objective_function
+        ) as spy:
+            with self._rescued_solve_patch():
+                self.opt.perform_naive_mpc_optim(
+                    self.df_input_data_dayahead,
+                    self.p_pv_forecast,
+                    self.p_load_forecast,
+                    prediction_horizon,
+                    **mpc_kwargs,
+                )
+
+        self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
+        self.assertEqual(
+            spy.call_count,
+            1,
+            "On a cache-HIT retry, _build_objective_function must be called exactly once "
+            "(the retry rebuild only -- the initial build block is skipped on a cache hit).",
+        )
+        called_batt_stress_conf = spy.call_args[0][0]
+        self.assertIsNotNone(
+            called_batt_stress_conf,
+            "The retry's objective rebuild must receive the cached (non-None) stress conf (#1048)",
+        )
+        self.assertIs(called_batt_stress_conf, cached_batt_stress_conf)
+
+    def test_relaxed_rescue_keeps_thermal_artifacts_fresh(self):
+        """Issue #1048: regression guard for the run-local-rescue property of
+        the fix -- the rescue's rebuilt thermal artifacts must stay confined
+        to the run that triggered it, never permanently replacing the
+        instance-held references that extraction and warm-starting read from.
+
+        This pins a *narrower* bug than the other three #1048 tests: an early
+        version of the fix already stopped ``self.prob`` itself from being
+        replaced (see ``test_relaxed_rescue_keeps_cached_problem``), but still
+        let the relaxed retry overwrite ``self.predicted_temps`` /
+        ``self.heating_demands`` / ``self.q_inputs`` and
+        ``self.param_thermal[k]["q_input_var"]`` with variables that only
+        live in the discarded ``prob_relaxed``. Every later cache-hit run
+        would then extract ``predicted_temp_heater0`` / ``q_input_heater0``
+        from those dead variables -- byte-frozen at whatever value they held
+        right after the one-shot rescue solve, never re-solved again. The
+        current fix routes the rescue's rebuilt artifacts into locals used
+        only by that run's own extraction (see the ``predicted_temps =
+        self.predicted_temps`` / ``q_inputs = self.q_inputs`` locals in
+        ``perform_optimization``), and snapshots/restores the instance
+        thermal hooks around the rescue.
+
+        NOTE: this test is NOT expected to be RED on unpatched master. On
+        master, a failed first solve makes the retry set ``self.prob =
+        prob_relaxed`` outright (the headline #1048 bug), so a later clean
+        call re-solves that swapped-in problem for real with the new
+        outdoor-temperature parameter values -- giving a genuinely different
+        (not frozen) result and not tripping the assertions below either.
+        This test is green on both master and the fix; it exists purely to
+        pin the fix's run-local-rescue property so a future refactor can't
+        silently reintroduce the narrower dead-variable regression an
+        earlier draft of the fix had.
+
+        Uses a ``thermal_battery`` deferrable load (not plain
+        ``thermal_config``): only ``_add_thermal_battery_constraints``
+        supports ``thermal_inertia_time_constant`` / the ``q_input_var``
+        low-pass-filter hook and populates ``self.heating_demands`` /
+        ``self.q_inputs`` -- ``thermal_config``'s constraint builder reads a
+        differently-named ``thermal_inertia`` key and always returns a None
+        q_input, so it cannot exercise the ``q_input_var`` snapshot/restore
+        path this test targets.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 1.0,
+        }
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        self.opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        # Solve 1: clean build -- establishes the cached problem and the
+        # instance-held thermal references extraction/warm-start read from.
+        opt_res_1 = self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(
+            "q_input_heater0",
+            opt_res_1.columns,
+            "thermal_inertia_time_constant > 0 must produce a q_input_heater0 column",
+        )
+        q_hook_before = self.opt.param_thermal[0].get("q_input_var")
+        self.assertIsNotNone(q_hook_before, "Solve 1 must populate the q_input_var hook (tau > 0)")
+        predicted_temps_before = self.opt.predicted_temps.get(0)
+        self.assertIsNotNone(
+            predicted_temps_before, "Solve 1 must populate self.predicted_temps[0]"
+        )
+
+        # Solve 2: cache-HIT run, first solve() forced to fail -> relaxed rescue.
+        with self._rescued_solve_patch():
+            opt_res_2 = self.opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+        self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
+        self.assertIs(
+            self.opt.param_thermal[0]["q_input_var"],
+            q_hook_before,
+            "The rescue must restore the instance's q_input_var hook to the "
+            "cached problem's own variable, not leave it pointing at the "
+            "discarded prob_relaxed's variable (#1048).",
+        )
+        self.assertIs(
+            self.opt.predicted_temps.get(0),
+            predicted_temps_before,
+            "The rescue must not permanently replace self.predicted_temps[0] "
+            "with the discarded prob_relaxed's variable (#1048).",
+        )
+
+        # Solve 3: clean cache-hit run again, with a DIFFERENT outdoor
+        # temperature forecast so the true predicted temperatures (and the
+        # heating-demand/thermal-loss terms that depend on outdoor temp
+        # directly) must change from solve 2's.
+        df_shifted = self.df_input_data_dayahead.copy()
+        df_shifted["outdoor_temperature_forecast"] = (
+            df_shifted["outdoor_temperature_forecast"] + 10.0
+        )
+        unit_load_cost_3 = df_shifted[self.opt.var_load_cost].values
+        unit_prod_price_3 = df_shifted[self.opt.var_prod_price].values
+        opt_res_3 = self.opt.perform_optimization(
+            df_shifted,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost_3,
+            unit_prod_price_3,
+        )
+        self.assertEqual(
+            self.opt.optim_status,
+            "Optimal",
+            "Solve 3 must re-attempt the real cached MILP, not report a retained relaxed status.",
+        )
+
+        temp_2 = opt_res_2["predicted_temp_heater0"].to_numpy()
+        temp_3 = opt_res_3["predicted_temp_heater0"].to_numpy()
+        self.assertFalse(
+            np.isnan(temp_3).any(), "predicted_temp_heater0 in solve 3 must not contain NaN"
+        )
+        self.assertFalse(
+            np.allclose(temp_2, temp_3),
+            "Solve 3's predicted_temp_heater0 must differ from solve 2's: a "
+            "+10C outdoor shift changes the thermal-loss/heating-demand "
+            "terms directly, so identical values here mean extraction read a "
+            "dead variable frozen at the rescue's values instead of the live "
+            "cached-problem variable (#1048).",
+        )
+        self.assertAlmostEqual(
+            temp_3[0],
+            config["start_temperature"],
+            places=2,
+            msg="predicted_temp_heater0[0] is pinned to start_temperature by "
+            "construction regardless of outdoor forecast",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
