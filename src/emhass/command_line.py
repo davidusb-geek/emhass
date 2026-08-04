@@ -1448,9 +1448,9 @@ async def _identify_battery_impl(
             )
             return
         configured_capacity_wh = float(plant_conf.get("battery_nominal_energy_capacity", 0) or 0)
-        result = BatteryIdentification(logger).identify(
-            df, power_col, soc_col, configured_capacity_wh
-        )
+        result = BatteryIdentification(
+            logger, time_step=retrieve_hass_conf.get("optimization_time_step")
+        ).identify(df, power_col, soc_col, configured_capacity_wh)
         for msg in result.messages:
             logger.info("Battery identification: %s", msg)
         if not result.is_ok:
@@ -1568,9 +1568,9 @@ async def _identify_battery_impl(
         configured_capacity_wh = float(
             _batt_conf_val(plant_conf.get("battery_nominal_energy_capacity", 0), k) or 0
         )
-        result = BatteryIdentification(logger).identify(
-            df, power_col, soc_col, configured_capacity_wh
-        )
+        result = BatteryIdentification(
+            logger, time_step=retrieve_hass_conf.get("optimization_time_step")
+        ).identify(df, power_col, soc_col, configured_capacity_wh)
         for msg in result.messages:
             logger.info("Battery %d identification: %s", k, msg)
         if not result.is_ok:
