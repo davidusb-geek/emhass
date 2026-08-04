@@ -1,8 +1,8 @@
 # 📁 Study Cases
 
-End-to-end walkthroughs for common EMHASS configurations using real data.
-Each page is tagged by Diátaxis mode so you can pick the entry point that
-fits your needs.
+Walkthroughs and studies for common EMHASS configurations and related control
+experiments. Each page is tagged by Diátaxis mode so you can pick the entry point
+that fits your needs.
 
 ## Tutorials — start here if you're new
 
@@ -33,6 +33,7 @@ fits your needs.
 | Topic | Page |
 |-------|------|
 | Hard-learned wisdom: forecast quality, SOC semantics, infeasibility triage | [Good Practices](good_practices.md) |
+| How forecast quality changed deterministic, rolling, and quantile battery control | [Forecast-to-MPC study](chance_constrained_mpc.md) |
 
 ```{toctree}
 :maxdepth: 1
@@ -46,6 +47,7 @@ heat_pump_walkthrough
 dhw_walkthrough
 ev
 good_practices
+chance_constrained_mpc
 reference_configs
 legacy_cli
 ```
