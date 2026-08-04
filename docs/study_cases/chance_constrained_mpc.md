@@ -352,7 +352,7 @@ The rolling point controllers produced:
 | Gradient Boosting point | 136.50 | 5.919 | 73 |
 | Gaussian ensemble mean | **136.96** | 12.259 | 80 |
 
-Detailed once-daily replay retained 8.31 kWh of adjustment for FlowState, 8.43
+Detailed once-daily replays retained 8.31 kWh of adjustment for FlowState, 8.43
 kWh for EMA, and 14.00 kWh for Gradient Boosting. The supplemental Gaussian
 once-daily baseline retained its adjusted cost but not detailed throughput or
 recourse fields.
