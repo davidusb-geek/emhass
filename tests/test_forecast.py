@@ -3041,6 +3041,161 @@ class TestGetMixForecast(unittest.TestCase):
         self.assertEqual(int(out.iloc[2]), 800)
 
 
+class TestForecastDatesTieAlignment(unittest.IsolatedAsyncioTestCase):
+    """Forecast date-range construction when now() lands exactly on a half-interval tie.
+
+    With ``method_ts_round: "nearest"`` a constructor running at exactly HH:15:00
+    or HH:45:00 (with a 30-min step) makes every stamp of the built range an
+    exact round-to-freq tie; rounding the whole index stamp-by-stamp then
+    collapses neighbouring stamps into duplicates via round-half-to-even, and the
+    first downstream index assignment raises "ValueError: Length mismatch:
+    Expected axis has 24/25 elements, new values have 48". These tests pin
+    ``pd.Timestamp.now`` to tie seconds to prove the index stays unique, and pin
+    non-tie seconds to prove the aligned-start construction is a no-op for all
+    three ``method_ts_round`` modes.
+    """
+
+    async def asyncSetUp(self):
+        import pytz
+
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        self.retrieve_hass_conf = retrieve_hass_conf
+        self.optim_conf = optim_conf
+        self.plant_conf = plant_conf
+        self.params = params
+        self.time_zone = pytz.timezone("Europe/Paris")
+
+    def _build_forecast(self, now_utc, method_ts_round="nearest", tz_name=None, step=None):
+        """Construct a Forecast with ``pd.Timestamp.now`` pinned to ``now_utc``.
+
+        Only ``now`` is patched (works on pandas 2.2 and 3.x, which both allow
+        class attribute assignment on ``Timestamp``), so every other use of the
+        class keeps its real behaviour. The patch scope is confined to the
+        constructor call, the only place ``Forecast.__init__`` reads the clock.
+        """
+        import pytz
+
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = method_ts_round
+        conf["time_zone"] = pytz.timezone(tz_name) if tz_name else self.time_zone
+        if step is not None:
+            conf["optimization_time_step"] = step
+        real_timestamp = pd.Timestamp
+
+        def _pinned_now(tz=None):
+            ts = real_timestamp(now_utc, tz="UTC")
+            return ts.tz_convert(tz) if tz is not None else ts.tz_localize(None)
+
+        with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+            fcst = Forecast(
+                conf,
+                self.optim_conf,
+                self.plant_conf,
+                copy.deepcopy(self.params),
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+        return fcst
+
+    def test_nearest_tie_second_keeps_forecast_dates_unique(self):
+        # 03:45:00 UTC collapses to 24 unique stamps on the unfixed builder,
+        # 03:15:00 UTC to 25 - the two lengths seen in the CI failures.
+        for now_utc in ("2026-08-05 03:45:00", "2026-08-05 03:15:00"):
+            with self.subTest(now_utc=now_utc):
+                fcst = self._build_forecast(now_utc)
+                fd = fcst.forecast_dates
+                self.assertEqual(len(fd), 48)
+                self.assertTrue(
+                    fd.is_unique,
+                    f"forecast_dates has duplicates: {list(fd[fd.duplicated()])}",
+                )
+                self.assertTrue((fd[1:] - fd[:-1] == fcst.freq).all())
+
+    async def test_typical_load_forecast_survives_tie_second(self):
+        # End-to-end repro of the CI crash: on the unfixed builder this raises
+        # ValueError("Length mismatch: Expected axis has 24 elements, new
+        # values have 48") when _get_load_forecast_typical assigns
+        # forecast_dates as the output index.
+        fcst = self._build_forecast("2026-08-05 03:45:00")
+        p_load_forecast = await fcst.get_load_forecast(method="typical")
+        self.assertEqual(len(p_load_forecast), len(fcst.forecast_dates))
+        self.assertTrue(p_load_forecast.index.equals(fcst.forecast_dates))
+
+    def test_tie_second_across_dst_transitions(self):
+        # A tie-second start whose one-day range crosses a DST transition:
+        # spring-forward day has 46 half-hour slots, fall-back day 50, and the
+        # index must stay unique through both.
+        for now_utc, expected_len in (
+            ("2026-03-28 22:45:00", 46),  # crosses Paris spring-forward 2026-03-29
+            ("2026-10-24 22:45:00", 50),  # crosses Paris fall-back 2026-10-25
+        ):
+            with self.subTest(now_utc=now_utc):
+                fcst = self._build_forecast(now_utc)
+                fd = fcst.forecast_dates
+                self.assertEqual(len(fd), expected_len)
+                self.assertTrue(
+                    fd.is_unique,
+                    f"forecast_dates has duplicates: {list(fd[fd.duplicated()])}",
+                )
+
+    def test_non_tie_starts_match_rounded_index_for_all_modes(self):
+        # Counterfactual no-op guard: away from tie seconds the aligned-start
+        # construction must reproduce, stamp for stamp, what the previous
+        # build-then-round pipeline produced, for all three method_ts_round
+        # modes. This recomputes that pipeline inline as the expectation, so it
+        # passes on the old builder too - it pins byte-identity, not the fix.
+        # One instant rounds down and one rounds up, so a floor posing as a
+        # round cannot slip through.
+        for now_utc in ("2026-08-05 03:37:23", "2026-08-05 03:52:23"):
+            for mode in ("nearest", "first", "last"):
+                with self.subTest(now_utc=now_utc, mode=mode):
+                    fcst = self._build_forecast(now_utc, method_ts_round=mode)
+                    tz = fcst.time_zone
+                    start_raw = pd.Timestamp(now_utc, tz="UTC").tz_convert(tz)
+                    if mode == "first":
+                        base_start = start_raw.floor(freq=fcst.freq)
+                        self.assertEqual(fcst.start_forecast, base_start)
+                    elif mode == "last":
+                        base_start = start_raw.ceil(freq=fcst.freq)
+                        self.assertEqual(fcst.start_forecast, base_start)
+                    else:
+                        base_start = start_raw
+                    base_end = (base_start + pd.DateOffset(days=1)).replace(microsecond=0)
+                    expected = (
+                        pd.date_range(
+                            start=base_start,
+                            end=base_end - fcst.freq,
+                            freq=fcst.freq,
+                            tz=tz,
+                        )
+                        .tz_convert("utc")
+                        .round(fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+                        .tz_convert(tz)
+                    )
+                    self.assertTrue(fcst.forecast_dates.equals(expected))
+
+    def test_nearest_alignment_rounds_in_utc_not_local_wall_time(self):
+        # Australia/Adelaide sits at UTC+9:30, so with a 60-min step the local
+        # wall-time grid and the UTC grid disagree by 30 minutes. The old
+        # pipeline rounded the built index in UTC; the aligned start must take
+        # the same route. A local wall-time round would land on :00 local,
+        # 30 minutes away from every stamp the old builder produced.
+        fcst = self._build_forecast(
+            "2026-08-05 03:37:23",
+            tz_name="Australia/Adelaide",
+            step=pd.Timedelta("1h"),
+        )
+        expected_start = (
+            pd.Timestamp("2026-08-05 03:37:23", tz="UTC").round("1h").tz_convert(fcst.time_zone)
+        )
+        self.assertEqual(fcst.forecast_dates[0], expected_start)
+        self.assertEqual(len(fcst.forecast_dates), 24)
+        self.assertTrue(fcst.forecast_dates.is_unique)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
