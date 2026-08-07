@@ -42,6 +42,13 @@
       "default_value": null,
       "unit": "W"
     },
+    "capacity_charge_window": {
+      "friendly_name": "Capacity charge demand-window mask",
+      "Description": "Optional per-timestep mask restricting the demand/capacity charge to a tariff's demand window: a list of weights in [0, 1] of length prediction_horizon, aligned like load_cost_forecast. The peak_import epigraph only prices timesteps where the mask is non-zero, so import outside the window (e.g. outside 16:00-20:00 on business days) cannot inflate the priced peak. The caller owns the business-day / holiday / season calendar - EMHASS stays tariff-agnostic. Only effective when capacity_cost_per_kw > 0; ignored otherwise. Defaults to unset (None -> all timesteps priced), identical to behaviour without this key. An invalid mask (non-numeric, NaN/inf, shorter than the horizon) is ignored with a warning; a longer mask is truncated; values outside [0, 1] are clipped. Only used by naive-mpc-optim. See issues #540 / #623 and passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "none"
+    },
     "operating_timesteps_of_each_deferrable_load": {
       "friendly_name": "Operating timesteps of each deferrable load",
       "Description": "Per-deferrable-load total number of operating timesteps over the horizon (the timestep-based alternative to operating_hours_of_each_deferrable_load, preferred for sub-hour steps). One int per deferrable load. Only used by naive-mpc-optim. See passing_data.md.",
