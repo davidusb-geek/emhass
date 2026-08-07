@@ -1771,6 +1771,15 @@ async def treat_runtimeparams(
             params["passed_data"]["current_period_peak"] = runtimeparams.get(
                 "current_period_peak", None
             )
+            # Demand-window mask for the capacity charge (issue #623, Phase 3).
+            # Runtime-only list of [0, 1] weights, length = prediction_horizon;
+            # defaults to None (all timesteps priced). Validation happens in
+            # Optimization.perform_optimization. Deliberately NOT mirrored into
+            # optim_conf / associations.csv: it changes every call, so putting
+            # it in the structural config would defeat the OptimizationCache.
+            params["passed_data"]["capacity_charge_window"] = runtimeparams.get(
+                "capacity_charge_window", None
+            )
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
@@ -1818,6 +1827,9 @@ async def treat_runtimeparams(
                 else None
             )
             params["passed_data"]["current_period_peak"] = None
+            # Like current_period_peak, the demand-window mask is naive-mpc-only:
+            # dayahead/perfect optimizations price the full horizon peak.
+            params["passed_data"]["capacity_charge_window"] = None
 
         # Parsing the thermal model parameters
         # Load the default config
@@ -3487,6 +3499,7 @@ async def build_params(
         "soc_target": None,
         "soc_target_timestep": None,
         "current_period_peak": None,
+        "capacity_charge_window": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
         "end_timesteps_of_each_deferrable_load": None,

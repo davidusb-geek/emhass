@@ -2543,6 +2543,9 @@ async def naive_mpc_optim(
     soc_target = input_data_dict["params"]["passed_data"].get("soc_target", None)
     soc_target_timestep = input_data_dict["params"]["passed_data"].get("soc_target_timestep", None)
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
+    capacity_charge_window = input_data_dict["params"]["passed_data"].get(
+        "capacity_charge_window", None
+    )
     def_total_hours = input_data_dict["params"]["optim_conf"].get(
         "operating_hours_of_each_deferrable_load", None
     )
@@ -2566,6 +2569,7 @@ async def naive_mpc_optim(
             soc_target=soc_target,
             soc_target_timestep=soc_target_timestep,
             current_period_peak=current_period_peak,
+            capacity_charge_window=capacity_charge_window,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
