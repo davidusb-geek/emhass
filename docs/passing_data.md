@@ -200,6 +200,32 @@ rest_command:
 `current_period_peak` is in **Watts**, not kilowatts: pass `7000`, not `7`, for a 7 kW peak (if your sensor is in kW, multiply by 1000 as shown above). It only has an effect when `capacity_cost_per_kw` is set above 0; on its own it does nothing. It is a floor, not a target: it never raises import or forces a new peak, it only stops the optimizer chasing a peak it cannot reduce. A negative, non-finite (NaN or infinity) or non-numeric value is ignored (treated as 0). Reset it at the start of each billing period (e.g. via a utility-meter cycle) so a stale high value does not suppress legitimate peak shaving in the new period.
 ```
 
+### Restricting the demand charge to a tariff demand window (naive-mpc-optim)
+
+Many demand tariffs do not charge the highest import of the whole day: they charge the highest import inside a **demand window** (e.g. 16:00-20:00 on business days only). Without a window, EMHASS prices the peak over every timestep of the horizon, so a deliberate off-window import (say, midday EV charging) pins `peak_import` and gets taxed for a cost that will never be billed - while shaving inside the actual window has zero marginal value (issues [#540](https://github.com/davidusb-geek/emhass/issues/540) / [#623](https://github.com/davidusb-geek/emhass/issues/623)).
+
+The optional runtime key `capacity_charge_window` masks the peak constraint to the window:
+
+- `capacity_charge_window`: a list of weights in `[0, 1]` of length `prediction_horizon`, aligned to the horizon timesteps like `load_cost_forecast`. The priced peak only "sees" timesteps where the mask is non-zero (`peak_import >= mask[t] * grid_import[t]`), so off-window import cannot inflate the demand charge. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
+
+EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed monthly demand tariff faithfully: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
+
+As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon:
+
+```yaml
+      {% set nf = now().replace(minute=(now().minute // 30) * 30, second=0, microsecond=0) %}
+      {% set ns = namespace(mask=[]) %}
+      {% for i in range(48) %}
+        {% set dt = nf + timedelta(minutes=30 * i) %}
+        {% set ns.mask = ns.mask + [1 if (dt.weekday() < 5 and 16 <= dt.hour < 20) else 0] %}
+      {% endfor %}
+      "capacity_charge_window": {{ ns.mask | tojson }}
+```
+
+```{note}
+The mask defaults to *unset* (`None`) = every timestep priced, identical to behaviour without this key. An all-zero mask (no window in this horizon) makes the demand term a constant - the plan is then identical to running without a capacity charge. An invalid mask (non-numeric entries, NaN/infinity, or shorter than the horizon) is ignored with a warning and the full horizon is priced; a longer mask is truncated; weights outside `[0, 1]` are clipped. Fractional weights are allowed and scale how much of that timestep's import the priced peak sees. If your billing period resets monthly, also zero the mask entries that fall in the *next* month and reset `current_period_peak` on the boundary, so the new period starts from a clean floor.
+```
+
 ### Passing forecast data
 
 There is a complete dedicated section in the [Forecast](forecasts) section.

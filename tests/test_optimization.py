@@ -1038,6 +1038,127 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg="current_period_peak ignored: high baseline still shaved like peak=0",
         )
 
+    def test_capacity_charge_window_mask(self):
+        """Issue #623 Phase 3 (see also #540): capacity_charge_window (runtime-only)
+        masks the peak_import epigraph to a tariff's demand window, so only
+        in-window import can raise the priced peak:
+          - no mask (None)      -> every timestep priced (== Phase 2).
+          - mask excluding the spike -> spike NOT shaved (== no-capacity baseline
+            off-window), flexibility saved for the window.
+          - all-zero mask       -> peak collapses to the current_period_peak floor,
+            a constant: plan == the no-capacity baseline.
+          - invalid masks (short / non-numeric) -> warning + all-ones fallback
+            (== the unmasked shaving plan), never a crash.
+        Discriminator: capacity_cost_per_kw > 0 is FIXED across the masked runs,
+        so only the mask changes. A build ignoring the mask would shave the
+        off-window spike in every run and fail the masked check.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0  # spike at timestep 2, OUTSIDE the window below
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        window_mask = [0, 0, 0, 0, 1, 1]  # window = timesteps 4-5 only
+
+        def run(cap_cost, capacity_charge_window, current_period_peak=0.0):
+            self.optim_conf["capacity_cost_per_kw"] = cap_cost
+            self.opt = self.create_optimization()
+            res = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=0.5,
+                soc_final=0.5,
+                current_period_peak=current_period_peak,
+                capacity_charge_window=capacity_charge_window,
+            )
+            self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+            return res["P_grid_pos"].iloc[:prediction_horizon].to_numpy()
+
+        # RUN 1 - no capacity charge: true baseline, full spike imported.
+        grid_baseline = run(cap_cost=0.0, capacity_charge_window=None)
+        self.assertGreater(
+            grid_baseline.max(),
+            4000.0,
+            msg="baseline did not import the full spike; scenario no longer discriminates",
+        )
+
+        # RUN 2 - capacity charge ON, no mask: every timestep priced (Phase 2),
+        # the spike is shaved.
+        grid_unmasked = run(cap_cost=2.0, capacity_charge_window=None)
+        self.assertTrue(self.opt.prob.is_dpp())  # DPP preserved (warm-start)
+        self.assertLess(
+            grid_unmasked.max(),
+            grid_baseline.max() - 1000.0,
+            msg="no mask must reproduce Phase 2 full-horizon shaving",
+        )
+
+        # RUN 3 - SAME cost, mask excludes the spike: off-window import is free
+        # of demand pricing, so the spike must NOT be shaved.
+        grid_masked = run(cap_cost=2.0, capacity_charge_window=window_mask)
+        self.assertTrue(self.opt.prob.is_dpp())
+        self.assertGreater(
+            grid_masked[2],
+            grid_baseline[2] - 1e-3,
+            msg="capacity_charge_window ignored: off-window spike was still shaved",
+        )
+
+        # RUN 4 - all-zero mask + an incurred-peak floor: peak_import collapses to
+        # the constant floor -> no decision bias, plan == the no-capacity baseline.
+        grid_zero = run(
+            cap_cost=2.0,
+            capacity_charge_window=[0] * prediction_horizon,
+            current_period_peak=3000.0,
+        )
+        np.testing.assert_allclose(grid_zero, grid_baseline, atol=1e-3)
+
+        # RUN 5 - invalid masks fail safe to all-ones (the unmasked plan), with a
+        # warning, never a crash. Short mask:
+        with self.assertLogs(level="WARNING") as logs:
+            grid_short = run(cap_cost=2.0, capacity_charge_window=[1, 0, 1])
+        self.assertTrue(
+            any("capacity_charge_window" in line for line in logs.output),
+            msg=f"expected a short-mask warning, got: {logs.output}",
+        )
+        np.testing.assert_allclose(grid_short, grid_unmasked, atol=1e-3)
+
+        # Non-numeric mask:
+        with self.assertLogs(level="WARNING") as logs:
+            grid_nonnum = run(cap_cost=2.0, capacity_charge_window=["a", "b"])
+        self.assertTrue(
+            any("capacity_charge_window" in line for line in logs.output),
+            msg=f"expected a non-numeric warning, got: {logs.output}",
+        )
+        np.testing.assert_allclose(grid_nonnum, grid_unmasked, atol=1e-3)
+
     def test_current_period_peak_noop_and_coercion(self):
         """Issue #623 Phase 2: current_period_peak with the feature OFF is a no-op;
         with the feature ON, 0/unset reproduces the Phase-1 plan, a numeric string is
