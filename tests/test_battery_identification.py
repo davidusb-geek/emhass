@@ -879,5 +879,314 @@ class TestIsModelOutdatedLabel(unittest.TestCase):
         self.assertTrue(any("Battery identification model" in m for m in cm.output))
 
 
+@unittest.skipUnless(HAVE_FEATURE, "battery_identification feature not present (base commit)")
+class TestGapHandling(unittest.TestCase):
+    """
+    Recorder gaps must contribute zero throughput and zero dSoC (#1051).
+
+    After the retrieval resample, missing history becomes NaN buckets which the
+    segmentation's dropna removes, leaving one oversized step spanning the gap.
+    On the base commit the trapezoid integrates AC power across that step, so a
+    multi-day gap fabricates p_avg * gap_hours of throughput (the reported 79 h
+    outage became an 89,809 Wh "discharge segment" on a 10 kWh pack). The
+    tests that avoid the ``time_step`` kwarg are base-safe: they drive the
+    estimator through calls whose signatures exist on base too, so their RED
+    assertions fail behaviourally there. The ones passing ``time_step``
+    exercise fix-only surface and error on base instead.
+    """
+
+    def setUp(self):
+        self.logger = logging.getLogger("test_battery_id_gaps")
+        self.power_col = "sensor_power_battery"
+        self.soc_col = "sensor_battery_state_of_charge"
+
+    @staticmethod
+    def _two_block_charge(
+        gap_hours: float = 79.0,
+        dt_minutes: int = 30,
+        n_side: int = 10,
+        power_w: float = 1000.0,
+        cap_wh: float = 20000.0,
+        rte: float = 0.90,
+    ) -> pd.DataFrame:
+        """
+        Two charge blocks separated by a silent stretch with SoC flat across it:
+        the recorder died mid-charge and came back while the battery (which sat
+        idle in between) was charging again. The sample on each side of the gap
+        carries active charge power, exactly the bridged shape from the issue.
+        """
+        eta = float(np.sqrt(rte))
+        dt_h = dt_minutes / 60.0
+        step_pts = eta * power_w * dt_h / cap_wh * 100.0
+        idx1 = pd.date_range(
+            "2026-01-01 00:00:00", periods=n_side, freq=f"{dt_minutes}min", tz="UTC"
+        )
+        idx2 = pd.date_range(
+            idx1[-1] + pd.Timedelta(hours=gap_hours),
+            periods=n_side,
+            freq=f"{dt_minutes}min",
+            tz="UTC",
+        )
+        soc1 = [20.0 + step_pts * k for k in range(n_side)]
+        soc2 = [soc1[-1] + step_pts * k for k in range(n_side)]
+        return pd.DataFrame(
+            {
+                "sensor_power_battery": [power_w] * (2 * n_side),
+                "sensor_battery_state_of_charge": soc1 + soc2,
+            },
+            index=idx1.append(idx2),
+        )
+
+    # -- the #1051 bug itself (RED on base) -----------------------------------
+    def test_gap_contributes_zero_throughput(self):
+        """A 79 h recorder gap must add nothing to segment throughput."""
+        df = self._two_block_charge()
+        segs = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        total_throughput = sum(s.throughput_wh for s in segs)
+        # Ground truth: 9 half-hour intervals per block at 1000 W = 4500 Wh per
+        # block, 9000 Wh measured in total. On base the bridged trapezoid adds
+        # 1000 W * 79 h = 79,000 Wh on top, so this bound fails behaviourally.
+        self.assertLess(
+            total_throughput,
+            9000.0 * 1.10,
+            "segment throughput must not exceed the energy actually measured "
+            f"(got {total_throughput:.0f} Wh)",
+        )
+        for s in segs:
+            self.assertLess(
+                s.end - s.start,
+                pd.Timedelta(hours=79),
+                "no segment may span the recorder gap",
+            )
+
+    def test_gap_contributes_zero_dsoc(self):
+        """The run ends at the gap: unobserved SoC change is never credited."""
+        df = self._two_block_charge()
+        segs = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        self.assertTrue(segs, "each observed block is deep enough to segment")
+        eta = float(np.sqrt(0.90))
+        per_block_swing = 9 * (eta * 1000.0 * 0.5 / 20000.0 * 100.0)
+        for s in segs:
+            # On base the single bridged segment carries both blocks' swing
+            # (double this bound), so this fails behaviourally there.
+            self.assertLessEqual(
+                abs(s.d_soc),
+                per_block_swing + 0.1,
+                "a segment must not carry SoC change from beyond the gap",
+            )
+
+    def test_identify_recovers_truth_despite_gap(self):
+        """End to end: a huge mid-run gap no longer corrupts the fit."""
+        cap_true, rte_true = 10000.0, 0.90
+        df = _make_history(cap_true, rte_true, n_cycles=20, dt_minutes=30, idle_steps=4)
+        # Cut from mid-charge-run to mid-charge-run roughly 79 h later, so the
+        # samples on BOTH sides of the gap carry active charge power and the
+        # bridged trapezoid on base fabricates ~3 kW * ~80 h of throughput.
+        run_rows = df[df[self.power_col] > 0]
+        mid = run_rows.index[len(run_rows) // 2 + 2]
+        later = run_rows.index[run_rows.index >= mid + pd.Timedelta(hours=79)]
+        end = later[2]
+        mask = (df.index >= mid) & (df.index < end)
+        gapped = df.loc[~mask]
+        res = BatteryIdentification(self.logger).identify(
+            gapped, self.power_col, self.soc_col, cap_true
+        )
+        self.assertEqual(res.status, "ok", msg=str(res.messages))
+        self.assertAlmostEqual(res.capacity_wh, cap_true, delta=0.05 * cap_true)
+        self.assertAlmostEqual(res.round_trip_efficiency, rte_true, delta=0.03)
+
+    # -- the fix's own risk: splitting must not eat healthy profiles ----------
+    def test_idle_gaps_between_cycles_keep_segments(self):
+        """
+        The change-only profile from the issue: dense reporting while cycling,
+        silent while idle. Gaps sit BETWEEN runs, so excluding them must not
+        cost any segments and the fit must stay accurate.
+        """
+        cap_true, rte_true = 10000.0, 0.90
+        df = _make_history(cap_true, rte_true, n_cycles=6, dt_minutes=30, idle_steps=12)
+        # Silence every idle stretch (power == 0) except one edge sample on
+        # each side, as a change-only sensor would.
+        idle = df[self.power_col] == 0.0
+        edges = idle & (~idle.shift(1, fill_value=False) | ~idle.shift(-1, fill_value=False))
+        gapped = df[~idle | edges]
+        res = BatteryIdentification(self.logger).identify(
+            gapped, self.power_col, self.soc_col, cap_true
+        )
+        self.assertEqual(res.status, "ok", msg=str(res.messages))
+        self.assertAlmostEqual(res.capacity_wh, cap_true, delta=0.05 * cap_true)
+
+    def test_sub_threshold_dropout_still_bridged(self):
+        """Up to two consecutive missing samples is jitter, not a gap: no split."""
+        df = _make_history(10000.0, 0.90, n_cycles=1, dt_minutes=30, idle_steps=4)
+        run_rows = df[df[self.power_col] > 0]
+        mid_pos = len(run_rows) // 2
+        # Drop exactly two consecutive in-run samples -> dt == 3x step, at the
+        # documented tolerance boundary.
+        to_drop = run_rows.index[mid_pos : mid_pos + 2]
+        jittered = df.drop(index=to_drop)
+        segs_ref = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        segs_jit = BatteryIdentification(self.logger)._segment(
+            jittered, self.power_col, self.soc_col
+        )
+        self.assertEqual(
+            len(segs_jit),
+            len(segs_ref),
+            "a two-sample dropout must not split the run",
+        )
+        # Depth must survive too: a >=-threshold variant would split here and
+        # the surviving half would shrink dSoC while the count stays equal.
+        for ref, jit in zip(segs_ref, segs_jit):
+            self.assertEqual(jit.direction, ref.direction)
+            self.assertAlmostEqual(jit.d_soc, ref.d_soc, places=6)
+
+    def test_sub_threshold_dropout_bridges_on_odd_grids(self):
+        """
+        The 3x tolerance must hold on grids whose step is not a binary
+        fraction of an hour (float-hours comparison misclassified exactly-3x
+        dropouts at 1/2/3/6/7/13 min steps; spacing is compared in integer
+        nanoseconds precisely so this cannot happen).
+        """
+        for dt_minutes in (1, 3, 7, 13):
+            df = _make_history(
+                10000.0, 0.90, n_cycles=1, power_w=300.0, dt_minutes=dt_minutes, idle_steps=4
+            )
+            run_rows = df[df[self.power_col] > 0]
+            mid_pos = len(run_rows) // 2
+            to_drop = run_rows.index[mid_pos : mid_pos + 2]
+            jittered = df.drop(index=to_drop)
+            with self.subTest(dt_minutes=dt_minutes):
+                segs_ref = BatteryIdentification(
+                    self.logger, time_step=pd.Timedelta(minutes=dt_minutes)
+                )._segment(df, self.power_col, self.soc_col)
+                segs_jit = BatteryIdentification(
+                    self.logger, time_step=pd.Timedelta(minutes=dt_minutes)
+                )._segment(jittered, self.power_col, self.soc_col)
+                self.assertEqual(
+                    [(s.direction, round(s.d_soc, 6)) for s in segs_jit],
+                    [(s.direction, round(s.d_soc, 6)) for s in segs_ref],
+                    f"exactly-3x dropout must stay bridged at {dt_minutes} min",
+                )
+
+    def test_discharge_gap_contributes_nothing(self):
+        """Same guarantee for the discharge direction: two discharge blocks."""
+        eta = float(np.sqrt(0.90))
+        step_pts = 1000.0 * 0.5 / (eta * 20000.0) * 100.0
+        idx1 = pd.date_range("2026-01-01 00:00:00", periods=10, freq="30min", tz="UTC")
+        idx2 = pd.date_range(idx1[-1] + pd.Timedelta(hours=79), periods=10, freq="30min", tz="UTC")
+        soc1 = [90.0 - step_pts * k for k in range(10)]
+        soc2 = [soc1[-1] - step_pts * k for k in range(10)]
+        df = pd.DataFrame(
+            {
+                "sensor_power_battery": [-1000.0] * 20,
+                "sensor_battery_state_of_charge": soc1 + soc2,
+            },
+            index=idx1.append(idx2),
+        )
+        segs = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        self.assertEqual(len(segs), 2, "one discharge segment per observed block")
+        for s in segs:
+            self.assertEqual(s.direction, "discharge")
+            self.assertLess(s.end - s.start, pd.Timedelta(hours=79))
+        self.assertLess(
+            sum(s.throughput_wh for s in segs),
+            9000.0 * 1.10,
+            "the bridged 79 h discharge trapezoid must not be counted",
+        )
+
+    def test_gap_at_series_edges_is_harmless(self):
+        """A lone pre-history or post-history sample must change nothing."""
+        df = _make_history(10000.0, 0.90, n_cycles=2, dt_minutes=30, idle_steps=4)
+        lone_before = pd.DataFrame(
+            {self.power_col: [3000.0], self.soc_col: [50.0]},
+            index=pd.DatetimeIndex([df.index[0] - pd.Timedelta(hours=79)]),
+        )
+        lone_after = pd.DataFrame(
+            {self.power_col: [-3000.0], self.soc_col: [30.0]},
+            index=pd.DatetimeIndex([df.index[-1] + pd.Timedelta(hours=79)]),
+        )
+        padded = pd.concat([lone_before, df, lone_after])
+        segs_ref = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        segs_pad = BatteryIdentification(self.logger)._segment(padded, self.power_col, self.soc_col)
+        self.assertEqual(
+            [(s.direction, round(s.d_soc, 6)) for s in segs_pad],
+            [(s.direction, round(s.d_soc, 6)) for s in segs_ref],
+            "lone samples across an edge gap must contribute nothing",
+        )
+
+    def test_gap_detected_on_microsecond_index(self):
+        """
+        Gap detection must survive a non-nanosecond index resolution: pandas 3
+        builds datetime64[us] indexes by default, where asi8 counts
+        microseconds while Timedelta.value is nanoseconds. A unit mix-up makes
+        the threshold 1000x too big and silently disables gap handling under
+        an explicit time_step (the production configuration).
+        """
+        df = self._two_block_charge()
+        df.index = df.index.as_unit("us")
+        segs = BatteryIdentification(self.logger, time_step=pd.Timedelta(minutes=30))._segment(
+            df, self.power_col, self.soc_col
+        )
+        self.assertEqual(len(segs), 2, "the 79 h gap must still split on a us-unit index")
+        self.assertLess(sum(s.throughput_wh for s in segs), 9000.0 * 1.10)
+
+    def test_explicit_time_step_overrides_inference(self):
+        """
+        With an explicit time_step the gap threshold follows the configured
+        step, not the data spacing: a 65 min hole in 5 min data is a gap when
+        inferring (threshold 15 min) but tolerated jitter at a 30 min
+        configured step (threshold 90 min).
+        """
+        df = _make_history(10000.0, 0.90, n_cycles=1, power_w=1500.0, dt_minutes=5, idle_steps=4)
+        run_rows = df[df[self.power_col] > 0]
+        mid = run_rows.index[len(run_rows) // 2]
+        mask = (df.index >= mid) & (df.index < mid + pd.Timedelta(minutes=60))
+        gapped = df.loc[~mask]
+        inferred = BatteryIdentification(self.logger)._segment(gapped, self.power_col, self.soc_col)
+        explicit = BatteryIdentification(self.logger, time_step=pd.Timedelta(minutes=30))._segment(
+            gapped, self.power_col, self.soc_col
+        )
+        n_charge_inferred = sum(1 for s in inferred if s.direction == "charge")
+        n_charge_explicit = sum(1 for s in explicit if s.direction == "charge")
+        self.assertEqual(n_charge_explicit, 1, "65 min hole within 3x30 min must bridge")
+        self.assertEqual(n_charge_inferred, 2, "65 min hole beyond 3x5 min must split")
+
+    def test_gap_steps_do_not_vote_on_sign_convention(self):
+        """
+        A gap step must not contribute its (stale) left-sample power to the
+        sign auto-detection vote. Here the meter reports charge as negative,
+        the battery started a hard discharge right before the recorder died,
+        and SoC came back higher. Unmasked, that one stale high-power vote
+        outweighs every real charging step and the convention flips the wrong
+        way; masked, the real steps win.
+        """
+        step_pts = float(np.sqrt(0.90)) * 1000.0 * 0.5 / 20000.0 * 100.0
+        idx1 = pd.date_range("2026-01-01 00:00:00", periods=11, freq="30min", tz="UTC")
+        idx2 = pd.date_range(idx1[-1] + pd.Timedelta(hours=79), periods=10, freq="30min", tz="UTC")
+        # Charge = NEGATIVE on this meter. Ten charging samples, then one
+        # discharge spike sample right before the gap, then charging again
+        # with SoC a little higher than where it went dark.
+        powers = [-1000.0] * 10 + [20000.0] + [-1000.0] * 10
+        soc1 = [20.0 + step_pts * k for k in range(11)]  # still rising into the spike
+        soc2 = [soc1[-1] + 5.0 + step_pts * k for k in range(10)]
+        df = pd.DataFrame(
+            {
+                "sensor_power_battery": powers,
+                "sensor_battery_state_of_charge": soc1 + soc2,
+            },
+            index=idx1.append(idx2),
+        )
+        segs = BatteryIdentification(self.logger)._segment(df, self.power_col, self.soc_col)
+        # Masked vote -> convention flips correctly -> one charge block on each
+        # side of the gap. An unmasked vote leaves the convention inverted and
+        # the post-gap block comes out labelled discharge instead.
+        self.assertEqual(len(segs), 2, "one segment per observed block")
+        for s in segs:
+            self.assertEqual(
+                s.direction,
+                "charge",
+                "sign convention must be detected from real steps, not the gap step",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ This is opt-in and default off. In this first version it is advisory only: it re
 
 The two sensors are only retrieved when battery self-identification is enabled, so they cost nothing on a normal run. Their signed values are kept intact on this retrieval regardless of the `set_zero_min` data cleaning setting, which continues to sanitize the load data as usual.
 
+Stretches of history with no recorded data are excluded from the fit. Any step between two samples longer than three times the `optimization_time_step` counts as a recorder gap: the battery state across it is unobserved, so it contributes no energy throughput and no state of charge change, and any charge or discharge run in progress ends at the last sample before the gap. This means history riddled with long gaps (a recorder outage, or a power sensor that only reports on changes and stays silent for hours) can honestly come back as "not enough data" rather than producing an estimate from invented energy. Shorter dropouts, up to two consecutive missing steps, are still bridged.
+
 ## Enabling it
 
 Set these in your configuration:
