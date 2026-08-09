@@ -76,6 +76,25 @@ Your orchestrator maintains the running peak: on each cycle, `current_period_pea
 
 Expected: with a non-zero `current_period_peak`, the plan stops shaving below that floor — deferrable loads relax up to (but not past) the incurred peak, recovering energy-cost savings the charge would otherwise forfeit.
 
+## Step 3b (MPC only): Mask the charge to your tariff's demand window
+
+<!-- source: src/emhass/optimization.py (param_capacity_window vector param, masked epigraph) -->
+
+Many tariffs assess demand only inside a **window** (e.g. 16:00-20:00, business days). Without a mask, the epigraph prices *every* timestep, so a deliberate off-window import — midday EV charging is the classic case — pins `peak_import` and the optimizer both pays a phantom charge on it and sees zero marginal value in shaving the actual window. Pass `capacity_charge_window`, a `prediction_horizon`-length list of `0`/`1` weights aligned to the horizon timesteps, and the epigraph becomes `peak_import ≥ mask[t] · p_grid_pos[t]`: only in-window import can set the priced peak.
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": 8.0,
+  "current_period_peak": 6000,
+  "capacity_charge_window": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0]
+}
+```
+
+Your orchestrator owns the calendar (business days, public holidays, seasons) and recomputes the mask each cycle; EMHASS stays tariff-agnostic. Omit the key for the previous full-horizon behaviour. An all-zero mask (horizon entirely outside the window) makes the demand term a constant — the plan is then identical to a run without the charge, which is exactly right when no window timestep is reachable. If your billing period is monthly, zero the slots that fall in the *next* month and reset `current_period_peak` at the boundary. See `passing_data.md` for an HA template that builds the mask.
+
+Expected: with the spike-owning timesteps masked out, off-window imports run unshaved at full power while in-window import is shaved toward the `current_period_peak` floor.
+
 ## Step 4: Verify the shave
 
 <!-- source: docs/plan_output_schema.md — `P_grid` (W, positive = import); P_grid = P_grid_pos + P_grid_neg at optimization.py:2299 -->
@@ -97,6 +116,7 @@ Expected: `peak_on ≤ peak_off`. The gap is your planned peak reduction; if it 
 - **`current_period_peak` is MPC-only.** It is read from runtime params on the `prediction_horizon` path (`utils.py:1637`) and defaults to `None` on the day-ahead path (`utils.py:1675`) — passing it to `dayahead-optim` has no effect.
 - **Opt-in, fail-open on bad input.** Default `0.0` skips the variable entirely (`optimization.py:1408`). A negative or non-finite `capacity_cost_per_kw` / `current_period_peak` is *ignored with a warning*, not an error (`optimization.py:1260-1270`, `3894-3906`) — so a bad value silently disables the charge; check your logs if a shave you expected does not appear.
 - **Units.** `capacity_cost_per_kw` is per **kW**; `current_period_peak` is in **Watts** (matches `P_grid`). Mixing them up (e.g. passing 6 instead of 6000) sets a 6 W floor, effectively no floor.
+- **`capacity_charge_window` is MPC-only and fail-open too.** Like `current_period_peak` it is read on the `prediction_horizon` path only. An invalid mask (non-numeric, NaN/inf, shorter than the horizon) is ignored with a warning — the full horizon gets priced again, which *overstates* the charge on off-window imports; check logs if the window seems to have no effect.
 
 ## Credits
 

@@ -314,6 +314,9 @@ class Optimization:
         # Peak grid import already incurred this billing period (issue #623, Phase 2)
         self._init_current_period_peak_param()
 
+        # Per-timestep demand-window mask for the capacity charge (issue #623, Phase 3)
+        self._init_capacity_window_param()
+
         # Initialize deferrable load parameters (window masks and energy constraints)
         self._init_deferrable_load_params()
 
@@ -407,6 +410,32 @@ class Optimization:
         """
         self.param_current_period_peak = cp.Parameter(nonneg=True, name="current_period_peak")
         self.param_current_period_peak.value = 0.0
+
+    def _init_capacity_window_param(self) -> None:
+        """Initialize the CVXPY parameter masking the capacity-charge epigraph to a
+        demand window (issue #623, Phase 3).
+
+        ``param_capacity_window`` is a per-horizon vector of weights in [0, 1]
+        applied to each grid-import timestep inside the ``peak_import`` epigraph:
+        ``peak_import >= mask[t] * p_grid_pos[t]``. Tariffs that charge demand
+        only inside a daily window (e.g. 16:00-20:00 business days) set 1 on
+        in-window timesteps and 0 elsewhere, so off-window import can no longer
+        inflate the priced peak. The mask is computed by the caller (Home
+        Assistant owns the business-day / holiday / season calendar) - EMHASS
+        stays tariff-agnostic.
+
+        ``cp.multiply(Parameter, Variable)`` is DPP, so per-call value updates
+        do not force recanonicalisation (warm-start safe). Default all-ones
+        reproduces the unmasked ``peak_import >= p_grid_pos`` epigraph exactly,
+        so behaviour is identical to Phase 2 unless a mask is explicitly passed.
+        Like ``param_soc_target_floor`` it is horizon-shaped, so it must be
+        re-created whenever the horizon length changes. Called from __init__
+        and from the resize block in ``perform_optimization``.
+        """
+        self.param_capacity_window = cp.Parameter(
+            self.num_timesteps, nonneg=True, name="capacity_window_mask"
+        )
+        self.param_capacity_window.value = np.ones(self.num_timesteps)
 
     def _init_deferrable_load_params(self) -> None:
         """
@@ -1716,7 +1745,16 @@ class Optimization:
         # part of the OptimizationCache key (a change rebuilds the problem).
         if self._get_capacity_cost_per_kw() > 0:
             vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
-            constraints.append(vars_dict["peak_import"] >= vars_dict["p_grid_pos"])
+            # Epigraph masked to the tariff's demand window (issue #623, Phase 3):
+            # param_capacity_window is all-ones by default, reproducing the plain
+            # peak_import >= p_grid_pos epigraph; a 0/1 window mask passed at
+            # runtime zeroes out-of-window timesteps so only in-window import can
+            # raise the priced peak. cp.multiply(Parameter, Variable) is DPP, so
+            # mask updates do not rebuild the problem.
+            constraints.append(
+                vars_dict["peak_import"]
+                >= cp.multiply(self.param_capacity_window, vars_dict["p_grid_pos"])
+            )
             # Floor peak_import at any demand already incurred this billing period
             # (issue #623, Phase 2). With the floor binding, shaving below it has
             # zero marginal value, so the solver does not waste battery /
@@ -4236,6 +4274,7 @@ class Optimization:
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
+        capacity_charge_window: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -4289,6 +4328,11 @@ class Optimization:
 
             # Re-initialize the intermediate SOC target mask with the new horizon (#553)
             self._init_soc_target_params()
+
+            # Re-initialize the capacity-charge window mask with the new horizon
+            # (issue #623, Phase 3) - it is a vector param, so unlike the scalar
+            # current_period_peak below it MUST be re-created on resize.
+            self._init_capacity_window_param()
 
             # NOTE: param_current_period_peak (issue #623, Phase 2) is a SCALAR
             # cp.Parameter, horizon-independent, so it is intentionally NOT
@@ -4426,6 +4470,54 @@ class Optimization:
                 )
         else:
             self.param_current_period_peak.value = 0.0
+
+        # Demand-window mask for the capacity charge (issue #623, Phase 3).
+        # Reset to all-ones on EVERY call so a mask from a previous MPC tick
+        # does not leak; a valid runtime mask then overwrites it. Any invalid
+        # mask (non-numeric, NaN/inf, too short) falls back to all-ones - the
+        # unmasked Phase 2 epigraph - with a warning rather than crashing.
+        # Weights are clipped into [0, 1]; fractional weights pass through so a
+        # tariff could in principle weight timesteps, though 0/1 is the
+        # expected shape. A too-long mask is truncated to the horizon.
+        window_mask = np.ones(self.num_timesteps)
+        if self._get_capacity_cost_per_kw() > 0 and capacity_charge_window is not None:
+            try:
+                mask_arr = np.asarray(capacity_charge_window, dtype=float).ravel()
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    f"Invalid capacity_charge_window (non-numeric entries): "
+                    f"{capacity_charge_window!r}; ignoring it (full-horizon peak pricing)."
+                )
+                mask_arr = None
+            if mask_arr is not None and not np.all(np.isfinite(mask_arr)):
+                self.logger.warning(
+                    "capacity_charge_window contains NaN/inf entries; "
+                    "ignoring it (full-horizon peak pricing)."
+                )
+                mask_arr = None
+            if mask_arr is not None and len(mask_arr) < self.num_timesteps:
+                self.logger.warning(
+                    f"capacity_charge_window has {len(mask_arr)} entries but the "
+                    f"horizon is {self.num_timesteps}; ignoring it "
+                    "(full-horizon peak pricing)."
+                )
+                mask_arr = None
+            if mask_arr is not None:
+                if len(mask_arr) > self.num_timesteps:
+                    self.logger.debug(
+                        f"capacity_charge_window has {len(mask_arr)} entries; "
+                        f"truncating to the {self.num_timesteps}-step horizon."
+                    )
+                    mask_arr = mask_arr[: self.num_timesteps]
+                if np.any(mask_arr < 0) or np.any(mask_arr > 1):
+                    self.logger.warning("capacity_charge_window entries outside [0, 1]; clipping.")
+                    mask_arr = np.clip(mask_arr, 0.0, 1.0)
+                window_mask = mask_arr
+                self.logger.debug(
+                    f"Capacity charge: demand-window mask active on "
+                    f"{int(np.count_nonzero(window_mask))}/{self.num_timesteps} timesteps."
+                )
+        self.param_capacity_window.value = window_mask
 
         # Pad deferrable load lists
         if def_total_timestep is not None:
@@ -5600,6 +5692,7 @@ class Optimization:
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
+        capacity_charge_window: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -5654,6 +5747,18 @@ class Optimization:
             identical to omitting it. Ignored when ``capacity_cost_per_kw`` is 0. \
             Runtime-only; only used by naive-mpc-optim. See issue #623.
         :type current_period_peak: float
+        :param capacity_charge_window: Optional per-timestep demand-window mask for \
+            the capacity charge: a list of weights in [0, 1] of length \
+            ``prediction_horizon``, aligned like ``load_cost_forecast``. When the \
+            capacity charge (``capacity_cost_per_kw`` > 0) is active, the \
+            ``peak_import`` epigraph only prices timesteps where the mask is \
+            non-zero, so import outside the tariff's demand window (e.g. \
+            16:00-20:00 business days) cannot inflate the priced peak. The \
+            caller owns the business-day / holiday / season calendar. ``None`` \
+            (the default) prices every timestep, identical to omitting it. \
+            Ignored when ``capacity_cost_per_kw`` is 0. Runtime-only; only \
+            used by naive-mpc-optim. See issue #623.
+        :type capacity_charge_window: list
         :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning timesteps at nominal power)
         :type def_total_timestep: list
@@ -5706,6 +5811,7 @@ class Optimization:
             soc_target=soc_target,
             soc_target_timestep=soc_target_timestep,
             current_period_peak=current_period_peak,
+            capacity_charge_window=capacity_charge_window,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
