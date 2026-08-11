@@ -20,6 +20,7 @@ except ImportError:  # Windows
 
 
 import logging
+import math
 import os
 import pickle
 import pickle as cPickle
@@ -1986,27 +1987,79 @@ class Forecast:
         )
         return await self.get_weather_covariates(future_index, weather_features)
 
-    async def _get_load_forecast_ml(
-        self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
-    ) -> pd.DataFrame | bool:
-        """Helper for ML forecast."""
+    async def _load_mlf_model(self, mlf, debug: bool) -> MLForecaster | bool:
+        """Resolve the MLForecaster instance to use for the load forecast.
+
+        In production (``debug=False``) the model is read from the saved pickle
+        file; in debug/unit-test mode the passed ``mlf`` object is used as-is.
+        Returns False when the pickle file is missing.
+        """
+        if debug:
+            return mlf
         model_type = self.params["passed_data"]["model_type"]
         filename = model_type + "_mlf.pkl"
         filename_path = self.emhass_conf["data_path"] / filename
-        if not debug:
-            if filename_path.is_file():
-                async with aiofiles.open(filename_path, "rb") as inp:
-                    content = await inp.read()
-                    mlf = pickle.loads(content)
-            else:
-                self.logger.error(
-                    "The ML forecaster file was not found, please run a model fit method before this predict method"
-                )
-                return False
+        if not filename_path.is_file():
+            self.logger.error(
+                "The ML forecaster file was not found, please run a model fit method before this predict method"
+            )
+            return False
+        async with aiofiles.open(filename_path, "rb") as inp:
+            content = await inp.read()
+            return pickle.loads(content)
+
+    @staticmethod
+    def _mlf_window_size(mlf) -> int:
+        """Return the number of observed samples the fitted model needs as its last window.
+
+        skforecast's ``forecaster.window_size`` is authoritative: it equals the
+        largest lag, which can exceed ``len(lags)`` when the lags are not
+        contiguous. Fall back to ``lags_opt``/``num_lags`` for model objects
+        without a fitted forecaster attached.
+        """
+        window_size = getattr(getattr(mlf, "forecaster", None), "window_size", None)
+        if window_size is None and getattr(mlf, "is_tuned", False):
+            window_size = getattr(mlf, "lags_opt", None)
+        if window_size is None:
+            window_size = mlf.num_lags
+        return int(window_size)
+
+    def _mlf_required_history_days(self, mlf, days_min_load_forecast: int) -> int:
+        """Days of history to retrieve so the model's last window can be filled.
+
+        Sized from the model's real lag requirement at the optimization time
+        step, never below ``days_min_load_forecast``. One extra day covers
+        DST-short days and minor recorder gaps.
+        """
+        window_size = self._mlf_window_size(mlf)
+        samples_per_day = max(1, int(pd.Timedelta(days=1) / self.freq))
+        needed_days = math.ceil(window_size / samples_per_day) + 1
+        return max(days_min_load_forecast, needed_days)
+
+    async def _get_load_forecast_ml(
+        self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
+    ) -> pd.DataFrame | bool:
+        """Helper for ML forecast.
+
+        ``mlf`` is the already-loaded model: ``get_load_forecast`` reads the
+        pickle before the history retrieval (see ``_load_mlf_model``) so the
+        retrieval window can be sized from the model's lag requirement.
+        """
         data_last_window = None
         if use_last_window:
             data_last_window = copy.deepcopy(df)
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
+            window_size = self._mlf_window_size(mlf)
+            if len(data_last_window) < window_size:
+                self.logger.error(
+                    "Not enough load history to fill the ML forecaster's last window: "
+                    f"the model needs {window_size} samples at {self.freq} "
+                    f"but only {len(data_last_window)} were retrieved. Check that the "
+                    "Home Assistant recorder (or database) retains at least "
+                    f"{self._mlf_required_history_days(mlf, 0)} days of history for "
+                    f"{self.retrieve_hass_conf['sensor_power_load_no_var_loads']}."
+                )
+                return False
         # When the model was trained with weather covariates, supply the future weather over the
         # forecast horizon so the recursive predict has the exog columns it expects.
         weather_future = await self._build_weather_future(data_last_window, mlf)
@@ -2077,7 +2130,10 @@ class Forecast:
         Get and generate the load forecast data.
 
         :param days_min_load_forecast: The number of last days to retrieve that \
-            will be used to generate a naive forecast, defaults to 3
+            will be used to generate a naive forecast, defaults to 3. For the \
+            'mlforecaster' method this is a lower bound: the retrieval window is \
+            automatically enlarged to cover the trained model's last-window \
+            requirement (its lags) when needed.
         :type days_min_load_forecast: int, optional
         :param method: The method to be used to generate load forecast, the options \
             are 'typical' for a typical household load consumption curve, \
@@ -2111,6 +2167,19 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
         # Retrieve Data from Home Assistant if needed
         df = None
+        if method == "mlforecaster":
+            # Load the trained model BEFORE the history retrieval so the retrieval
+            # window can be sized from the model's real lag requirement (#1067):
+            # the optimization callers size days_min_load_forecast from
+            # delta_forecast_daily, which says nothing about how many past samples
+            # the (possibly tuned) auto-regressive model needs as its last window.
+            mlf = await self._load_mlf_model(mlf, debug)
+            if mlf is False:
+                return False
+            if use_last_window:
+                days_min_load_forecast = self._mlf_required_history_days(
+                    mlf, days_min_load_forecast
+                )
         if method in ["naive", "mlforecaster"]:
             df = await self._prepare_hass_load_data(days_min_load_forecast, method)
             if df is False:
