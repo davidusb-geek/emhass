@@ -245,6 +245,11 @@ The hyperparameter tuning using Bayesian optimization improves the bare KNN regr
 The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `historic_days_to_retrieve` parameter. In the example shown, for a 240-day train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with an i5 processor and 8 GB of RAM. This is a task that should be performed once in a while, for example, every week.
 ```
 
+```{note}
+
+When the model is used inside an optimization run (`load_forecast_method: mlforecaster` with `dayahead-optim` or `naive-mpc-optim`), EMHASS automatically retrieves enough recent load history to fill the model's last window: at least as many past samples as the model has lags. For example, a tuned model with 144 lags at a 30 min time step needs 3 days of history. Make sure your Home Assistant recorder (`purge_keep_days`) retains at least that much history for the load sensor, otherwise the forecast will abort with an explicit error.
+```
+
 ## How does this work? 
 This machine learning forecast class is based on the `skforecast` module. 
 We use the recursive autoregressive forecaster with added features. 

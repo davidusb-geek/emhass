@@ -3196,6 +3196,250 @@ class TestForecastDatesTieAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fcst.forecast_dates.is_unique)
 
 
+class _FakeRecorderRetrieveHass:
+    """Stand-in for RetrieveHass simulating a recorder with a bounded history.
+
+    ``get_data`` synthesizes ``min(requested, available_days)`` full days of
+    30-min load samples (no partial "today", the conservative case), so the
+    number of samples the forecaster receives is a deterministic function of the
+    days the caller asked for -- which is exactly what the #1067 fix must size
+    correctly. The class records the last constructed instance and the requested
+    day count for assertions.
+    """
+
+    last_instance = None
+    available_days = None  # None = recorder has whatever is asked for
+
+    def __init__(self, hass_url, long_lived_token, freq, time_zone, params, emhass_conf, logger):
+        self.freq = freq
+        self.time_zone = time_zone
+        self.requested_days = None
+        self.df_final = None
+        type(self).last_instance = self
+
+    async def get_data(self, days_list, var_list, **kwargs):
+        # get_days_list(N) yields N prior days + today, i.e. N+1 stamps.
+        self.requested_days = len(days_list) - 1
+        self._var = var_list[0]
+        available = type(self).available_days
+        n_days = self.requested_days if available is None else min(self.requested_days, available)
+        samples_per_day = int(pd.Timedelta(days=1) / self.freq)
+        periods = max(1, n_days * samples_per_day)
+        end = pd.Timestamp.now(tz=self.time_zone).floor(self.freq)
+        index = pd.date_range(end=end, periods=periods, freq=self.freq)
+        values = 500.0 + 200.0 * np.sin(np.arange(periods) * 2 * np.pi / samples_per_day)
+        self.df_final = pd.DataFrame({self._var: values}, index=index)
+        return True
+
+    def prepare_data(self, var_load, **kwargs):
+        self.df_final = self.df_final.rename(columns={self._var: var_load + "_positive"})
+        return True
+
+
+class TestMlforecasterLastWindowSizing(unittest.IsolatedAsyncioTestCase):
+    """The mlforecaster load-forecast history retrieval is sized from the model (#1067).
+
+    The optimization callers (naive-mpc-optim, dayahead-optim) pass
+    ``days_min_load_forecast = delta_forecast_daily.days`` (default 1), which
+    says nothing about how many past samples the auto-regressive model needs as
+    its skforecast ``last_window``. A model with 144 lags at a 30-min step needs
+    3 days of history, so every optimization run used to die inside skforecast
+    with "`last_window` must have as many values as needed to generate the
+    predictors". The retrieval window must be sized from the loaded model, and a
+    still-too-short history must abort with a clear error instead of a raw
+    skforecast ValueError.
+    """
+
+    async def asyncSetUp(self):
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        self.retrieve_hass_conf = retrieve_hass_conf
+        self.optim_conf = optim_conf
+        self.plant_conf = plant_conf
+        self.params = params
+        self.var_load = retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        self.time_zone = retrieve_hass_conf["time_zone"]
+        _FakeRecorderRetrieveHass.last_instance = None
+        _FakeRecorderRetrieveHass.available_days = None
+
+    def _build_forecast(self):
+        """A Forecast wired for a live (non-file) retrieval path."""
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            copy.deepcopy(self.params),
+            emhass_conf,
+            logger,
+            get_data_from_file=False,
+        )
+        # The ml path resolves the pickle filename from passed_data["model_type"]
+        # (and pre-fix code read it even in debug mode); the default test params
+        # do not carry one.
+        fcst.params["passed_data"]["model_type"] = "test_1067"
+        return fcst
+
+    async def _fit_mlf(self, num_lags, train_days=14):
+        """Fit a real KNN MLForecaster with ``num_lags`` on synthetic 30-min data."""
+        samples = train_days * 48
+        index = pd.date_range(
+            start=pd.Timestamp("2024-06-01", tz=self.time_zone),
+            periods=samples,
+            freq=pd.Timedelta("30min"),
+        )
+        rng = np.random.default_rng(1067)
+        values = (
+            500.0 + 200.0 * np.sin(np.arange(samples) * 2 * np.pi / 48) + rng.normal(0, 20, samples)
+        )
+        data = pd.DataFrame({self.var_load: values}, index=index)
+        mlf = MLForecaster(
+            data,
+            "test_1067",
+            self.var_load,
+            "KNeighborsRegressor",
+            num_lags,
+            emhass_conf,
+            logger,
+        )
+        await mlf.fit()
+        return mlf
+
+    async def _run_ml_forecast(self, fcst, mlf, days_min):
+        """Run the mlforecaster load forecast against the fake recorder.
+
+        RetrieveHass is patched at the module-class level because
+        _prepare_hass_load_data constructs its own instance internally --
+        there is no narrower seam to inject the fake through. Returns the
+        forecast result, or the raised ValueError (the base failure mode) so
+        assertions fail on behaviour rather than error out.
+        """
+        with unittest.mock.patch.object(forecast_module, "RetrieveHass", _FakeRecorderRetrieveHass):
+            try:
+                return await fcst.get_load_forecast(
+                    days_min_load_forecast=days_min,
+                    method="mlforecaster",
+                    use_last_window=True,
+                    debug=True,
+                    mlf=mlf,
+                )
+            except ValueError as e:
+                return e
+
+    async def test_history_retrieval_sized_from_model_lags(self):
+        """A 144-lag model with delta_forecast_daily=1 must still forecast.
+
+        On the unsized retrieval the recorder returns 1 day (48 samples), the
+        model needs 144, and skforecast raises -- the #1067 crash. The fix must
+        enlarge the fetch to ceil(144/48)+1 = 4 days and succeed.
+        """
+        fcst = self._build_forecast()
+        mlf = await self._fit_mlf(num_lags=144)
+
+        result = await self._run_ml_forecast(fcst, mlf, days_min=1)
+
+        self.assertIsInstance(
+            result,
+            pd.Series,
+            f"mlforecaster load forecast failed instead of succeeding: {result!r}",
+        )
+        self.assertEqual(len(result), len(fcst.forecast_dates))
+        self.assertFalse(result.isna().any())
+        # The retrieval was sized from the model, not from delta_forecast_daily.
+        self.assertEqual(_FakeRecorderRetrieveHass.last_instance.requested_days, 4)
+
+    async def test_short_recorder_aborts_cleanly_not_skforecast_error(self):
+        """Recorder retaining less than the model needs -> False, not a raw ValueError."""
+        _FakeRecorderRetrieveHass.available_days = 1  # recorder only has 1 day
+        fcst = self._build_forecast()
+        mlf = await self._fit_mlf(num_lags=144)
+
+        result = await self._run_ml_forecast(fcst, mlf, days_min=1)
+
+        self.assertIs(
+            result,
+            False,
+            f"expected a clean False abort on short history, got: {result!r}",
+        )
+
+    async def test_small_model_keeps_days_min_load_forecast(self):
+        """A model needing less than days_min_load_forecast must not shrink or grow the fetch."""
+        fcst = self._build_forecast()
+        # 52 lags (not 48) so the model can still fill the 50-step horizon of the
+        # 25-hour day before a fall-back DST transition; the sizing under test is
+        # unchanged: ceil(52/48)+1 = 3 days needed, below the days_min of 4.
+        mlf = await self._fit_mlf(num_lags=52)
+
+        result = await self._run_ml_forecast(fcst, mlf, days_min=4)
+
+        self.assertIsInstance(result, pd.Series)
+        self.assertEqual(len(result), len(fcst.forecast_dates))
+        # 3 days needed; days_min=4 is larger and must win.
+        self.assertEqual(_FakeRecorderRetrieveHass.last_instance.requested_days, 4)
+
+    async def test_missing_model_pickle_fails_before_any_retrieval(self):
+        """With no saved model the run must fail before the history fetch happens."""
+        fcst = self._build_forecast()
+        fcst.params["passed_data"]["model_type"] = "no_such_model_1067"
+
+        with unittest.mock.patch.object(forecast_module, "RetrieveHass", _FakeRecorderRetrieveHass):
+            result = await fcst.get_load_forecast(
+                days_min_load_forecast=1,
+                method="mlforecaster",
+                use_last_window=True,
+                debug=False,
+            )
+
+        self.assertIs(result, False)
+        self.assertIsNone(
+            _FakeRecorderRetrieveHass.last_instance,
+            "history retrieval ran despite the model pickle being missing",
+        )
+
+    def test_mlf_window_size_prefers_fitted_forecaster(self):
+        """forecaster.window_size wins over lags_opt/num_lags (non-contiguous lags)."""
+        mlf = unittest.mock.MagicMock()
+        mlf.forecaster.window_size = 144
+        mlf.is_tuned = True
+        mlf.lags_opt = 4  # len(lags) of a non-contiguous [1, 2, 3, 144]
+        mlf.num_lags = 48
+        self.assertEqual(Forecast._mlf_window_size(mlf), 144)
+
+    def test_mlf_window_size_fallbacks(self):
+        """Without a fitted forecaster: lags_opt when tuned, num_lags otherwise."""
+        tuned = unittest.mock.MagicMock()
+        tuned.forecaster = None
+        tuned.is_tuned = True
+        tuned.lags_opt = 96
+        tuned.num_lags = 48
+        self.assertEqual(Forecast._mlf_window_size(tuned), 96)
+
+        untuned = unittest.mock.MagicMock()
+        untuned.forecaster = None
+        untuned.is_tuned = False
+        untuned.num_lags = 48
+        self.assertEqual(Forecast._mlf_window_size(untuned), 48)
+
+    def test_mlf_required_history_days_math(self):
+        """needed_days = ceil(window_size / samples_per_day) + 1, floored at days_min."""
+        fcst = self._build_forecast()
+        mlf = unittest.mock.MagicMock()
+        mlf.forecaster.window_size = 144
+        # 30-min steps: 48/day -> ceil(144/48)+1 = 4
+        fcst.freq = pd.Timedelta("30min")
+        self.assertEqual(fcst._mlf_required_history_days(mlf, 1), 4)
+        # 1-h steps: 24/day -> ceil(144/24)+1 = 7
+        fcst.freq = pd.Timedelta("1h")
+        self.assertEqual(fcst._mlf_required_history_days(mlf, 1), 7)
+        # Non-divisible: 50 lags at 30-min -> ceil(50/48)+1 = 3
+        mlf.forecaster.window_size = 50
+        fcst.freq = pd.Timedelta("30min")
+        self.assertEqual(fcst._mlf_required_history_days(mlf, 1), 3)
+        # days_min larger than the model's need wins.
+        mlf.forecaster.window_size = 24
+        self.assertEqual(fcst._mlf_required_history_days(mlf, 5), 5)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
