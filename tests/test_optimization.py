@@ -1392,7 +1392,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_capacity_interval_legacy_path_skips_aggregation_machinery(self):
-        """Supervisor correction (#540): the interval-aggregation matrix/
+        """Issue #540 regression: the interval-aggregation matrix/
         contribution Parameters must NOT be constructed, updated or used, and
         capacity_charge_current_interval_history must NOT be validated, on
         either the disabled (capacity_cost_per_kw <= 0) or default (N == 1)
@@ -1479,9 +1479,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         inside an otherwise-zero six-step block must be priced as its
         1/6-weighted average (1000 W), NOT the raw 6000 W spike.
 
-        This must fail on current upstream master: master has no
-        capacity_charge_interval_timesteps concept and would still price the
-        raw per-timestep maximum (6000 W) via the #1066 epigraph.
+        Regression guard: an implementation that ignores interval aggregation
+        would price the raw per-timestep maximum (6000 W) via the #1066
+        epigraph instead of the 1000 W tariff-interval average.
         """
         prediction_horizon = 12  # two full 6-step tariff intervals
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
