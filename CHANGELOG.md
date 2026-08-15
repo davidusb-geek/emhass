@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.1 - 2026-08-15
+
+### Improvement
+- feat: mask the demand/capacity charge to a tariff demand window (capacity_charge_window) (@hossamnagy)
+- Preparing new release v0.18.0 (@davidusb-geek)
+
+### Documentation
+- docs: add forecast-to-MPC study (@OEB11)
+
+### Fix
+- fix: size the mlforecaster load forecast history retrieval from the trained model's lags (#1067) (@LesIT1)
+- fix: tighten the battery identification RTE guardrail to reject near-lossless fits (@LesIT1)
+- Fix: duplicate forecast_dates when Forecast is constructed on an exact half-interval tie second (@LesIT1)
+- fix: battery identification no longer counts throughput across recorder gaps (#1051) (@LesIT1)
+- fix: keep the relaxed-LP rescue one-shot so it cannot poison the cached problem (#1048) (@LesIT1)
+
 ## 0.18.0 - 2026-08-03
 
 ### EMHASS: The Multi-Battery Update
