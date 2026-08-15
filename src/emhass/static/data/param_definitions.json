@@ -803,14 +803,14 @@
     },
     "capacity_cost_per_kw": {
       "friendly_name": "Capacity (demand) charge cost",
-      "Description": "A cost (currency per kW) applied to the peak grid import power over the optimisation horizon, for tariffs with a capacity or demand charge. 0 (default) disables it and leaves the plan unchanged. A positive value makes the optimiser flatten the import peak, trading it off against energy cost in a single pass. The peak is priced once (it is a power charge, not energy), so set it to the marginal value of shaving 1 kW of peak.",
+      "Description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW.",
       "input": "float",
       "default_value": 0.0,
       "unit": "¤/kW"
     },
     "capacity_charge_interval_timesteps": {
       "friendly_name": "Capacity charge tariff measurement interval",
-      "Description": "Number of native optimisation timesteps that make up one tariff demand-measurement interval, for tariffs that bill on the average import power over a fixed clocked interval (e.g. a 30-minute demand interval with a 5-minute optimisation_time_step is 6). 1 (default) prices native per-timestep import power exactly as before, unchanged - the aggregation matrix is not even constructed. N > 1 makes the capacity charge price the average import power over each completed N-timestep tariff interval instead of a single timestep spike. Only effective when capacity_cost_per_kw > 0. Structural property of the shared capacity-charge model: applies on naive-mpc-optim, dayahead-optim and perfect-optim alike; follows normal EMHASS config/runtime-override behaviour like any other structural optim_conf key, with no special restriction on changing it, and a value change rebuilds the optimisation problem (different cache key). capacity_charge_current_interval_history (the elapsed-interval history) is naive-mpc-optim only - on dayahead-optim/perfect-optim there is no history to consult, so the horizon start is assumed to already sit on an interval boundary when N > 1.",
+      "Description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0.",
       "input": "int",
       "default_value": 1,
       "unit": "timesteps"

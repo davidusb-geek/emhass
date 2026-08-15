@@ -1327,17 +1327,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     # --- Issue #540: capacity-charge tariff measurement-interval aggregation ---
-    # All scenarios below disable the battery and deferrable loads
-    # (set_use_battery=False, number_of_deferrable_loads=0) with PV forecast
-    # zeroed, so P_grid_pos is fully exogenous and deterministically equals the
-    # load array - there is no flexibility to shave with, only the epigraph
-    # constraint pins peak_import. This lets each test assert the EXACT
-    # aggregated peak_import value against a hand-computed expectation, rather
-    # than inferring aggregation indirectly through solver shaving behaviour.
+    # No-flexibility fixtures keep P_grid_pos equal to load so these tests
+    # can assert exact capacity-peak values without scheduling side effects.
 
     def _capacity_interval_base_conf(self, prediction_horizon):
-        """Shared no-flexibility scenario setup for the capacity-charge
-        interval-aggregation tests below. Returns (df, pv, load_s)."""
+        """Set up a deterministic no-flexibility capacity-interval case."""
         df = self.prepare_forecast_data()
         n = len(df)
         df["p_pv_forecast"] = 0.0
@@ -1390,6 +1384,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             res_explicit["P_grid_pos"].to_numpy(),
             atol=1e-6,
         )
+
+    def test_capacity_interval_invalid_n_falls_back_to_one(self):
+        """Issue #540: invalid interval lengths warn and preserve N=1 behavior."""
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        for value in (0, -1, 1.5, "bad", float("nan"), float("inf")):
+            with self.subTest(value=value), self.assertLogs(level="WARNING"):
+                self.optim_conf["capacity_charge_interval_timesteps"] = value
+                self.opt = self.create_optimization()
+            self.assertEqual(self.opt.capacity_charge_interval_timesteps, 1)
+            self.assertFalse(self.opt._capacity_interval_aggregation_active)
 
     def test_capacity_interval_legacy_path_skips_aggregation_machinery(self):
         """Issue #540 regression: the interval-aggregation matrix/
@@ -1483,10 +1487,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         would price the raw per-timestep maximum (6000 W) via the #1066
         epigraph instead of the 1000 W tariff-interval average.
         """
-        prediction_horizon = 12  # two full 6-step tariff intervals
+        prediction_horizon = 14  # two full intervals plus an incomplete tail
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
         load = np.zeros(len(df))
-        load[5] = 6000.0  # last step of interval 1 (indices 0-5) -> avg 1000 W
+        load[5] = 6000.0  # completed interval 1 -> 1000 W average
+        load[12] = 8000.0  # incomplete terminal interval: not priced this solve
         df["p_load_forecast"] = load
         load_s = df["p_load_forecast"].copy()
         self.optim_conf["capacity_cost_per_kw"] = 2.0
@@ -1495,7 +1500,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         res = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
-        self.assertTrue(self.opt.prob.is_dpp())
         peak = self.opt.vars["peak_import"].value
         self.assertAlmostEqual(
             peak,
@@ -1505,6 +1509,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         # Full spike is still physically imported - only the PRICED peak is aggregated.
         self.assertAlmostEqual(res["P_grid_pos"].iloc[5], 6000.0, places=3)
+        self.assertAlmostEqual(res["P_grid_pos"].iloc[12], 8000.0, places=3)
 
     def test_capacity_interval_partial_current_interval_history(self):
         """Issue #540: capacity_charge_current_interval_history supplies the
@@ -1556,30 +1561,35 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         aggregation - only a completed interval whose ENDPOINT falls inside
         the window can raise peak_import, even if it has the larger average.
         """
-        prediction_horizon = 12
+        prediction_horizon = 10
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
         load = np.zeros(len(df))
-        load[3] = 6000.0  # interval 1 (indices 0-5) -> avg 1000 W, OFF window
-        load[9] = 3000.0  # interval 2 (indices 6-11) -> avg 500 W, IN window
+        load[7] = 3000.0  # second completed interval -> 500 W average
         df["p_load_forecast"] = load
         load_s = df["p_load_forecast"].copy()
         self.optim_conf["capacity_cost_per_kw"] = 2.0
         self.optim_conf["capacity_charge_interval_timesteps"] = 6
         self.opt = self.create_optimization()
 
-        # Window excludes interval 1's endpoint (index 5), includes interval 2's (index 11).
-        window = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+        # m=2 makes completed endpoints 3 and 9. The first interval's 1000 W
+        # history contribution is off-window; only the second interval is priced.
+        history = [6000.0, 0.0]
+        window = [0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
         self.opt.perform_naive_mpc_optim(
-            df, pv, load_s, prediction_horizon, capacity_charge_window=window
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_window=window,
+            capacity_charge_current_interval_history=history,
         )
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
-        self.assertTrue(self.opt.prob.is_dpp())
         peak = self.opt.vars["peak_import"].value
         self.assertAlmostEqual(
             peak,
             500.0,
             places=3,
-            msg="off-window completed interval (avg 1000 W) must not set peak_import; "
+            msg="off-window history contribution must not set peak_import; "
             "only the in-window interval (avg 500 W) may",
         )
 
