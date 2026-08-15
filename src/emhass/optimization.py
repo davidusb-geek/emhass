@@ -317,6 +317,26 @@ class Optimization:
         # Per-timestep demand-window mask for the capacity charge (issue #623, Phase 3)
         self._init_capacity_window_param()
 
+        # Tariff measurement-interval aggregation for the capacity charge (#540).
+        # Structural (part of optim_conf, so it is automatically covered by
+        # OptimizationCacheKey's generic optim_conf_structural_hash - see
+        # command_line.py._compute_cache_key): read once here, not re-read per
+        # call, and a change to it goes through a brand-new Optimization object.
+        self.capacity_charge_interval_timesteps = self._get_capacity_charge_interval_timesteps()
+        # Only active when BOTH the capacity charge itself is on AND aggregation
+        # is actually requested (N > 1). At capacity_cost_per_kw <= 0 the whole
+        # capacity-charge feature is off (no peak_import variable at all - see
+        # _initialize_decision_variables); at N == 1 the plain #1066
+        # peak_import >= cp.multiply(window, p_grid_pos) epigraph applies
+        # unchanged. Only in the N > 1 case is the A @ p_grid_pos + c interval
+        # matrix machinery created, updated or read - never for the legacy
+        # no-capacity or N == 1 paths.
+        self._capacity_interval_aggregation_active = (
+            self._get_capacity_cost_per_kw() > 0 and self.capacity_charge_interval_timesteps > 1
+        )
+        if self._capacity_interval_aggregation_active:
+            self._init_capacity_interval_params()
+
         # Initialize deferrable load parameters (window masks and energy constraints)
         self._init_deferrable_load_params()
 
@@ -436,6 +456,65 @@ class Optimization:
             self.num_timesteps, nonneg=True, name="capacity_window_mask"
         )
         self.param_capacity_window.value = np.ones(self.num_timesteps)
+
+    def _capacity_interval_k_max(self) -> int:
+        """Maximum possible number of completed tariff-measurement intervals
+        (issue #540) within the current horizon, for any valid runtime history
+        phase. Used to size the fixed-shape interval-aggregation Parameters so
+        they never need rebuilding when the runtime history length changes.
+
+        With ``N = capacity_charge_interval_timesteps`` and ``n =
+        num_timesteps``, the first completed interval's decision-index endpoint
+        is ``N - 1 - m`` for a history of length ``m`` in ``[0, N-1]`` - i.e.
+        anywhere in ``[0, N-1]`` depending on the runtime phase. The most
+        intervals fit when that first endpoint is 0, giving ``ceil(n / N)``.
+        """
+        return ceil(self.num_timesteps / self.capacity_charge_interval_timesteps)
+
+    def _init_capacity_interval_params(self) -> None:
+        """Initialize the CVXPY parameters implementing tariff
+        measurement-interval aggregation for the capacity charge (issue #540).
+
+        Generalises the #623/#1066 per-timestep ``peak_import >= mask[t] *
+        p_grid_pos[t]`` epigraph to ``peak_import >= Q[i]`` where ``Q[i]`` is
+        the (window-masked) average import power over the i-th completed
+        tariff interval, ``Q = A @ p_grid_pos + c``:
+
+        - ``param_capacity_interval_matrix`` (``A``, shape ``K_max x n``) is a
+          single numeric coefficient matrix: row i holds ``1/N`` at the planned
+          decision-index columns belonging to completed interval i (already
+          multiplied by that interval's window-mask weight), 0 elsewhere. Rows
+          beyond the number of completed intervals actually present for the
+          current runtime history are all-zero (inert - ``peak_import >= 0`` is
+          already implied by non-negativity).
+        - ``param_capacity_realised_contribution`` (``c``, shape ``K_max``) adds
+          the already-elapsed history's contribution (Watts, divided by N) to
+          the first completed interval's row only; 0 elsewhere.
+
+        Both are recomputed in plain NumPy on every call in
+        ``perform_optimization`` (from capacity_charge_interval_timesteps,
+        the runtime history and the validated window mask) and assigned as
+        already-composed numeric values, so ``A @ p_grid_pos`` is a single
+        Parameter multiplying the Variable vector - never a Parameter *
+        Parameter product - keeping the problem DPP / warm-start safe. At the
+        default ``capacity_charge_interval_timesteps=1`` this reproduces the
+        prior per-timestep epigraph exactly (A = diag(window_mask), c = 0).
+
+        Fixed-shape (``K_max`` from structural N and n only, never from the
+        runtime history length) so a change in history length never forces a
+        rebuild. Horizon-shaped, so like ``param_capacity_window`` it must be
+        re-created whenever the horizon length changes. Called from __init__
+        and from the resize block in ``perform_optimization``.
+        """
+        k_max = self._capacity_interval_k_max()
+        self.param_capacity_interval_matrix = cp.Parameter(
+            (k_max, self.num_timesteps), nonneg=True, name="capacity_interval_matrix"
+        )
+        self.param_capacity_interval_matrix.value = np.zeros((k_max, self.num_timesteps))
+        self.param_capacity_realised_contribution = cp.Parameter(
+            k_max, nonneg=True, name="capacity_realised_contribution"
+        )
+        self.param_capacity_realised_contribution.value = np.zeros(k_max)
 
     def _init_deferrable_load_params(self) -> None:
         """
@@ -1567,6 +1646,126 @@ class Optimization:
             return 0.0
         return value
 
+    def _get_capacity_charge_interval_timesteps(self):
+        """Tariff measurement-interval length, in native optimisation timesteps,
+        for the capacity charge (issue #540), coerced to a positive integer.
+
+        ``capacity_charge_interval_timesteps`` is structural (associations.csv /
+        config_defaults.json), read once at construction. 1 (the default)
+        reproduces the exact #966/#1066 per-timestep epigraph. A missing,
+        non-numeric, non-finite, non-positive or non-integer value falls back
+        to 1 with a warning rather than crashing the problem build, matching
+        the existing capacity-charge fail-open convention.
+        """
+        raw = self.optim_conf.get("capacity_charge_interval_timesteps", 1)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid capacity_charge_interval_timesteps value ({raw!r}); "
+                "falling back to 1 (no tariff-interval aggregation)."
+            )
+            return 1
+        if not isfinite(value) or value < 1 or value != int(value):
+            self.logger.warning(
+                f"capacity_charge_interval_timesteps must be a positive integer, "
+                f"got {raw!r}; falling back to 1 (no tariff-interval aggregation)."
+            )
+            return 1
+        return int(value)
+
+    def _validate_capacity_interval_history(self, history) -> np.ndarray:
+        """Validate the runtime ``capacity_charge_current_interval_history``
+        (issue #540): positive-import power samples (W), oldest -> newest,
+        for the native timesteps already elapsed in the currently open tariff
+        interval. Maximum valid length is
+        ``capacity_charge_interval_timesteps - 1``.
+
+        Fails open: any invalid input (non-numeric, NaN/inf, negative, or too
+        long) is ignored with a warning, falling back to an empty history -
+        i.e. the horizon start (t0) is assumed to sit exactly on an interval
+        boundary, matching behaviour with the key omitted.
+        """
+        max_len = self.capacity_charge_interval_timesteps - 1
+        empty = np.array([], dtype=float)
+        if history is None:
+            return empty
+        try:
+            hist_arr = np.asarray(history, dtype=float).ravel()
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid capacity_charge_current_interval_history (non-numeric "
+                f"entries): {history!r}; ignoring it (empty history assumed)."
+            )
+            return empty
+        if hist_arr.size > 0 and not np.all(np.isfinite(hist_arr)):
+            self.logger.warning(
+                "capacity_charge_current_interval_history contains NaN/inf "
+                "entries; ignoring it (empty history assumed)."
+            )
+            return empty
+        if np.any(hist_arr < 0):
+            self.logger.warning(
+                "capacity_charge_current_interval_history must contain only "
+                "non-negative (import) power values; ignoring it (empty "
+                "history assumed)."
+            )
+            return empty
+        if len(hist_arr) > max_len:
+            self.logger.warning(
+                f"capacity_charge_current_interval_history has {len(hist_arr)} "
+                f"entries but capacity_charge_interval_timesteps="
+                f"{self.capacity_charge_interval_timesteps} allows at most "
+                f"{max_len}; ignoring it (empty history assumed)."
+            )
+            return empty
+        return hist_arr
+
+    def _build_capacity_interval_arrays(
+        self, window_mask: np.ndarray, history
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build the numeric ``(A, c)`` pair implementing tariff
+        measurement-interval aggregation for the capacity charge (issue #540):
+        ``Q = A @ p_grid_pos + c`` prices the (window-masked) average import
+        power over each completed tariff interval. See
+        ``_init_capacity_interval_params`` for the DPP rationale.
+
+        With ``N = capacity_charge_interval_timesteps``, ``n = num_timesteps``
+        and a validated history of length ``m`` (0..N-1), the first completed
+        interval's decision-index endpoint is ``e0 = N - 1 - m`` (the history's
+        ``m`` already-elapsed samples plus the ``N - m`` planned samples at
+        decision indices ``0..e0`` make up its ``N`` samples); every
+        subsequent completed interval is the next ``N`` consecutive planned
+        samples, ending every ``N`` steps after that (``e0 + N``,
+        ``e0 + 2N``, ...). Each row is scaled by the window mask value at its
+        endpoint, so an off-window completed interval cannot raise
+        ``peak_import``.
+        """
+        n = self.num_timesteps
+        interval_n = self.capacity_charge_interval_timesteps
+        k_max = self.param_capacity_interval_matrix.shape[0]
+        matrix = np.zeros((k_max, n))
+        contribution = np.zeros(k_max)
+
+        hist_arr = self._validate_capacity_interval_history(history)
+        m = len(hist_arr)
+        e0 = interval_n - 1 - m
+
+        row = 0
+        e = e0
+        while e < n and row < k_max:
+            w = float(window_mask[e])
+            if row == 0:
+                start = 0
+                contribution[row] = w * (float(hist_arr.sum()) / interval_n)
+            else:
+                start = e - interval_n + 1
+            matrix[row, start : e + 1] = w / interval_n
+            e += interval_n
+            row += 1
+
+        return matrix, contribution
+
     def _initialize_decision_variables(self):
         """
         Initialize all main decision variables for the CVXPY problem.
@@ -1745,16 +1944,39 @@ class Optimization:
         # part of the OptimizationCache key (a change rebuilds the problem).
         if self._get_capacity_cost_per_kw() > 0:
             vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
-            # Epigraph masked to the tariff's demand window (issue #623, Phase 3):
-            # param_capacity_window is all-ones by default, reproducing the plain
-            # peak_import >= p_grid_pos epigraph; a 0/1 window mask passed at
-            # runtime zeroes out-of-window timesteps so only in-window import can
-            # raise the priced peak. cp.multiply(Parameter, Variable) is DPP, so
-            # mask updates do not rebuild the problem.
-            constraints.append(
-                vars_dict["peak_import"]
-                >= cp.multiply(self.param_capacity_window, vars_dict["p_grid_pos"])
-            )
+            if self._capacity_interval_aggregation_active:
+                # Epigraph over completed tariff-measurement-interval averages
+                # (issue #540, generalising #623/#1066's per-timestep epigraph).
+                # Only reached when capacity_charge_interval_timesteps > 1 (see
+                # the gate set in __init__). param_capacity_interval_matrix
+                # (K_max x n) is a single numeric coefficient matrix, recomputed
+                # each call in perform_optimization from
+                # capacity_charge_interval_timesteps (structural), the runtime
+                # history, and the (already-validated) demand-window mask - all
+                # composed together in plain NumPy before being assigned to this
+                # ONE Parameter, so this stays a Parameter @ Variable product
+                # (DPP-safe; never a Parameter * Parameter product).
+                # param_capacity_realised_contribution folds in the
+                # already-elapsed history's contribution (in W) to the first
+                # completed interval; it is 0 everywhere else.
+                constraints.append(
+                    vars_dict["peak_import"]
+                    >= self.param_capacity_interval_matrix @ vars_dict["p_grid_pos"]
+                    + self.param_capacity_realised_contribution
+                )
+            else:
+                # capacity_charge_interval_timesteps == 1 (the default): the
+                # EXACT pre-#540 #1066 epigraph, byte-identical to before this
+                # feature existed. param_capacity_window is all-ones by default,
+                # reproducing the plain peak_import >= p_grid_pos epigraph; a
+                # 0/1 window mask passed at runtime zeroes out-of-window
+                # timesteps so only in-window import can raise the priced peak.
+                # cp.multiply(Parameter, Variable) is DPP, so mask updates do
+                # not rebuild the problem.
+                constraints.append(
+                    vars_dict["peak_import"]
+                    >= cp.multiply(self.param_capacity_window, vars_dict["p_grid_pos"])
+                )
             # Floor peak_import at any demand already incurred this billing period
             # (issue #623, Phase 2). With the floor binding, shaving below it has
             # zero marginal value, so the solver does not waste battery /
@@ -4275,6 +4497,7 @@ class Optimization:
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
+        capacity_charge_current_interval_history: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -4333,6 +4556,14 @@ class Optimization:
             # (issue #623, Phase 3) - it is a vector param, so unlike the scalar
             # current_period_peak below it MUST be re-created on resize.
             self._init_capacity_window_param()
+
+            # Re-initialize the capacity-interval-aggregation matrix/contribution
+            # with the new horizon (issue #540) - K_max depends on num_timesteps,
+            # so this must be re-created on resize too. Only when the N > 1
+            # aggregation path is actually active (see __init__ for the gate);
+            # otherwise this machinery is never created at all.
+            if self._capacity_interval_aggregation_active:
+                self._init_capacity_interval_params()
 
             # NOTE: param_current_period_peak (issue #623, Phase 2) is a SCALAR
             # cp.Parameter, horizon-independent, so it is intentionally NOT
@@ -4518,6 +4749,22 @@ class Optimization:
                     f"{int(np.count_nonzero(window_mask))}/{self.num_timesteps} timesteps."
                 )
         self.param_capacity_window.value = window_mask
+
+        # Tariff measurement-interval aggregation for the capacity charge
+        # (issue #540). Only built/validated/assigned when the N > 1
+        # aggregation path is active (capacity_cost_per_kw > 0 AND
+        # capacity_charge_interval_timesteps > 1 - see the gate set in
+        # __init__). At capacity_cost_per_kw <= 0 or the default N == 1, this
+        # machinery does not exist on the instance at all (see
+        # _init_capacity_interval_params) and
+        # capacity_charge_current_interval_history is not even inspected, let
+        # alone validated - the exact pre-#540 no-op / #1066 legacy path.
+        if self._capacity_interval_aggregation_active:
+            interval_matrix, realised_contribution = self._build_capacity_interval_arrays(
+                window_mask, capacity_charge_current_interval_history
+            )
+            self.param_capacity_interval_matrix.value = interval_matrix
+            self.param_capacity_realised_contribution.value = realised_contribution
 
         # Pad deferrable load lists
         if def_total_timestep is not None:
@@ -5693,6 +5940,7 @@ class Optimization:
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
+        capacity_charge_current_interval_history: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -5743,9 +5991,15 @@ class Optimization:
             (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
             floored at this value so the optimization does not spend battery or \
             deferrable flexibility shaving below a peak already locked in for the \
-            month. ``None`` / 0 (the default) prices the full horizon peak, \
+            month. When ``capacity_charge_interval_timesteps`` > 1 (issue #540), \
+            this MUST be expressed in the SAME metric the epigraph then prices: \
+            the highest already-COMPLETED clocked tariff-interval AVERAGE import \
+            power, not the maximum instantaneous or per-native-timestep import - \
+            the currently open interval belongs in \
+            ``capacity_charge_current_interval_history``, not here. \
+            ``None`` / 0 (the default) prices the full horizon peak, \
             identical to omitting it. Ignored when ``capacity_cost_per_kw`` is 0. \
-            Runtime-only; only used by naive-mpc-optim. See issue #623.
+            Runtime-only; only used by naive-mpc-optim. See issues #623 / #540.
         :type current_period_peak: float
         :param capacity_charge_window: Optional per-timestep demand-window mask for \
             the capacity charge: a list of weights in [0, 1] of length \
@@ -5759,6 +6013,23 @@ class Optimization:
             Ignored when ``capacity_cost_per_kw`` is 0. Runtime-only; only \
             used by naive-mpc-optim. See issue #623.
         :type capacity_charge_window: list
+        :param capacity_charge_current_interval_history: Optional list of the AVERAGE \
+            positive grid-import power (Watts, oldest -> newest) for each native \
+            optimisation timestep already elapsed in the currently open tariff \
+            measurement interval - the same per-timestep quantity ``P_grid_pos`` \
+            itself represents (or an exactly equivalent energy-derived average), \
+            NOT an arbitrary instantaneous sensor snapshot. Only meaningful when \
+            ``capacity_charge_interval_timesteps`` > 1. Its length (0.. \
+            ``capacity_charge_interval_timesteps - 1``) encodes how far the horizon \
+            start (t0) sits into the open interval. The caller owns clock/calendar \
+            alignment; EMHASS does not compute timezone, season or wall-clock rules. \
+            ``None`` (the default) is treated as an empty history (t0 assumed to sit \
+            on an interval boundary). At ``capacity_cost_per_kw`` <= 0 or \
+            ``capacity_charge_interval_timesteps`` == 1 this value is never inspected \
+            or validated - the plain per-timestep epigraph applies unchanged. \
+            Runtime-only; only used by naive-mpc-optim (never populated by \
+            dayahead-optim/perfect-optim). See issue #540.
+        :type capacity_charge_current_interval_history: list
         :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning timesteps at nominal power)
         :type def_total_timestep: list
@@ -5812,6 +6083,7 @@ class Optimization:
             soc_target_timestep=soc_target_timestep,
             current_period_peak=current_period_peak,
             capacity_charge_window=capacity_charge_window,
+            capacity_charge_current_interval_history=capacity_charge_current_interval_history,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,

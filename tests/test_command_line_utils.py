@@ -2716,6 +2716,33 @@ class TestOptimizationCache(unittest.TestCase):
 
         self.assertNotEqual(key1, key2)
 
+    def test_cache_key_different_for_capacity_charge_interval_timesteps(self):
+        """Issue #540: capacity_charge_interval_timesteps is structural (it
+        changes the shape of the capacity-charge epigraph matrix), so a change
+        must produce a different cache key and force a rebuild. It is a plain
+        optim_conf key with no special-case handling in _compute_cache_key -
+        this pins that the generic optim_conf_structural_hash actually covers
+        it (i.e. it was never added to the runtime-keys exclusion set).
+        """
+        key1 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        modified_optim_conf = self.optim_conf.copy()
+        modified_optim_conf["capacity_charge_interval_timesteps"] = 6
+
+        key2 = OptimizationCache._compute_cache_key(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        self.assertNotEqual(key1, key2)
+
     def test_cache_clear(self):
         """Test that clear() empties the cache."""
         mock_opt = MagicMock()

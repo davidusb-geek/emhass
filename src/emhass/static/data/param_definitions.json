@@ -808,6 +808,13 @@
       "default_value": 0.0,
       "unit": "¤/kW"
     },
+    "capacity_charge_interval_timesteps": {
+      "friendly_name": "Capacity charge tariff measurement interval",
+      "Description": "Number of native optimisation timesteps that make up one tariff demand-measurement interval, for tariffs that bill on the average import power over a fixed clocked interval (e.g. a 30-minute demand interval at a 5-minute optimisation_time_step is 6). 1 (default) prices native per-timestep import power exactly as before, unchanged - the aggregation matrix is not even constructed. N > 1 makes the capacity charge price the average import power over each completed N-timestep tariff interval instead of a single timestep spike. Only effective when capacity_cost_per_kw > 0. Structural (optim_conf): follows normal EMHASS config/runtime-override behaviour like any other structural key, with no special restriction on changing it; because it changes the shape of the capacity-charge constraint, a change produces a different optimisation cache key and rebuilds the problem (does not warm-start). See capacity_charge_current_interval_history for feeding the already-elapsed part of the currently open interval on the naive-mpc-optim path (this history mechanism is naive-mpc-optim only; dayahead-optim/perfect-optim behaviour is unaffected by this parameter's runtime-history companion).",
+      "input": "int",
+      "default_value": 1,
+      "unit": "timesteps"
+    },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",
       "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
