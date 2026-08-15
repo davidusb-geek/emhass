@@ -182,6 +182,27 @@ class TestBatteryIdentification(unittest.TestCase):
         self.assertEqual(res.status, "rejected_sanity_check")
         self.assertFalse(res.is_ok)
 
+    def test_near_lossless_rte_rejected(self):
+        # The #1069 case: change-only sampling produced a fit with RTE 0.991
+        # (one-way sqrt 0.9955) on a pack independently metered at 0.83
+        # round-trip efficiency. No real AC-coupled pack is that close to
+        # lossless, so the efficiency guardrail must reject it rather than
+        # publish. Asserting on the message pins the rejection to the
+        # efficiency band, not the separate RTE > 1 gate.
+        df = _make_history(10000.0, 0.991, n_cycles=6)
+        res = self._identify(df)
+        self.assertEqual(res.status, "rejected_sanity_check", msg=str(res.messages))
+        self.assertFalse(res.is_ok)
+        self.assertTrue(any("sqrt(RTE)" in m for m in res.messages), msg=str(res.messages))
+
+    def test_plausible_high_rte_still_passes(self):
+        # Counterfactual pin for the bound location: RTE 0.988 (one-way sqrt
+        # 0.994) sits just below SQRT_RTE_HIGH and must still publish.
+        df = _make_history(10000.0, 0.988, n_cycles=6)
+        res = self._identify(df)
+        self.assertEqual(res.status, "ok", msg=str(res.messages))
+        self.assertTrue(res.is_ok)
+
     # -- default-no-op sanity: to_dict is JSON-serialisable scalars -----------
     def test_result_to_dict_is_scalar_json(self):
         import json

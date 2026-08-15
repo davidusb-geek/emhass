@@ -88,7 +88,9 @@ CAPACITY_SANITY_HIGH = 1.5
 ABS_CAPACITY_LOW_WH = 200.0
 ABS_CAPACITY_HIGH_WH = 500000.0
 SQRT_RTE_LOW = 0.80  # one-way efficiency = sqrt(RTE) plausible range
-SQRT_RTE_HIGH = 0.999
+# No real AC-coupled pack is near-lossless: a one-way efficiency above 0.995
+# (RTE > 0.99) is a sampling artifact, not physics (#1069).
+SQRT_RTE_HIGH = 0.995
 
 # Energy-balance cross-check is only meaningful over an approximately CLOSED
 # window: if the net SoC drift is large relative to the total SoC swung, the
@@ -595,7 +597,7 @@ class BatteryIdentification:
         if not (SQRT_RTE_LOW <= eta <= SQRT_RTE_HIGH):
             result.status = "rejected_sanity_check"
             result.messages.append(
-                f"One-way efficiency sqrt(RTE)={eta:.3f} outside "
+                f"One-way efficiency sqrt(RTE)={eta:.4f} outside "
                 f"[{SQRT_RTE_LOW}, {SQRT_RTE_HIGH}]; keeping configured values."
             )
             return result
