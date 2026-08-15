@@ -323,14 +323,10 @@ class Optimization:
         # command_line.py._compute_cache_key): read once here, not re-read per
         # call, and a change to it goes through a brand-new Optimization object.
         self.capacity_charge_interval_timesteps = self._get_capacity_charge_interval_timesteps()
-        # Only active when BOTH the capacity charge itself is on AND aggregation
-        # is actually requested (N > 1). At capacity_cost_per_kw <= 0 the whole
-        # capacity-charge feature is off (no peak_import variable at all - see
-        # _initialize_decision_variables); at N == 1 the plain #1066
-        # peak_import >= cp.multiply(window, p_grid_pos) epigraph applies
-        # unchanged. Only in the N > 1 case is the A @ p_grid_pos + c interval
-        # matrix machinery created, updated or read - never for the legacy
-        # no-capacity or N == 1 paths.
+        # Active only when the capacity charge is on AND N > 1 is requested;
+        # gates whether the A @ p_grid_pos + c interval-matrix machinery
+        # (below) is ever created, updated or read - see
+        # _initialize_decision_variables for the N == 1 / off legacy path.
         self._capacity_interval_aggregation_active = (
             self._get_capacity_cost_per_kw() > 0 and self.capacity_charge_interval_timesteps > 1
         )
@@ -496,15 +492,22 @@ class Optimization:
         the runtime history and the validated window mask) and assigned as
         already-composed numeric values, so ``A @ p_grid_pos`` is a single
         Parameter multiplying the Variable vector - never a Parameter *
-        Parameter product - keeping the problem DPP / warm-start safe. At the
-        default ``capacity_charge_interval_timesteps=1`` this reproduces the
-        prior per-timestep epigraph exactly (A = diag(window_mask), c = 0).
+        Parameter product - keeping the problem DPP / warm-start safe.
+
+        Only ever called when ``capacity_charge_interval_timesteps > 1`` (see
+        ``self._capacity_interval_aggregation_active``, set in ``__init__``).
+        At the default ``N = 1`` this method is never called at all: the
+        matrix/contribution Parameters are never constructed, and the
+        original #1066 ``cp.multiply(param_capacity_window, p_grid_pos)``
+        epigraph is used instead - not an ``A = diag(window), c = 0`` special
+        case of this machinery.
 
         Fixed-shape (``K_max`` from structural N and n only, never from the
         runtime history length) so a change in history length never forces a
         rebuild. Horizon-shaped, so like ``param_capacity_window`` it must be
         re-created whenever the horizon length changes. Called from __init__
-        and from the resize block in ``perform_optimization``.
+        and from the resize block in ``perform_optimization``, both gated by
+        ``self._capacity_interval_aggregation_active``.
         """
         k_max = self._capacity_interval_k_max()
         self.param_capacity_interval_matrix = cp.Parameter(
@@ -1945,34 +1948,17 @@ class Optimization:
         if self._get_capacity_cost_per_kw() > 0:
             vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
             if self._capacity_interval_aggregation_active:
-                # Epigraph over completed tariff-measurement-interval averages
-                # (issue #540, generalising #623/#1066's per-timestep epigraph).
-                # Only reached when capacity_charge_interval_timesteps > 1 (see
-                # the gate set in __init__). param_capacity_interval_matrix
-                # (K_max x n) is a single numeric coefficient matrix, recomputed
-                # each call in perform_optimization from
-                # capacity_charge_interval_timesteps (structural), the runtime
-                # history, and the (already-validated) demand-window mask - all
-                # composed together in plain NumPy before being assigned to this
-                # ONE Parameter, so this stays a Parameter @ Variable product
-                # (DPP-safe; never a Parameter * Parameter product).
-                # param_capacity_realised_contribution folds in the
-                # already-elapsed history's contribution (in W) to the first
-                # completed interval; it is 0 everywhere else.
+                # N > 1 (issue #540): epigraph over completed tariff-interval
+                # averages, Q = A @ p_grid_pos + c. See
+                # _init_capacity_interval_params for the DPP rationale.
                 constraints.append(
                     vars_dict["peak_import"]
                     >= self.param_capacity_interval_matrix @ vars_dict["p_grid_pos"]
                     + self.param_capacity_realised_contribution
                 )
             else:
-                # capacity_charge_interval_timesteps == 1 (the default): the
-                # EXACT pre-#540 #1066 epigraph, byte-identical to before this
-                # feature existed. param_capacity_window is all-ones by default,
-                # reproducing the plain peak_import >= p_grid_pos epigraph; a
-                # 0/1 window mask passed at runtime zeroes out-of-window
-                # timesteps so only in-window import can raise the priced peak.
-                # cp.multiply(Parameter, Variable) is DPP, so mask updates do
-                # not rebuild the problem.
+                # N == 1 (default): the exact pre-#540 #1066 epigraph,
+                # semantically identical to before this feature existed.
                 constraints.append(
                     vars_dict["peak_import"]
                     >= cp.multiply(self.param_capacity_window, vars_dict["p_grid_pos"])
@@ -4557,11 +4543,8 @@ class Optimization:
             # current_period_peak below it MUST be re-created on resize.
             self._init_capacity_window_param()
 
-            # Re-initialize the capacity-interval-aggregation matrix/contribution
-            # with the new horizon (issue #540) - K_max depends on num_timesteps,
-            # so this must be re-created on resize too. Only when the N > 1
-            # aggregation path is actually active (see __init__ for the gate);
-            # otherwise this machinery is never created at all.
+            # K_max depends on num_timesteps, so re-create on resize too - only
+            # when the N > 1 aggregation path is active (see __init__).
             if self._capacity_interval_aggregation_active:
                 self._init_capacity_interval_params()
 
@@ -4750,15 +4733,10 @@ class Optimization:
                 )
         self.param_capacity_window.value = window_mask
 
-        # Tariff measurement-interval aggregation for the capacity charge
-        # (issue #540). Only built/validated/assigned when the N > 1
-        # aggregation path is active (capacity_cost_per_kw > 0 AND
-        # capacity_charge_interval_timesteps > 1 - see the gate set in
-        # __init__). At capacity_cost_per_kw <= 0 or the default N == 1, this
-        # machinery does not exist on the instance at all (see
-        # _init_capacity_interval_params) and
-        # capacity_charge_current_interval_history is not even inspected, let
-        # alone validated - the exact pre-#540 no-op / #1066 legacy path.
+        # Tariff measurement-interval aggregation (#540). Only built when N > 1
+        # is active; otherwise this machinery doesn't exist on the instance at
+        # all (see _capacity_interval_aggregation_active, set in __init__) and
+        # the history is never inspected - the exact pre-#540 legacy path.
         if self._capacity_interval_aggregation_active:
             interval_matrix, realised_contribution = self._build_capacity_interval_arrays(
                 window_mask, capacity_charge_current_interval_history
