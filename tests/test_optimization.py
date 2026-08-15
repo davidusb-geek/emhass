@@ -1326,6 +1326,363 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             atol=1e-6,
         )
 
+    # --- Issue #540: capacity-charge tariff measurement-interval aggregation ---
+    # All scenarios below disable the battery and deferrable loads
+    # (set_use_battery=False, number_of_deferrable_loads=0) with PV forecast
+    # zeroed, so P_grid_pos is fully exogenous and deterministically equals the
+    # load array - there is no flexibility to shave with, only the epigraph
+    # constraint pins peak_import. This lets each test assert the EXACT
+    # aggregated peak_import value against a hand-computed expectation, rather
+    # than inferring aggregation indirectly through solver shaving behaviour.
+
+    def _capacity_interval_base_conf(self, prediction_horizon):
+        """Shared no-flexibility scenario setup for the capacity-charge
+        interval-aggregation tests below. Returns (df, pv, load_s)."""
+        df = self.prepare_forecast_data()
+        n = len(df)
+        df["p_pv_forecast"] = 0.0
+        load = np.zeros(n)
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 0,
+            }
+        )
+        return df, pv, load_s
+
+    def test_capacity_interval_legacy_parity(self):
+        """Issue #540: capacity_charge_interval_timesteps=1 (explicit) must
+        reproduce the exact #966/#1066 per-timestep epigraph - identical to
+        the parameter being entirely absent. peak_import must equal the plain
+        per-timestep maximum (5000 W), NOT any interval average.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+
+        # Parameter entirely absent.
+        self.optim_conf.pop("capacity_charge_interval_timesteps", None)
+        self.opt = self.create_optimization()
+        res_omitted = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_omitted = self.opt.vars["peak_import"].value
+
+        # Parameter explicit N=1.
+        self.optim_conf["capacity_charge_interval_timesteps"] = 1
+        self.opt = self.create_optimization()
+        res_explicit = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_explicit = self.opt.vars["peak_import"].value
+
+        self.assertAlmostEqual(peak_omitted, 5000.0, places=3)
+        self.assertAlmostEqual(peak_explicit, 5000.0, places=3)
+        np.testing.assert_allclose(
+            res_omitted["P_grid_pos"].to_numpy(),
+            res_explicit["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+    def test_capacity_interval_legacy_path_skips_aggregation_machinery(self):
+        """Supervisor correction (#540): the interval-aggregation matrix/
+        contribution Parameters must NOT be constructed, updated or used, and
+        capacity_charge_current_interval_history must NOT be validated, on
+        either the disabled (capacity_cost_per_kw <= 0) or default (N == 1)
+        legacy paths. Only the N > 1 path may touch this machinery.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        # An invalid history (negative) that WOULD trigger a validation warning
+        # if the interval-aggregation code path were reached.
+        invalid_history = [-100.0]
+
+        # (i) Feature OFF entirely (capacity_cost_per_kw <= 0): no matrix
+        # Parameters constructed at all, and the invalid history is silently
+        # never inspected (no warning, no crash - it just isn't read).
+        self.optim_conf["capacity_cost_per_kw"] = 0.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+        self.assertFalse(self.opt._capacity_interval_aggregation_active)
+        self.assertFalse(hasattr(self.opt, "param_capacity_interval_matrix"))
+        self.assertFalse(hasattr(self.opt, "param_capacity_realised_contribution"))
+        res_off = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=invalid_history,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertNotIn("peak_import", self.opt.vars)
+        self.assertFalse(hasattr(self.opt, "param_capacity_interval_matrix"))
+
+        # (ii) Feature ON but N == 1 (the default): same - no matrix
+        # Parameters, invalid history never inspected, and the plan matches
+        # the plain per-timestep epigraph (peak_import == 5000 W, not
+        # affected by aggregation machinery that doesn't exist).
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 1
+        self.opt = self.create_optimization()
+        self.assertFalse(self.opt._capacity_interval_aggregation_active)
+        self.assertFalse(hasattr(self.opt, "param_capacity_interval_matrix"))
+        res_n1 = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=invalid_history,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertFalse(hasattr(self.opt, "param_capacity_interval_matrix"))
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 5000.0, places=3)
+        np.testing.assert_allclose(
+            res_off["P_grid_pos"].to_numpy(), res_n1["P_grid_pos"].to_numpy(), atol=1e-6
+        )
+
+        # (iii) Contrast: N > 1 DOES construct the machinery and DOES validate
+        # the (still invalid) history, producing a warning.
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+        self.assertTrue(self.opt._capacity_interval_aggregation_active)
+        self.assertTrue(hasattr(self.opt, "param_capacity_interval_matrix"))
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_current_interval_history=invalid_history,
+            )
+        self.assertTrue(
+            any(
+                "capacity_charge_current_interval_history" in line
+                for line in logs.output
+            ),
+            msg=f"expected an invalid-history warning on the N>1 path, got: {logs.output}",
+        )
+
+    def test_capacity_interval_six_to_one_aggregation(self):
+        """Issue #540: with capacity_charge_interval_timesteps=6, six native
+        timesteps form one tariff-interval average. A one-step 6000 W spike
+        inside an otherwise-zero six-step block must be priced as its
+        1/6-weighted average (1000 W), NOT the raw 6000 W spike.
+
+        This must fail on current upstream master: master has no
+        capacity_charge_interval_timesteps concept and would still price the
+        raw per-timestep maximum (6000 W) via the #1066 epigraph.
+        """
+        prediction_horizon = 12  # two full 6-step tariff intervals
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[5] = 6000.0  # last step of interval 1 (indices 0-5) -> avg 1000 W
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        res = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(self.opt.prob.is_dpp())
+        peak = self.opt.vars["peak_import"].value
+        self.assertAlmostEqual(
+            peak,
+            1000.0,
+            places=3,
+            msg="6-step spike must be weighted 1/6 (1000 W), not priced as the raw 6000 W spike",
+        )
+        # Full spike is still physically imported - only the PRICED peak is aggregated.
+        self.assertAlmostEqual(res["P_grid_pos"].iloc[5], 6000.0, places=3)
+
+    def test_capacity_interval_partial_current_interval_history(self):
+        """Issue #540: capacity_charge_current_interval_history supplies the
+        already-elapsed samples of the currently open tariff interval; the
+        optimizer must combine it with the remaining planned steps to price
+        the correct first completed interval average.
+
+        This must fail if the history is ignored: with all planned p_grid_pos
+        at 0, the history's 6000 W sample (contributing 1000 W to the 6-step
+        average) is the ONLY source of a non-zero priced peak.
+        """
+        prediction_horizon = 8
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # m=4 elapsed samples; only the last (6000 W) is non-zero.
+        history = [0.0, 0.0, 0.0, 6000.0]
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=history,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_with_history = self.opt.vars["peak_import"].value
+        self.assertAlmostEqual(
+            peak_with_history,
+            1000.0,
+            places=3,
+            msg="history must combine with planned steps to price the first interval average",
+        )
+
+        # Same call without the history: nothing left to set a non-zero peak.
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_no_history = self.opt.vars["peak_import"].value
+        self.assertAlmostEqual(
+            peak_no_history,
+            0.0,
+            places=3,
+            msg="history ignored: expected a zero peak with no planned import",
+        )
+
+    def test_capacity_interval_window_plus_aggregation(self):
+        """Issue #540: capacity_charge_window composes with interval
+        aggregation - only a completed interval whose ENDPOINT falls inside
+        the window can raise peak_import, even if it has the larger average.
+        """
+        prediction_horizon = 12
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[3] = 6000.0  # interval 1 (indices 0-5) -> avg 1000 W, OFF window
+        load[9] = 3000.0  # interval 2 (indices 6-11) -> avg 500 W, IN window
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # Window excludes interval 1's endpoint (index 5), includes interval 2's (index 11).
+        window = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, capacity_charge_window=window
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(self.opt.prob.is_dpp())
+        peak = self.opt.vars["peak_import"].value
+        self.assertAlmostEqual(
+            peak,
+            500.0,
+            places=3,
+            msg="off-window completed interval (avg 1000 W) must not set peak_import; "
+            "only the in-window interval (avg 500 W) may",
+        )
+
+    def test_capacity_interval_incumbent_floor(self):
+        """Issue #540: current_period_peak continues to floor peak_import
+        (and so removes the marginal value of shaving below it) when
+        aggregation is active - the two features are independent.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[3] = 3000.0  # single 6-step interval -> avg 500 W
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, current_period_peak=0.0
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 500.0, places=3)
+
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, current_period_peak=800.0
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            800.0,
+            places=3,
+            msg="current_period_peak must still floor peak_import with aggregation active",
+        )
+
+    def test_capacity_interval_dpp(self):
+        """Issue #540: the problem stays DPP with aggregation, runtime history
+        and window changes across successive calls on the SAME Optimization
+        instance (warm-start safe - no rebuild, self.prob identity unchanged).
+        """
+        prediction_horizon = 12
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[3] = 6000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertTrue(self.opt.prob.is_dpp())
+        prob_id_first = id(self.opt.prob)
+
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=[0.0, 0.0, 1000.0],
+            capacity_charge_window=[1] * prediction_horizon,
+        )
+        self.assertTrue(self.opt.prob.is_dpp())
+        self.assertEqual(
+            id(self.opt.prob),
+            prob_id_first,
+            msg="history/window changes must not force a problem rebuild",
+        )
+
+    def test_capacity_interval_invalid_history(self):
+        """Issue #540: an invalid runtime history (negative import power) is
+        rejected with a warning and falls back to an empty history (t0 assumed
+        to sit on an interval boundary), never a crash.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_current_interval_history=[-100.0, 0.0, 0.0],
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(
+            any(
+                "capacity_charge_current_interval_history" in line
+                for line in logs.output
+            ),
+            msg=f"expected an invalid-history warning, got: {logs.output}",
+        )
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="invalid history must fall back to empty, not crash or silently apply",
+        )
+
     def test_battery_first_priority_drains_before_import(self):
         """Issue #834: with ``set_battery_first_priority`` the optimizer must
         not import from the grid while the battery is still above its minimum

@@ -226,6 +226,35 @@ As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a
 The mask defaults to *unset* (`None`) = every timestep priced, identical to behaviour without this key. An all-zero mask (no window in this horizon) makes the demand term a constant - the plan is then identical to running without a capacity charge. An invalid mask (non-numeric entries, NaN/infinity, or shorter than the horizon) is ignored with a warning and the full horizon is priced; a longer mask is truncated; weights outside `[0, 1]` are clipped. Fractional weights are allowed and scale how much of that timestep's import the priced peak sees. If your billing period resets monthly, also zero the mask entries that fall in the *next* month and reset `current_period_peak` on the boundary, so the new period starts from a clean floor.
 ```
 
+### Pricing the tariff's measurement interval, not the raw timestep (naive-mpc-optim)
+
+Most demand tariffs bill on the **average** import power over a fixed clocked interval (e.g. 30 minutes), not a single optimisation timestep's instantaneous power (issue [#540](https://github.com/davidusb-geek/emhass/issues/540)). The config key `capacity_charge_interval_timesteps` (`optim_conf`, default `1`) sets how many native timesteps make up one tariff interval - at `1` the aggregation matrix is never constructed at all and the plain per-timestep peak epigraph from the sections above applies byte-for-byte unchanged; `N > 1` prices the average import power over each completed N-timestep interval instead, so a brief spike inside an otherwise-idle interval is weighted down instead of priced as if it lasted the whole interval. Like `capacity_cost_per_kw`, it is a normal structural `optim_conf` key (`associations.csv`) and follows the usual EMHASS config-override behaviour, including runtime override - there is no special restriction on changing it. Because it changes the shape of the capacity-charge constraint, changing its value changes the optimisation cache key and rebuilds the problem rather than reusing a warm-started one.
+
+The runtime history mechanism below is scoped to `naive-mpc-optim` only, exactly like `current_period_peak` and `capacity_charge_window` above - no new plumbing was added for `dayahead-optim`/`perfect-optim` in this PR, and their existing capacity-charge behaviour is unaffected.
+
+Because the MPC horizon rarely starts exactly on an interval boundary, pass the optional runtime key `capacity_charge_current_interval_history` so the first completed interval prices correctly:
+
+- `capacity_charge_current_interval_history`: a list of the **average** positive grid-import power (Watts, oldest -> newest) for each native optimisation timestep already elapsed in the currently open tariff interval - the same per-timestep quantity `P_grid_pos` itself represents, not an arbitrary instantaneous sensor reading. If your source is an energy meter, derive it as `elapsed_energy_Wh / (optimization_time_step_minutes / 60)` per elapsed timestep. Its length (`0` to `capacity_charge_interval_timesteps - 1`) tells EMHASS how far the horizon start sits into the open interval. Only effective when `capacity_cost_per_kw > 0` and `capacity_charge_interval_timesteps > 1`; ignored otherwise.
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": 8.0,
+  "capacity_charge_interval_timesteps": 6,
+  "capacity_charge_current_interval_history": [0, 0, 0, 6000]
+}
+```
+
+EMHASS stays tariff-agnostic here too: the **caller owns clock/calendar alignment** (which native timestep the horizon starts on, within which tariff interval) - EMHASS does not compute timezone, season or wall-clock rules. `capacity_charge_window` still works alongside this, but note its semantics shift: for `N > 1` the mask is evaluated only at each completed interval's *endpoint*, which assumes the tariff's demand-window boundaries align with the tariff measurement-interval boundaries (i.e. the mask is effectively constant across any one N-timestep interval) - a window that is `1` throughout the tariff's demand hours still selects exactly the completed intervals that fall inside it.
+
+A tariff interval still incomplete at the far end of the current MPC horizon is simply not priced by this solve - it has no completed-interval row yet. A later receding-horizon solve prices it once its completion becomes visible; this is inherent to only pricing *completed* intervals, not something to work around.
+
+When `capacity_charge_interval_timesteps > 1`, `current_period_peak` (above) must be expressed in the same metric this epigraph now prices: the highest already-*completed* clocked tariff-interval **average** import power (Watts), not the maximum instantaneous or per-native-timestep import. The currently *open* interval belongs in `capacity_charge_current_interval_history`, not in `current_period_peak` - do not fold it into the incumbent floor until its tariff interval actually completes. `current_period_peak` itself is unchanged (same scalar Watts key); only which value is correct to pass changes when aggregation is on.
+
+```{note}
+The history defaults to *unset* (`None`) = an empty history, i.e. the horizon start is assumed to sit exactly on an interval boundary. An invalid history (non-numeric, NaN/infinity, negative values, or longer than `capacity_charge_interval_timesteps - 1`) is ignored with a warning, falling back to an empty history. At `capacity_charge_interval_timesteps = 1` the aggregation machinery is never constructed and the history is never inspected or validated.
+```
+
 ### Passing forecast data
 
 There is a complete dedicated section in the [Forecast](forecasts) section.
