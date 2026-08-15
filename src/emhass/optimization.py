@@ -428,13 +428,31 @@ class Optimization:
         self.param_current_period_peak.value = 0.0
 
     def _init_capacity_window_param(self) -> None:
-        """Initialize the horizon demand-window parameter for the capacity charge.
+        """Initialize the CVXPY parameter masking the capacity-charge epigraph to a
+        demand window (issue #623, Phase 3).
 
-        With N=1 the parameter is used directly in the #1066 epigraph. With
-        N>1 its numeric value at each completed interval endpoint is folded into
-        the aggregation matrix. The caller owns tariff calendar rules. The
-        all-ones default prices every eligible timestep/interval, and the
-        horizon-shaped parameter is recreated when the horizon changes.
+        ``param_capacity_window`` is a per-horizon vector of weights in [0, 1]
+        applied to each grid-import timestep inside the ``peak_import`` epigraph:
+        ``peak_import >= mask[t] * p_grid_pos[t]``. Tariffs that charge demand
+        only inside a daily window (e.g. 16:00-20:00 business days) set 1 on
+        in-window timesteps and 0 elsewhere, so off-window import can no longer
+        inflate the priced peak. The mask is computed by the caller (Home
+        Assistant owns the business-day / holiday / season calendar) - EMHASS
+        stays tariff-agnostic.
+
+        ``cp.multiply(Parameter, Variable)`` is DPP, so per-call value updates
+        do not force recanonicalisation (warm-start safe). Default all-ones
+        reproduces the unmasked ``peak_import >= p_grid_pos`` epigraph exactly,
+        so behaviour is identical to Phase 2 unless a mask is explicitly passed.
+        Like ``param_soc_target_floor`` it is horizon-shaped, so it must be
+        re-created whenever the horizon length changes. Called from __init__
+        and from the resize block in ``perform_optimization``.
+
+        With N=1 (``capacity_charge_interval_timesteps``) the parameter is used
+        directly in the #1066 epigraph above; with N>1 (issue #540) its numeric
+        value at each completed tariff interval's endpoint is instead folded
+        into the interval-aggregation matrix built by
+        ``_build_capacity_interval_arrays``.
         """
         self.param_capacity_window = cp.Parameter(
             self.num_timesteps, nonneg=True, name="capacity_window_mask"
@@ -1681,6 +1699,12 @@ class Optimization:
         ``e0 + 2N``, ...). Each row is scaled by the window mask value at its
         endpoint, so an off-window completed interval cannot raise
         ``peak_import``.
+
+        Logs a warning (without altering behaviour) when ``e0 >= n`` (no
+        tariff interval completes within this solve) and when
+        ``capacity_charge_window`` changes within the planned samples of a
+        completed interval (endpoint sampling then determines the applied
+        weight).
         """
         n = self.num_timesteps
         interval_n = self.capacity_charge_interval_timesteps
@@ -1692,6 +1716,17 @@ class Optimization:
         m = len(hist_arr)
         e0 = interval_n - 1 - m
 
+        if e0 >= n:
+            self.logger.warning(
+                f"Capacity charge: with capacity_charge_interval_timesteps={interval_n}, "
+                f"capacity_charge_current_interval_history length={m} and a "
+                f"prediction horizon of {n}, no tariff measurement interval "
+                "completes within this solve; no prospective aggregated interval "
+                "can raise peak_import this solve (the current_period_peak floor, "
+                "if any, still applies)."
+            )
+
+        window_misaligned = False
         row = 0
         e = e0
         while e < n and row < k_max:
@@ -1701,9 +1736,20 @@ class Optimization:
                 contribution[row] = w * (float(hist_arr.sum()) / interval_n)
             else:
                 start = e - interval_n + 1
+            if not np.allclose(window_mask[start : e + 1], w):
+                window_misaligned = True
             matrix[row, start : e + 1] = w / interval_n
             e += interval_n
             row += 1
+
+        if window_misaligned:
+            self.logger.warning(
+                "capacity_charge_window changes within a completed tariff "
+                "measurement interval; capacity_charge_window boundaries should "
+                "align with the tariff measurement interval when "
+                "capacity_charge_interval_timesteps > 1, otherwise endpoint "
+                "sampling determines the applied interval weight."
+            )
 
         return matrix, contribution
 
@@ -1875,9 +1921,17 @@ class Optimization:
         # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
 
-        # Capacity/demand peak variable (#623). Feature-off remains a true no-op.
-        # N=1 uses the #1066 per-timestep epigraph; N>1 uses completed
-        # tariff-interval averages built as Q = A @ p_grid_pos + c.
+        # Peak grid-import variable for the capacity / demand charge (issue #623).
+        # Opt-in: only created when capacity_cost_per_kw > 0, so when the feature
+        # is off the problem is byte-identical to before (no extra variable, no
+        # constraint, no objective term). peak_import (W) is a single scalar
+        # bounded below by every grid-import timestep, i.e. the epigraph of
+        # max(p_grid_pos) over the horizon; the cost on it is added in
+        # _build_objective_function. The gate is a static config value so it is
+        # part of the OptimizationCache key (a change rebuilds the problem).
+        # N=1 uses the #1066 per-timestep epigraph below; N>1 (issue #540)
+        # instead uses completed tariff-interval averages built as
+        # Q = A @ p_grid_pos + c.
         if self._get_capacity_cost_per_kw() > 0:
             vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
             if self._capacity_interval_aggregation_active:
@@ -2166,9 +2220,13 @@ class Optimization:
                 * cp.sum(cp.multiply(self.param_load_cost_pos, battery_first_penalty))
             )
 
-        # Capacity/demand charge (#623): one-time cost on the modelled peak
-        # power. peak_import is W, so divide by 1000 for a currency/kW rate;
-        # unlike energy terms this is not scaled by the timestep.
+        # Capacity / demand charge (issue #623). A one-time cost on the peak grid
+        # import over the optimisation, priced in currency per kW. The peak_import
+        # variable only exists when capacity_cost_per_kw > 0 (opt-in; default 0 is
+        # a true no-op). This is a peak-POWER charge, so it is NOT scaled by
+        # time_step the way the per-timestep energy terms are; peak_import is in W
+        # and divided by 1000 to price it in kW. Subtracted because the objective
+        # is maximised.
         capacity_cost_per_kw = self._get_capacity_cost_per_kw()
         if capacity_cost_per_kw > 0 and "peak_import" in self.vars:
             objective_terms.append(-capacity_cost_per_kw * (self.vars["peak_import"] / 1000.0))

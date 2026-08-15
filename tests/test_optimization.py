@@ -1693,6 +1693,160 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg="invalid history must fall back to empty, not crash or silently apply",
         )
 
+    def test_capacity_interval_history_length_n_minus_one(self):
+        """Issue #540 review follow-up: with
+        ``capacity_charge_current_interval_history`` at its maximum valid
+        length (N - 1), the first completed tariff interval is made up of
+        ALL history samples plus exactly ONE planned timestep, so its
+        decision-index endpoint is ``e0 = N - 1 - m = 0``.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[0] = 6000.0  # the single planned timestep of the first completed interval
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # m = 5 = N - 1 (maximum valid history length).
+        history = [0.0, 0.0, 0.0, 0.0, 6000.0]
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=history,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # e0 = 0: the first (and only) completed interval's decision-index
+        # endpoint is index 0, so only column 0 of the aggregation matrix's
+        # first row is populated.
+        matrix = self.opt.param_capacity_interval_matrix.value
+        self.assertNotEqual(matrix[0, 0], 0.0)
+        self.assertTrue(
+            np.all(matrix[0, 1:] == 0.0),
+            msg="with e0 == 0 only decision index 0 belongs to the first completed interval",
+        )
+
+        # Realised history (sum 6000 over 5 samples) plus the single planned
+        # timestep (p_grid_pos[0] == 6000) must average to 2000 W over the
+        # 6-step tariff interval.
+        peak = self.opt.vars["peak_import"].value
+        self.assertAlmostEqual(
+            peak,
+            2000.0,
+            places=3,
+            msg="history plus the single planned timestep must produce the correct average",
+        )
+
+    def test_capacity_interval_history_too_long_falls_back_to_empty(self):
+        """Issue #540 review follow-up: a
+        ``capacity_charge_current_interval_history`` of length >= N is
+        invalid (the max valid length is N - 1); it must warn and fall back
+        to the SAME empty-history semantics as omitting the key entirely,
+        not silently apply the over-long values.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[0] = 6000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # Length 6 == N, exceeding the max valid length of N - 1 = 5. Nonzero
+        # content so an accidental accept (bug) would produce a different,
+        # wrong result rather than trivially matching by coincidence.
+        too_long_history = [500.0] * 6
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_current_interval_history=too_long_history,
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(
+            any(
+                "capacity_charge_current_interval_history" in line
+                for line in logs.output
+            ),
+            msg=f"expected an invalid-history warning, got: {logs.output}",
+        )
+        peak_too_long = self.opt.vars["peak_import"].value
+
+        # Same call with the history omitted entirely: empty-history
+        # semantics (t0 sits exactly on an interval boundary) must match.
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_omitted = self.opt.vars["peak_import"].value
+
+        self.assertAlmostEqual(peak_too_long, peak_omitted, places=3)
+        self.assertAlmostEqual(
+            peak_too_long,
+            1000.0,
+            places=3,
+            msg="empty history: only p_grid_pos[0] == 6000 over the 6-step interval -> 1000 W avg",
+        )
+
+    def test_capacity_interval_prediction_horizon_resize(self):
+        """Issue #540 review follow-up: reusing the SAME Optimization
+        instance with N > 1 active for a NEW prediction_horizon must
+        recreate the capacity-interval Parameters (shape is
+        k_max x num_timesteps, and k_max depends on the horizon) rather than
+        reuse stale shapes, the solve must remain valid, and DPP / warm-start
+        semantics must hold at the new horizon.
+        """
+        interval_n = 6
+        horizon_a = 6
+        horizon_b = 12
+        df, pv, load_s = self._capacity_interval_base_conf(horizon_b)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = interval_n
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, horizon_a)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(self.opt.prob.is_dpp())
+        shape_a = self.opt.param_capacity_interval_matrix.value.shape
+        self.assertEqual(shape_a, (int(np.ceil(horizon_a / interval_n)), horizon_a))
+
+        # Reuse the SAME instance with a larger prediction_horizon.
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, horizon_b)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(self.opt.prob.is_dpp())
+        shape_b = self.opt.param_capacity_interval_matrix.value.shape
+        self.assertEqual(
+            shape_b,
+            (int(np.ceil(horizon_b / interval_n)), horizon_b),
+            msg="capacity-interval Parameters must be recreated with the new horizon's shape",
+        )
+
+        # Once rebuilt at the new horizon, repeated calls at that SAME
+        # horizon stay DPP / warm-start safe (no further rebuild) - the same
+        # guarantee test_capacity_interval_dpp checks at a fixed horizon.
+        prob_id_at_b = id(self.opt.prob)
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            horizon_b,
+            capacity_charge_current_interval_history=[0.0, 0.0, 1000.0],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(self.opt.prob.is_dpp())
+        self.assertEqual(
+            id(self.opt.prob),
+            prob_id_at_b,
+            msg="history changes at a stable horizon must not force a rebuild",
+        )
+
     def test_battery_first_priority_drains_before_import(self):
         """Issue #834: with ``set_battery_first_priority`` the optimizer must
         not import from the grid while the battery is still above its minimum
