@@ -4,7 +4,6 @@
 
 ### Improvement
 - feat: mask the demand/capacity charge to a tariff demand window (capacity_charge_window) (@hossamnagy)
-- Preparing new release v0.18.0 (@davidusb-geek)
 
 ### Documentation
 - docs: add forecast-to-MPC study (@OEB11)
