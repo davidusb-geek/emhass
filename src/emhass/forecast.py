@@ -1546,27 +1546,13 @@ class Forecast:
         :rtype: pd.date_range
 
         """
-        start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
-        if self.method_ts_round == "nearest":
-            # Same start alignment as __init__: round once in UTC so the built
-            # range needs no stamp-by-stamp round (see the comment there).
-            start_forecast_csv = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .tz_convert("utc")
-                .round(self.freq)
-                .tz_convert(self.time_zone)
-            )
-        elif self.method_ts_round == "first":
-            start_forecast_csv = (
-                pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
-            )
-        elif self.method_ts_round == "last":
-            start_forecast_csv = (
-                pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
-            )
-        else:
-            self.logger.error("Wrong method_ts_round passed parameter")
+        # Reuse the start stamp frozen in __init__ rather than reading the clock
+        # again. Data prep between the two calls takes seconds, so a re-read that
+        # lands the other side of a rounding boundary builds a grid one step off
+        # from the one df_final is indexed on, and the strict lookup in
+        # _extract_daily_forecast then raises KeyError (issue #1076). The
+        # rounding itself still happens exactly once, in __init__.
+        start_forecast_csv = self.start_forecast
         end_forecast_csv = (
             start_forecast_csv + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
         ).replace(microsecond=0)
