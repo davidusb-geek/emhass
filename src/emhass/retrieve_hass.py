@@ -341,7 +341,7 @@ class RetrieveHass:
                     minimal_response,
                     significant_changes_only,
                     test_url,
-                    keep_partial_days,
+                    keep_partial_days=keep_partial_days,
                 )
             return success
 
@@ -352,7 +352,7 @@ class RetrieveHass:
             minimal_response,
             significant_changes_only,
             test_url,
-            keep_partial_days,
+            keep_partial_days=keep_partial_days,
         )
 
     def _build_history_url(
