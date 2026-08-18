@@ -5966,14 +5966,17 @@ class Optimization:
             identical to omitting it. Ignored when ``capacity_cost_per_kw`` is 0. \
             Runtime-only; only used by naive-mpc-optim. See issues #623 / #540.
         :type current_period_peak: float
-        :param capacity_charge_window: Optional prediction-horizon demand-window mask for \
-            the capacity charge, with weights in [0, 1]. At \
+        :param capacity_charge_window: Optional per-timestep demand-window mask for \
+            the capacity charge: a list of weights in [0, 1] of length \
+            ``prediction_horizon``, aligned like ``load_cost_forecast``. At \
             ``capacity_charge_interval_timesteps == 1`` it applies per native timestep; \
             at ``N > 1`` the weight at each completed tariff-interval endpoint scales \
-            that interval's average. Tariff-window boundaries should therefore align \
-            with measurement-interval boundaries. ``None`` prices all eligible \
-            timesteps/intervals. Ignored when ``capacity_cost_per_kw`` is 0. \
-            Runtime-only; only used by naive-mpc-optim.
+            that interval's average, so tariff-window boundaries should align with \
+            measurement-interval boundaries. The caller owns the business-day / \
+            holiday / season calendar. ``None`` (the default) prices every \
+            timestep/interval, identical to omitting it. Ignored when \
+            ``capacity_cost_per_kw`` is 0. Runtime-only; only used by naive-mpc-optim. \
+            See issues #623 / #540.
         :type capacity_charge_window: list
         :param capacity_charge_current_interval_history: Optional list of the AVERAGE \
             positive grid-import power (Watts, oldest -> newest) for each native \

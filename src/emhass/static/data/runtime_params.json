@@ -37,14 +37,14 @@
     },
     "current_period_peak": {
       "friendly_name": "Current billing-period peak grid import",
-      "Description": "Optional billed peak already incurred in the current billing period, in Watts. With capacity_charge_interval_timesteps=1 use the highest eligible positive-import timestep; with N>1 use the highest eligible completed tariff-interval average. The currently open interval belongs in capacity_charge_current_interval_history. Only used by naive-mpc-optim when capacity_cost_per_kw > 0; invalid values are ignored with a warning.",
+      "Description": "Optional peak grid import already incurred during the current billing period, in Watts, used to floor the demand/capacity charge so the optimisation does not chase a new peak below one already locked in this period. Only the import above this value is worth shaving. Only effective when capacity_cost_per_kw > 0; ignored otherwise. Defaults to no floor (None -> 0.0) so behaviour is unchanged when omitted. A negative, non-finite (NaN/inf) or non-numeric value is ignored with a warning. Only used by naive-mpc-optim. With capacity_charge_interval_timesteps=1 use the highest eligible positive-import timestep; with N>1 current_period_peak must be expressed in the same measurement basis as the epigraph - the highest eligible already-completed tariff measurement-interval average. The currently open interval is represented by capacity_charge_current_interval_history, not current_period_peak. See issue #623 and passing_data.md.",
       "input": "float",
       "default_value": null,
       "unit": "W"
     },
     "capacity_charge_window": {
       "friendly_name": "Capacity charge demand-window mask",
-      "Description": "Optional prediction_horizon-length mask of weights in [0, 1] selecting the tariff demand window. With N=1 it applies per timestep; with N>1 the weight at each completed interval endpoint is used, so tariff-window boundaries should align with measurement-interval boundaries. The caller owns calendar rules. Only used by naive-mpc-optim when capacity_cost_per_kw > 0; invalid short or non-finite masks are ignored with a warning.",
+      "Description": "Optional per-timestep mask restricting the demand/capacity charge to a tariff's demand window: a list of weights in [0, 1] of length prediction_horizon, aligned like load_cost_forecast. With N=1 the mask applies per native timestep (the peak_import epigraph only prices timesteps where the mask is non-zero); with N>1 the mask value at each completed tariff-interval endpoint determines that completed interval's eligibility/weight, so tariff demand-window boundaries should align with tariff measurement-interval boundaries. The caller owns the business-day / holiday / season calendar - EMHASS stays tariff-agnostic. Only effective when capacity_cost_per_kw > 0; ignored otherwise. Defaults to unset (None -> all timesteps priced), identical to behaviour without this key. An invalid mask (non-numeric, NaN/inf, shorter than the horizon) is ignored with a warning; a longer mask is truncated; values outside [0, 1] are clipped. Only used by naive-mpc-optim. See issues #540 / #623 and passing_data.md.",
       "input": "array.float",
       "default_value": null,
       "unit": "none"
