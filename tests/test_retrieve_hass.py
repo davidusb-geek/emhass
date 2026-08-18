@@ -1351,13 +1351,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(success)
         mock_rest_fallback.assert_called_once()
-        call_args = mock_rest_fallback.call_args
-        passed_flag = (
-            call_args.args[-1]
-            if len(call_args.args) >= 6
-            else call_args.kwargs.get("keep_partial_days")
-        )
-        self.assertTrue(passed_flag)
+        self.assertTrue(mock_rest_fallback.call_args.kwargs.get("keep_partial_days"))
 
         # Reset for other tests
         mock_get_ws.side_effect = None
