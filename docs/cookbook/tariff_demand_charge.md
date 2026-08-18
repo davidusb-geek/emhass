@@ -30,9 +30,8 @@ Expected: the optimization still solves normally; a positive rate gives the solv
 
 ## Step 2: Understand the default N=1 model
 
-<!-- source: src/emhass/optimization.py:1882 -->
-<!-- source: src/emhass/optimization.py:1897 -->
-<!-- source: src/emhass/optimization.py:2174 -->
+<!-- source: src/emhass/optimization.py:1936-1952 -->
+<!-- source: src/emhass/optimization.py:2232 -->
 
 At the default `capacity_charge_interval_timesteps = 1`, `peak_import` is constrained by each eligible positive-import timestep and floored by `current_period_peak`. The objective prices that scalar peak once in currency/kW.
 
@@ -90,7 +89,7 @@ Expected: only eligible demand-window timesteps/intervals can raise the priced p
 
 <!-- source: src/emhass/data/config_defaults.json:141 -->
 <!-- source: src/emhass/data/associations.csv:100 -->
-<!-- source: src/emhass/optimization.py:1665 -->
+<!-- source: src/emhass/optimization.py:1683 -->
 <!-- source: src/emhass/utils.py:1788 -->
 <!-- transport: direct EMHASS configuration/runtime JSON; adapter-specific transport untested -->
 
@@ -124,7 +123,7 @@ Expected: the first tariff interval combines realised history with the remaining
 
 ## Step 4: Verify the tariff metric
 
-<!-- source: src/emhass/optimization.py:1665 -->
+<!-- source: src/emhass/optimization.py:1683 -->
 <!-- transport: local Python helper; untested adapter transport - contribution welcome -->
 
 Do not verify `N>1` with the raw maximum of `P_grid`; that would compare a native-timestep peak with a tariff-interval average. Use the same completed-interval metric:
@@ -150,6 +149,7 @@ def billed_peak_w(p_grid_w, n=1, history=(), window=None, incumbent_w=0):
             end += n
     return max([float(incumbent_w), *candidates])
 
+
 assert billed_peak_w([0, 0, 0, 0, 0, 6000], n=6) == 1000
 assert round(billed_peak_w([3000, 1000], n=6, history=[2000, 4000, 0, 6000]), 1) == 2666.7
 ```
@@ -168,6 +168,7 @@ Expected: comparisons between capacity-charge runs use the billed metric above, 
 
 ## Credits
 
-- Base capacity-charge feature: #623.
-- Demand-window feature: #1066.
-- Tariff measurement-interval aggregation: #540 discussion.
+- Base capacity-charge feature — **#623**, implemented by @LesIT1, requested by @matti-oss.
+- Weighted-sum / LP peak-cost formulation from the #623 discussion — @Whatsonyourmind.
+- Demand-window feature — **#1066**, @hossamnagy.
+- Tariff measurement-interval aggregation — **#540** discussion.

@@ -1470,10 +1470,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 capacity_charge_current_interval_history=invalid_history,
             )
         self.assertTrue(
-            any(
-                "capacity_charge_current_interval_history" in line
-                for line in logs.output
-            ),
+            any("capacity_charge_current_interval_history" in line for line in logs.output),
             msg=f"expected an invalid-history warning on the N>1 path, got: {logs.output}",
         )
 
@@ -1680,10 +1677,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertTrue(
-            any(
-                "capacity_charge_current_interval_history" in line
-                for line in logs.output
-            ),
+            any("capacity_charge_current_interval_history" in line for line in logs.output),
             msg=f"expected an invalid-history warning, got: {logs.output}",
         )
         self.assertAlmostEqual(
@@ -1773,10 +1767,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertTrue(
-            any(
-                "capacity_charge_current_interval_history" in line
-                for line in logs.output
-            ),
+            any("capacity_charge_current_interval_history" in line for line in logs.output),
             msg=f"expected an invalid-history warning, got: {logs.output}",
         )
         peak_too_long = self.opt.vars["peak_import"].value
@@ -1845,6 +1836,56 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             id(self.opt.prob),
             prob_id_at_b,
             msg="history changes at a stable horizon must not force a rebuild",
+        )
+
+    def test_capacity_interval_no_completed_interval_warns(self):
+        """Issue #540 review follow-up: when the prediction horizon is
+        shorter than a single tariff measurement interval, no interval
+        completes within the solve. ``_build_capacity_interval_arrays`` must
+        warn rather than silently price nothing.
+        """
+        prediction_horizon = 5
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(
+            any(
+                "no tariff measurement interval completes within this solve" in line
+                for line in logs.output
+            ),
+            msg=f"expected the no-completed-interval warning, got: {logs.output}",
+        )
+
+    def test_capacity_interval_window_misalignment_warns(self):
+        """Issue #540 review follow-up: when ``capacity_charge_window``
+        changes value within the planned samples of a completed tariff
+        interval, ``_build_capacity_interval_arrays`` must warn that endpoint
+        sampling (not the full-interval mask) determines the applied weight.
+        """
+        prediction_horizon = 12
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        window = [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df, pv, load_s, prediction_horizon, capacity_charge_window=window
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(
+            any(
+                "capacity_charge_window changes within a completed tariff "
+                "measurement interval" in line
+                for line in logs.output
+            ),
+            msg=f"expected the window-misalignment warning, got: {logs.output}",
         )
 
     def test_battery_first_priority_drains_before_import(self):
