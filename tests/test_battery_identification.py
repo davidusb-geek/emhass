@@ -13,7 +13,9 @@ than erroring at import.
 
 import json
 import logging
+import os
 import pathlib
+import time
 import unittest
 from datetime import UTC, datetime, timedelta
 
@@ -377,7 +379,7 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
         # The docs promise the suggest tier logs a recommendation.
         self.assertTrue(any("recommendation" in m.lower() for m in cm.output))
 
-    async def test_failed_fit_writes_nothing_and_leaves_existing_untouched(self):
+    async def test_failed_fit_records_last_attempt_and_preserves_existing_record(self):
         # Seed an existing (stale-looking) file to prove it is not clobbered.
         self._json_path().write_text('{"status": "ok", "marker": "keep-me"}')
         # Shallow data -> insufficient -> non-ok.
@@ -392,8 +394,155 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = json.loads(self._json_path().read_text())
-        self.assertEqual(payload.get("marker"), "keep-me", "failed fit must not clobber the file")
+        self.assertEqual(
+            payload.get("marker"), "keep-me", "failed fit must not discard the retained record"
+        )
         self.assertEqual(rh.published, {}, "failed fit must not publish")
+        self.assertEqual(payload.get("status"), "ok", "retained ok record must survive")
+        attempt = payload["last_attempt"]
+        self.assertEqual(attempt["status"], "insufficient_data")
+        self.assertTrue(attempt["messages"], "the failure reason must be recorded")
+        datetime.fromisoformat(attempt["attempted_at"])  # parses, same format as fitted_at
+
+    async def test_n1_no_prior_fit_failure_writes_failure_only_payload_and_backs_off(self):
+        """No prior file: a failed fit writes a failure-only payload (no
+        top-level status, so it can never be mistaken for a fit result) and
+        the very next run - still inside max_age - must serve the recorded
+        backoff without retrieving history again. RED-on-base: base writes
+        nothing on a failed fit, so this file would never even exist."""
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        rh1 = await self._run({"battery_identification_trust_tier": "suggest"}, df=shallow)
+        self.assertEqual(rh1.published, {}, "a failed fit must not publish")
+        self.assertTrue(self._json_path().exists(), "a failed fit must record the attempt")
+
+        payload = json.loads(self._json_path().read_text())
+        self.assertNotIn(
+            "status", payload, "a failure-only payload must not look like a fit result"
+        )
+        attempt = payload["last_attempt"]
+        self.assertEqual(attempt["status"], "insufficient_data")
+        self.assertTrue(attempt["messages"], "the failure reason must be recorded")
+        datetime.fromisoformat(attempt["attempted_at"])  # parses, same format as fitted_at
+
+        rh2 = await self._run({"battery_identification_trust_tier": "suggest"}, df=shallow)
+        self.assertIsNone(
+            self.last_retrieve_sensor_config,
+            "a second run inside max_age must not retrieve history for a fresh fit",
+        )
+        self.assertEqual(rh2.published, {})
+
+    async def test_n1_backoff_expires_and_refits(self):
+        """After the failure-only payload's mtime is aged past max_age (the
+        mechanism the backoff rides on, since N=1 freshness is mtime-only via
+        is_model_outdated), the next run must retrieve and re-fit rather than
+        serving the stale backoff forever."""
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        rh1 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 1,
+            },
+            df=shallow,
+        )
+        self.assertEqual(rh1.published, {})
+        json_path = self._json_path()
+        self.assertTrue(json_path.exists(), "a failed fit must record the attempt")
+        aged = time.time() - 3 * 3600  # 3h old, past the 1h max_age
+        os.utime(json_path, (aged, aged))
+
+        rh2 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 1,
+            },
+            df=self.df_good,
+        )
+        self.assertIsNotNone(
+            self.last_retrieve_sensor_config,
+            "an expired backoff must retrieve history for a fresh fit",
+        )
+        payload = json.loads(json_path.read_text())
+        self.assertEqual(payload.get("status"), "ok", "the expired backoff's re-fit succeeded")
+        self.assertIn("sensor.battery_identified_capacity", rh2.published)
+
+    async def test_n1_success_after_failure_clears_last_attempt(self):
+        """A later successful fit replaces the whole file, which is how a run
+        of recorded failures clears automatically once the fit succeeds
+        again."""
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 0,
+            },
+            df=shallow,
+        )
+        payload_after_fail = json.loads(self._json_path().read_text())
+        self.assertIn("last_attempt", payload_after_fail)
+
+        rh = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 0,
+            },
+            df=self.df_good,
+        )
+        payload_after_success = json.loads(self._json_path().read_text())
+        self.assertEqual(payload_after_success.get("status"), "ok")
+        self.assertNotIn(
+            "last_attempt",
+            payload_after_success,
+            "a successful fit must clear any previously recorded failed attempt",
+        )
+        self.assertIn("sensor.battery_identified_capacity", rh.published)
+
+    async def test_n1_retained_ok_keeps_being_served_across_failed_attempts(self):
+        """A successful fit, then a failed attempt (which must not stop the
+        retained estimate being served), then a THIRD run inside max_age
+        that must serve the retained ok record without a re-fetch: once a
+        battery has a good record, a later failing attempt must not make
+        EMHASS go silent - it keeps serving the last known-good estimate
+        while it quietly retries the fit in the background."""
+        rh1 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 24,
+            },
+            df=self.df_good,
+        )
+        self.assertIn("sensor.battery_identified_capacity", rh1.published)
+        payload1 = json.loads(self._json_path().read_text())
+        self.assertEqual(payload1.get("status"), "ok")
+
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        rh2 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 0,
+            },
+            df=shallow,
+        )
+        self.assertEqual(rh2.published, {}, "the failing attempt itself must not publish")
+        payload2 = json.loads(self._json_path().read_text())
+        self.assertEqual(payload2.get("status"), "ok", "retained ok record must survive")
+        self.assertIn("last_attempt", payload2)
+
+        rh3 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 24,
+            },
+            df=shallow,  # irrelevant: must never be retrieved
+        )
+        self.assertIsNone(
+            self.last_retrieve_sensor_config,
+            "a backed-off failure must not suppress serving the retained ok record",
+        )
+        self.assertIn(
+            "sensor.battery_identified_capacity",
+            rh3.published,
+            "the retained ok record must keep being published across failed attempts",
+        )
 
     async def test_missing_sensor_columns_is_graceful(self):
         bad = self.df_good.rename(columns={"sensor_power_battery": "something_else"})
@@ -569,8 +718,10 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
 
     async def test_n2_partial_failure_independence(self):
         """k=0 has good data and fits; k=1 has insufficient data. k=0's fit
-        must persist and publish, k=1 must be absent from the container, and
-        the run must not raise."""
+        must persist and publish, k=1 is recorded as a failure-only slot (not
+        omitted), and the run must not raise. A later successful fit for k=1
+        then clears its recorded last_attempt, the same success-replaces-the-
+        whole-slot clearing behaviour proven for N=1 elsewhere in this file."""
         self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
         good = _make_history(10000.0, 0.90, n_cycles=6).rename(
             columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
@@ -585,7 +736,152 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
 
         payload = json.loads(self._json_path().read_text())
         self.assertIn("0", payload["batteries"])
-        self.assertNotIn("1", payload["batteries"])
+        self.assertIn("1", payload["batteries"], "the failed battery's attempt must be recorded")
+        entry1 = payload["batteries"]["1"]
+        self.assertNotIn("status", entry1, "failure-only slot must not look like a fit result")
+        self.assertNotIn("fitted_at", entry1)
+        self.assertNotIn("capacity_kwh", entry1)
+        self.assertEqual(entry1["last_attempt"]["status"], "insufficient_data")
+        self.assertEqual(entry1["last_attempt"]["sensors"], {"power": "p1", "soc": "soc1"})
+        self.assertTrue(entry1["last_attempt"]["messages"])
+
+        # A later successful fit for battery 1 clears its last_attempt.
+        good1 = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        df2 = pd.concat([good, good1], axis=1)
+        rh2 = await self._run(
+            {
+                "battery_identification_trust_tier": "suggest",
+                "battery_identification_model_max_age": 0,
+            },
+            df=df2,
+        )
+        payload2 = json.loads(self._json_path().read_text())
+        self.assertEqual(payload2["batteries"]["1"]["status"], "ok")
+        self.assertNotIn("last_attempt", payload2["batteries"]["1"])
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh2.published)
+
+    async def test_n2_failing_battery_backs_off_and_is_excluded_from_next_retrieval(self):
+        """A battery whose fit fails gains an in-slot last_attempt and, on
+        the next cycle inside max_age, is excluded from the retrieval batch
+        entirely (the acceptance slice: retries at max_age cadence, not
+        every run) while its fresh sibling keeps being served from cache."""
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        good0 = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        shallow1 = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        df1 = pd.concat([good0, shallow1], axis=1)
+        await self._run({"battery_identification_trust_tier": "suggest"}, df=df1)
+
+        payload = json.loads(self._json_path().read_text())
+        self.assertIn("1", payload["batteries"], "the failed battery's attempt must be recorded")
+        entry1 = payload["batteries"]["1"]
+        self.assertNotIn("status", entry1)
+        self.assertIn("last_attempt", entry1)
+
+        # Second run: k=0 stays fresh and k=1's failure is still inside
+        # max_age, so NEITHER battery is stale - no retrieval batch should
+        # run at all (the existing M1 pin: only stale batteries' sensors are
+        # ever presented to retrieval).
+        rh2 = await self._run({"battery_identification_trust_tier": "suggest"}, df=df1)
+        self.assertIsNone(
+            self.last_retrieve_sensor_config,
+            "neither battery is stale, so no retrieval batch should run at all",
+        )
+        self.assertIn("sensor.battery_identified_capacity_battery0", rh2.published)
+        self.assertNotIn(
+            "sensor.battery_identified_capacity_battery1",
+            rh2.published,
+            "a backed-off failure-only entry must never be published",
+        )
+
+    async def test_n2_sensor_change_on_failure_only_entry_forces_immediate_retry(self):
+        """A failure-only slot's last_attempt records the sensor pair it was
+        attempted against; if that pair changes, the backoff must not apply -
+        the sensor-pair override (invariant 6) extends to a failure-only
+        entry, not just a retained ok record."""
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        good0 = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        shallow1 = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        df1 = pd.concat([good0, shallow1], axis=1)
+        await self._run({"battery_identification_trust_tier": "suggest"}, df=df1)
+
+        # Re-point battery 1 at a different sensor pair.
+        self.retrieve_hass_conf["sensor_power_battery"] = ["p0", "p1_new"]
+        self.retrieve_hass_conf["sensor_battery_state_of_charge"] = ["soc0", "soc1_new"]
+        good1_new = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={
+                "sensor_power_battery": "p1_new",
+                "sensor_battery_state_of_charge": "soc1_new",
+            }
+        )
+        df2 = pd.concat([good0, good1_new], axis=1)
+        rh2 = await self._run({"battery_identification_trust_tier": "suggest"}, df=df2)
+        self.assertEqual(
+            self.last_retrieve_sensor_config,
+            (["p1_new"], ["soc1_new"]),
+            "the sensor-pair change must force battery 1's retry against the NEW pair, "
+            "not be suppressed by the old pair's backoff",
+        )
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh2.published)
+
+    async def test_n2_wrong_pair_last_attempt_never_publishes_old_sensor_capacity(self):
+        """The single worst silent-wrong-result class this feature could
+        introduce. A slot can hold a retained ok record fitted against an
+        OLD sensor pair (A) plus a fresh, well-formed last_attempt against
+        the CURRENTLY resolved pair (B) - e.g. after a sensor-list edit
+        followed by a failed re-fit. _battery_fit_is_stale correctly treats
+        this as not-stale (backed off against B), but the not-stale publish
+        branch must NOT serve A's retained capacity as if it were B's."""
+        self._set_n2_config(["p0", "pB"], ["soc0", "socB"])
+        now = datetime.now(UTC)
+        seed = {
+            "schema_version": 2,
+            "batteries": {
+                "0": {
+                    "status": "ok",
+                    "marker": "keep-k0",
+                    "fitted_at": now.isoformat(),
+                    "sensors": {"power": "p0", "soc": "soc0"},
+                    "capacity_kwh": {"value": 10.0},
+                    "round_trip_efficiency": {"value": 0.9},
+                },
+                "1": {
+                    "status": "ok",
+                    "fitted_at": now.isoformat(),
+                    "sensors": {"power": "pA", "soc": "socA"},
+                    "capacity_kwh": {"value": 999.0},
+                    "round_trip_efficiency": {"value": 0.5},
+                    "last_attempt": {
+                        "status": "insufficient_data",
+                        "attempted_at": now.isoformat(),
+                        "messages": ["not enough cycles"],
+                        "sensors": {"power": "pB", "soc": "socB"},
+                    },
+                },
+            },
+        }
+        self._json_path().write_text(json.dumps(seed))
+        rh = await self._run({"battery_identification_trust_tier": "suggest"}, df=self.df_good)
+        self.assertIsNone(
+            self.last_retrieve_sensor_config,
+            "battery 0 is fresh and battery 1 is backed off against the current pair B, "
+            "so no retrieval batch should run at all",
+        )
+        self.assertIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertNotIn(
+            "sensor.battery_identified_capacity_battery1",
+            rh.published,
+            "battery A's retained capacity must never be published as battery B's",
+        )
 
     async def test_n2_per_battery_freshness_only_stale_battery_refits(self):
         """A fresh k=0 entry must be reused untouched while a stale k=1 entry
@@ -790,6 +1086,89 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
             "batteries", payload, "N=1 must rewrite the flat v1 shape, not keep the v2 container"
         )
         self.assertIn("sensor.battery_identified_capacity", rh.published)
+
+    async def test_n1_failed_fit_does_not_destroy_a_v2_container_left_behind(self):
+        """A v2 container left behind by a reverted number_of_batteries (e.g.
+        2 -> 1), still holding at least one retained ok slot, must not be
+        destroyed by a FAILED N=1 fit. Falling through to a re-fit every run
+        (as the read-side v2-leftover test above accepts) is fine; silently
+        wiping a retained ok slot is an invariant-2 violation, not an
+        acceptable N-transition cost."""
+        seed = {
+            "schema_version": 2,
+            "batteries": {
+                "0": {"status": "ok", "marker": "keep-k0", "capacity_kwh": {"value": 10.0}},
+                "1": {"status": "ok", "marker": "keep-k1", "capacity_kwh": {"value": 12.0}},
+            },
+        }
+        self._json_path().write_text(json.dumps(seed))
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        rh = await self._run({"battery_identification_trust_tier": "suggest"}, df=shallow)
+        self.assertEqual(rh.published, {}, "a failed fit must not publish")
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(
+            payload, seed, "a failed N=1 fit must not touch a foreign v2 container at all"
+        )
+
+    async def test_n1_failed_fit_overwrites_a_failure_only_v2_container(self):
+        """The mirror case of the test above: a v2 container left behind by a
+        reverted number_of_batteries whose slots are ALL failure-only (both
+        batteries were failing before the revert) holds nothing worth
+        protecting. A failed N=1 fit must overwrite it with the normal N=1
+        failure-only payload and engage the backoff, not skip forever with no
+        self-clearing path - skipping here would just re-create the every-run
+        re-pull this feature exists to fix, since only a SUCCESSFUL N=1 fit
+        would ever clear a protective skip, and that can't happen while the
+        fit keeps failing."""
+        seed = {
+            "schema_version": 2,
+            "batteries": {
+                "0": {"last_attempt": {"status": "insufficient_data", "messages": ["x"]}},
+                "1": {"last_attempt": {"status": "insufficient_data", "messages": ["y"]}},
+            },
+        }
+        self._json_path().write_text(json.dumps(seed))
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        rh1 = await self._run({"battery_identification_trust_tier": "suggest"}, df=shallow)
+        self.assertEqual(rh1.published, {})
+        payload = json.loads(self._json_path().read_text())
+        self.assertNotIn(
+            "batteries", payload, "the failure-only container must be overwritten, not skipped"
+        )
+        self.assertIn("last_attempt", payload)
+
+        rh2 = await self._run({"battery_identification_trust_tier": "suggest"}, df=shallow)
+        self.assertIsNone(
+            self.last_retrieve_sensor_config,
+            "the backoff must engage on the very next run, not skip forever",
+        )
+        self.assertEqual(rh2.published, {})
+
+    async def test_n2_failed_fits_do_not_destroy_a_v1_payload_left_behind(self):
+        """Mirror direction: a flat v1 ok payload left behind by a reverted
+        number_of_batteries (e.g. 1 -> 2) must not be destroyed by FAILED N>1
+        fits, for either battery. The success path already treats a v1
+        leftover as absent and rewrites it (unchanged, invariant 1) - only a
+        FAILURE must refuse to touch it."""
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        seed_text = json.dumps(
+            {"status": "ok", "marker": "flat-v1", "capacity_kwh": {"value": 10.0}}
+        )
+        self._json_path().write_text(seed_text)
+        shallow0 = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        shallow1 = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        df = pd.concat([shallow0, shallow1], axis=1)
+        rh = await self._run({"battery_identification_trust_tier": "suggest"}, df=df)
+        self.assertEqual(rh.published, {}, "failed fits must not publish")
+        self.assertEqual(
+            self._json_path().read_text(),
+            seed_text,
+            "failed N>1 fits must not touch a foreign v1 payload at all, byte-identical",
+        )
 
     async def test_n1_publish_is_exact_todays_two_entities_pin(self):
         """N=1 regression pin: exactly today's two entity ids, and a flat JSON
