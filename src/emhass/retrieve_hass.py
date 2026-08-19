@@ -294,6 +294,7 @@ class RetrieveHass:
         minimal_response: bool | None = False,
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
+        keep_partial_days: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -311,6 +312,16 @@ class RetrieveHass:
         :param significant_changes_only: Retrieve significant changes only \
             using the hass restful API, defaults to False
         :type significant_changes_only: bool, optional
+        :param keep_partial_days: Only applies to the REST API path, including \
+            when a websocket-configured retrieval falls back to REST. When False \
+            (default), a day is dropped for every variable in var_list if any one \
+            variable has no data for that day, matching today's behaviour. When \
+            True, a day is only dropped if every variable is missing for it; a \
+            variable missing on an otherwise-kept day shows up as NaN for that \
+            stretch instead. Used by battery self-identification so one stale \
+            sensor doesn't cost other sensors days they did have data for. \
+            Defaults to False
+        :type keep_partial_days: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -330,12 +341,18 @@ class RetrieveHass:
                     minimal_response,
                     significant_changes_only,
                     test_url,
+                    keep_partial_days=keep_partial_days,
                 )
             return success
 
         self.logger.info("Using REST API for data retrieval")
         return await self._get_data_rest_api(
-            days_list, var_list, minimal_response, significant_changes_only, test_url
+            days_list,
+            var_list,
+            minimal_response,
+            significant_changes_only,
+            test_url,
+            keep_partial_days=keep_partial_days,
         )
 
     def _build_history_url(
@@ -462,6 +479,7 @@ class RetrieveHass:
         minimal_response: bool | None = False,
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
+        keep_partial_days: bool = False,
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
@@ -521,42 +539,55 @@ class RetrieveHass:
                     return False
                 results[(day_idx, var)] = data
 
+            partial_days = 0
             for day_idx, day in enumerate(days_list):
-                df_day = pd.DataFrame()
+                day_frames = []
                 skip_day = False
-                for i, var in enumerate(var_list):
+                missing_var = False
+                for var in var_list:
                     # Fetched concurrently above; just pick the result out
                     data = results.get((day_idx, var))
-                    if data is None:
-                        skip_day = True
-                        break
-                    # Process Data
-                    df_resampled = self._process_history_dataframe(
-                        data,
-                        var,
-                        day,
-                        is_first_day=(day_idx == 0),
-                        is_last_day=(day_idx == len(days_list) - 1),
-                    )
+                    df_resampled = None
+                    if data is not None:
+                        df_resampled = self._process_history_dataframe(
+                            data,
+                            var,
+                            day,
+                            is_first_day=(day_idx == 0),
+                            is_last_day=(day_idx == len(days_list) - 1),
+                        )
                     if df_resampled is None:
-                        skip_day = True
-                        break
-                    # Merge into daily DataFrame
-                    # If it's the first variable, we initialize the day's index based on it
-                    if i == 0:
-                        df_day = pd.DataFrame(index=df_resampled.index)
-                        # Ensure the daily index is regularized to the frequency
-                        # Note: The original logic created a manual range here, but using the
-                        # resampled index from the first variable is safer and cleaner if
-                        # _process_history_dataframe handles resampling correctly.
-                    df_day = pd.concat([df_day, df_resampled], axis=1)
-                if skip_day:
+                        missing_var = True
+                        if not keep_partial_days:
+                            skip_day = True
+                            break
+                        # Keep going: this variable is missing for this day,
+                        # but other variables may still have data for it.
+                        continue
+                    day_frames.append(df_resampled)
+                # In default mode this only triggers via skip_day (exact legacy
+                # behaviour). In keep_partial_days mode a day is only skipped
+                # once every requested variable came back empty for it.
+                if skip_day or (keep_partial_days and not day_frames):
                     days_skipped += 1
                     continue
+                if keep_partial_days and missing_var:
+                    partial_days += 1
+                # Merge the day's per-variable frames on their real resampled
+                # indices; a variable missing for this day (kept mode) is just
+                # absent from the day's frame, and the cross-day concat below
+                # unions columns so it surfaces as a NaN stretch rather than
+                # forcing a synthetic index.
+                df_day = pd.concat(day_frames, axis=1) if day_frames else pd.DataFrame()
                 self.df_final = pd.concat([self.df_final, df_day], axis=0)
         if days_skipped > 0:
             self.logger.warning(
                 f"Skipped {days_skipped} of {len(days_list)} days due to missing history data"
+            )
+        if keep_partial_days and partial_days > 0:
+            self.logger.warning(
+                f"Kept {partial_days} of {len(days_list)} days with partial data "
+                "(one or more variables missing for part of the requested range)"
             )
         if self.df_final.empty:
             self.logger.error(
@@ -573,6 +604,9 @@ class RetrieveHass:
                 f"to the defined freq in passed: {self.freq}"
             )
             return False
+        # With keep_partial_days, a variable that returned no data for the
+        # entire range is listed here without a matching df_final column, so
+        # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
         return True
 
