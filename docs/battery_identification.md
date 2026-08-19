@@ -9,7 +9,7 @@ This is opt-in and default off. In this first version it is advisory only: it re
 - `set_use_battery` must be True.
 - A signed AC-side battery power sensor, set as `sensor_power_battery` (in Watts). Either sign convention works, the direction is auto-detected.
 - The measured battery state of charge, set as `sensor_battery_state_of_charge` (in percent).
-- Enough history. The fit needs weeks of signed power and state of charge with enough reasonably deep charge and discharge cycles. If the data is too shallow, or the fit fails an internal sanity check, it publishes nothing and keeps your configured values.
+- Enough history. The fit needs weeks of signed power and state of charge with enough reasonably deep charge and discharge cycles. If the data is too shallow, or the fit fails an internal sanity check, that run publishes nothing new; a previously identified estimate, if any, keeps being served from the next run on (see [Reading the result](#reading-the-result)). The failed attempt itself is recorded, so the next retry backs off for `battery_identification_model_max_age` instead of re-pulling history and re-fitting on every run.
 
 The two sensors are only retrieved when battery self-identification is enabled, so they cost nothing on a normal run. Their signed values are kept intact on this retrieval regardless of the `set_zero_min` data cleaning setting, which continues to sanitize the load data as usual.
 
@@ -22,7 +22,7 @@ Set these in your configuration:
 - `set_use_battery_identification`: True to turn the feature on (default False).
 - `sensor_power_battery` and `sensor_battery_state_of_charge`: the two sensors above. With more than one battery these must be lists, one sensor per battery, see [Multiple batteries](#multiple-batteries) below.
 - `battery_identification_trust_tier`: `observe` (default) or `suggest`, see below.
-- `battery_identification_model_max_age`: how many hours before the estimate is re-fitted from fresh history. Default 24. Set to 0 to re-fit on every call. Like the adjusted-PV cache, this avoids re-pulling history on every run.
+- `battery_identification_model_max_age`: how many hours before a fit is attempted again from fresh history. This applies whether the last attempt succeeded or failed - a failed attempt is recorded too, so a setup whose fits keep failing retries at this cadence instead of re-pulling history every run. Default 24. Set to 0 to attempt a fit on every call. Like the adjusted-PV cache, this avoids re-pulling history when nothing needs to change. To force an immediate retry right after fixing a sensor or config issue, set this to 0 for one run, or delete `battery_identification.json`.
 
 See the [configuration reference](config.md) for the full parameter descriptions.
 
@@ -40,7 +40,7 @@ Under `suggest`, two sensors appear:
 - `sensor.battery_identified_capacity`, the usable capacity in kWh.
 - `sensor.battery_identified_round_trip_efficiency`, the lumped round-trip efficiency.
 
-Each sensor carries its confidence interval (`ci_low` / `ci_high`), an internal cross-check, the time of the last successful fit (`fitted_at`), the number of charge and discharge segments used, and the assumptions, so you can judge how much to trust it from the sensor attributes alone.
+Each sensor carries its confidence interval (`ci_low` / `ci_high`), an internal cross-check, the time the reported fit was actually made (`fitted_at`), the number of charge and discharge segments used, and the assumptions, so you can judge how much to trust it from the sensor attributes alone. If later fit attempts fail, EMHASS keeps serving this same estimate rather than falling silent (each failed attempt is still logged, so check the log if you want to know it's happening) - `fitted_at` is how you can tell the estimate itself has stopped getting fresher even though nothing looks wrong on the sensor itself.
 
 To compare the capacity against your configuration, note the units: the sensor is in kWh while `battery_nominal_energy_capacity` is in Wh, so multiply the sensor value by 1000 before comparing. If you trust the estimate, update `battery_nominal_energy_capacity`, `battery_charge_efficiency` and `battery_discharge_efficiency` by hand.
 
@@ -51,7 +51,7 @@ With `number_of_batteries` greater than 1, identification runs once per battery,
 - Set `sensor_power_battery` and `sensor_battery_state_of_charge` each to a list of exactly `number_of_batteries` entries, index-matched to the battery config lists (battery 0 first, same order everywhere).
 - There is no scalar broadcast for these two, unlike the numeric battery parameters. One meter cannot tell two batteries apart, so a single sensor name at `number_of_batteries > 1` is not accepted. If either list is missing or the wrong length, identification skips with a warning that says which key is wrong and what it expected, and the rest of the optimization runs as normal.
 
-Each battery is fitted independently. One pack can pass while another does not have enough usable cycles yet; the pack that passed is reported, the other keeps your configured values and is retried on later runs. The re-fit age (`battery_identification_model_max_age`) is also tracked per battery, from each battery's own last successful fit, so one pack's fresh result never delays another pack's retry. Each battery's cached result is bound to the exact sensor pair it was fitted from, so editing or reordering the sensor lists is safe: the affected battery just re-fits on the next run instead of serving a result from the wrong pack.
+Each battery is fitted independently. One pack can pass while another does not have enough usable cycles yet; the pack that passed is reported, the other keeps your configured values, and the failed attempt is recorded so that the pack retries at the same `battery_identification_model_max_age` cadence instead of re-fitting every run. The re-fit age is also tracked per battery, from each battery's own last attempt (successful or not), so one pack's fresh result - or fresh backoff - never delays another pack's retry. Each battery's cached result, and each recorded failed attempt, is bound to the exact sensor pair it came from, so editing or reordering the sensor lists is safe: the affected battery just re-fits on the next run instead of serving a result, or a backoff, from the wrong pack.
 
 History retrieval itself is one shared batch per cycle covering every battery that is currently due for a re-fit, not a separate call per battery. If retrieval hits a hard error (an unreachable Home Assistant instance, an auth failure), the whole batch still fails and the currently-due batteries defer to a later run; batteries whose cached result is still fresh are unaffected either way, since they are never part of that batch.
 

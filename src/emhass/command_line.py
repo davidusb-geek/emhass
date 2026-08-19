@@ -21,6 +21,7 @@ import orjson
 import pandas as pd
 
 from emhass import last_run, plan_store, utils
+from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
 from emhass.battery_identification import BatteryIdentification
 from emhass.forecast import Forecast
 from emhass.forecast_calibration import (
@@ -1023,6 +1024,13 @@ def _resolve_battery_sensor_lists(
 # v1-style payloads at N>1, keyed by str(k), so one battery's freshness/
 # failure never touches another's entry.
 _BATTERY_ID_SCHEMA_VERSION_V2 = 2
+# _BATTERY_ID_SCHEMA_VERSION_V1 is imported above (aliased from
+# emhass.battery_identification.SCHEMA_VERSION): written into a failure-only
+# N=1 payload or N>1 slot (see _record_battery_identification_failed_attempt)
+# when there is no usable prior fit to retain. Importing it (rather than
+# redeclaring the literal here) keeps the flat-payload schema_version and
+# BatteryIdentificationResult.to_dict()'s own schema_version in sync by
+# construction.
 
 
 def _load_battery_identification_container(json_path: pathlib.Path, logger: logging.Logger) -> dict:
@@ -1071,6 +1079,23 @@ def _atomic_json_write(json_path: pathlib.Path, data: dict) -> None:
     os.replace(tmp_path, json_path)
 
 
+def _read_raw_battery_identification_json(json_path: pathlib.Path):
+    """
+    Read the raw persisted JSON with no shape normalisation, or ``None`` if
+    the file is missing or unreadable.
+
+    Used by the failure-recording paths, which must distinguish v1/v2/foreign
+    shapes themselves rather than have
+    :func:`_load_battery_identification_container` silently normalise a
+    foreign shape away before they get a chance to look at it.
+    """
+    try:
+        with open(json_path, "rb") as inp:
+            return json.loads(inp.read())
+    except (KeyError, ValueError, OSError):
+        return None
+
+
 def _write_battery_identification_container(
     json_path: pathlib.Path, logger: logging.Logger, k: int, entry: dict
 ) -> None:
@@ -1092,6 +1117,95 @@ def _write_battery_identification_container(
     _atomic_json_write(json_path, container)
 
 
+def _battery_id_sensors_match(sensors, current_power: str, current_soc: str) -> bool:
+    """
+    True iff ``sensors`` (an entry's or a last_attempt's own recorded
+    ``{"power": ..., "soc": ...}`` pair) matches the CURRENTLY resolved
+    ``(current_power, current_soc)`` pair.
+
+    Missing (e.g. an entry written before this field existed) or malformed
+    ``sensors`` both count as not-matching. Shared by
+    :func:`_battery_fit_is_stale` (both its ok-record and last_attempt
+    freshness branches) and the N>1 not-stale publish gate, so "does this
+    record's sensors match the current pair" has one definition, not two.
+    """
+    return (
+        isinstance(sensors, dict)
+        and sensors.get("power") == current_power
+        and sensors.get("soc") == current_soc
+    )
+
+
+def _battery_identification_last_attempt(entry) -> dict | None:
+    """
+    Return ``entry["last_attempt"]`` if it is well-formed enough to trust as a
+    recorded failure - a dict with a truthy ``status`` and a parsable
+    ``attempted_at`` - else ``None``.
+
+    Both call sites (the N=1 cache-hit branch and :func:`_battery_fit_is_stale`)
+    fall through to a re-fit when this returns ``None``, so a malformed
+    last_attempt (missing, not a dict, no status, unparsable attempted_at -
+    e.g. a hand-edited or truncated file) can never become a permanent no-fit
+    trap.
+    """
+    if not isinstance(entry, dict):
+        return None
+    attempt = entry.get("last_attempt")
+    if not isinstance(attempt, dict) or not attempt.get("status"):
+        return None
+    try:
+        datetime.fromisoformat(attempt.get("attempted_at"))
+    except (TypeError, ValueError):
+        return None
+    return attempt
+
+
+def _record_battery_identification_failed_attempt(
+    existing: dict | None, status: str, messages: list[str], sensors: dict | None = None
+) -> dict:
+    """
+    Build the payload/slot to persist for a failed identification attempt.
+
+    If ``existing`` is a retained ok record (a dict with ``status == "ok"``),
+    every field is kept and ``last_attempt`` is added/replaced - a failed fit
+    never destroys a retained ok record. Otherwise (missing, unreadable, or
+    already non-ok) the result is a failure-only payload: ``schema_version``
+    and ``last_attempt`` only, deliberately with NO top-level/slot-level
+    ``status``, so it can never be mistaken for a fit result by any of the
+    several places that gate on ``status == "ok"``.
+
+    ``sensors`` is recorded inside ``last_attempt`` only when given. N>1
+    callers pass the attempted ``(power, soc)`` pair - required so a later
+    sensor-list edit can void the backoff (see _battery_fit_is_stale). The
+    N=1 caller does not pass it: the N=1 cache-hit branch is deliberately
+    sensor-indifferent (it never consults sensor_power_battery/
+    sensor_battery_state_of_charge on a cache hit), so recording sensors
+    there would be dead data.
+
+    ``existing`` must already be known to be the SAME schema shape this
+    caller expects (flat v1 at N=1, a v2 container slot at N>1): this
+    function only distinguishes "ok" from "not ok" within that shape, it
+    does not detect a foreign shape (e.g. a v2 container passed in at N=1).
+    A foreign shape would fail the ``status == "ok"`` check and take the
+    "no usable prior payload" branch, silently discarding it - so both call
+    sites check for a foreign shape and skip the write entirely BEFORE
+    calling this, rather than relying on this function to notice.
+    """
+    attempt = {
+        "status": status,
+        "attempted_at": datetime.now(UTC).isoformat(),
+        "messages": messages,
+    }
+    if sensors is not None:
+        attempt["sensors"] = sensors
+    if isinstance(existing, dict) and existing.get("status") == "ok":
+        new_payload = dict(existing)
+    else:
+        new_payload = {"schema_version": _BATTERY_ID_SCHEMA_VERSION_V1}
+    new_payload["last_attempt"] = attempt
+    return new_payload
+
+
 def _battery_fit_is_stale(
     logger: logging.Logger,
     entry,
@@ -1102,25 +1216,46 @@ def _battery_fit_is_stale(
 ) -> bool:
     """
     Per-battery counterpart to :func:`is_model_outdated`: freshness comes from
-    the stored entry's own ``fitted_at`` field, not the shared file's mtime, so
-    one battery's fresh fit can never suppress another battery's retry.
+    the stored entry's own timestamp fields, not the shared file's mtime, so
+    one battery's fresh fit (or fresh recorded failure) can never suppress
+    another battery's retry.
 
     ``entry`` is whatever the persisted container has under ``batteries[str(k)]``
     - possibly ``None`` (missing), possibly corrupt (hand-edited or from a
-    future incompatible writer). Any shape other than a well-formed dict with
-    ``status == "ok"`` is treated as absent/stale for THIS battery only: this
-    function must never raise, since it runs inside an eager per-k scan
-    (`stale_ks`) computed before the main loop, and one corrupt entry must not
-    abort every other battery's fresh-cache read for the whole cycle. This
-    mirrors the N=1 cache-hit branch's own ``payload.get("status") == "ok"``
-    gate, which a persisted entry always satisfies today (only a successful
-    fit is ever written) but a hand-edited or foreign entry may not.
+    future incompatible writer). This function must never raise, since it
+    runs inside an eager per-k scan (`stale_ks`) computed before the main
+    loop, and one corrupt entry must not abort every other battery's
+    freshness read for the whole cycle.
 
-    The stored ``sensors`` pair is compared against the currently resolved
-    (power, soc) entity ids: missing (e.g. an entry written before this field
-    existed) or mismatched (the lists were edited or reordered since the fit)
-    both count as stale, so a cached result is never served for a different
-    sensor pair than it was fitted from.
+    Not stale (a re-fit is skipped) iff, for the CURRENT ``(power, soc)`` pair:
+
+    * the entry has a retained ``status == "ok"`` record fitted against this
+      exact pair, within ``max_age_hours`` of its ``fitted_at``; OR
+    * the entry has a well-formed ``last_attempt`` (a recorded failure, see
+      :func:`_battery_identification_last_attempt`) made against this exact pair, within
+      ``max_age_hours`` of its ``attempted_at`` - this is the backoff #1052
+      adds: a battery whose fits keep failing retries at ``max_age_hours``
+      cadence instead of re-fitting every run.
+
+    Either branch requires the record's own ``sensors`` to match the
+    currently resolved pair: missing (e.g. an entry written before this field
+    existed) or mismatched (the lists were edited or reordered since the fit
+    or attempt) both count as not-matching for that branch, so a cached ok
+    result or a backed-off failure is never served for a different sensor
+    pair than it was fitted/attempted against.
+
+    ``max_age_hours <= 0`` is checked BEFORE either branch, so "0 means
+    attempt every run" can never be defeated by a fresh last_attempt.
+
+    A genuinely unusable entry (not a dict, or a dict with neither a usable
+    ok record nor a well-formed last_attempt at all) logs a WARNING and is
+    treated as stale. An entry that DOES have a usable ok record or
+    last_attempt, just not a fresh-and-matching one right now (a sensor-pair
+    change, ordinary expiry, or an unparsable/missing timestamp), logs at
+    INFO instead - this includes a well-formed recorded failure simply still
+    inside its backoff window, which is normal, expected operation, not a
+    problem (see #1052: a WARNING firing every cycle for a backoff that is
+    working as designed was the complaint this feature exists to fix).
     """
     label = f"Battery {k} identification model"
     if not isinstance(entry, dict):
@@ -1132,45 +1267,64 @@ def _battery_fit_is_stale(
         else:
             logger.info(f"{label} has no recorded fit, will train new model")
         return True
-    if entry.get("status") != "ok":
-        logger.warning(
-            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok'; will re-fit."
-        )
-        return True
-    sensors = entry.get("sensors")
-    if (
-        not isinstance(sensors, dict)
-        or sensors.get("power") != current_power
-        or sensors.get("soc") != current_soc
-    ):
-        logger.info(f"{label} sensor binding is missing or changed, will re-fit")
-        return True
-    fitted_at = entry.get("fitted_at")
-    if not fitted_at:
-        logger.info(f"{label} has no recorded fit, will train new model")
-        return True
+
     if max_age_hours <= 0:
         logger.info(f"{label} max age is set to 0, forcing model re-fit")
         return True
-    try:
-        fitted_dt = datetime.fromisoformat(fitted_at)
-    except (ValueError, TypeError):
-        logger.warning(f"{label} fitted_at is unparsable ({fitted_at!r}); will re-fit.")
-        return True
-    if fitted_dt.tzinfo is None:
-        fitted_dt = fitted_dt.replace(tzinfo=UTC)
-    age = datetime.now(UTC) - fitted_dt
+
+    def _age_of(timestamp) -> timedelta | None:
+        if not timestamp:
+            return None
+        try:
+            dt = datetime.fromisoformat(timestamp)
+        except (ValueError, TypeError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return datetime.now(UTC) - dt
+
     max_age = timedelta(hours=max_age_hours)
-    if age > max_age:
+
+    if entry.get("status") == "ok" and _battery_id_sensors_match(
+        entry.get("sensors"), current_power, current_soc
+    ):
+        age = _age_of(entry.get("fitted_at"))
+        if age is not None and age <= max_age:
+            logger.info(
+                f"Using existing {label} (age: {age.total_seconds() / 3600:.1f}h, "
+                f"max: {max_age_hours}h)"
+            )
+            return False
+
+    attempt = _battery_identification_last_attempt(entry)
+    if attempt is not None and _battery_id_sensors_match(
+        attempt.get("sensors"), current_power, current_soc
+    ):
+        age = _age_of(attempt.get("attempted_at"))
+        if age is not None and age <= max_age:
+            logger.info(
+                f"{label} recorded a failed attempt (status={attempt.get('status')}, "
+                f"age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h); "
+                "keeping configured battery values, backing off."
+            )
+            return False
+
+    # Neither branch is fresh-and-matching: either a genuinely unusable entry
+    # (warn) or a normal expiry / sensor-pair change / expired attempt (info).
+    # The INFO wording deliberately doesn't claim WHICH of those it is - it
+    # also covers a missing/unparsable fitted_at or attempted_at (_age_of
+    # returned None above), which is neither "outdated" nor "re-bound".
+    if entry.get("status") == "ok" or attempt is not None:
         logger.info(
-            f"{label} is outdated (age: {age.total_seconds() / 3600:.1f}h, "
-            f"max: {max_age_hours}h), will train new model"
+            f"{label} has no fresh, matching record for the current sensor pair "
+            "(outdated, re-bound, or an unreadable timestamp); will re-fit."
         )
-        return True
-    logger.info(
-        f"Using existing {label} (age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h)"
-    )
-    return False
+    else:
+        logger.warning(
+            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok', "
+            "and no usable recorded attempt; will re-fit."
+        )
+    return True
 
 
 def _log_battery_identification_summary(
@@ -1417,9 +1571,23 @@ async def _identify_battery_impl(
                     _log_battery_identification_recommendation(logger, payload, plant_conf)
                     await _publish_battery_identification(rh, payload, logger)
                 return
-            # Fall through to a re-fit on an unreadable or non-ok cached file
-            # (also covers a v2 container left over from a reverted N>1 run:
-            # it has no top-level "status", so it reads as not-ok here).
+            attempt = _battery_identification_last_attempt(payload)
+            if attempt is not None:
+                # A fresh, well-formed recorded failure: back off (retry at
+                # max_age cadence, per #1052) instead of re-fitting every run.
+                # Logged at INFO - this is expected operation, not a problem.
+                logger.info(
+                    f"Battery identification: recorded attempt at {attempt.get('attempted_at')} "
+                    f"failed guardrails (status={attempt.get('status')}); keeping configured "
+                    "battery values, backing off until max_age."
+                )
+                return
+            # Fall through to a re-fit on an unreadable, non-ok payload with
+            # no (or malformed) last_attempt (also covers a v2 container left
+            # over from a reverted N>1 run: it has no top-level "status", so
+            # it reads as not-ok here). A malformed last_attempt must fall
+            # through too, so a hand-edited or truncated file can never
+            # become a permanent no-fit trap.
 
         # Refit path only: resolve the sensor keys now, matching where base
         # first read power_col (after a successful retrieval was decided on,
@@ -1460,14 +1628,72 @@ async def _identify_battery_impl(
         for msg in result.messages:
             logger.info("Battery identification: %s", msg)
         if not result.is_ok:
+            # Record the failed attempt via a read-modify-write of the file: a
+            # retained ok payload keeps every field and gains last_attempt; a
+            # missing/unreadable/already-non-ok payload becomes a
+            # failure-only payload (see
+            # _record_battery_identification_failed_attempt). This DOES bump
+            # the file mtime - that is now the intended mechanism: it is what
+            # makes is_model_outdated (and the cache-hit branch above) back
+            # off retrying for max_age_hours instead of re-fitting every run
+            # (#1052).
+            #
+            # Read-then-write, not a single atomic transaction: a concurrent
+            # writer (e.g. a dayahead call racing an MPC cron, both fitting
+            # this same battery) could complete its own write in the
+            # millisecond window between this read and _atomic_json_write
+            # below, and get silently overwritten. Same lost-update class the
+            # container writer's docstring already accepts for N>1; self-
+            # heals within max_age_hours. Not worth file locking for.
+            existing = _read_raw_battery_identification_json(json_path)
+            existing_batteries = existing.get("batteries") if isinstance(existing, dict) else None
+            if isinstance(existing_batteries, dict) and any(
+                isinstance(slot, dict) and slot.get("status") == "ok"
+                for slot in existing_batteries.values()
+            ):
+                # Foreign shape WORTH PROTECTING: a v2 (N>1) container left on
+                # disk (e.g. after reverting number_of_batteries from >1 back
+                # to 1) that still holds at least one retained ok slot.
+                # _record_battery_identification_failed_attempt only knows
+                # how to retain a flat v1 "ok" record; handing it this
+                # container would fail its status=="ok" check and take the
+                # "no usable prior payload" branch, silently discarding every
+                # retained per-battery slot (invariant 2 violation across an
+                # N-transition - a failed fit must never destroy a retained
+                # ok record, not even one in the "wrong" shape). Skip the
+                # write entirely and retry every run instead, exactly like
+                # master's failed-fit-writes-nothing behaviour, until either a
+                # successful N=1 fit overwrites the file or the leftover file
+                # is deleted.
+                #
+                # Deliberately narrower than "any v2 container": a container
+                # whose slots are ALL failure-only has nothing to protect, so
+                # skipping here would just re-create the every-run re-pull
+                # #1052 exists to fix, with no self-clearing path (only a
+                # successful N=1 fit removes the leftover shape, and that
+                # can't happen while every N=1 fit keeps failing). Proceed to
+                # the normal failure write below in that case - it discards
+                # the empty container and starts a fresh N=1 backoff.
+                logger.info(
+                    "Battery identification: existing file has the multi-battery "
+                    "layout with a retained estimate; not recording the attempt, "
+                    "will retry next run."
+                )
+                return
+            new_payload = _record_battery_identification_failed_attempt(
+                existing, result.status, result.messages
+            )
+            _atomic_json_write(json_path, new_payload)
             logger.warning(
                 f"Battery identification did not pass guardrails (status={result.status}); "
-                "keeping configured battery values. Existing results file left untouched."
+                "keeping configured battery values and recording the failed attempt. Any "
+                "previously stored estimate is kept."
             )
             return
 
-        # Persist ONLY a successful estimate, atomically. A failed fit must not
-        # bump the file mtime (which would suppress retries for max_age_hours).
+        # Persist a successful estimate, atomically; this replaces the whole
+        # file (including any previously recorded last_attempt), which is how
+        # a success after a run of failures clears the backoff record.
         payload = result.to_dict()
         payload["fitted_at"] = datetime.now(UTC).isoformat()
         payload["trust_tier"] = tier
@@ -1550,12 +1776,39 @@ async def _identify_battery_impl(
 
     for k in range(num_batteries):
         if k not in stale_ks:
-            # Fresh cached entry: log/publish from it, no re-fit.
+            # Not stale, per _battery_fit_is_stale - but that can now mean
+            # either a fresh ok record OR a fresh, well-formed backed-off
+            # last_attempt: a slot can hold a retained ok record fitted
+            # against an OLD sensor pair plus a fresh last_attempt against
+            # the CURRENTLY resolved pair (e.g. after a sensor-list edit
+            # followed by a failed re-fit), which _battery_fit_is_stale
+            # correctly treats as not-stale. Only an actual ok record for
+            # THIS battery's currently resolved sensor pair is ever published
+            # or summarised; a backed-off failure-only entry (or an ok record
+            # whose own sensors no longer match the current pair) is logged
+            # at info and skipped, never mistaken for a publishable result -
+            # this is what stops the old pair's capacity ever being served as
+            # the new pair's.
             entry = batteries[str(k)]
-            _log_battery_identification_summary(logger, entry, plant_conf, k=k)
-            if tier == "suggest":
-                _log_battery_identification_recommendation(logger, entry, plant_conf, k=k)
-                await _publish_battery_identification(rh, entry, logger, k=k)
+            entry_matches_current_pair = _battery_id_sensors_match(
+                entry.get("sensors") if isinstance(entry, dict) else None,
+                power_list[k],
+                soc_list[k],
+            )
+            if (
+                isinstance(entry, dict)
+                and entry.get("status") == "ok"
+                and entry_matches_current_pair
+            ):
+                _log_battery_identification_summary(logger, entry, plant_conf, k=k)
+                if tier == "suggest":
+                    _log_battery_identification_recommendation(logger, entry, plant_conf, k=k)
+                    await _publish_battery_identification(rh, entry, logger, k=k)
+            else:
+                logger.info(
+                    f"Battery {k} identification: recorded attempt is backed off; "
+                    "keeping configured battery values, nothing to publish."
+                )
             continue
         if df is None:
             logger.warning(
@@ -1580,18 +1833,65 @@ async def _identify_battery_impl(
         for msg in result.messages:
             logger.info("Battery %d identification: %s", k, msg)
         if not result.is_ok:
+            # Record the failed attempt in battery k's slot only, via the
+            # same read-modify-write container helper the success path uses
+            # below (_write_battery_identification_container): an entry with
+            # status == "ok" keeps every field and gains last_attempt (with
+            # "sensors" recording the pair this attempt was against - unlike
+            # N=1, see _record_battery_identification_failed_attempt);
+            # otherwise the slot becomes a failure-only payload with no
+            # slot-level "status", mirroring the N=1 shape. No other
+            # battery's entry is touched.
+            #
+            # Read-then-write, not a single atomic transaction: same narrow,
+            # self-healing lost-update window as the N=1 failure write and
+            # the container writer's own documented concurrency note (a
+            # concurrent successful write for this exact battery landing
+            # inside this window could be overwritten; corrects itself within
+            # max_age_hours). Not worth file locking for.
+            #
+            # Read the RAW file first (bypassing the v2-container loader,
+            # which would silently normalise a foreign shape to an empty
+            # container): a flat v1 payload left on disk (e.g. after raising
+            # number_of_batteries from 1 to >1) must not be discarded by a
+            # FAILURE the way the success path's existing treat-v1-as-absent
+            # normalisation already discards it on success (invariant 1,
+            # unchanged) - a failed fit destroying a retained ok record
+            # would violate invariant 2, even across an N-transition.
+            raw_existing = _read_raw_battery_identification_json(json_path)
+            if (
+                isinstance(raw_existing, dict)
+                and "status" in raw_existing
+                and "batteries" not in raw_existing
+            ):
+                logger.info(
+                    f"Battery {k} identification: existing file has the single-battery "
+                    "layout; not recording the attempt, will retry next run."
+                )
+                continue
+            prior = _load_battery_identification_container(json_path, logger)["batteries"].get(
+                str(k)
+            )
+            failed_entry = _record_battery_identification_failed_attempt(
+                prior, result.status, result.messages, sensors={"power": power_col, "soc": soc_col}
+            )
+            _write_battery_identification_container(json_path, logger, k, failed_entry)
             logger.warning(
                 f"Battery {k} identification did not pass guardrails (status={result.status}); "
-                "keeping configured battery values. Existing entry left untouched."
+                "keeping configured battery values and recording the failed attempt. Any "
+                "previously stored estimate is kept."
             )
             continue
 
-        # Persist ONLY a successful estimate for battery k, read-modify-write,
-        # atomic. A failed fit for battery k (above) never touches battery k's
-        # (or any other battery's) previously stored entry. "sensors" binds
-        # this entry to the exact pair it was fitted from, so a later run
-        # that edits or reorders the lists can never serve it as a stale-free
-        # cache hit for the wrong sensor pair (see _battery_fit_is_stale).
+        # Persist a successful estimate for battery k, read-modify-write,
+        # atomic; this replaces battery k's whole slot (including any
+        # previously recorded last_attempt), which is how a success after a
+        # run of failures clears the backoff record. A failed fit for battery
+        # k (above) never touches battery k's (or any other battery's)
+        # previously stored entry. "sensors" binds this entry to the exact
+        # pair it was fitted from, so a later run that edits or reorders the
+        # lists can never serve it as a stale-free cache hit for the wrong
+        # sensor pair (see _battery_fit_is_stale).
         new_entry = result.to_dict()
         new_entry["fitted_at"] = datetime.now(UTC).isoformat()
         new_entry["trust_tier"] = tier
