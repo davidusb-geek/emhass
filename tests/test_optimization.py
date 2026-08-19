@@ -2198,6 +2198,123 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # The 2-step, 1000 W sequence ran exactly once: total power 2000 W.
         self.assertAlmostEqual(res["P_deferrable0"].sum(), 2000.0, delta=1.0)
 
+    def test_sequence_load_short_window_warns_with_sequence_wording(self):
+        """Issue #1081: a sequence (list-valued power) deferrable load's window
+        check must be sized against the length of its own power sequence, not
+        against operating hours/timesteps (which are meaningless for it, since
+        the energy constraint already exempts sequence loads). When the
+        allowed window is shorter than the sequence, a warning naming both the
+        available window and the sequence length must fire.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [[2200, 2200, 2200, 200, 200]],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [4],
+                "operating_hours_of_each_deferrable_load": [0],
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        joined = "\n".join(logs.output)
+        # 5-step sequence, only a 4-step window available: warning must name
+        # both the available window and the sequence length. The run is
+        # expected to be infeasible; that is not asserted here.
+        self.assertIn("power sequence", joined)
+        self.assertIn("(4 timesteps)", joined)
+        self.assertIn("(5 timesteps)", joined)
+
+    def test_sequence_load_exact_window_with_stale_operating_hours_no_warning(self):
+        """Issue #1081: previously, a sequence load's window check used
+        operating hours/timesteps even though they play no role in how a
+        sequence load is scheduled. That produced false-positive warnings
+        whenever a stale operating_hours value happened to be larger than the
+        sequence length, even though the configured window fits the sequence
+        exactly. With the window sized to the sequence length, a stale
+        operating_hours value must be inert and the load must still run.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [[2200, 2200, 2200, 200, 200]],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [5],
+                "operating_hours_of_each_deferrable_load": [10],
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            # Sentinel record so the context always has something to capture,
+            # regardless of whether the optimization itself logs anything.
+            logger.warning("sentinel: capture context armed")
+            res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        joined = "\n".join(logs.output)
+        self.assertNotIn("Available timeframe", joined)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # The 5-step sequence ran exactly once: total power 2200+2200+2200+200+200 = 7000 W.
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 7000.0, delta=1.0)
+
+    def test_sequence_longer_than_horizon_window_check_clamped_to_horizon(self):
+        """Issue #1081: a sequence longer than the optimization horizon is
+        truncated to the horizon length (with its own warning), so the window
+        check must compare the window against the horizon-clamped length, not
+        the raw sequence length. A window covering the whole horizon fits
+        everything that can actually be placed, so no window warning must fire
+        next to the truncation warning, and the truncated sequence must run.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [[1000] * 12],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [10],
+                "operating_hours_of_each_deferrable_load": [0],
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        joined = "\n".join(logs.output)
+        # The truncation warning fires; the window warning must not.
+        self.assertIn("longer than optimization horizon", joined)
+        self.assertNotIn("power sequence", joined)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # The 12-step sequence was truncated to the 10-step horizon: 10 x 1000 W.
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 10000.0, delta=1.0)
+
+    def test_nonsequence_load_short_window_warns_with_original_wording(self):
+        """Issue #1081: the window-check fix is scoped to sequence loads only.
+        A regular (scalar-power) deferrable load with a window shorter than
+        its operating-hours requirement must keep warning with the original,
+        unmodified wording.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [1000],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [4],
+                "operating_hours_of_each_deferrable_load": [4],
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        joined = "\n".join(logs.output)
+        self.assertIn(
+            "Available timeframe is shorter than the specified number of hours to operate", joined
+        )
+
     def test_thermal_config_unknown_key_warns(self):
         """Issue #943: a thermal_config with an unrecognized key (e.g. the
         singular min_temperature instead of the list min_temperatures, or a
