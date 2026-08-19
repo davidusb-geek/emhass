@@ -1490,11 +1490,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         ``_pin_forecast_to_date``, so exact slot counts are asserted.
 
         ``get_load_cost_forecast`` and ``get_prod_price_forecast`` with
-        method="list" both internally call ``get_forecast_days_csv()`` which
-        uses wall-clock time rather than ``self.start_forecast``.  Pinning
-        those would require mocking ``pd.Timestamp.now`` throughout; instead
-        we just verify they do not raise and produce a DataFrame with the
-        expected columns.
+        method="list" internally call ``get_forecast_days_csv()``.  That used to
+        read the wall clock, so neither could be pinned here and both were left
+        out; since #1076 it builds from ``self.start_forecast``, which
+        ``_pin_forecast_to_date`` sets, so their slot counts are asserted too.
         """
         p_pv_forecast = await fcst.get_weather_forecast(method="list")
         self.assertIsInstance(p_pv_forecast, pd.DataFrame)
@@ -1515,11 +1514,25 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(p_load_forecast.values[0], 1)
         self.assertEqual(p_load_forecast.values[-1], expected_last)
 
-        # get_load_cost_forecast and get_prod_price_forecast with method="list"
-        # call get_forecast_days_csv() which always uses wall-clock time and
-        # therefore cannot be pinned to a fixed date without mocking
-        # pd.Timestamp.now globally.  Those code paths are not relevant to the
-        # DST list-trimming fix validated here, so they are omitted.
+        # The two list-priced paths, now that the pinned start reaches them.
+        df_input = pd.DataFrame(
+            {
+                "p_pv_forecast": p_pv_forecast.values[:, 0],
+                "p_load_forecast": p_load_forecast.values,
+            },
+            index=p_pv_forecast.index,
+        )
+        df_cost = fcst.get_load_cost_forecast(df_input, method="list")
+        self.assertEqual(len(df_cost), expected_last)
+        self.assertEqual(df_cost[fcst.var_load_cost].isna().sum(), 0)
+        self.assertEqual(df_cost[fcst.var_load_cost].values[0], 1)
+        self.assertEqual(df_cost[fcst.var_load_cost].values[-1], expected_last)
+
+        df_price = fcst.get_prod_price_forecast(df_cost, method="list")
+        self.assertEqual(len(df_price), expected_last)
+        self.assertEqual(df_price[fcst.var_prod_price].isna().sum(), 0)
+        self.assertEqual(df_price[fcst.var_prod_price].values[0], 1)
+        self.assertEqual(df_price[fcst.var_prod_price].values[-1], expected_last)
 
     async def test_get_forecasts_with_longer_lists_summer(self):
         """3-day list forecast in summer (no DST transition): exactly 3×48 slots."""
@@ -3194,6 +3207,154 @@ class TestForecastDatesTieAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fcst.forecast_dates[0], expected_start)
         self.assertEqual(len(fcst.forecast_dates), 24)
         self.assertTrue(fcst.forecast_dates.is_unique)
+
+
+class TestForecastDaysCsvStartAlignment(unittest.IsolatedAsyncioTestCase):
+    """The csv/list forecast grid must match the one the input data is indexed on.
+
+    ``Forecast.__init__`` freezes ``self.start_forecast`` (and ``forecast_dates``)
+    from the clock at set-input-data time. ``get_forecast_days_csv`` used to read
+    the clock a second time and round it again, so a run whose data prep straddled
+    a rounding boundary built a grid one step off from ``df_final``. The strict
+    lookup in ``_extract_daily_forecast`` then raised
+    ``KeyError: [Timestamp(...)] not in index`` naming the stamp one step behind
+    (issue #1076, reported at 15 min/"first" and again at 30 min/"nearest").
+    """
+
+    TZ = "Europe/Brussels"
+    HORIZON = 10
+
+    async def asyncSetUp(self):
+        import pytz
+
+        self.params = await TestForecast.get_test_params()
+        self.params["passed_data"]["prediction_horizon"] = self.HORIZON
+        self.params["passed_data"]["load_cost_forecast"] = [0.25] * 200
+        self.params["passed_data"]["prod_price_forecast"] = [0.05] * 200
+        params_json = orjson.dumps(self.params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(15, "minutes")
+        retrieve_hass_conf["time_zone"] = pytz.timezone(self.TZ)
+        self.retrieve_hass_conf = retrieve_hass_conf
+        self.optim_conf = optim_conf
+        self.plant_conf = plant_conf
+        self.params_json = params_json
+
+    @staticmethod
+    def _pinned_now(now_local, tz_name):
+        """Patch only ``pd.Timestamp.now``, fixed to one instant.
+
+        ``Forecast`` has no injected clock seam to patch instead, so ``now``
+        itself is the narrowest available target; every other use of
+        ``Timestamp`` keeps its real behaviour. Unlike
+        ``TestForecastDatesTieAlignment._build_forecast``, which patches only
+        for the duration of construction, this returns the context manager so
+        a single test can pin two instants in turn: one for ``__init__``, one
+        for the later call that exposes the skew.
+        """
+        real_timestamp = pd.Timestamp
+        fixed_utc = real_timestamp(now_local, tz=tz_name).tz_convert("UTC")
+
+        def _now(tz=None):
+            return fixed_utc.tz_convert(tz) if tz is not None else fixed_utc.tz_localize(None)
+
+        return unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_now))
+
+    def _build(self, init_now, method_ts_round="first"):
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = method_ts_round
+        with self._pinned_now(init_now, self.TZ):
+            return Forecast(
+                conf,
+                self.optim_conf,
+                self.plant_conf,
+                self.params_json,
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+
+    def _dayahead_input(self, fcst):
+        """Mirrors df_input_data_dayahead: indexed on the frozen forecast dates."""
+        return pd.DataFrame(
+            {"p_pv_forecast": 0.0, "p_load_forecast": 500.0},
+            index=fcst.forecast_dates[: self.HORIZON],
+        )
+
+    def test_grid_start_is_the_frozen_start_not_the_clock(self):
+        """The returned grid starts at ``self.start_forecast`` however late it is called."""
+        fcst = self._build("2026-08-16 17:44:55")
+        # Call it a full step later than construction: the old builder rounded
+        # this second read to 17:45 and started the grid there instead.
+        with self._pinned_now("2026-08-16 17:45:09", self.TZ):
+            dates = fcst.get_forecast_days_csv(timedelta_days=0)
+        self.assertEqual(dates[0], fcst.start_forecast)
+        self.assertTrue(dates.equals(fcst.forecast_dates[: self.HORIZON]))
+
+    def test_boundary_straddle_does_not_raise(self):
+        """Init at 17:44:55 (floors to 17:30), load-cost call at 17:45:09 (floors to 17:45)."""
+        fcst = self._build("2026-08-16 17:44:55")
+        df = self._dayahead_input(fcst)
+        self.assertEqual(str(df.index[0]), "2026-08-16 17:30:00+02:00")
+        with self._pinned_now("2026-08-16 17:45:09", self.TZ):
+            out = fcst.get_load_cost_forecast(df, method="list")
+        self.assertEqual(len(out), self.HORIZON)
+        self.assertTrue(out.index.equals(df.index))
+        self.assertEqual(out[fcst.var_load_cost].isna().sum(), 0)
+        self.assertTrue((out[fcst.var_load_cost] == 0.25).all())
+
+    def test_boundary_straddle_does_not_raise_prod_price(self):
+        """The production-price list path shares the builder and the strict lookup."""
+        fcst = self._build("2026-08-16 17:44:55")
+        df = self._dayahead_input(fcst)
+        with self._pinned_now("2026-08-16 17:45:09", self.TZ):
+            out = fcst.get_prod_price_forecast(df, method="list")
+        self.assertEqual(len(out), self.HORIZON)
+        self.assertEqual(out[fcst.var_prod_price].isna().sum(), 0)
+
+    def test_nearest_half_hour_tie_boundary(self):
+        """The reporter's second config: 30 min steps, "nearest", crash only on the :15 run.
+
+        Round-half-to-even sends :15:00 down to the hour and :45:00 up, so only a
+        run firing at :15 has its two clock reads disagree.
+        """
+        self.retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
+        fcst = self._build("2026-08-17 08:15:00", method_ts_round="nearest")
+        df = self._dayahead_input(fcst)
+        with self._pinned_now("2026-08-17 08:15:44", self.TZ):
+            out = fcst.get_load_cost_forecast(df, method="list")
+        self.assertEqual(len(out), self.HORIZON)
+        self.assertTrue(out.index.equals(df.index))
+
+    def test_perfect_optim_list_path_prices_are_not_shifted(self):
+        """The silent case: ``list_and_perfect`` never raises, it just mis-prices.
+
+        The perfect-optim list path slices with ``between_time`` instead of the
+        strict ``.loc``, so a straddling run came back the right length with the
+        wrong values and nothing to notice: on master the tail repeats
+        (``[0.17, 0.18, 0.18]``) where it should read ``[0.17, 0.18, 0.19]``.
+        """
+        prices = [round(0.10 + 0.01 * i, 2) for i in range(200)]
+        self.params["passed_data"]["load_cost_forecast"] = prices
+        self.params_json = orjson.dumps(self.params).decode("utf-8")
+        fcst = self._build("2026-08-16 17:44:55")
+        df = self._dayahead_input(fcst)
+        with self._pinned_now("2026-08-16 17:45:09", self.TZ):
+            out = fcst.get_load_cost_forecast(df, method="list", list_and_perfect=True)
+        self.assertEqual(len(out), self.HORIZON)
+        # The frozen grid starts at slot 0 of the list, so the horizon is the
+        # first HORIZON prices in order, with no repeated tail value.
+        self.assertEqual(list(out[fcst.var_load_cost]), prices[: self.HORIZON])
+
+    def test_same_step_call_is_unchanged(self):
+        """Counterfactual: both reads inside one step behaved correctly before and after."""
+        fcst = self._build("2026-08-16 17:44:45")
+        df = self._dayahead_input(fcst)
+        with self._pinned_now("2026-08-16 17:44:58", self.TZ):
+            out = fcst.get_load_cost_forecast(df, method="list")
+        self.assertEqual(len(out), self.HORIZON)
+        self.assertTrue(out.index.equals(df.index))
+        self.assertTrue((out[fcst.var_load_cost] == 0.25).all())
 
 
 class _FakeRecorderRetrieveHass:
