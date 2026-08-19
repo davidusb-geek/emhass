@@ -2,63 +2,56 @@
 
 ## Goal
 
-Make EMHASS shave your **peak grid import** (the kW demand / capacity charge many utilities bill on top of energy) in the *same* optimization that minimizes energy cost — no core changes, no second solver. You set one config key to your tariff's demand rate; EMHASS adds a peak-power term to the objective and spreads deferrable load to hold the single highest import point down. Optionally you feed it the peak already locked in this billing period so it never wastes flexibility fighting a peak it can't beat.
+Price a tariff's billed demand peak inside the same EMHASS optimization that prices energy. EMHASS remains tariff-agnostic: the caller supplies the rate, billing-period incumbent, demand window and (for rolling MPC) any realised part of the open tariff interval.
 
 ## Prerequisites
 
-- EMHASS **≥ 0.17.7** (the opt-in capacity / demand charge with billing-period peak floor landed in that release — CHANGELOG `#623`).
-- No special config block — this rides on your existing grid-import setup. If `capacity_cost_per_kw` is `0` (the default) the feature is a true no-op: the peak variable is not even created.
-- Transport-agnostic. The static rate is a config key; the optional incurred-peak floor is a runtime param on `naive-mpc-optim` calls (any orchestrator that POSTs runtime params — Node-RED, AppDaemon, HA `rest_command`, a cron `curl`).
+- Base capacity charging (`capacity_cost_per_kw` and `current_period_peak`) is available from EMHASS 0.17.7.
+- Demand-window use requires a build exposing `capacity_charge_window`.
+- Tariff-interval aggregation requires a build exposing `capacity_charge_interval_timesteps` and `capacity_charge_current_interval_history`.
+- Transport: examples below are direct EMHASS config/runtime payloads. Adapter-specific Node-RED, Home Assistant and AppDaemon transport is not claimed as tested here.
 
-## Step 1: Turn on the demand charge
+## Step 1: Set the marginal capacity-charge rate
 
-<!-- source: src/emhass/data/config_defaults.json:139 (default 0.0 = off) -->
-<!-- source: src/emhass/data/associations.csv:99 (runtime-overridable, same name) -->
+<!-- source: src/emhass/data/config_defaults.json:140 -->
+<!-- source: src/emhass/data/associations.csv:99 -->
+<!-- transport: direct EMHASS configuration; adapter-specific transport untested -->
 
-Set `capacity_cost_per_kw` in your `optim_conf` to your utility's demand-charge rate, in **your currency per kW** of billed peak. This is not a tuning weight you invent — it is the real tariff number, so the optimizer trades a €/kW peak reduction against €/kWh energy arbitrage on the correct economic footing.
+Set `capacity_cost_per_kw` to the marginal billing cost of increasing the applicable billed peak by 1 kW. Do not blindly copy a daily tariff number unless the tariff applies one billing-period peak across those billable days; if it does, convert the daily rate to the corresponding billing-period marginal cost.
 
 ```yaml
 optim_conf:
-  # Demand / capacity charge on the single peak grid import over the horizon.
-  # Currency per kW. 0.0 = feature off (default). Example: €8/kW/month tariff.
   capacity_cost_per_kw: 8.0
 ```
 
-It is also runtime-overridable under the same name (associations.csv), so a time-of-use utility with different demand rates per season can pass it per call instead of hard-coding it.
+`0` (default) disables capacity charging.
 
-Expected: with `capacity_cost_per_kw > 0`, a day-ahead or MPC run still solves and returns `optim_status: Optimal`; the resulting `P_grid` plan has a **lower maximum import** than the same run with the key at `0` (verified in Step 4).
+Expected: the optimization still solves normally; a positive rate gives the solver an economic reason to reduce the applicable demand peak when flexibility is available.
 
-## Step 2: Understand what the solver is doing (the model)
+## Step 2: Understand the default N=1 model
 
-<!-- source: src/emhass/optimization.py:1408-1419 (peak_import epigraph + incurred-peak floor) -->
-<!-- source: src/emhass/optimization.py:1646 (objective term) -->
+<!-- source: src/emhass/optimization.py:1936-1952 -->
+<!-- source: src/emhass/optimization.py:2232 -->
 
-The feature adds one scalar variable `peak_import` (Watts) and the epigraph constraint that pins it to the highest grid-import timestep:
+At the default `capacity_charge_interval_timesteps = 1`, `peak_import` is constrained by each eligible positive-import timestep and floored by `current_period_peak`. The objective prices that scalar peak once in currency/kW.
 
-```
-peak_import ≥ p_grid_pos[t]        for every timestep t     (epigraph → peak = max import)
-peak_import ≥ current_period_peak                           (floor at already-incurred peak, Step 3)
-```
+```text
+peak_import >= capacity_charge_window[t] * p_grid_pos[t]
+peak_import >= current_period_peak
 
-and one term to the maximization objective (EMHASS maximizes −cost):
-
-```
-maximize:  −Σ_t ( unit_load_cost[t] · p_grid_pos[t] · Δt )        # energy cost, per-timestep
-           − capacity_cost_per_kw · ( peak_import / 1000 )        # demand charge, ONE-TIME on the peak
+capacity term = capacity_cost_per_kw * peak_import / 1000
 ```
 
-That is exactly a weighted-sum of the two objectives: energy cost plus a peak-power penalty. Because the demand term is a **power** charge it is *not* multiplied by the timestep the way the energy terms are — `peak_import` is in W and divided by 1000 to price it in kW. The epigraph is what linearizes `max(p_grid_pos)` into an LP the existing solver handles, so nothing about your solver choice changes.
+This is a power charge, so it is not multiplied by the optimization timestep.
 
-Expected: no action this step — this is the mental model for why raising `capacity_cost_per_kw` flattens the import profile instead of just shifting it to the cheapest hour.
+Expected: `N=1` preserves the pre-aggregation capacity-charge semantics.
 
-## Step 3 (MPC only): Feed the peak already incurred this billing period
+## Step 3: Feed the incumbent billing-period peak (MPC)
 
-<!-- source: src/emhass/utils.py:1637-1638 (treat_runtimeparams reads current_period_peak on the prediction_horizon path) -->
-<!-- source: src/emhass/optimization.py:281-303, 3889-3906 (scalar Watts param, coerced/validated) -->
+<!-- source: src/emhass/utils.py:1771 -->
+<!-- transport: direct EMHASS naive-mpc-optim runtime JSON; adapter-specific transport untested -->
 
-A demand charge is billed on the **month's** peak, but one optimization only sees its own horizon. If you already hit, say, 6 kW earlier this month, there is no point spending battery/deferrable flexibility to keep this afternoon under 6 kW — that peak is already paid for. Pass the running monthly peak as `current_period_peak` (in **Watts**) so the solver floors `peak_import` there and only fights *new* peaks above it.
-
-This is a runtime param, honored on the `naive-mpc-optim` (prediction-horizon) path. POST it to `/action/naive-mpc-optim` in the `runtime_params` body (strictly valid JSON, copy-paste as-is):
+Pass `current_period_peak` in Watts. With `N=1`, use the highest eligible positive-import timestep already incurred in the current billing period. With `N>1`, use the highest eligible completed tariff-interval average instead.
 
 ```json
 {
@@ -68,19 +61,16 @@ This is a runtime param, honored on the `naive-mpc-optim` (prediction-horizon) p
 }
 ```
 
-- `current_period_peak` is in **Watts** — the highest grid import measured so far this billing month.
-- `capacity_cost_per_kw` here is an optional per-call override of the Step 1 config value.
-- Both are **scalars, not arrays**, so the template's array-length / `horizon_steps` sizing rule does not apply — nothing to pad or truncate.
+The currently open tariff interval is not part of this incumbent until it completes.
 
-Your orchestrator maintains the running peak: on each cycle, `current_period_peak = max(previous_stored_peak, latest_measured_grid_import_W)`, reset to `0` at the start of each billing period.
+Expected: EMHASS does not spend flexibility trying to reduce the planned peak below a billed peak that is already locked in.
 
-Expected: with a non-zero `current_period_peak`, the plan stops shaving below that floor — deferrable loads relax up to (but not past) the incurred peak, recovering energy-cost savings the charge would otherwise forfeit.
+## Step 3b: Apply the tariff demand window (MPC)
 
-## Step 3b (MPC only): Mask the charge to your tariff's demand window
+<!-- source: src/emhass/utils.py:1780 -->
+<!-- transport: direct EMHASS naive-mpc-optim runtime JSON; adapter-specific transport untested -->
 
-<!-- source: src/emhass/optimization.py (param_capacity_window vector param, masked epigraph) -->
-
-Many tariffs assess demand only inside a **window** (e.g. 16:00-20:00, business days). Without a mask, the epigraph prices *every* timestep, so a deliberate off-window import — midday EV charging is the classic case — pins `peak_import` and the optimizer both pays a phantom charge on it and sees zero marginal value in shaving the actual window. Pass `capacity_charge_window`, a `prediction_horizon`-length list of `0`/`1` weights aligned to the horizon timesteps, and the epigraph becomes `peak_import ≥ mask[t] · p_grid_pos[t]`: only in-window import can set the priced peak.
+`capacity_charge_window` is a `prediction_horizon`-length list aligned with the horizon. The example below has `prediction_horizon: 24`, so the mask contains exactly 24 values.
 
 ```json
 {
@@ -91,35 +81,94 @@ Many tariffs assess demand only inside a **window** (e.g. 16:00-20:00, business 
 }
 ```
 
-Your orchestrator owns the calendar (business days, public holidays, seasons) and recomputes the mask each cycle; EMHASS stays tariff-agnostic. Omit the key for the previous full-horizon behaviour. An all-zero mask (horizon entirely outside the window) makes the demand term a constant — the plan is then identical to a run without the charge, which is exactly right when no window timestep is reachable. If your billing period is monthly, zero the slots that fall in the *next* month and reset `current_period_peak` at the boundary. See `passing_data.md` for an HA template that builds the mask.
+The caller owns business-day, holiday, season and timezone rules. With `N>1`, EMHASS uses the mask value at each completed tariff interval endpoint, so demand-window boundaries should align with tariff measurement-interval boundaries.
 
-Expected: with the spike-owning timesteps masked out, off-window imports run unshaved at full power while in-window import is shaved toward the `current_period_peak` floor.
+Expected: only eligible demand-window timesteps/intervals can raise the priced peak.
 
-## Step 4: Verify the shave
+## Step 3c: Price a tariff measurement interval
 
-<!-- source: docs/plan_output_schema.md — `P_grid` (W, positive = import); P_grid = P_grid_pos + P_grid_neg at optimization.py:2299 -->
+<!-- source: src/emhass/data/config_defaults.json:141 -->
+<!-- source: src/emhass/data/associations.csv:100 -->
+<!-- source: src/emhass/optimization.py:1683 -->
+<!-- source: src/emhass/utils.py:1788 -->
+<!-- transport: direct EMHASS configuration/runtime JSON; adapter-specific transport untested -->
 
-`peak_import` is an internal solver variable, not a published column, so read the effect off the published `P_grid` series: its maximum positive value is the planned peak import. Run the same inputs twice and compare:
+Set `capacity_charge_interval_timesteps` to the number of native optimization timesteps in one tariff measurement interval:
 
-```python
-# From the EMHASS optimization result DataFrame `opt_res`:
-peak_off = opt_res["P_grid"].clip(lower=0).max()  # capacity_cost_per_kw = 0.0
-peak_on = opt_res["P_grid"].clip(lower=0).max()  # capacity_cost_per_kw = 8.0
-# Expect peak_on <= peak_off, at the cost of a small rise in the energy-only cost_fun term.
+```yaml
+optim_conf:
+  capacity_charge_interval_timesteps: 6
 ```
 
-Expected: `peak_on ≤ peak_off`. The gap is your planned peak reduction; if it is zero, either your load has no shiftable headroom in this horizon or the demand rate is too small relative to the energy spread to justify moving anything.
+For a 5-minute optimizer and a clocked 30-minute demand interval, `N=6`. `N` must be a positive integer; invalid values warn and fall back to `1`. A ratio such as 30/20 = 1.5 cannot be represented exactly by this model.
+
+With `N>1`, EMHASS prices completed N-timestep average positive import instead of the largest raw native timestep. A single 6000 W 5-minute spike in an otherwise-zero 30-minute block therefore contributes 1000 W to the billed 30-minute average.
+
+Rolling MPC may start inside an already-open interval. Pass the average positive-import power for each elapsed native timestep, oldest to newest:
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": 8.0,
+  "capacity_charge_interval_timesteps": 6,
+  "capacity_charge_current_interval_history": [2000, 4000, 0, 6000]
+}
+```
+
+At 17:20 in a 17:00-17:30 interval, four 5-minute averages are already realised. If the remaining planned averages are 3000 W and 1000 W, the completed 30-minute average is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`.
+
+History entries are native-interval averages, not instantaneous snapshots. An equivalent energy measurement is valid after conversion to mean Watts.
+
+Expected: the first tariff interval combines realised history with the remaining planned timesteps, then subsequent completed intervals use planned data only.
+
+## Step 4: Verify the tariff metric
+
+<!-- source: src/emhass/optimization.py:1683 -->
+<!-- transport: local Python helper; untested adapter transport - contribution welcome -->
+
+Do not verify `N>1` with the raw maximum of `P_grid`; that would compare a native-timestep peak with a tariff-interval average. Use the same completed-interval metric:
+
+```python
+def billed_peak_w(p_grid_w, n=1, history=(), window=None, incumbent_w=0):
+    imports = [max(float(p), 0.0) for p in p_grid_w]
+    weights = [1.0] * len(imports) if window is None else list(window)
+    if n == 1:
+        candidates = [w * p for w, p in zip(weights, imports)]
+    else:
+        m = len(history)
+        end = n - m - 1
+        candidates = []
+        first = True
+        while end < len(imports):
+            if first:
+                total = sum(history) + sum(imports[: end + 1])
+                first = False
+            else:
+                total = sum(imports[end - n + 1 : end + 1])
+            candidates.append(weights[end] * total / n)
+            end += n
+    return max([float(incumbent_w), *candidates])
+
+
+assert billed_peak_w([0, 0, 0, 0, 0, 6000], n=6) == 1000
+assert round(billed_peak_w([3000, 1000], n=6, history=[2000, 4000, 0, 6000]), 1) == 2666.7
+```
+
+Expected: comparisons between capacity-charge runs use the billed metric above, not the raw native-timestep maximum.
 
 ## Caveats
 
-- **Horizon peak ≠ calendar-month peak.** Each run only prices the peak *within its own horizon*. True monthly demand-charge behavior requires the MPC path plus `current_period_peak` (Step 3) carrying the month's running peak; a bare day-ahead run resets the notion of "peak" every solve.
-- **`current_period_peak` is MPC-only.** It is read from runtime params on the `prediction_horizon` path (`utils.py:1637`) and defaults to `None` on the day-ahead path (`utils.py:1675`) — passing it to `dayahead-optim` has no effect.
-- **Opt-in, fail-open on bad input.** Default `0.0` skips the variable entirely (`optimization.py:1408`). A negative or non-finite `capacity_cost_per_kw` / `current_period_peak` is *ignored with a warning*, not an error (`optimization.py:1260-1270`, `3894-3906`) — so a bad value silently disables the charge; check your logs if a shave you expected does not appear.
-- **Units.** `capacity_cost_per_kw` is per **kW**; `current_period_peak` is in **Watts** (matches `P_grid`). Mixing them up (e.g. passing 6 instead of 6000) sets a 6 W floor, effectively no floor.
-- **`capacity_charge_window` is MPC-only and fail-open too.** Like `current_period_peak` it is read on the `prediction_horizon` path only. An invalid mask (non-numeric, NaN/inf, shorter than the horizon) is ignored with a warning — the full horizon gets priced again, which *overstates* the charge on off-window imports; check logs if the window seems to have no effect.
+- `current_period_peak`, `capacity_charge_window` and `capacity_charge_current_interval_history` are MPC runtime inputs. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
+- `dayahead-optim` and `perfect-optim` have no elapsed-interval history. With `N>1`, start their horizon on a tariff measurement-interval boundary.
+- A tariff interval incomplete at the far end of the horizon is not priced until a later receding-horizon solve can see its completion. No terminal continuation model is added here.
+- Exact billing-period rollover with `N>1` assumes the billing-period boundary aligns with a tariff measurement-interval boundary. EMHASS does not split one aggregated interval across two billing periods.
+- This implementation represents one capacity-charge component per solve. Independent components with different rates, windows or incumbent peaks require separate future support.
+- `current_period_peak` and interval history are in Watts; `capacity_cost_per_kw` is currency/kW.
+- The caller owns tariff calendar/state. EMHASS does not persist billing-period peaks or compute tariff seasons/timezones.
 
 ## Credits
 
-- Feature: opt-in capacity / demand charge with billing-period peak floor — **#623**, implemented by @LesIT1, requested by @matti-oss.
-- Weighted-sum peak/cost LP formulation from the #623 discussion (@Whatsonyourmind).
-- Field names and line numbers verified against `src/emhass/utils.py:treat_runtimeparams`, `src/emhass/optimization.py`, and `src/emhass/data/config_defaults.json` on 2026-07-18, using the EMHASS 0.17.9 source tree (the then-current release — a verification snapshot only; the feature itself requires just **≥ 0.17.7**, per Prerequisites).
+- Base capacity-charge feature — **#623**, implemented by @LesIT1, requested by @matti-oss.
+- Weighted-sum / LP peak-cost formulation from the #623 discussion — @Whatsonyourmind.
+- Demand-window feature — **#1066**, @hossamnagy.
+- Tariff measurement-interval aggregation — **#540** discussion.

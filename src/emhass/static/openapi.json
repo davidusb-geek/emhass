@@ -1087,7 +1087,14 @@
             "default": 0.0,
             "title": "Capacity (demand) charge cost",
             "x-unit": "¤/kW",
-            "description": "A cost (currency per kW) applied to the peak grid import power over the optimisation horizon, for tariffs with a capacity or demand charge. 0 (default) disables it and leaves the plan unchanged. A positive value makes the optimiser flatten the import peak, trading it off against energy cost in a single pass. The peak is priced once (it is a power charge, not energy), so set it to the marginal value of shaving 1 kW of peak. (unit: ¤/kW)"
+            "description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. (unit: ¤/kW)"
+          },
+          "capacity_charge_interval_timesteps": {
+            "type": "integer",
+            "default": 1,
+            "title": "Capacity charge tariff measurement interval",
+            "x-unit": "timesteps",
+            "description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. (unit: timesteps)"
           },
           "ignore_pv_feedback_during_curtailment": {
             "type": "boolean",

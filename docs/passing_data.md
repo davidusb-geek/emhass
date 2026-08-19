@@ -162,15 +162,15 @@ The target must be *reachable* by its timestep. If the requested SOC cannot be a
 
 ### Capping the demand charge at the peak already incurred (naive-mpc-optim)
 
-EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)): a cost on the single highest grid-import power over the optimization horizon, which pushes the optimizer to flatten import peaks.
+EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)). With `capacity_charge_interval_timesteps = 1` (default), it prices the highest eligible positive-import timestep; with `N > 1`, it prices the highest eligible completed tariff-interval average described below.
 
-In a real tariff the demand charge is assessed over the whole **billing period** (e.g. a month), not just the optimization horizon. Once you have already hit, say, 7 kW earlier in the month, there is no point spending battery energy now to keep this horizon's peak below 7 kW: that peak is already "locked in" and will be billed regardless. The optional runtime key `current_period_peak` tells EMHASS what that already-incurred peak is, so it only shaves the part of a new peak that is actually above it.
+In a real tariff the demand charge is assessed over a **billing period**, not just the optimization horizon. The billing period may use any caller-defined start/end dates; it does not need to be a calendar month. Once you have already incurred, say, a 7 kW billed peak earlier in the current period, there is no point spending battery energy now to keep this horizon's eligible peak below 7 kW: that peak is already "locked in" and will be billed regardless. The optional runtime key `current_period_peak` tells EMHASS what that already-incurred billed peak is, so it only shaves the part of a new peak that is actually above it.
 
-- `current_period_peak`: the peak grid import already reached this billing period, in **Watts** (not kW). Only effective when `capacity_cost_per_kw > 0`; ignored otherwise. The planned import peak is floored at this value, so the optimizer will not waste battery or deferrable flexibility trying to push the peak below a level already incurred.
+- `current_period_peak`: the billed peak already incurred in this billing period, in **Watts** (not kW). With `capacity_charge_interval_timesteps = 1`, use the highest eligible positive-import timestep. With `capacity_charge_interval_timesteps > 1`, use the highest eligible **completed clocked tariff-interval average**; keep the currently open interval in `capacity_charge_current_interval_history` until it completes. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
 
 It defaults to *unset* (`None`, equivalent to 0), in which case the full horizon peak is priced, identical to behaviour without this key. It is a one-sided floor (`peak_import >= current_period_peak`), so it never forces additional import and never makes the problem infeasible.
 
-For example, with a capacity charge configured and 7 kW already incurred this month:
+For example, with a capacity charge configured and a 7 kW billed peak already incurred in the current billing period:
 
 ```json
 {
@@ -180,7 +180,7 @@ For example, with a capacity charge configured and 7 kW already incurred this mo
 }
 ```
 
-As an HA `rest_command`, reading a kW sensor that tracks the monthly peak and converting to Watts:
+As an HA `rest_command`, reading a kW sensor that tracks the applicable billing-period peak and converting to Watts (for `N > 1`, that sensor must track the highest **completed tariff-interval average**, not the largest instantaneous sample):
 
 ```yaml
 rest_command:
@@ -192,7 +192,7 @@ rest_command:
       {
         "prediction_horizon": 48,
         "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
-        "current_period_peak": {{ states('sensor.monthly_peak_grid_import_kw') | float(0) * 1000 }}
+        "current_period_peak": {{ states('sensor.billing_period_peak_grid_import_kw') | float(0) * 1000 }}
       }
 ```
 
@@ -206,9 +206,9 @@ Many demand tariffs do not charge the highest import of the whole day: they char
 
 The optional runtime key `capacity_charge_window` masks the peak constraint to the window:
 
-- `capacity_charge_window`: a list of weights in `[0, 1]` of length `prediction_horizon`, aligned to the horizon timesteps like `load_cost_forecast`. The priced peak only "sees" timesteps where the mask is non-zero (`peak_import >= mask[t] * grid_import[t]`), so off-window import cannot inflate the demand charge. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
+- `capacity_charge_window`: a list of weights in `[0, 1]` of length `prediction_horizon`, aligned to the horizon timesteps like `load_cost_forecast`. At `capacity_charge_interval_timesteps = 1`, the priced peak only sees timesteps where the mask is non-zero (`peak_import >= mask[t] * grid_import[t]`). At `capacity_charge_interval_timesteps > 1`, the mask is evaluated at each completed tariff interval's endpoint and scales that completed interval average. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
 
-EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed monthly demand tariff faithfully: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
+EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed demand tariff over the caller-defined billing period: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
 
 As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon:
 
@@ -223,9 +223,72 @@ As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a
 ```
 
 ```{note}
-The mask defaults to *unset* (`None`) = every timestep priced, identical to behaviour without this key. An all-zero mask (no window in this horizon) makes the demand term a constant - the plan is then identical to running without a capacity charge. An invalid mask (non-numeric entries, NaN/infinity, or shorter than the horizon) is ignored with a warning and the full horizon is priced; a longer mask is truncated; weights outside `[0, 1]` are clipped. Fractional weights are allowed and scale how much of that timestep's import the priced peak sees. If your billing period resets monthly, also zero the mask entries that fall in the *next* month and reset `current_period_peak` on the boundary, so the new period starts from a clean floor.
+The mask defaults to *unset* (`None`) = every timestep priced, identical to behaviour without this key. An all-zero mask (no window in this horizon) makes the demand term a constant - the plan is then identical to running without a capacity charge. An invalid mask (non-numeric entries, NaN/infinity, or shorter than the horizon) is ignored with a warning and the full horizon is priced; a longer mask is truncated; weights outside `[0, 1]` are clipped. Fractional weights are allowed: at `N = 1` they scale that timestep's import; at `N > 1` the endpoint weight scales the completed tariff-interval average, including any realised-history contribution to the first interval. If the horizon crosses the end of the current billing period, zero mask entries that belong to the *next* billing period. When the boundary is actually crossed, reset `current_period_peak` for the new period. The billing period may use any caller-defined start/end dates; it does not need to match a calendar month.
 ```
 
+### Pricing the tariff's measurement interval, not the raw timestep
+
+Most demand tariffs bill the **average import power over a fixed clocked interval** rather than the largest native optimizer timestep (issue [#540](https://github.com/davidusb-geek/emhass/issues/540)).
+
+The three time concepts are independent:
+
+| Concept | Example | Owner |
+|---|---|---|
+| EMHASS native timestep | 5 minutes | `optimization_time_step` |
+| Tariff measurement interval | 30 minutes | `capacity_charge_interval_timesteps` |
+| Billing period | 14 August to 13 September | caller/orchestrator |
+
+Set:
+
+```text
+capacity_charge_interval_timesteps =
+    tariff_measurement_interval_minutes / optimization_time_step_minutes
+```
+
+The result must be a positive integer for exact interval representation. Invalid values warn and fall back to `1` (no aggregation). Examples: 15/5 = 3, 30/5 = 6 and 30/30 = 1. A 30-minute tariff with a 20-minute optimizer step gives 1.5 and cannot be represented exactly by this N-timestep aggregation.
+
+At `N = 1` (default), the original per-timestep capacity-charge behavior applies. At `N > 1`, only completed N-timestep tariff-interval averages can raise the priced peak. A single 6000 W 5-minute import inside an otherwise-zero 30-minute (`N = 6`) interval therefore contributes 1000 W to the completed interval average.
+
+`capacity_charge_interval_timesteps` is a structural `optim_conf` parameter shared by `naive-mpc-optim`, `dayahead-optim` and `perfect-optim`. Changing it changes the optimization structure/cache key and rebuilds the problem.
+
+#### Runtime state for a partly elapsed MPC interval
+
+`capacity_charge_current_interval_history` is `naive-mpc-optim` runtime state. It is a list of the **average positive grid-import power in Watts for each native timestep already elapsed in the currently open tariff interval**, oldest to newest.
+
+For a 5-minute optimizer and a clocked 30-minute tariff interval, a solve starting at 17:20 has four elapsed native intervals (17:00-05, 05-10, 10-15 and 15-20). Example:
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": 8.0,
+  "capacity_charge_interval_timesteps": 6,
+  "capacity_charge_current_interval_history": [2000, 4000, 0, 6000]
+}
+```
+
+The history length (`0` to `N - 1`) encodes the horizon's phase inside the open tariff interval. Each entry is an interval **average**, not an instantaneous sensor snapshot. An equivalent energy-derived value is valid:
+
+```text
+average_W = elapsed_energy_Wh / (optimization_time_step_minutes / 60)
+```
+
+If that 17:20 solve plans 3000 W for 17:20-25 and 1000 W for 17:25-30, the completed 17:00-17:30 interval is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`.
+
+When `N > 1`, `current_period_peak` must use the **same tariff metric**: the highest eligible **completed clocked tariff-interval average** already incurred in the current billing period. Do not add the currently open interval to `current_period_peak` until that interval completes.
+
+`capacity_charge_window` still composes with aggregation. For `N > 1`, it is evaluated at each completed tariff interval's endpoint, so demand-window boundaries should align with measurement-interval boundaries. The caller owns timezone, season, business-day, holiday and billing-period calendar logic.
+
+If the optimization horizon crosses into the next billing period, keep next-period mask entries at `0` until the actual rollover. After rollover, reset `current_period_peak` and build the new period's mask. The current single-component model cannot carry separate old-period and new-period incumbent peaks in one solve. With `N > 1`, exact rollover handling also assumes the billing-period boundary aligns with a tariff measurement-interval boundary; EMHASS does not split one aggregated interval across two billing periods.
+
+The current model represents one capacity-charge component per solve. Independent components with different rates, windows or incumbent peaks require separate future support.
+
+`dayahead-optim` and `perfect-optim` also aggregate when `N > 1`, but they do not receive elapsed-interval history. Their horizon start must therefore align to a tariff measurement-interval boundary.
+
+A tariff interval incomplete at the far end of the horizon is not priced in that solve; a later receding-horizon solve prices it once its completion becomes visible.
+
+```{note}
+Invalid history (non-numeric, NaN/infinity, negative values, or longer than `N - 1`) is ignored with a warning and falls back to empty history, meaning t0 is treated as a tariff-interval boundary. At `N = 1`, interval-history machinery is not used.
+```
 ### Passing forecast data
 
 There is a complete dedicated section in the [Forecast](forecasts) section.
