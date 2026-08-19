@@ -3887,20 +3887,25 @@ class Optimization:
 
             # Time Window Logic
             # Calculate Valid Window
-            if def_total_timestep and def_total_timestep[k] > 0:
-                def_start, def_end, warning = Optimization.validate_def_timewindow(
-                    def_start_timestep[k],
-                    def_end_timestep[k],
-                    ceil(def_total_timestep[k]),
-                    n,
-                )
+            if is_sequence_load:
+                # A sequence load is placed in one piece, so the window must fit the
+                # whole sequence. Operating hours/timesteps play no role for sequence
+                # loads (their energy constraint is skipped above), so they must not
+                # drive this check either. Clamped to the horizon: a sequence longer
+                # than the horizon is truncated to n steps (warned above), so n is
+                # all the window ever needs to fit.
+                min_steps = min(sequence_length, n)
+            elif def_total_timestep and def_total_timestep[k] > 0:
+                min_steps = ceil(def_total_timestep[k])
             else:
-                def_start, def_end, warning = Optimization.validate_def_timewindow(
-                    def_start_timestep[k],
-                    def_end_timestep[k],
-                    ceil(def_total_hours[k] / self.time_step),
-                    n,
-                )
+                min_steps = ceil(def_total_hours[k] / self.time_step)
+            def_start, def_end, warning = Optimization.validate_def_timewindow(
+                def_start_timestep[k],
+                def_end_timestep[k],
+                min_steps,
+                n,
+                is_sequence=is_sequence_load,
+            )
             if warning is not None:
                 self.logger.warning(f"Deferrable load {k} : {warning}")
 
@@ -6059,7 +6064,7 @@ class Optimization:
 
     @staticmethod
     def validate_def_timewindow(
-        start: int, end: int, min_steps: int, window: int
+        start: int, end: int, min_steps: int, window: int, is_sequence: bool = False
     ) -> tuple[int, int, str]:
         r"""
         Helper function to validate (and if necessary: correct) the defined optimization window of a deferrable load.
@@ -6068,10 +6073,16 @@ class Optimization:
         :type start: int
         :param end: End timestep of the optimization window of the deferrable load
         :type end: int
-        :param min_steps: Minimal timesteps during which the load should operate (at nominal power)
+        :param min_steps: Minimal number of usable timesteps the window must contain:
+            derived from the operating hours for regular loads, or from the
+            (horizon-clamped) sequence length for sequence loads
         :type min_steps: int
         :param window: Total number of timesteps in the optimization window
         :type window: int
+        :param is_sequence: True when min_steps was derived from a sequence load's
+            power-sequence length rather than from operating hours/timesteps. Selects
+            the wording of the short-timeframe warning.
+        :type is_sequence: bool
         :return: start_validated: Validated start timestep of the optimization window of the deferrable load
         :rtype: int
         :return: end_validated: Validated end timestep of the optimization window of the deferrable load
@@ -6089,9 +6100,16 @@ class Optimization:
             start_validated = max(0, min(window, start))
             end_validated = max(0, min(window, end))
             if end_validated > 0:
-                # If the available timeframe is shorter than the number of timesteps needed to meet the hours to operate (def_total_hours), issue a warning.
+                # If the available timeframe is shorter than the number of timesteps the load needs (min_steps: from the operating hours, or the sequence length for a sequence load), issue a warning.
                 if (end_validated - start_validated) < min_steps:
-                    warning = "Available timeframe is shorter than the specified number of hours to operate. Optimization will fail."
+                    if is_sequence:
+                        warning = (
+                            f"Available timeframe ({end_validated - start_validated} timesteps) is "
+                            f"shorter than the load's power sequence ({min_steps} timesteps). "
+                            "Optimization will fail."
+                        )
+                    else:
+                        warning = "Available timeframe is shorter than the specified number of hours to operate. Optimization will fail."
         else:
             warning = "Invalid timeframe for deferrable load (start timestep is not <= end timestep). Continuing optimization without timewindow constraint."
         return start_validated, end_validated, warning
