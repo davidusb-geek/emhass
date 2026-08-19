@@ -1780,6 +1780,14 @@ async def treat_runtimeparams(
             params["passed_data"]["capacity_charge_window"] = runtimeparams.get(
                 "capacity_charge_window", None
             )
+            # Realised import history for the currently open tariff interval
+            # (issue #540). Runtime-only list, in Watts; defaults to None (empty
+            # history, i.e. horizon start assumed to sit on an interval
+            # boundary). Coercion/validation happens in
+            # Optimization.perform_optimization.
+            params["passed_data"]["capacity_charge_current_interval_history"] = runtimeparams.get(
+                "capacity_charge_current_interval_history", None
+            )
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
@@ -1830,6 +1838,9 @@ async def treat_runtimeparams(
             # Like current_period_peak, the demand-window mask is naive-mpc-only:
             # dayahead/perfect optimizations price the full horizon peak.
             params["passed_data"]["capacity_charge_window"] = None
+            # Like the two above, the interval-aggregation history is
+            # naive-mpc-only (issue #540).
+            params["passed_data"]["capacity_charge_current_interval_history"] = None
 
         # Parsing the thermal model parameters
         # Load the default config
@@ -3500,6 +3511,7 @@ async def build_params(
         "soc_target_timestep": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
+        "capacity_charge_current_interval_history": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
         "end_timesteps_of_each_deferrable_load": None,
