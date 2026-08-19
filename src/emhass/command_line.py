@@ -592,7 +592,13 @@ async def _retrieve_from_hass(
             if logger:
                 logger.debug(f"Variable list for data retrieval: {var_list}")
     success = await rh.get_data(
-        days_list, var_list, minimal_response=False, significant_changes_only=False
+        days_list,
+        var_list,
+        minimal_response=False,
+        significant_changes_only=False,
+        # A stale battery's sensor shouldn't cost a healthy battery days it did
+        # have data for; each battery's fit only reads its own two columns (#1061).
+        keep_partial_days=(set_type == "battery_id"),
     )
     return success, days_list
 

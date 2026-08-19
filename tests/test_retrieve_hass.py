@@ -3,6 +3,7 @@ import asyncio
 import bz2
 import copy
 import datetime
+import inspect
 import os
 import pathlib
 import pickle
@@ -1112,6 +1113,249 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
             result = await self.rh._get_data_rest_api(days_list, var_list)
             self.assertFalse(result)
+
+    @staticmethod
+    def _make_partial_day_data(date_str, entity_id, num_records=96, minutes_step=15):
+        """Build HA history payload records for one (day, sensor) pair, #1061 tests."""
+        records = []
+        base = pd.Timestamp(date_str, tz="UTC")
+        for i in range(num_records):
+            ts = base + pd.Timedelta(minutes=minutes_step * i)
+            records.append(
+                {
+                    "entity_id": entity_id,
+                    "state": str(100.0 + i),
+                    "attributes": {},
+                    "last_changed": ts.isoformat(),
+                    "last_updated": ts.isoformat(),
+                }
+            )
+        return [records]  # HA wraps per-entity in a list
+
+    def _partial_day_url(self, day, var):
+        base_url = self.retrieve_hass_conf["hass_url"] + "api/history/period/"
+        return base_url + day.strftime("%Y-%m-%dT%H:%M:%SZ") + f"?filter_entity_id={var}"
+
+    async def test_get_data_rest_api_keep_partial_days_keeps_day(self):
+        """T1 (#1061): with keep_partial_days on, a day with SOME variables present
+        is kept instead of dropped; the missing variable shows up as NaN for that
+        day rather than removing every variable's data for it."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_a = "sensor.var_a"
+        var_b = "sensor.var_b"
+        var_list = [var_a, var_b]
+
+        kwargs = {}
+        if "keep_partial_days" in inspect.signature(self.rh._get_data_rest_api).parameters:
+            kwargs["keep_partial_days"] = True
+
+        with aioresponses() as mocked:
+            # Day 1: var_a has data, var_b has none for this day
+            mocked.get(
+                self._partial_day_url(days_list[0], var_a),
+                payload=self._make_partial_day_data("2024-01-01", var_a),
+                status=200,
+            )
+            mocked.get(self._partial_day_url(days_list[0], var_b), payload=[], status=200)
+            # Day 2: both variables have data
+            mocked.get(
+                self._partial_day_url(days_list[1], var_a),
+                payload=self._make_partial_day_data("2024-01-02", var_a),
+                status=200,
+            )
+            mocked.get(
+                self._partial_day_url(days_list[1], var_b),
+                payload=self._make_partial_day_data("2024-01-02", var_b),
+                status=200,
+            )
+
+            result = await self.rh._get_data_rest_api(days_list, var_list, **kwargs)
+
+        self.assertTrue(result)
+        df = self.rh.df_final
+        # Boolean masks rather than .loc partial-string lookups: on base (kwarg
+        # stripped) day 1 is dropped entirely and .loc would raise KeyError,
+        # masking the intended behavioural RED failure on the assertion below.
+        day1 = df[df.index.normalize() == pd.Timestamp("2024-01-01", tz="UTC")]
+        day2 = df[df.index.normalize() == pd.Timestamp("2024-01-02", tz="UTC")]
+        self.assertFalse(day1.empty, "day 1 rows should be present when keep_partial_days is on")
+        self.assertFalse(day1[var_a].isna().all(), "var_a should have real values on day 1")
+        self.assertTrue(day1[var_b].isna().all(), "var_b should be all-NaN on day 1 (missing)")
+        self.assertFalse(day2[var_b].isna().all(), "var_b should have real values on day 2")
+
+    async def test_get_data_rest_api_default_still_skips_partial_days(self):
+        """T2 (#1061): no-op proof. With the flag not passed at all, default
+        behaviour is unchanged: a day missing any variable is dropped whole, and
+        there is no NaN stretch left behind. Must pass on base and patched."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_a = "sensor.var_a"
+        var_b = "sensor.var_b"
+        var_list = [var_a, var_b]
+
+        with aioresponses() as mocked:
+            mocked.get(
+                self._partial_day_url(days_list[0], var_a),
+                payload=self._make_partial_day_data("2024-01-01", var_a),
+                status=200,
+            )
+            mocked.get(self._partial_day_url(days_list[0], var_b), payload=[], status=200)
+            mocked.get(
+                self._partial_day_url(days_list[1], var_a),
+                payload=self._make_partial_day_data("2024-01-02", var_a),
+                status=200,
+            )
+            mocked.get(
+                self._partial_day_url(days_list[1], var_b),
+                payload=self._make_partial_day_data("2024-01-02", var_b),
+                status=200,
+            )
+
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+
+        self.assertTrue(result)
+        df = self.rh.df_final
+        # Day 1 fully dropped: index starts on day 2, no all-NaN stretch anywhere
+        self.assertGreaterEqual(df.index[0], pd.Timestamp("2024-01-02", tz="UTC"))
+        self.assertFalse(df[var_a].isna().all())
+        self.assertFalse(df[var_b].isna().all())
+        self.assertEqual(df[var_a].isna().sum(), 0)
+        self.assertEqual(df[var_b].isna().sum(), 0)
+
+    async def test_get_data_rest_api_keep_partial_days_all_missing_still_skipped(self):
+        """T3 (#1061): with the flag on, a day is only kept if at least one
+        variable has data; a day where every variable is missing is still
+        skipped, same as default mode."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_a = "sensor.var_a"
+        var_b = "sensor.var_b"
+        var_list = [var_a, var_b]
+
+        kwargs = {}
+        if "keep_partial_days" in inspect.signature(self.rh._get_data_rest_api).parameters:
+            kwargs["keep_partial_days"] = True
+
+        with aioresponses() as mocked:
+            # Day 1: both variables missing
+            mocked.get(self._partial_day_url(days_list[0], var_a), payload=[], status=200)
+            mocked.get(self._partial_day_url(days_list[0], var_b), payload=[], status=200)
+            # Day 2: both variables have data
+            mocked.get(
+                self._partial_day_url(days_list[1], var_a),
+                payload=self._make_partial_day_data("2024-01-02", var_a),
+                status=200,
+            )
+            mocked.get(
+                self._partial_day_url(days_list[1], var_b),
+                payload=self._make_partial_day_data("2024-01-02", var_b),
+                status=200,
+            )
+
+            result = await self.rh._get_data_rest_api(days_list, var_list, **kwargs)
+
+        self.assertTrue(result)
+        df = self.rh.df_final
+        self.assertGreaterEqual(df.index[0], pd.Timestamp("2024-01-02", tz="UTC"))
+
+    async def test_get_data_rest_api_keep_partial_days_partial_last_day_no_fabricated_tail(self):
+        """T4 (#1061): partial last day (the reporter's-sketch failure mode). One
+        variable has data only for the morning of the last day, the other is
+        missing entirely for that day. With the flag on the day is kept, but the
+        index must end at the last real timestamp, never a fabricated full-day
+        tail."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_a = "sensor.var_a"
+        var_b = "sensor.var_b"
+        var_list = [var_a, var_b]
+
+        kwargs = {}
+        if "keep_partial_days" in inspect.signature(self.rh._get_data_rest_api).parameters:
+            kwargs["keep_partial_days"] = True
+
+        # Day 2 (last day): var_a only reports for the first 12 hours (48 records
+        # at 15-minute steps), var_b has no data at all for that day.
+        last_day_records = 48
+        last_ts = pd.Timestamp("2024-01-02", tz="UTC") + pd.Timedelta(
+            minutes=15 * (last_day_records - 1)
+        )
+
+        with aioresponses() as mocked:
+            mocked.get(
+                self._partial_day_url(days_list[0], var_a),
+                payload=self._make_partial_day_data("2024-01-01", var_a),
+                status=200,
+            )
+            mocked.get(
+                self._partial_day_url(days_list[0], var_b),
+                payload=self._make_partial_day_data("2024-01-01", var_b),
+                status=200,
+            )
+            mocked.get(
+                self._partial_day_url(days_list[1], var_a),
+                payload=self._make_partial_day_data(
+                    "2024-01-02", var_a, num_records=last_day_records
+                ),
+                status=200,
+            )
+            mocked.get(self._partial_day_url(days_list[1], var_b), payload=[], status=200)
+
+            result = await self.rh._get_data_rest_api(days_list, var_list, **kwargs)
+
+        self.assertTrue(result)
+        df = self.rh.df_final
+        # No fabricated rows past the last real sample on the last day
+        self.assertLessEqual(df.index[-1], last_ts)
+        self.assertEqual(df.index[-1].date(), last_ts.date())
+
+    async def test_retrieve_from_hass_keep_partial_days_plumbing(self):
+        """T5 (#1061): _retrieve_from_hass threads keep_partial_days=True only
+        for battery_id, leaving the other set_types at the historical default."""
+        from emhass.command_line import _retrieve_from_hass
+
+        retrieve_hass_conf = dict(self.retrieve_hass_conf)
+        retrieve_hass_conf["historic_days_to_retrieve"] = 1
+        retrieve_hass_conf["sensor_power_battery"] = "sensor.power_battery"
+        retrieve_hass_conf["sensor_battery_state_of_charge"] = "sensor.battery_soc"
+
+        optim_conf = {"set_use_pv": False}
+
+        mock_rh = MagicMock()
+        mock_rh.get_data = AsyncMock(return_value=True)
+
+        await _retrieve_from_hass("battery_id", retrieve_hass_conf, optim_conf, mock_rh, logger)
+        _, call_kwargs = mock_rh.get_data.call_args
+        self.assertTrue(call_kwargs.get("keep_partial_days"))
+
+        mock_rh.get_data.reset_mock()
+        await _retrieve_from_hass("perfect-optim", retrieve_hass_conf, optim_conf, mock_rh, logger)
+        _, call_kwargs = mock_rh.get_data.call_args
+        self.assertFalse(call_kwargs.get("keep_partial_days", False))
+
+    @patch("emhass.retrieve_hass.get_websocket_client", new_callable=AsyncMock)
+    @patch("emhass.retrieve_hass.RetrieveHass._get_data_rest_api")
+    async def test_get_data_websocket_fallback_threads_keep_partial_days(
+        self, mock_rest_fallback, mock_get_ws
+    ):
+        """T6 (#1061): when the websocket path fails and falls back to the REST
+        API, keep_partial_days reaches that fallback call too."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_list = ["sensor.power_load"]
+
+        self.rh.use_websocket = True
+        mock_get_ws.side_effect = Exception("Connection refused")
+        mock_rest_fallback.return_value = True
+
+        if "keep_partial_days" not in inspect.signature(self.rh.get_data).parameters:
+            self.skipTest("keep_partial_days not present on this source")
+
+        success = await self.rh.get_data(days_list, var_list, keep_partial_days=True)
+
+        self.assertTrue(success)
+        mock_rest_fallback.assert_called_once()
+        self.assertTrue(mock_rest_fallback.call_args.kwargs.get("keep_partial_days"))
+
+        # Reset for other tests
+        mock_get_ws.side_effect = None
+        self.rh.use_websocket = False
 
     @patch("aiofiles.open")
     async def test_post_data_extended(self, mock_aio_open):
