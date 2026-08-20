@@ -4749,36 +4749,16 @@ class Optimization:
                     f"Capacity charge: demand-window mask active on "
                     f"{int(np.count_nonzero(window_mask))}/{self.num_timesteps} timesteps."
                 )
-        # MPC capacity consideration (issue #540 follow-up): a SEPARATE optional
-        # runtime weight, distinct from capacity_charge_window above.
-        # capacity_charge_window says where the tariff genuinely allows a
-        # billed peak to be set (eligibility); capacity_charge_consideration
-        # says whether an otherwise-eligible prospective timestep should
-        # participate in THIS solve's prospective capacity peak (rolling-MPC
-        # commitment scope) - e.g. excluding a later recurrence of a demand
-        # window that is still fully replannable next cycle, while a nearer,
-        # about-to-be-committed occurrence is considered. Composed
-        # numerically with window_mask below and assigned to the SAME
-        # param_capacity_window Parameter the solver already has: no second
-        # cp.Parameter is created, so the epigraph stays a single-Parameter
-        # cp.multiply and the problem remains DPP. A direct Parameter x
-        # Parameter product in the epigraph is NOT DPP under cvxpy - subsequent
-        # solves would recanonicalise instead of reusing the warm-started
-        # problem - so that shape is deliberately avoided here.
-        #
-        # Reset to all-ones on EVERY call, same leak-prevention discipline as
-        # capacity_charge_window above. Any invalid input (non-numeric,
-        # NaN/inf, too short) falls back to all-ones - full consideration of
-        # every tariff-eligible timestep, i.e. today's behaviour - with a
-        # warning rather than crashing. Weights are clipped into [0, 1];
-        # ordinary usage is expected to be 0/1 (does this occurrence count
-        # toward the current solve's peak, yes or no) rather than a fractional
-        # billing discount or a probability, though fractional values pass
-        # through as a prospective-peak influence weight, mirroring
-        # capacity_charge_window's own fractional allowance. A too-long vector
-        # is truncated to the horizon. capacity_charge_window remains
-        # authoritative: consideration can only narrow what is already
-        # tariff-eligible, never widen it.
+        # MPC capacity consideration (issue #540 follow-up): a SEPARATE
+        # optional runtime weight. capacity_charge_window says where the tariff
+        # allows a billed peak to be set (eligibility); this says whether an
+        # otherwise-eligible prospective timestep participates in THIS solve's
+        # prospective peak - e.g. excluding a later, still fully replannable
+        # recurrence of a demand window. It can only narrow eligibility, never
+        # widen it. Same reset / fail-open-to-all-ones / clip / truncate
+        # discipline as capacity_charge_window above; 0/1 is the expected
+        # shape, fractional values pass through as a prospective-peak influence
+        # weight exactly as capacity_charge_window's own do.
         consideration_mask = np.ones(self.num_timesteps)
         if self._get_capacity_cost_per_kw() > 0 and capacity_charge_consideration is not None:
             try:
@@ -4821,13 +4801,13 @@ class Optimization:
                     f"{int(np.count_nonzero(consideration_mask))}/{self.num_timesteps} timesteps."
                 )
 
-        # Effective capacity-window value seen by the solver: tariff
-        # eligibility composed numerically with MPC consideration BEFORE
-        # assignment to the single existing CVXPY Parameter (NumPy product,
-        # not a second Parameter - see above). When
-        # capacity_charge_consideration is omitted, consideration_mask stays
-        # all-ones and effective_capacity_mask == window_mask, so
-        # capacity_charge_window's own #1066 behaviour is unchanged.
+        # Effective capacity-window value seen by the solver: eligibility and
+        # consideration are composed as a NumPy product BEFORE assignment to
+        # the single existing param_capacity_window. No second cp.Parameter is
+        # created, because a Parameter x Parameter product in the epigraph is
+        # NOT DPP under cvxpy and would recanonicalise on every solve instead
+        # of reusing the warm-started problem. With consideration omitted the
+        # mask stays all-ones, so #1066/#1079 behaviour is unchanged.
         effective_capacity_mask = window_mask * consideration_mask
         self.param_capacity_window.value = effective_capacity_mask
 
@@ -6098,12 +6078,13 @@ class Optimization:
             participates in THIS solve's prospective capacity peak, e.g. excluding a \
             later, still fully replannable recurrence of a demand window while \
             considering a nearer, about-to-be-committed occurrence. It can only narrow \
-            what ``capacity_charge_window`` already allows, never widen it. Composed \
-            numerically with ``capacity_charge_window`` (never as a second CVXPY \
-            Parameter) before being applied, so the problem stays DPP. Ordinary usage \
+            what ``capacity_charge_window`` already allows, never widen it. Ordinary usage \
             is expected to be 0/1 (considered or not); this is not a fractional \
             billing discount or a probability. Never scales or erases \
-            ``current_period_peak`` (realised billing history). ``None`` (the default) \
+            ``current_period_peak`` (realised billing history). An excluded timestep \
+            stays tariff-eligible and only its capacity contribution is removed, so it \
+            becomes comparatively attractive for import/charging in this solve. \
+            ``None`` (the default) \
             considers every tariff-eligible timestep/interval, identical to omitting \
             it - the existing #1066/#1079 behaviour is unchanged. Ignored when \
             ``capacity_cost_per_kw`` is 0. Runtime-only; only used by naive-mpc-optim. \

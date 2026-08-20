@@ -110,7 +110,9 @@ Here the demand window (`capacity_charge_window`) still allows every timestep fr
 Defaults to unset (`None`) = every tariff-eligible timestep/interval considered, identical to today's behaviour without this key. Ordinary usage is `0`/`1` (considered or not); it is not a fractional billing discount.
 
 ```{warning}
-Excluding a later, genuinely eligible occurrence removes the MPC's incentive to pre-position the battery for it in the current solve. EMHASS exposes the mechanism only - it does not decide, or default to, a "nearest occurrence only" policy. Choose which occurrence(s) to consider deliberately; the consequence of that choice is caller-owned.
+Excluding a later, genuinely eligible occurrence does two things. It removes the MPC's incentive to pre-position the battery for that occurrence in the current solve; and, because only its capacity contribution was removed, it makes that occurrence comparatively attractive as a place to put grid import or battery charging. EMHASS exposes the mechanism only - it does not decide, or default to, a "nearest occurrence only" policy. Choose which occurrence(s) to consider deliberately; the consequence of that choice is caller-owned.
+
+An excluded timestep is **capacity-unpriced in this solve, not free**: its energy price, the battery/grid/deferrable-load constraints and every other objective term still apply, and it stays fully tariff-eligible. Consequently `peak_import` reports the peak over the *considered* contributions only - it can read `0.0` while the plan schedules a large import at an excluded but still tariff-eligible timestep. Check `P_grid_pos` across the eligible timesteps, not `peak_import` alone.
 ```
 
 Expected: only the considered, tariff-eligible timestep/interval(s) can raise the priced peak; excluded-but-still-eligible timesteps/intervals do not participate in this solve's prospective capacity peak, and their tariff eligibility remains unchanged.
@@ -189,7 +191,8 @@ Expected: comparisons between capacity-charge runs use the billed metric above, 
 ## Caveats
 
 - `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are MPC runtime inputs. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
-- `capacity_charge_consideration` is separate from `capacity_charge_window`: it narrows which otherwise tariff-eligible occurrences count toward THIS solve's peak, it never widens eligibility, and it never scales or erases `current_period_peak`.
+- `capacity_charge_consideration` is separate from `capacity_charge_window`: it narrows which otherwise tariff-eligible occurrences count toward THIS solve's peak, and it never widens eligibility.
+- Two different "history" quantities behave differently under consideration, and the distinction matters at `N>1`. `capacity_charge_current_interval_history` holds realised samples inside a **still-open** tariff interval; that interval's billed average does not exist until it closes, so the whole interval candidate is prospective and the endpoint consideration weight **does** scale it - the planned portion and the realised-history portion alike, all-or-nothing. `current_period_peak` is the already-completed, irreversible billed-history floor; it is an independent constraint that consideration **never** scales or erases, at any `N`.
 - `dayahead-optim` and `perfect-optim` have no elapsed-interval history. With `N>1`, start their horizon on a tariff measurement-interval boundary.
 - A tariff interval incomplete at the far end of the horizon is not priced until a later receding-horizon solve can see its completion. No terminal continuation model is added here.
 - Exact billing-period rollover with `N>1` assumes the billing-period boundary aligns with a tariff measurement-interval boundary. EMHASS does not split one aggregated interval across two billing periods.

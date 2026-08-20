@@ -1906,6 +1906,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         an explicit all-ones consideration vector must be identical to
         omission - all-ones is the identity element under
         E_t * C_t, not a special-cased default.
+
+        Also covers stale-value leakage across sequential solves on the SAME
+        Optimization instance: after a solve with a non-trivial consideration
+        vector, omitting the key on the next solve must restore full
+        consideration, not silently reuse the previous vector.
         """
         prediction_horizon = 6
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
@@ -1935,6 +1940,35 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         np.testing.assert_allclose(
             res_omitted["P_grid_pos"].to_numpy(),
             res_allones["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+        # Stale-value regression: a non-trivial vector excluding the spike
+        # collapses the peak to 0, so its effect is unambiguously observable...
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[1, 1, 0, 1, 1, 1],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 0.0, places=3)
+
+        # ...and omitting the key on the NEXT solve of the SAME instance must
+        # restore full consideration rather than reuse the previous vector.
+        res_after = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            5000.0,
+            places=3,
+            msg="omitting capacity_charge_consideration must reset to full "
+            "consideration, not leak the previous solve's vector",
+        )
+        np.testing.assert_allclose(
+            res_after["P_grid_pos"].to_numpy(),
+            res_omitted["P_grid_pos"].to_numpy(),
             atol=1e-6,
         )
 
@@ -1994,6 +2028,130 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "restore marginal capacity value to the nearer occurrence",
         )
 
+    def test_capacity_charge_consideration_changes_battery_dispatch(self):
+        """New: with real flexibility (battery enabled), excluding a
+        tariff-eligible occurrence from consideration must change the DISPATCH
+        DECISION, not merely the reported peak_import number. Tariff
+        eligibility (an explicit all-ones capacity_charge_window) and the
+        capacity rate are held FIXED across the paired runs, so
+        capacity_charge_consideration is the only difference.
+
+        This also pins the documented consequence of that exclusion: the
+        excluded timestep stays tariff-eligible and only its capacity
+        contribution is removed, so it becomes comparatively attractive for
+        import/charging and peak_import can read far below the import the plan
+        actually schedules there. Assertions are inequalities/invariants
+        rather than exact dispatch values, so the test does not depend on the
+        solver's choice among equivalent-cost timesteps.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.zeros(n)
+        load[1] = 1500.0  # nearer, about-to-be-committed occurrence
+        load[4] = 3000.0  # later, still fully replannable occurrence
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+                "capacity_cost_per_kw": 2.0,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        # Every timestep is genuinely tariff-eligible in BOTH runs.
+        eligibility = [1] * prediction_horizon
+        excluded_t = 4
+
+        def run(capacity_charge_consideration):
+            res = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=0.5,
+                soc_final=0.5,
+                capacity_charge_window=eligibility,
+                capacity_charge_consideration=capacity_charge_consideration,
+            )
+            self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+            return res, self.opt.vars["peak_import"].value
+
+        # RUN 1 - every eligible occurrence considered (today's behaviour).
+        res_all, peak_all = run([1] * prediction_horizon)
+        grid_all = res_all["P_grid_pos"].iloc[:prediction_horizon].to_numpy()
+        batt_all = res_all["P_batt"].iloc[:prediction_horizon].to_numpy()
+
+        # RUN 2 - identical except the later occurrence is not considered.
+        consideration = [1] * prediction_horizon
+        consideration[excluded_t] = 0
+        res_excl, peak_excl = run(consideration)
+        grid_excl = res_excl["P_grid_pos"].iloc[:prediction_horizon].to_numpy()
+        batt_excl = res_excl["P_batt"].iloc[:prediction_horizon].to_numpy()
+
+        # (c) Peak economics move in the expected direction.
+        self.assertLess(
+            peak_excl,
+            peak_all,
+            msg="excluding an eligible occurrence must lower this solve's priced peak",
+        )
+
+        # (d) The DISPATCH genuinely changed, not just the reported number.
+        self.assertFalse(
+            np.allclose(grid_all, grid_excl, atol=1e-3),
+            msg="P_grid_pos identical across the paired runs: the feature only "
+            "relabelled the peak instead of changing the plan",
+        )
+        self.assertFalse(
+            np.allclose(batt_all, batt_excl, atol=1e-3),
+            msg="P_batt identical across the paired runs: battery dispatch unchanged",
+        )
+
+        # (e) The excluded-but-eligible occurrence attracts import, exactly as
+        # documented - it is capacity-unpriced in this solve, NOT free.
+        self.assertGreater(
+            grid_excl[excluded_t],
+            grid_all[excluded_t] + 1e-3,
+            msg="excluding an eligible occurrence must make it comparatively "
+            "attractive for import/charging",
+        )
+        # peak_import now understates the import actually planned at a
+        # timestep the tariff still measures.
+        self.assertGreater(grid_excl[excluded_t], peak_excl + 1e-3)
+        # Energy is redistributed, not created: soc_init == soc_final with unit
+        # efficiencies pins net battery energy at 0, so total grid import
+        # energy is unchanged between the runs.
+        np.testing.assert_allclose(grid_excl.sum(), grid_all.sum(), rtol=1e-3)
+
+        # (f) Omitting the key entirely reproduces the all-considered run.
+        res_omitted, peak_omitted = run(None)
+        self.assertAlmostEqual(peak_omitted, peak_all, places=3)
+        np.testing.assert_allclose(
+            res_omitted["P_grid_pos"].iloc[:prediction_horizon].to_numpy(),
+            grid_all,
+            atol=1e-3,
+        )
+
     def test_capacity_charge_consideration_cannot_override_ineligibility(self):
         """New: capacity_charge_window remains authoritative. Consideration
         set to 1 on a timestep the tariff window excludes (window = 0) must
@@ -2033,6 +2191,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         contribution to peak_import, but current_period_peak (realised
         billing history) is a SEPARATE constraint that consideration must
         never scale or erase.
+
+        Also pins the documented [0, 1] weight domain: a fractional weight
+        derates that timestep's prospective contribution proportionally, it
+        is not rounded to 0/1.
         """
         prediction_horizon = 6
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
@@ -2070,6 +2232,25 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             3000.0,
             places=3,
             msg="all-zero consideration must not scale or erase current_period_peak",
+        )
+
+        # Fractional weight (no incurred floor): the 5000 W spike is the only
+        # eligible candidate, so a 0.5 weight derates its prospective
+        # contribution to 2500 W rather than rounding to 0 or 5000.
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[1, 1, 0.5, 1, 1, 1],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            2500.0,
+            places=3,
+            msg="a fractional consideration weight must scale the timestep's "
+            "prospective contribution, not be rounded to 0/1",
         )
 
     def test_capacity_charge_consideration_invalid_inputs_fall_back_to_all_ones(self):
@@ -2141,17 +2322,29 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
         # Too-long consideration is truncated to the horizon (debug, not a
-        # warning) rather than rejected.
-        too_long = [1] * prediction_horizon + [0, 0, 0]
+        # warning) rather than rejected, and the LEADING horizon entries are
+        # the ones kept. The payload is deliberately asymmetric: the zero sits
+        # at the spike timestep (index 2) inside the first 6 entries, so
+        # front-truncation gives [1, 1, 0, 1, 1, 1] -> peak 0, while keeping
+        # the LAST 6 entries would give all-ones -> peak 5000. A reversed
+        # truncation direction therefore fails this assertion.
+        too_long = [1, 1, 0, 1, 1, 1] + [1, 1, 1]
         self.opt.perform_naive_mpc_optim(
             df, pv, load_s, prediction_horizon, capacity_charge_consideration=too_long
         )
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertAlmostEqual(
             self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="too-long consideration must truncate to the LEADING horizon entries",
+        )
+        self.assertNotAlmostEqual(
+            self.opt.vars["peak_import"].value,
             peak_baseline,
             places=3,
-            msg="too-long consideration must truncate to the horizon, not crash",
+            msg="truncation assertion is degenerate: front- and back-truncation "
+            "give the same peak for this payload",
         )
 
     def test_capacity_charge_consideration_noop_when_feature_off(self):
@@ -2232,10 +2425,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     def test_capacity_charge_consideration_dpp_and_problem_identity(self):
         """New: repeated capacity_charge_consideration updates at a fixed
         horizon must NOT rebuild the optimisation problem (same self.prob
-        identity) and must keep the problem DPP - the whole point of
-        composing eligibility * consideration in NumPy before assigning the
-        single existing param_capacity_window, per issue #540's DPP
-        discussion (a direct Parameter x Parameter product is NOT DPP).
+        identity) and must keep the problem DPP. See the rationale comment on
+        effective_capacity_mask in optimization.py.
         """
         prediction_horizon = 6
         df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
