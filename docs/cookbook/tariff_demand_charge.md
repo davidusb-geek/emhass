@@ -105,7 +105,7 @@ A rolling-MPC horizon can contain two occurrences of the same recurring demand w
 }
 ```
 
-Here the demand window (`capacity_charge_window`) still allows every timestep from 14 to 21, but `capacity_charge_consideration` marks only timestep 14 - the nearer, about-to-be-committed occurrence - as counting toward THIS solve's peak. The later occurrences (timesteps 15-21) stay tariff-eligible for a future solve; they simply do not set the peak in this one.
+Here the demand window (`capacity_charge_window`) still allows every timestep from 14 to 21 - this single contiguous window, not multiple recurring-window occurrences. `capacity_charge_consideration` narrows that eligible span down to only timestep 14, demonstrating that consideration can exclude otherwise tariff-eligible prospective timesteps from THIS solve's peak; timesteps 15-21 stay tariff-eligible for a future solve, they simply do not set the peak in this one. The motivating recurring-window case above (a nearer occurrence vs. a later one) is expressed the same way: set `capacity_charge_consideration` to `1` only on the timesteps/intervals belonging to the occurrence(s) you want counted this solve.
 
 Defaults to unset (`None`) = every tariff-eligible timestep/interval considered, identical to today's behaviour without this key. Ordinary usage is `0`/`1` (considered or not); it is not a fractional billing discount.
 
@@ -113,7 +113,7 @@ Defaults to unset (`None`) = every tariff-eligible timestep/interval considered,
 Excluding a later, genuinely eligible occurrence removes the MPC's incentive to pre-position the battery for it in the current solve. EMHASS exposes the mechanism only - it does not decide, or default to, a "nearest occurrence only" policy. Choose which occurrence(s) to consider deliberately; the consequence of that choice is caller-owned.
 ```
 
-Expected: only the considered, tariff-eligible timestep/interval(s) can raise the priced peak; excluded-but-still-eligible occurrences remain unbilled this solve without becoming untariffed.
+Expected: only the considered, tariff-eligible timestep/interval(s) can raise the priced peak; excluded-but-still-eligible timesteps/intervals do not participate in this solve's prospective capacity peak, and their tariff eligibility remains unchanged.
 
 ## Step 3d: Price a tariff measurement interval
 
