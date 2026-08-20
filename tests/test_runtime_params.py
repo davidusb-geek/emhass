@@ -53,6 +53,7 @@ EXPECTED_KEYS = {
     "soc_target_timestep",
     "current_period_peak",
     "capacity_charge_window",
+    "capacity_charge_consideration",
     "capacity_charge_current_interval_history",
     "operating_timesteps_of_each_deferrable_load",
     "alpha",

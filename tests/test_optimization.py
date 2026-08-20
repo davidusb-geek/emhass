@@ -5,6 +5,7 @@ import pathlib
 import pickle
 import random
 import unittest
+import warnings
 from datetime import datetime
 from unittest import mock
 
@@ -1886,6 +1887,664 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 for line in logs.output
             ),
             msg=f"expected the window-misalignment warning, got: {logs.output}",
+        )
+
+    # ------------------------------------------------------------------
+    # capacity_charge_consideration (issue #540 follow-up): a SEPARATE
+    # optional runtime weight from capacity_charge_window (tariff
+    # eligibility), controlling whether an otherwise tariff-eligible
+    # prospective timestep/interval participates in THIS solve's
+    # prospective capacity peak. See davidusb-geek/emhass#540 for the
+    # architecture discussion and the DPP rationale for composing it
+    # numerically into the existing param_capacity_window rather than
+    # adding a second CVXPY Parameter.
+    # ------------------------------------------------------------------
+
+    def test_capacity_charge_consideration_omission_and_allones_parity(self):
+        """New: capacity_charge_consideration omitted must reproduce
+        exactly today's capacity_charge_window-only (#1066) behaviour, and
+        an explicit all-ones consideration vector must be identical to
+        omission - all-ones is the identity element under
+        E_t * C_t, not a special-cased default.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        res_omitted = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_omitted = self.opt.vars["peak_import"].value
+
+        res_allones = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[1] * prediction_horizon,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_allones = self.opt.vars["peak_import"].value
+
+        self.assertAlmostEqual(peak_omitted, 5000.0, places=3)
+        self.assertAlmostEqual(peak_allones, 5000.0, places=3)
+        np.testing.assert_allclose(
+            res_omitted["P_grid_pos"].to_numpy(),
+            res_allones["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+    def test_capacity_charge_consideration_commitment_reproducer(self):
+        """New: reproduces the K=1 rolling-MPC commitment-asymmetry case
+        from issue #540 - two tariff-eligible occurrences in one horizon, a
+        nearer/smaller one (4000 W) and a later/larger one (8000 W). With
+        consideration all-ones (or omitted) the later occurrence binds
+        peak_import, matching today's existing #1066 all-occurrences
+        behaviour. Excluding ONLY the later occurrence from consideration -
+        while it stays fully tariff-eligible via capacity_charge_window -
+        restores marginal capacity value to the nearer occurrence. This
+        demonstrates the SEMANTIC separation generically (the caller chose
+        which timestep to exclude); no nearest-occurrence policy is baked
+        into EMHASS itself.
+        """
+        prediction_horizon = 8
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 4000.0  # nearer, about-to-be-committed occurrence
+        load[6] = 8000.0  # later, still fully replannable occurrence
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        # Default: every tariff-eligible timestep considered (== today's
+        # #1066 behaviour) - the later, larger occurrence binds the epigraph.
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            8000.0,
+            places=3,
+            msg="default (all occurrences considered) must match today's #1066 "
+            "all-occurrences peak",
+        )
+
+        # Exclude ONLY the later occurrence's timestep from consideration,
+        # leaving it fully tariff-eligible (capacity_charge_window
+        # untouched): the nearer occurrence now sets peak_import.
+        consideration = [1] * prediction_horizon
+        consideration[6] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            4000.0,
+            places=3,
+            msg="excluding only the later occurrence from consideration must "
+            "restore marginal capacity value to the nearer occurrence",
+        )
+
+    def test_capacity_charge_consideration_cannot_override_ineligibility(self):
+        """New: capacity_charge_window remains authoritative. Consideration
+        set to 1 on a timestep the tariff window excludes (window = 0) must
+        NOT let that timestep raise peak_import - consideration can only
+        narrow tariff eligibility, never widen it.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        window = [1, 1, 0, 1, 1, 1]  # timestep 2 (the spike) is tariff-ineligible
+        consideration = [1] * prediction_horizon  # fully considered everywhere
+        res = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_window=window,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="consideration=1 on a tariff-ineligible timestep must not create eligibility",
+        )
+        self.assertAlmostEqual(res["P_grid_pos"].iloc[2], 5000.0, places=3)
+
+    def test_capacity_charge_consideration_all_zero_and_current_period_peak_unscaled(self):
+        """New: an all-zero consideration vector removes every prospective
+        contribution to peak_import, but current_period_peak (realised
+        billing history) is a SEPARATE constraint that consideration must
+        never scale or erase.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        # All-zero consideration, no incurred floor: peak collapses to 0.
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[0] * prediction_horizon,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 0.0, places=3)
+
+        # Same all-zero consideration, WITH an incurred current_period_peak:
+        # the floor must still bind - consideration cannot erase it.
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[0] * prediction_horizon,
+            current_period_peak=3000.0,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            3000.0,
+            places=3,
+            msg="all-zero consideration must not scale or erase current_period_peak",
+        )
+
+    def test_capacity_charge_consideration_invalid_inputs_fall_back_to_all_ones(self):
+        """New: any invalid capacity_charge_consideration (non-numeric,
+        NaN/inf, too short) warns and falls back to all-ones (full
+        consideration), matching capacity_charge_window's established
+        fail-open convention - never a crash. Negative / >1 values are
+        clipped into [0, 1] instead of rejected outright, and a too-long
+        vector is truncated - also matching capacity_charge_window.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        peak_baseline = self.opt.vars["peak_import"].value  # all-ones behaviour
+
+        for bad_value, label in [
+            ([1, 0, 1], "short"),
+            (["a", "b"], "non-numeric"),
+            ([float("nan")] * prediction_horizon, "nan"),
+            ([float("inf")] * prediction_horizon, "inf"),
+        ]:
+            with self.subTest(label=label), self.assertLogs(level="WARNING") as logs:
+                self.opt.perform_naive_mpc_optim(
+                    df,
+                    pv,
+                    load_s,
+                    prediction_horizon,
+                    capacity_charge_consideration=bad_value,
+                )
+            self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+            self.assertTrue(
+                any("capacity_charge_consideration" in line for line in logs.output),
+                msg=f"expected a capacity_charge_consideration warning for "
+                f"{label}, got: {logs.output}",
+            )
+            self.assertAlmostEqual(
+                self.opt.vars["peak_import"].value,
+                peak_baseline,
+                places=3,
+                msg=f"{label} consideration must fall back to all-ones",
+            )
+
+        # Negative / >1 clip into [0, 1] rather than being rejected: an
+        # out-of-range value at the spike timestep clips toward 1.0.
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_consideration=[1, 1, 5.0, 1, 1, 1],
+            )
+        self.assertTrue(
+            any("capacity_charge_consideration" in line for line in logs.output),
+            msg=f"expected an out-of-range warning, got: {logs.output}",
+        )
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            peak_baseline,
+            places=3,
+            msg=">1 must clip to 1.0, reproducing full consideration at that timestep",
+        )
+
+        # Too-long consideration is truncated to the horizon (debug, not a
+        # warning) rather than rejected.
+        too_long = [1] * prediction_horizon + [0, 0, 0]
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, capacity_charge_consideration=too_long
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            peak_baseline,
+            places=3,
+            msg="too-long consideration must truncate to the horizon, not crash",
+        )
+
+    def test_capacity_charge_consideration_noop_when_feature_off(self):
+        """New: capacity_charge_consideration must be inert when
+        capacity_cost_per_kw == 0 - no peak_import variable is created and
+        the plan is identical whether or not a consideration vector is
+        passed.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 0.0
+        self.opt = self.create_optimization()
+
+        res_no_consideration = self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertNotIn("peak_import", self.opt.vars)
+
+        res_with_consideration = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[0] * prediction_horizon,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertNotIn("peak_import", self.opt.vars)
+        np.testing.assert_allclose(
+            res_no_consideration["P_grid_pos"].to_numpy(),
+            res_with_consideration["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+    def test_capacity_charge_consideration_horizon_resize(self):
+        """New: reusing the SAME Optimization instance across a horizon
+        resize must not leak a stale consideration vector shape -
+        param_capacity_window is horizon-shaped and re-created on resize
+        (existing #1066 lifecycle), and this must hold correctly when
+        consideration is supplied at the new horizon too.
+        """
+        horizon_a = 6
+        horizon_b = 10
+        df, pv, load_s = self._capacity_interval_base_conf(horizon_b)
+        load = np.zeros(len(df))
+        load[8] = 5000.0  # only inside the LARGER horizon
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, horizon_a, capacity_charge_consideration=[1] * horizon_a
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(self.opt.param_capacity_window.value.shape, (horizon_a,))
+
+        consideration_b = [1] * horizon_b
+        consideration_b[8] = 0  # exclude the new horizon's spike from consideration
+        self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, horizon_b, capacity_charge_consideration=consideration_b
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(
+            self.opt.param_capacity_window.value.shape,
+            (horizon_b,),
+            msg="param_capacity_window must be recreated at the new horizon's shape",
+        )
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="excluded spike at the new horizon must not leak a stale consideration value",
+        )
+
+    def test_capacity_charge_consideration_dpp_and_problem_identity(self):
+        """New: repeated capacity_charge_consideration updates at a fixed
+        horizon must NOT rebuild the optimisation problem (same self.prob
+        identity) and must keep the problem DPP - the whole point of
+        composing eligibility * consideration in NumPy before assigning the
+        single existing param_capacity_window, per issue #540's DPP
+        discussion (a direct Parameter x Parameter product is NOT DPP).
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertTrue(self.opt.prob.is_dpp())
+        prob_id_first = id(self.opt.prob)
+
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[1, 1, 0, 1, 1, 1],
+        )
+        self.assertTrue(self.opt.prob.is_dpp())
+        self.assertEqual(
+            id(self.opt.prob),
+            prob_id_first,
+            msg="capacity_charge_consideration changes must not force a problem rebuild",
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_consideration=[1, 0, 1, 1, 1, 1],
+            )
+        dpp_warnings = [w for w in caught if "DPP" in str(w.message)]
+        self.assertEqual(
+            dpp_warnings,
+            [],
+            msg=f"unexpected non-DPP warning on a runtime consideration update: {dpp_warnings}",
+        )
+
+    def test_capacity_charge_consideration_multiple_occurrences_no_nearest_only_policy(self):
+        """New: a caller may mark MORE than one occurrence as considered -
+        the mechanism is generic, not limited to a hard-coded
+        "nearest/current occurrence only" policy. Three eligible
+        occurrences; consideration keeps the current AND the second,
+        excludes only the third (largest) - peak_import must be driven by
+        the max of the two still-considered occurrences, not by the
+        excluded largest one.
+        """
+        prediction_horizon = 9
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[1] = 3000.0  # occurrence 1 (kept)
+        load[4] = 5000.0  # occurrence 2 (kept) - the max of the KEPT occurrences
+        load[7] = 9000.0  # occurrence 3 (excluded) - the largest overall
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+
+        consideration = [1] * prediction_horizon
+        consideration[7] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            5000.0,
+            places=3,
+            msg="peak must be driven by the max of the considered occurrences, not "
+            "the excluded largest one, and not collapsed to a single-occurrence policy",
+        )
+
+    def test_capacity_charge_consideration_n_gt_1_basic_composition(self):
+        """New (#1079 composition): with capacity_charge_interval_timesteps
+        > 1, the effective per-interval weight folded into A/c is
+        eligibility_endpoint * consideration_endpoint - excluding a
+        completed interval via consideration alone (window untouched) must
+        remove it from the priced peak, exactly like excluding it via
+        window would.
+        """
+        prediction_horizon = 14
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[5] = 6000.0  # completed interval 1 (decision endpoint 5) -> 1000 W avg
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # Baseline: fully considered, interval 1 (endpoint 5) sets a 1000 W peak.
+        self.opt.perform_naive_mpc_optim(df, pv, load_s, prediction_horizon)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 1000.0, places=3)
+
+        # Exclude interval 1 via consideration at its endpoint (index 5)
+        # only - capacity_charge_window is left untouched (still fully
+        # eligible).
+        consideration = [1] * prediction_horizon
+        consideration[5] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="consideration=0 at a completed interval's endpoint must remove it "
+            "from the priced peak, even though capacity_charge_window still allows it",
+        )
+
+    def test_capacity_charge_consideration_n_gt_1_partial_history(self):
+        """New (#1079 composition): the SAME effective endpoint weight
+        (eligibility * consideration) applies consistently to both the
+        planned A-row contribution AND the realised-history c contribution
+        for the first, partially-elapsed completed interval - excluding
+        that interval via consideration removes the realised-history
+        contribution too, not just the planned part.
+        """
+        prediction_horizon = 8
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # m=4 elapsed samples; only the last (6000 W) is non-zero -> without
+        # exclusion this alone drives a 1000 W first-interval average
+        # (endpoint decision index e0 = 6 - 1 - 4 = 1).
+        history = [0.0, 0.0, 0.0, 6000.0]
+
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=history,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(self.opt.vars["peak_import"].value, 1000.0, places=3)
+
+        # Exclude the first interval's endpoint (decision index 1) from
+        # consideration: the realised-history contribution must ALSO drop out.
+        consideration = [1] * prediction_horizon
+        consideration[1] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_current_interval_history=history,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="excluding the first interval's endpoint from consideration must "
+            "remove the realised-history contribution as well as the planned one",
+        )
+
+    def test_capacity_charge_consideration_n_gt_1_current_period_peak_unscaled(self):
+        """New (#1079 composition): current_period_peak remains an
+        independent constraint under N>1 aggregation too - an all-zero
+        consideration vector must not scale or erase it.
+        """
+        prediction_horizon = 6
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[3] = 3000.0  # single 6-step interval -> avg 500 W
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_consideration=[0] * prediction_horizon,
+            current_period_peak=800.0,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            800.0,
+            places=3,
+            msg="current_period_peak must still floor peak_import under N>1 "
+            "aggregation even with an all-zero consideration vector",
+        )
+
+    def test_capacity_charge_consideration_n_gt_1_eligibility_separation(self):
+        """New (#1079 composition): under N>1, capacity_charge_window
+        remains authoritative and capacity_charge_consideration cannot
+        resurrect a genuinely tariff-ineligible completed interval;
+        conversely a tariff-eligible interval may still be excluded via
+        consideration alone.
+        """
+        prediction_horizon = 14
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        load = np.zeros(len(df))
+        load[5] = 6000.0  # completed interval 1 (endpoint 5) -> 1000 W avg
+        df["p_load_forecast"] = load
+        load_s = df["p_load_forecast"].copy()
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # window=0 at the endpoint, consideration=1 everywhere: ineligible
+        # interval must NOT be priced, even though fully "considered".
+        window = [1] * prediction_horizon
+        window[5] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_window=window,
+            capacity_charge_consideration=[1] * prediction_horizon,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="consideration cannot resurrect a tariff-ineligible completed interval",
+        )
+
+        # window=1 (untouched, fully eligible), consideration=0 at the
+        # endpoint: eligible interval may still be excluded via consideration.
+        consideration = [1] * prediction_horizon
+        consideration[5] = 0
+        self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            capacity_charge_window=[1] * prediction_horizon,
+            capacity_charge_consideration=consideration,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(
+            self.opt.vars["peak_import"].value,
+            0.0,
+            places=3,
+            msg="a tariff-eligible completed interval may still be excluded via "
+            "consideration without changing its eligibility input",
+        )
+
+    def test_capacity_charge_consideration_n_gt_1_misalignment_warning_is_attributed_correctly(
+        self,
+    ):
+        """New (#1079 composition): a capacity_charge_consideration value
+        that changes WITHIN a completed tariff interval must warn using
+        capacity_charge_consideration's own name, and must NOT be
+        misattributed to capacity_charge_window (which is unchanged/aligned
+        in this case).
+        """
+        prediction_horizon = 12
+        df, pv, load_s = self._capacity_interval_base_conf(prediction_horizon)
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.optim_conf["capacity_charge_interval_timesteps"] = 6
+        self.opt = self.create_optimization()
+
+        # window is uniformly all-ones (aligned); consideration changes
+        # value mid-interval (misaligned).
+        consideration = [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                capacity_charge_consideration=consideration,
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(
+            any(
+                "capacity_charge_consideration changes within a completed tariff "
+                "measurement interval" in line
+                for line in logs.output
+            ),
+            msg=f"expected a consideration-misalignment warning, got: {logs.output}",
+        )
+        self.assertFalse(
+            any(
+                "capacity_charge_window changes within a completed tariff "
+                "measurement interval" in line
+                for line in logs.output
+            ),
+            msg=f"window is aligned; must not misattribute the warning to "
+            f"capacity_charge_window: {logs.output}",
         )
 
     def test_battery_first_priority_drains_before_import(self):

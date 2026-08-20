@@ -1681,7 +1681,7 @@ class Optimization:
         return hist_arr
 
     def _build_capacity_interval_arrays(
-        self, window_mask: np.ndarray, history
+        self, window_mask: np.ndarray, history, consideration_mask: np.ndarray | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
         """Build the numeric ``(A, c)`` pair implementing tariff
         measurement-interval aggregation for the capacity charge (issue #540):
@@ -1700,17 +1700,31 @@ class Optimization:
         endpoint, so an off-window completed interval cannot raise
         ``peak_import``.
 
+        ``consideration_mask`` (issue #540 follow-up) is the SAME MPC capacity
+        consideration weight applied per-timestep in the N=1 path, folded in
+        here the same way: each row is additionally scaled by
+        ``consideration_mask`` at that row's endpoint, and that endpoint
+        weight applies uniformly to both the row's planned-sample entries in
+        ``A`` and (for the first row) the realised-history contribution in
+        ``c`` - the whole completed tariff-interval average is either
+        considered or not, consistently. Defaults to all-ones (no effect,
+        exact pre-existing #1079 behaviour) when omitted, e.g. when the N=1
+        caller never validated one.
+
         Logs a warning (without altering behaviour) when ``e0 >= n`` (no
-        tariff interval completes within this solve) and when
+        tariff interval completes within this solve), when
         ``capacity_charge_window`` changes within the planned samples of a
-        completed interval (endpoint sampling then determines the applied
-        weight).
+        completed interval, and - separately, so the two are never
+        conflated - when ``capacity_charge_consideration`` does (endpoint
+        sampling then determines the applied weight in either case).
         """
         n = self.num_timesteps
         interval_n = self.capacity_charge_interval_timesteps
         k_max = self.param_capacity_interval_matrix.shape[0]
         matrix = np.zeros((k_max, n))
         contribution = np.zeros(k_max)
+        if consideration_mask is None:
+            consideration_mask = np.ones(n)
 
         hist_arr = self._validate_capacity_interval_history(history)
         m = len(hist_arr)
@@ -1727,17 +1741,20 @@ class Optimization:
             )
 
         window_misaligned = False
+        consideration_misaligned = False
         row = 0
         e = e0
         while e < n and row < k_max:
-            w = float(window_mask[e])
+            w = float(window_mask[e]) * float(consideration_mask[e])
             if row == 0:
                 start = 0
                 contribution[row] = w * (float(hist_arr.sum()) / interval_n)
             else:
                 start = e - interval_n + 1
-            if not np.allclose(window_mask[start : e + 1], w):
+            if not np.allclose(window_mask[start : e + 1], window_mask[e]):
                 window_misaligned = True
+            if not np.allclose(consideration_mask[start : e + 1], consideration_mask[e]):
+                consideration_misaligned = True
             matrix[row, start : e + 1] = w / interval_n
             e += interval_n
             row += 1
@@ -1747,6 +1764,14 @@ class Optimization:
                 "capacity_charge_window changes within a completed tariff "
                 "measurement interval; capacity_charge_window boundaries should "
                 "align with the tariff measurement interval when "
+                "capacity_charge_interval_timesteps > 1, otherwise endpoint "
+                "sampling determines the applied interval weight."
+            )
+        if consideration_misaligned:
+            self.logger.warning(
+                "capacity_charge_consideration changes within a completed tariff "
+                "measurement interval; capacity_charge_consideration boundaries "
+                "should align with the tariff measurement interval when "
                 "capacity_charge_interval_timesteps > 1, otherwise endpoint "
                 "sampling determines the applied interval weight."
             )
@@ -4475,6 +4500,7 @@ class Optimization:
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
+        capacity_charge_consideration: list | None = None,
         capacity_charge_current_interval_history: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
@@ -4723,7 +4749,87 @@ class Optimization:
                     f"Capacity charge: demand-window mask active on "
                     f"{int(np.count_nonzero(window_mask))}/{self.num_timesteps} timesteps."
                 )
-        self.param_capacity_window.value = window_mask
+        # MPC capacity consideration (issue #540 follow-up): a SEPARATE optional
+        # runtime weight, distinct from capacity_charge_window above.
+        # capacity_charge_window says where the tariff genuinely allows a
+        # billed peak to be set (eligibility); capacity_charge_consideration
+        # says whether an otherwise-eligible prospective timestep should
+        # participate in THIS solve's prospective capacity peak (rolling-MPC
+        # commitment scope) - e.g. excluding a later recurrence of a demand
+        # window that is still fully replannable next cycle, while a nearer,
+        # about-to-be-committed occurrence is considered. Composed
+        # numerically with window_mask below and assigned to the SAME
+        # param_capacity_window Parameter the solver already has: no second
+        # cp.Parameter is created, so the epigraph stays a single-Parameter
+        # cp.multiply and the problem remains DPP. A direct Parameter x
+        # Parameter product in the epigraph is NOT DPP under cvxpy - subsequent
+        # solves would recanonicalise instead of reusing the warm-started
+        # problem - so that shape is deliberately avoided here.
+        #
+        # Reset to all-ones on EVERY call, same leak-prevention discipline as
+        # capacity_charge_window above. Any invalid input (non-numeric,
+        # NaN/inf, too short) falls back to all-ones - full consideration of
+        # every tariff-eligible timestep, i.e. today's behaviour - with a
+        # warning rather than crashing. Weights are clipped into [0, 1];
+        # ordinary usage is expected to be 0/1 (does this occurrence count
+        # toward the current solve's peak, yes or no) rather than a fractional
+        # billing discount or a probability, though fractional values pass
+        # through as a prospective-peak influence weight, mirroring
+        # capacity_charge_window's own fractional allowance. A too-long vector
+        # is truncated to the horizon. capacity_charge_window remains
+        # authoritative: consideration can only narrow what is already
+        # tariff-eligible, never widen it.
+        consideration_mask = np.ones(self.num_timesteps)
+        if self._get_capacity_cost_per_kw() > 0 and capacity_charge_consideration is not None:
+            try:
+                consider_arr = np.asarray(capacity_charge_consideration, dtype=float).ravel()
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    f"Invalid capacity_charge_consideration (non-numeric entries): "
+                    f"{capacity_charge_consideration!r}; ignoring it (full consideration "
+                    "of every tariff-eligible timestep)."
+                )
+                consider_arr = None
+            if consider_arr is not None and not np.all(np.isfinite(consider_arr)):
+                self.logger.warning(
+                    "capacity_charge_consideration contains NaN/inf entries; "
+                    "ignoring it (full consideration of every tariff-eligible timestep)."
+                )
+                consider_arr = None
+            if consider_arr is not None and len(consider_arr) < self.num_timesteps:
+                self.logger.warning(
+                    f"capacity_charge_consideration has {len(consider_arr)} entries but "
+                    f"the horizon is {self.num_timesteps}; ignoring it (full "
+                    "consideration of every tariff-eligible timestep)."
+                )
+                consider_arr = None
+            if consider_arr is not None:
+                if len(consider_arr) > self.num_timesteps:
+                    self.logger.debug(
+                        f"capacity_charge_consideration has {len(consider_arr)} entries; "
+                        f"truncating to the {self.num_timesteps}-step horizon."
+                    )
+                    consider_arr = consider_arr[: self.num_timesteps]
+                if np.any(consider_arr < 0) or np.any(consider_arr > 1):
+                    self.logger.warning(
+                        "capacity_charge_consideration entries outside [0, 1]; clipping."
+                    )
+                    consider_arr = np.clip(consider_arr, 0.0, 1.0)
+                consideration_mask = consider_arr
+                self.logger.debug(
+                    f"Capacity charge: MPC consideration active on "
+                    f"{int(np.count_nonzero(consideration_mask))}/{self.num_timesteps} timesteps."
+                )
+
+        # Effective capacity-window value seen by the solver: tariff
+        # eligibility composed numerically with MPC consideration BEFORE
+        # assignment to the single existing CVXPY Parameter (NumPy product,
+        # not a second Parameter - see above). When
+        # capacity_charge_consideration is omitted, consideration_mask stays
+        # all-ones and effective_capacity_mask == window_mask, so
+        # capacity_charge_window's own #1066 behaviour is unchanged.
+        effective_capacity_mask = window_mask * consideration_mask
+        self.param_capacity_window.value = effective_capacity_mask
 
         # Tariff measurement-interval aggregation (#540). Only built when N > 1
         # is active; otherwise this machinery doesn't exist on the instance at
@@ -4731,7 +4837,7 @@ class Optimization:
         # the history is never inspected - the exact pre-#540 legacy path.
         if self._capacity_interval_aggregation_active:
             interval_matrix, realised_contribution = self._build_capacity_interval_arrays(
-                window_mask, capacity_charge_current_interval_history
+                window_mask, capacity_charge_current_interval_history, consideration_mask
             )
             self.param_capacity_interval_matrix.value = interval_matrix
             self.param_capacity_realised_contribution.value = realised_contribution
@@ -5910,6 +6016,7 @@ class Optimization:
         soc_target_timestep: int | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
+        capacity_charge_consideration: list | None = None,
         capacity_charge_current_interval_history: list | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
@@ -5983,6 +6090,25 @@ class Optimization:
             ``capacity_cost_per_kw`` is 0. Runtime-only; only used by naive-mpc-optim. \
             See issues #623 / #540.
         :type capacity_charge_window: list
+        :param capacity_charge_consideration: Optional per-timestep MPC capacity \
+            consideration weight for the capacity charge: a list of weights in [0, 1] \
+            of length ``prediction_horizon``, aligned like ``capacity_charge_window``. \
+            SEPARATE from ``capacity_charge_window`` (tariff eligibility): this weight \
+            controls whether an otherwise tariff-eligible prospective timestep \
+            participates in THIS solve's prospective capacity peak, e.g. excluding a \
+            later, still fully replannable recurrence of a demand window while \
+            considering a nearer, about-to-be-committed occurrence. It can only narrow \
+            what ``capacity_charge_window`` already allows, never widen it. Composed \
+            numerically with ``capacity_charge_window`` (never as a second CVXPY \
+            Parameter) before being applied, so the problem stays DPP. Ordinary usage \
+            is expected to be 0/1 (considered or not); this is not a fractional \
+            billing discount or a probability. Never scales or erases \
+            ``current_period_peak`` (realised billing history). ``None`` (the default) \
+            considers every tariff-eligible timestep/interval, identical to omitting \
+            it - the existing #1066/#1079 behaviour is unchanged. Ignored when \
+            ``capacity_cost_per_kw`` is 0. Runtime-only; only used by naive-mpc-optim. \
+            See issue #540.
+        :type capacity_charge_consideration: list
         :param capacity_charge_current_interval_history: Optional list of the AVERAGE \
             positive grid-import power (Watts, oldest -> newest) for each native \
             optimisation timestep already elapsed in the currently open tariff \
@@ -6053,6 +6179,7 @@ class Optimization:
             soc_target_timestep=soc_target_timestep,
             current_period_peak=current_period_peak,
             capacity_charge_window=capacity_charge_window,
+            capacity_charge_consideration=capacity_charge_consideration,
             capacity_charge_current_interval_history=capacity_charge_current_interval_history,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,

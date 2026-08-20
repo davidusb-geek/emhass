@@ -1780,6 +1780,19 @@ async def treat_runtimeparams(
             params["passed_data"]["capacity_charge_window"] = runtimeparams.get(
                 "capacity_charge_window", None
             )
+            # MPC capacity consideration (issue #540 follow-up). Runtime-only
+            # list of [0, 1] weights, length = prediction_horizon; SEPARATE
+            # from capacity_charge_window above - this controls whether an
+            # otherwise tariff-eligible prospective timestep participates in
+            # THIS solve's prospective capacity peak, not tariff eligibility
+            # itself. Defaults to None (every eligible timestep considered,
+            # i.e. today's behaviour). Validation happens in
+            # Optimization.perform_optimization. Deliberately NOT mirrored
+            # into optim_conf / associations.csv, for the same
+            # OptimizationCache reason as capacity_charge_window.
+            params["passed_data"]["capacity_charge_consideration"] = runtimeparams.get(
+                "capacity_charge_consideration", None
+            )
             # Realised import history for the currently open tariff interval
             # (issue #540). Runtime-only list, in Watts; defaults to None (empty
             # history, i.e. horizon start assumed to sit on an interval
@@ -1838,6 +1851,9 @@ async def treat_runtimeparams(
             # Like current_period_peak, the demand-window mask is naive-mpc-only:
             # dayahead/perfect optimizations price the full horizon peak.
             params["passed_data"]["capacity_charge_window"] = None
+            # Like the above, MPC capacity consideration is naive-mpc-only
+            # (issue #540 follow-up).
+            params["passed_data"]["capacity_charge_consideration"] = None
             # Like the two above, the interval-aggregation history is
             # naive-mpc-only (issue #540).
             params["passed_data"]["capacity_charge_current_interval_history"] = None
@@ -3511,6 +3527,7 @@ async def build_params(
         "soc_target_timestep": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
+        "capacity_charge_consideration": None,
         "capacity_charge_current_interval_history": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
