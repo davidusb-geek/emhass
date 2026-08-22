@@ -853,8 +853,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(df_weather_scrap["yhat"].isna().any())
             # The precise period-average step-hold contract (which 15-min
             # child holds which source value) is covered by the deterministic
-            # A1-A7 fixtures below; this test only proves shape/dtype/coverage
-            # against a real recorded Solcast payload.
+            # period-average mapping tests below; this test only proves
+            # shape/dtype/coverage against a real recorded Solcast payload.
 
         # Restore original freq/forecast_dates
         self.fcst.freq = original_freq
@@ -865,7 +865,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
             )
 
-    # --- Solcast period-average step-hold contract (#220 candidate A) ---
+    # --- Solcast period-average step-hold contract ---
     #
     # A Solcast row {period_end: E, period: "PT30M", pv_estimate: P} is the
     # average power over [E - 30min, E). Fixture timestamps use UTC 'Z' (as
@@ -878,7 +878,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Point forecast_dates at a fixed local-tz window and set freq.
         `start`/`end` let a test target a window starting inside a source
         interval (partial-leading-interval case)."""
-        self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True  # unrelated candidate-B cap
+        self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True  # bypass unrelated quota cap
         orig = (self.fcst.freq, self.fcst.forecast_dates)
         self.fcst.freq = pd.Timedelta(freq_str)
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(freq_str)
@@ -927,12 +927,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 mocked.get(get_url, payload=payload)
             return await self.fcst.get_weather_forecast(method="solcast")
 
-    # A1: for 30/15/5-min optimisation grids, every child timestep inside a
+    # For 30/15/5-min optimisation grids, every child timestep inside a
     # 30-min source window holds that window's average exactly (step-hold,
     # not linear interpolation), each window's energy is preserved when
     # split into sub-steps, timezone conversion is correct (UTC source ->
     # local grid), and no intermediate/ramped value ever appears.
-    async def test_solcast_A1_step_hold_across_grids(self):
+    async def test_solcast_step_hold_across_30_15_5min_grids(self):
         windows = [(200.0, "09:30"), (800.0, "10:00"), (500.0, "10:30")]
         for freq_min in (30, 15, 5):
             with self.subTest(freq=f"{freq_min}min"):
@@ -950,10 +950,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     energy = sum(df.loc[ts, "yhat"] for ts in children) * (freq_min / 60.0)
                     self.assertAlmostEqual(energy, value * 0.5, places=6)
 
-    # A2: forecast start occurs INSIDE an existing 30-min Solcast period. The
+    # Forecast start occurs INSIDE an existing 30-min Solcast period. The
     # remaining optimisation timesteps must use the source interval that
     # actually contains them (not the next one, not a zero/NaN gap).
-    async def test_solcast_A2_partial_leading_source_interval(self):
+    async def test_solcast_step_hold_partial_leading_source_interval(self):
         self._solcast_step_hold_setup("5min", start="09:40:00", end="10:10:00")
         df = await self._fetch_solcast("123456", self._three_period_payload())
         # 09:40/09:55 fall inside [09:30,10:00) -> 200W; 10:00/10:05 inside
@@ -967,8 +967,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             ts = pd.Timestamp(f"2026-08-22 {time_str}", tz=self.fcst.time_zone)
             self.assertEqual(df.loc[ts, "yhat"], expected)
 
-    # A3: multiple rooftops with aligned source intervals still sum correctly.
-    async def test_solcast_A3_multirooftop_sum_step_hold(self):
+    # Multiple rooftops with aligned source intervals still sum correctly.
+    async def test_solcast_step_hold_multirooftop_sum(self):
         self._solcast_step_hold_setup("15min")
         df = await self._fetch_solcast(
             "111111,222222",
@@ -982,10 +982,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(df.loc[t1000, "yhat"], 800.0 + 300.0, places=6)
         self.assertAlmostEqual(df.loc[t1015, "yhat"], 800.0 + 300.0, places=6)
 
-    # A4: the step-hold mapping change must not alter the P10/P50 blend
+    # The step-hold mapping change must not alter the P10/P50 blend
     # itself -- bias is applied before the interval mapping, so blended
     # values still land exactly on the held step.
-    async def test_solcast_A4_quantile_bias_unaffected_by_mapping_change(self):
+    async def test_solcast_step_hold_preserves_quantile_bias(self):
         self._solcast_step_hold_setup("15min")
         self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 1.0  # pure P10
         self.addCleanup(
