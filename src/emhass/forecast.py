@@ -640,9 +640,17 @@ class Forecast:
                     if len(data["forecasts"]) == 0:
                         self.logger.error("No data retrieved from Solcast service.")
                         return False
-                    # Build a timestamped DataFrame from Solcast period_end timestamps
-                    solcast_timestamps = [
+                    # Solcast rows are period averages labelled at period_end
+                    # (period=PT30M by default). Anchor each row at its period
+                    # START and step-hold it across that window, instead of
+                    # linearly interpolating between period_end points (which
+                    # mislabels the average and smears energy over the boundary).
+                    solcast_period_ends = [
                         pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]
+                    ]
+                    solcast_period_starts = [
+                        ts - pd.Timedelta(elm.get("period") or "PT30M")
+                        for ts, elm in zip(solcast_period_ends, data["forecasts"], strict=True)
                     ]
                     # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
                     # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
@@ -662,19 +670,24 @@ class Forecast:
                         data_list.append(est * 1000)
                     data_tmp = pd.DataFrame(
                         {"yhat": data_list},
-                        index=pd.DatetimeIndex(solcast_timestamps, name="ts"),
+                        index=pd.DatetimeIndex(solcast_period_starts, name="ts"),
                     )
                     if data_tmp.index.tz is None:
                         data_tmp.index = data_tmp.index.tz_localize("UTC")
                     data_tmp.index = data_tmp.index.tz_convert(self.forecast_dates.tz)
-                    # Reindex to target forecast dates and interpolate
-                    # (handles Solcast 30-min data -> any optimization_time_step)
+                    period_end_index = pd.DatetimeIndex(solcast_period_ends)
+                    if period_end_index.tz is None:
+                        period_end_index = period_end_index.tz_localize("UTC")
+                    last_period_end = period_end_index.tz_convert(self.forecast_dates.tz).max()
+                    # Step-hold each period's average across its own window (any
+                    # optimization_time_step); past the last period_end there is
+                    # no genuine coverage, so zero-fill instead of holding forever.
                     combined_index = data_tmp.index.union(self.forecast_dates).sort_values()
                     data_tmp = data_tmp.reindex(combined_index)
-                    data_tmp.interpolate(method="time", inplace=True)
+                    data_tmp["yhat"] = data_tmp["yhat"].ffill()
                     data_tmp = data_tmp.reindex(self.forecast_dates)
-                    # Zero-fill edges beyond Solcast data range
-                    data_tmp = data_tmp.fillna(0.0)
+                    data_tmp.loc[data_tmp.index >= last_period_end, "yhat"] = np.nan
+                    data_tmp = data_tmp.fillna(0.0)  # zero-fill edges beyond Solcast coverage
                     if len(total_data) == 0:
                         total_data = data_tmp.copy()
                     else:
