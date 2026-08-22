@@ -2250,7 +2250,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
 
-    # --- Multi-rooftop quota accounting + UTC quota-day (#220 candidate B) ---
+    # --- Multi-rooftop Solcast quota accounting + UTC quota day ---
     #
     # The daily counter reserves Solcast provider-call budget atomically for
     # ALL configured rooftop IDs before any HTTP request is made, so a
@@ -2276,7 +2276,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with open(paths[0]) as f:
             return int(f.read().strip())
 
-    async def _fetch_b(self, roof_ids_csv):
+    async def _fetch_solcast_quota_mock(self, roof_ids_csv):
         """Configure the given comma-separated rooftop IDs and fetch, with a
         mock registered for every possible roof (111111/222222) regardless of
         how many are actually configured -- so a rejected reservation proves
@@ -2308,11 +2308,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             res = await self.fcst.get_weather_forecast(method="solcast")
             return res, len(mocked.requests)
 
-    # B1-B5: (initial reserved count, roof count) -> allowed?, final count,
-    # actual HTTP requests. Covers 1/2-roof reservation, the 6+2->8 boundary,
-    # 7+2 rejection (no partial aggregate), and the 8-call cap for both roof
+    # (initial reserved count, roof count) -> allowed?, final count, actual
+    # HTTP requests. Covers 1/2-roof reservation, the 6+2->8 boundary, 7+2
+    # rejection (no partial aggregate), and the 8-call cap for both roof
     # counts.
-    async def test_solcast_B_reservation_table(self):
+    async def test_solcast_quota_reservation_table(self):
         cases = [
             (0, 1, True, 1, 1),
             (0, 2, True, 2, 2),
@@ -2327,7 +2327,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self._isolate_solcast_counter_dir()
                 if initial:
                     self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=initial))
-                res, n_http = await self._fetch_b(roof_ids_csv)
+                res, n_http = await self._fetch_solcast_quota_mock(roof_ids_csv)
                 self.assertEqual(res is not False, allowed)
                 if allowed:
                     self.assertIsInstance(res, pd.DataFrame)
@@ -2336,20 +2336,20 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(n_http, n_requests)
                 self.assertEqual(self._read_solcast_counter(), final_count)
 
-    async def test_solcast_B_lock_error_path_preserved(self):
+    async def test_solcast_quota_lock_error_path_preserved(self):
         """The OSError/ValueError-safe fallback (return False, log an error)
         must still work with the required_calls-aware signature."""
         with unittest.mock.patch("builtins.open", side_effect=OSError("disk full")):
             self.assertFalse(self.fcst._solcast_rate_limit_ok(required_calls=2))
 
-    async def test_solcast_B_single_rooftop_backward_compatible_default(self):
+    async def test_solcast_quota_single_rooftop_default(self):
         """Calling with no explicit required_calls (the pre-existing call
         pattern used elsewhere) still reserves exactly 1."""
         self._isolate_solcast_counter_dir()
         self.assertTrue(self.fcst._solcast_rate_limit_ok())
         self.assertEqual(self._read_solcast_counter(), 1)
 
-    async def test_solcast_B_utc_quota_day(self):
+    async def test_solcast_quota_uses_utc_day(self):
         """UTC quota-day semantics in one deterministic test (no wall clock):
         local midnight does not reset the counter, but real UTC midnight
         does start a fresh one."""
