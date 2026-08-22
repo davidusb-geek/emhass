@@ -491,13 +491,16 @@ class Forecast:
                 return await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
         return data
 
-    def _solcast_rate_limit_ok(self, max_calls: int = 8) -> bool:
-        """Check and increment a daily Solcast API call counter.
+    def _solcast_rate_limit_ok(self, required_calls: int = 1, max_calls: int = 8) -> bool:
+        """Atomically reserve `required_calls` of Solcast provider-call budget.
 
-        Uses a file in temporary directory keyed by date. Returns True if under
-        the daily limit, False otherwise.
+        This is a reservation, not a count of calls actually transmitted: it
+        may exceed the real number sent if a later roof in the same refresh
+        fails first -- intentionally conservative to avoid a partial
+        aggregate. Keyed by UTC date, since Solcast's quota is UTC-day based.
+        Returns True (and reserves) if it fits under max_calls, else False.
         """
-        today = pd.Timestamp.now(tz=self.time_zone).strftime("%Y-%m-%d")
+        today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
         temp_dir = tempfile.gettempdir()
         counter_path = os.path.join(temp_dir, f"emhass_solcast_calls_{today}.count")
 
@@ -511,14 +514,14 @@ class Forecast:
                 content = f.read().strip()
                 count = int(content) if content else 0
 
-                if count >= max_calls:
+                if count + required_calls > max_calls:
                     _flock_release(f)
                     return False
 
                 # Write incremented count back
                 f.seek(0)
                 f.truncate()
-                f.write(str(count + 1))
+                f.write(str(count + required_calls))
                 f.flush()
                 # Explicit close/unlock occurs via context manager exit, but we unlock explicitly
                 _flock_release(f)
@@ -595,17 +598,20 @@ class Forecast:
                 "Bypassing 'weather_forecast_cache_only' flag to fetch and cache a fresh forecast."
             )
             # Do NOT return False. We'll let execution continue below to fetch normally.
-        if not self._solcast_rate_limit_ok():
-            self.logger.warning(
-                "Solcast daily API call limit reached (safety cap). "
-                "Skipping live API call to preserve quota."
-            )
-            return False
         if "solcast_api_key" not in self.retrieve_hass_conf:
             self.logger.error("The solcast_api_key parameter was not defined")
             return False
         if "solcast_rooftop_id" not in self.retrieve_hass_conf:
             self.logger.error("The solcast_rooftop_id parameter was not defined")
+            return False
+        # Reserve budget for all configured roofs before any HTTP request, so
+        # a reservation that doesn't fit never yields a partial aggregate.
+        roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
+        if not self._solcast_rate_limit_ok(required_calls=len(roof_ids)):
+            self.logger.warning(
+                "Solcast daily API call limit reached (safety cap). "
+                "Skipping live API call to preserve quota."
+            )
             return False
         headers = {
             "User-Agent": "EMHASS",
@@ -613,7 +619,6 @@ class Forecast:
             "Accept": header_accept,
         }
         days_solcast = int(len(self.forecast_dates) * self.freq.seconds / 3600)
-        roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
         total_data = pd.DataFrame()
 
         # Conservative-bias blend factor, read once before the roof loop.
