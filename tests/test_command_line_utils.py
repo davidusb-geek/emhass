@@ -3456,6 +3456,94 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         # Cache key should be the same (hit)
         self.assertEqual(stats_after_second["cache_key"], first_cache_key)
 
+    async def test_mpc_cache_hit_with_capacity_charge_consideration_change(self):
+        """Issue #540 follow-up: capacity_charge_consideration is
+        runtime-only (never an optim_conf key, exactly like
+        capacity_charge_window), so changing it between naive-mpc-optim
+        calls must be a cache HIT (same Optimization instance reused, no
+        rebuild). This also exercises the full runtime_params ->
+        utils.treat_runtimeparams (passed_data) ->
+        command_line.naive_mpc_optim -> Optimization.perform_naive_mpc_optim
+        plumbing path end-to-end.
+        """
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.15 + i * 0.01 for i in range(10)],
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "capacity_charge_consideration": [1] * 10,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params["optim_conf"]["capacity_cost_per_kw"] = 2.0
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        stats_before = OptimizationCache.get_stats()
+        self.assertFalse(stats_before["has_instance"])
+
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        # Plumbing: capacity_charge_consideration must have reached passed_data.
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"].get("capacity_charge_consideration"),
+            [1] * 10,
+        )
+
+        stats_after_setup = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_setup["has_instance"])
+        first_cache_key = stats_after_setup["cache_key"]
+
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        # Second call: DIFFERENT capacity_charge_consideration - must still
+        # be a cache HIT, since this is a runtime-only key, not optim_conf.
+        runtimeparams2 = dict(runtimeparams)
+        runtimeparams2["capacity_charge_consideration"] = [1, 0, 1, 1, 1, 0, 1, 1, 1, 1]
+        runtimeparams_json2 = orjson.dumps(runtimeparams2).decode("utf-8")
+        params["passed_data"] = runtimeparams2
+        params_json2 = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json2,
+            runtimeparams_json2,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_second["has_instance"])
+        self.assertEqual(
+            stats_after_second["cache_key"],
+            first_cache_key,
+            msg="capacity_charge_consideration must be runtime-only: changing it "
+            "must never change the optimization cache key",
+        )
+
     async def test_mpc_cache_hit_with_different_time_windows(self):
         """Test that changing start/end timesteps results in cache HIT (parameterized)."""
         costfun = "profit"

@@ -8,6 +8,7 @@ Price a tariff's billed demand peak inside the same EMHASS optimization that pri
 
 - Base capacity charging (`capacity_cost_per_kw` and `current_period_peak`) is available from EMHASS 0.17.7.
 - Demand-window use requires a build exposing `capacity_charge_window`.
+- Excluding a tariff-eligible occurrence from the current MPC solve's peak requires a build exposing `capacity_charge_consideration`.
 - Tariff-interval aggregation requires a build exposing `capacity_charge_interval_timesteps` and `capacity_charge_current_interval_history`.
 - Transport: examples below are direct EMHASS config/runtime payloads. Adapter-specific Node-RED, Home Assistant and AppDaemon transport is not claimed as tested here.
 
@@ -85,7 +86,38 @@ The caller owns business-day, holiday, season and timezone rules. With `N>1`, EM
 
 Expected: only eligible demand-window timesteps/intervals can raise the priced peak.
 
-## Step 3c: Price a tariff measurement interval
+## Step 3c: Exclude a tariff-eligible occurrence from the current MPC solve's peak
+
+<!-- source: src/emhass/utils.py:1780 -->
+<!-- transport: direct EMHASS naive-mpc-optim runtime JSON; adapter-specific transport untested -->
+
+A rolling-MPC horizon can contain two occurrences of the same recurring demand window: a nearer one about to be executed and committed as billing history, and a later one still fully replannable next cycle. `capacity_charge_window` cannot express "still tariff-eligible, but do not let this occurrence affect the peak in THIS solve" - both occurrences are genuinely eligible, so masking the later one there would overload eligibility with a second meaning (issue [#540](https://github.com/davidusb-geek/emhass/issues/540)).
+
+`capacity_charge_consideration` is a separate `prediction_horizon`-length list, aligned like `capacity_charge_window`, for exactly this case. It can only narrow what `capacity_charge_window` already allows - never widen it - and it never touches `current_period_peak`.
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": 8.0,
+  "current_period_peak": 6000,
+  "capacity_charge_window": [0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+  "capacity_charge_consideration": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]
+}
+```
+
+Here `capacity_charge_window` marks two separate occurrences of the same recurring demand window: indices 2-4 and indices 14-16. Both remain fully tariff-eligible. `capacity_charge_consideration` excludes only the second occurrence (indices 14-16 set to `0`), so only the first participates in THIS solve's prospective capacity peak; the second stays tariff-eligible but is capacity-unpriced in this solve. The `1`s elsewhere in `capacity_charge_consideration` are inert - `effective = capacity_charge_window * capacity_charge_consideration`, so consideration only ever matters where the window already allows it. A caller may instead consider one, several, or all occurrences each cycle; EMHASS exposes the mechanism only and does not choose the policy.
+
+Defaults to unset (`None`) = every tariff-eligible timestep/interval considered, identical to today's behaviour without this key. Ordinary usage is `0`/`1` (considered or not); it is not a fractional billing discount.
+
+```{warning}
+Excluding a later, genuinely eligible occurrence does two things. It removes the MPC's incentive to pre-position the battery for that occurrence in the current solve; and, because only its capacity contribution was removed, it makes that occurrence comparatively attractive as a place to put grid import or battery charging. EMHASS exposes the mechanism only - it does not decide, or default to, a "nearest occurrence only" policy. Choose which occurrence(s) to consider deliberately; the consequence of that choice is caller-owned.
+
+An excluded timestep is **capacity-unpriced in this solve, not free**: its energy price, the battery/grid/deferrable-load constraints and every other objective term still apply, and it stays fully tariff-eligible. `peak_import` is an internal optimisation variable only - it is not returned by `naive-mpc-optim` and is not published. To verify what a plan actually does, use the returned `P_grid_pos` and the Step 4 tariff-metric helper below, passing the *effective* `capacity_charge_window * capacity_charge_consideration` weight as its `window` argument when consideration is active - a plan can still schedule a large import at an excluded but still tariff-eligible timestep that never raised this solve's priced peak.
+```
+
+Expected: only the considered, tariff-eligible timestep/interval(s) can raise the priced peak; excluded-but-still-eligible timesteps/intervals do not participate in this solve's prospective capacity peak, and their tariff eligibility remains unchanged.
+
+## Step 3d: Price a tariff measurement interval
 
 <!-- source: src/emhass/data/config_defaults.json:141 -->
 <!-- source: src/emhass/data/associations.csv:100 -->
@@ -126,7 +158,7 @@ Expected: the first tariff interval combines realised history with the remaining
 <!-- source: src/emhass/optimization.py:1683 -->
 <!-- transport: local Python helper; untested adapter transport - contribution welcome -->
 
-Do not verify `N>1` with the raw maximum of `P_grid`; that would compare a native-timestep peak with a tariff-interval average. Use the same completed-interval metric:
+Do not verify `N>1` with the raw maximum of `P_grid`; that would compare a native-timestep peak with a tariff-interval average. Use the same completed-interval metric, passing the effective `capacity_charge_window * capacity_charge_consideration` weight as `window` whenever consideration is active (unset consideration reduces to the raw window, matching EMHASS's own fail-open default):
 
 ```python
 def billed_peak_w(p_grid_w, n=1, history=(), window=None, incumbent_w=0):
@@ -158,7 +190,10 @@ Expected: comparisons between capacity-charge runs use the billed metric above, 
 
 ## Caveats
 
-- `current_period_peak`, `capacity_charge_window` and `capacity_charge_current_interval_history` are MPC runtime inputs. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
+- `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are MPC runtime inputs. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
+- `capacity_charge_consideration` is separate from `capacity_charge_window`: it narrows which otherwise tariff-eligible occurrences count toward THIS solve's peak, and it never widens eligibility.
+- Two different "history" quantities behave differently under consideration, and the distinction matters at `N>1`. `capacity_charge_current_interval_history` holds realised samples inside a **still-open** tariff interval; that interval's billed average does not exist until it closes, so the whole interval candidate is prospective and the endpoint consideration weight **does** scale it - the planned portion and the realised-history portion alike, all-or-nothing. `current_period_peak` is the already-completed, irreversible billed-history floor; it is an independent constraint that consideration **never** scales or erases, at any `N`.
+- For well-aligned `N>1` consideration input, hold the chosen `capacity_charge_consideration` value constant across every planned native timestep of a given completed tariff interval - including, for the first, still-open interval, every decision index from `0` through its own endpoint - rather than only at the endpoint. The endpoint alone sets the applied weight, but a differing planned span still trips EMHASS's own misalignment warning. Never rewrite `capacity_charge_current_interval_history` to compensate; it holds only already-realised samples.
 - `dayahead-optim` and `perfect-optim` have no elapsed-interval history. With `N>1`, start their horizon on a tariff measurement-interval boundary.
 - A tariff interval incomplete at the far end of the horizon is not priced until a later receding-horizon solve can see its completion. No terminal continuation model is added here.
 - Exact billing-period rollover with `N>1` assumes the billing-period boundary aligns with a tariff measurement-interval boundary. EMHASS does not split one aggregated interval across two billing periods.
