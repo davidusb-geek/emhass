@@ -3,10 +3,12 @@
 import _pickle as cPickle
 import bz2
 import copy
+import glob
 import os
 import pathlib
 import pickle
 import re
+import tempfile
 import unittest
 import unittest.mock
 
@@ -2248,6 +2250,198 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
 
+    # --- Multi-rooftop Solcast quota accounting + UTC quota day ---
+    #
+    # The daily counter reserves Solcast provider-call budget atomically for
+    # ALL configured rooftop IDs before any HTTP request is made, so a
+    # reservation that doesn't fit under the cap can never yield a partial
+    # multi-rooftop aggregate. Keyed by UTC calendar date, since Solcast's
+    # quota resets on the UTC day, not the site's local day.
+
+    def _isolate_solcast_counter_dir(self):
+        """Route the quota counter file into a private per-test temp dir so
+        these tests never touch a real developer/runtime quota counter."""
+        counter_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(counter_dir.cleanup)
+        patcher = unittest.mock.patch(
+            "emhass.forecast.tempfile.gettempdir", return_value=counter_dir.name
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._counter_dir = counter_dir.name
+
+    def _read_solcast_counter(self):
+        paths = glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count"))
+        assert len(paths) == 1, f"expected exactly one counter file, found {paths}"
+        with open(paths[0]) as f:
+            return int(f.read().strip())
+
+    async def _fetch_solcast_quota_mock(self, roof_ids_csv):
+        """Configure the given comma-separated rooftop IDs and fetch, with a
+        mock registered for every possible roof (111111/222222) regardless of
+        how many are actually configured -- so a rejected reservation proves
+        zero requests even though a mock exists that would have succeeded.
+        Caller must isolate the counter dir first (needed before any
+        pre-loading reservation call, so it isn't done here)."""
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = roof_ids_csv
+        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
+            os.remove(emhass_conf["data_path"] / "weather_forecast_data.pkl")
+        payload = {
+            "forecasts": [
+                {
+                    "period_end": "2026-08-22T10:00:00.0000000Z",
+                    "period": "PT30M",
+                    "pv_estimate": 0.5,
+                }
+            ]
+        }
+        with aioresponses() as mocked:
+            for rid in ("111111", "222222"):
+                mocked.get(
+                    f"https://api.solcast.com.au/rooftop_sites/{rid}/forecasts?hours=24",
+                    payload=payload,
+                )
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            return res, len(mocked.requests)
+
+    # (initial reserved count, roof count) -> allowed?, final count, actual
+    # HTTP requests. Covers 1/2-roof reservation, the 6+2->8 boundary, 7+2
+    # rejection (no partial aggregate), and the 8-call cap for both roof
+    # counts.
+    async def test_solcast_quota_reservation_table(self):
+        cases = [
+            (0, 1, True, 1, 1),
+            (0, 2, True, 2, 2),
+            (6, 2, True, 8, 2),
+            (7, 2, False, 7, 0),
+            (8, 1, False, 8, 0),
+            (8, 2, False, 8, 0),
+        ]
+        for initial, n_roofs, allowed, final_count, n_requests in cases:
+            with self.subTest(initial=initial, n_roofs=n_roofs):
+                roof_ids_csv = ",".join(["111111", "222222"][:n_roofs])
+                self._isolate_solcast_counter_dir()
+                if initial:
+                    self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=initial))
+                res, n_http = await self._fetch_solcast_quota_mock(roof_ids_csv)
+                self.assertEqual(res is not False, allowed)
+                if allowed:
+                    self.assertIsInstance(res, pd.DataFrame)
+                else:
+                    self.assertNotIsInstance(res, pd.DataFrame)
+                self.assertEqual(n_http, n_requests)
+                self.assertEqual(self._read_solcast_counter(), final_count)
+
+    async def test_solcast_quota_lock_error_path_preserved(self):
+        """The OSError/ValueError-safe fallback (return False, log an error)
+        must still work with the required_calls-aware signature."""
+        with unittest.mock.patch("builtins.open", side_effect=OSError("disk full")):
+            self.assertFalse(self.fcst._solcast_rate_limit_ok(required_calls=2))
+
+    async def test_solcast_quota_single_rooftop_default(self):
+        """Calling with no explicit required_calls (the pre-existing call
+        pattern used elsewhere) still reserves exactly 1."""
+        self._isolate_solcast_counter_dir()
+        self.assertTrue(self.fcst._solcast_rate_limit_ok())
+        self.assertEqual(self._read_solcast_counter(), 1)
+
+    async def test_solcast_quota_uses_utc_day(self):
+        """UTC quota-day semantics in one deterministic test (no wall clock):
+        local midnight does not reset the counter, but real UTC midnight
+        does start a fresh one."""
+        fixed = {"now": pd.Timestamp("2026-01-01 23:30:00", tz="UTC")}
+
+        def fake_now(tz=None):
+            return fixed["now"].tz_convert(tz) if tz is not None else fixed["now"]
+
+        patcher = unittest.mock.patch.object(pd.Timestamp, "now", side_effect=fake_now)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._isolate_solcast_counter_dir()
+
+        # 23:30 UTC on Jan 1 == 00:30 CET Jan 2 (Europe/Paris in winter): local
+        # calendar date has already rolled over, UTC has not -- must still
+        # land on the Jan-1 UTC-day file.
+        self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=5))
+        self.assertEqual(self._read_solcast_counter(), 5)
+        paths = glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count"))
+        self.assertIn("emhass_solcast_calls_2026-01-01.count", paths[0])
+
+        # Real UTC midnight rollover creates a fresh counter, not reused.
+        fixed["now"] = pd.Timestamp("2026-01-02 00:05:00", tz="UTC")
+        self.assertTrue(self.fcst._solcast_rate_limit_ok())
+        paths = sorted(glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count")))
+        self.assertEqual(len(paths), 2, "a new UTC-day counter file must be created, not reused")
+        with open(paths[1]) as f:
+            self.assertEqual(int(f.read().strip()), 1, "the new UTC day's counter starts fresh")
+
+    async def test_solcast_quota_reservation_fails_closed_without_lock(self):
+        """If the lock cannot be acquired the reservation fails closed
+        (returns False, reserves nothing) rather than proceeding without
+        atomicity -- this is also the observable behaviour of the "neither
+        fcntl nor msvcrt" fallback branch."""
+        self._isolate_solcast_counter_dir()
+        with unittest.mock.patch(
+            "emhass.forecast._flock_acquire", side_effect=OSError("no locking primitive")
+        ):
+            self.assertFalse(self.fcst._solcast_rate_limit_ok(required_calls=2))
+        # The failed attempt reserved nothing: the next real call starts at 1.
+        self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=1))
+        self.assertEqual(self._read_solcast_counter(), 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows msvcrt locking branch")
+    def test_flock_windows_mutual_exclusion(self):
+        """On Windows, _flock_acquire takes an exclusive lock a second file
+        handle cannot take until _flock_release runs."""
+        import msvcrt
+
+        from emhass.forecast import _flock_acquire, _flock_release
+
+        counter_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(counter_dir.cleanup)
+        path = os.path.join(counter_dir.name, "lock.count")
+        with open(path, "a+") as f1, open(path, "a+") as f2:
+            _flock_acquire(f1)
+            try:
+                f2.seek(0)
+                with self.assertRaises(OSError):
+                    msvcrt.locking(f2.fileno(), msvcrt.LK_NBLCK, 1)
+            finally:
+                _flock_release(f1)
+            # The region is free again once released.
+            f2.seek(0)
+            msvcrt.locking(f2.fileno(), msvcrt.LK_NBLCK, 1)
+            msvcrt.locking(f2.fileno(), msvcrt.LK_UNLCK, 1)
+
+    async def test_solcast_empty_rooftop_id_rejected_before_reservation(self):
+        """An empty / whitespace / separator-only solcast_rooftop_id is
+        rejected before any quota reservation and before any HTTP request."""
+        for bad in ("", "   ", ",", " , "):
+            with self.subTest(value=repr(bad)):
+                self._isolate_solcast_counter_dir()
+                self.fcst.params = {
+                    "passed_data": {
+                        "weather_forecast_cache": False,
+                        "weather_forecast_cache_only": False,
+                    }
+                }
+                self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
+                self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = bad
+                if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
+                    os.remove(emhass_conf["data_path"] / "weather_forecast_data.pkl")
+                with aioresponses() as mocked:
+                    res = await self.fcst.get_weather_forecast(method="solcast")
+                self.assertFalse(res)
+                self.assertEqual(len(mocked.requests), 0)
+                self.assertFalse(
+                    glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count")),
+                    "no quota counter file must be created",
+                )
+
     async def test_get_cached_forecast_data_stale_open_meteo_deletes_cache(self):
         """Stale Open-Meteo cache must be deleted and return False (no zero-fill).
 
@@ -2695,7 +2889,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "test_key"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
-        self.fcst._solcast_rate_limit_ok = lambda: True
+        self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True
 
         cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
         temp_path = emhass_conf["data_path"] / "temp_bias_weather_forecast_data.pkl"
