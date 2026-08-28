@@ -802,15 +802,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     emhass_conf["data_path"] / "weather_forecast_data.pkl",
                 )
 
-    # Test Solcast resampling: 30-min Solcast data → 15-min optimization_time_step
+    # Test Solcast resampling: recorded 30-min Solcast payload → 15-min grid
     async def test_get_weather_forecast_solcast_15min_resampling_mock(self):
-        """Verify Solcast data is correctly resampled when optimization_time_step < 30 min."""
-        # Override freq to 15 minutes (default test uses 30 min)
+        """Recorded Solcast payload → 15-min grid: every 15-min timestep that
+        falls wholly inside a 30-min source period must equal that period's
+        pv_estimate (kW→W, bias=0), and uncovered timesteps must be zero.
+
+        The recorded fixture is 2022 data, so its period_end timestamps are
+        re-anchored onto the current forecast window (values untouched) — this
+        exercises the overlap resampling with a real payload shape instead of
+        a fully zero-filled result.
+        """
         original_freq = self.fcst.freq
         original_forecast_dates = self.fcst.forecast_dates
         self.fcst.freq = pd.Timedelta("15min")
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("15min")
-        # Rebuild forecast_dates at 15-min intervals (same time window → 2× more slots)
         self.fcst.forecast_dates = pd.date_range(
             start=original_forecast_dates[0],
             end=original_forecast_dates[-1],
@@ -837,6 +843,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = cPickle.loads(data)
         data = orjson.loads(data.content)
 
+        # Re-anchor the recorded period_end timestamps so the first 30-min
+        # source period starts exactly at forecast_dates[0]. Values untouched.
+        recorded_ends = pd.to_datetime([e["period_end"] for e in data["forecasts"]], utc=True)
+        shift = self.fcst.forecast_dates[0] - (recorded_ends[0] - pd.Timedelta("30min"))
+        for elm, end in zip(data["forecasts"], recorded_ends, strict=True):
+            elm["period_end"] = (end + shift).isoformat()
+        shifted_ends = recorded_ends + shift
+        shifted_starts = shifted_ends - pd.Timedelta("30min")
+        est_w = np.array([e["pv_estimate"] * 1000 for e in data["forecasts"]], dtype="float64")
+        expected = []
+        for ts in self.fcst.forecast_dates:
+            hit = np.where((shifted_starts <= ts) & (ts < shifted_ends))[0]
+            expected.append(est_w[hit[0]] if len(hit) else 0.0)
+        expected = np.array(expected)
+
         days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
         get_url = f"https://api.solcast.com.au/rooftop_sites/123456/forecasts?hours={days_solcast}"
 
@@ -847,31 +868,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
             self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            # Key assertion: output length must match the 15-min forecast_dates
             self.assertEqual(len(df_weather_scrap), len(self.fcst.forecast_dates))
-            # Verify no NaN values after interpolation
             self.assertFalse(df_weather_scrap["yhat"].isna().any())
-
-            # Verify interpolation correctness at a midpoint between two 30-min source timestamps
-            # Pick a midpoint index to avoid edge effects
-            midpoint_idx = len(df_weather_scrap.index) // 2
-            ts_mid = df_weather_scrap.index[midpoint_idx]
-            ts_prev = ts_mid - pd.Timedelta(minutes=15)
-            ts_next = ts_mid + pd.Timedelta(minutes=15)
-
-            # Ensure the neighboring timestamps exist in the index
-            self.assertIn(ts_prev, df_weather_scrap.index)
-            self.assertIn(ts_next, df_weather_scrap.index)
-
-            y_prev = df_weather_scrap.loc[ts_prev, "yhat"]
-            y_mid = df_weather_scrap.loc[ts_mid, "yhat"]
-            y_next = df_weather_scrap.loc[ts_next, "yhat"]
-
-            # Expected linear interpolation at the midpoint
-            expected_mid = (y_prev + y_next) / 2.0
-
-            # Check that the interpolated midpoint matches the expected linear value
-            self.assertAlmostEqual(y_mid, expected_mid, places=6)
+            # Value-level mapping assertion against the recorded payload.
+            np.testing.assert_allclose(
+                df_weather_scrap["yhat"].to_numpy(), expected, rtol=0, atol=1e-6
+            )
+            # The mapping is actually exercised (not a fully zero-filled pass).
+            self.assertGreater(int((df_weather_scrap["yhat"] > 0).sum()), 0)
 
         # Restore original freq/forecast_dates
         self.fcst.freq = original_freq
@@ -881,6 +885,200 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
             )
+
+    # --- Solcast period-average → optimisation-grid overlap resampling ---
+    #
+    # A Solcast row {period_end: E, period: "PT30M", pv_estimate: P} is the
+    # AVERAGE power over [E - 30min, E), not a sample at E. Each optimisation
+    # interval takes the overlap-weighted mean of every real source interval
+    # touching it, so source-period energy is preserved for finer, equal,
+    # coarser and non-divisor grids alike, and no source interval is dropped
+    # or held across a gap. Fixture timestamps use UTC 'Z' (as the real API
+    # does) against a local tz of Europe/Paris (+02:00 in August), which
+    # doubles as the timezone-conversion check. Three consecutive periods
+    # [09:30,10:00)=200W, [10:00,10:30)=800W, [10:30,11:00)=500W give a strong
+    # boundary change that a ramp or a timestamp-sample would get wrong.
+
+    _P1, _P2, _P3 = 200.0, 800.0, 500.0  # W; == _three_period_payload defaults × 1000
+
+    def _solcast_grid_setup(self, freq_str, start="09:30:00", end="11:00:00"):
+        """Point forecast_dates at a fixed local-tz window [start, end) at the
+        given freq (kept as an exact tiling: end is excluded)."""
+        self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True  # bypass unrelated quota cap
+        orig = (self.fcst.freq, self.fcst.forecast_dates)
+        self.fcst.freq = pd.Timedelta(freq_str)
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(freq_str)
+        base = pd.Timestamp(f"2026-08-22 {start}", tz=self.fcst.time_zone)
+        end_ts = pd.Timestamp(f"2026-08-22 {end}", tz=self.fcst.time_zone)
+        self.fcst.forecast_dates = pd.date_range(
+            start=base, end=end_ts - self.fcst.freq, freq=self.fcst.freq
+        )
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        self.addCleanup(lambda: setattr(self.fcst, "freq", orig[0]))
+        self.addCleanup(lambda: setattr(self.fcst, "forecast_dates", orig[1]))
+
+    def _win(self, time_str):
+        return pd.Timestamp(f"2026-08-22 {time_str}", tz=self.fcst.time_zone)
+
+    @staticmethod
+    def _three_period_payload(p1=0.2, p2=0.8, p3=0.5, with_p10=False, drop=()):
+        """Three consecutive PT30M periods ending 08:00Z/08:30Z/09:00Z ==
+        10:00/10:30/11:00 Europe/Paris, values in kW. `drop` omits rows (by
+        0-based index) to model a missing source period."""
+        elms = []
+        for i, (time_str, est) in enumerate(
+            zip(("08:00:00", "08:30:00", "09:00:00"), (p1, p2, p3), strict=True)
+        ):
+            if i in drop:
+                continue
+            elm = {
+                "period_end": f"2026-08-22T{time_str}.0000000Z",
+                "period": "PT30M",
+                "pv_estimate": est,
+            }
+            if with_p10:
+                elm["pv_estimate10"] = est * 0.5
+            elms.append(elm)
+        return {"forecasts": elms}
+
+    async def _fetch_solcast(self, roof_ids_csv, payload_by_roof):
+        """roof_ids_csv: e.g. '111111' or '111111,222222'.
+        payload_by_roof: dict roof_id -> payload (or one payload for all roofs)."""
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = roof_ids_csv
+        roof_ids = re.split(r"[,\s]+", roof_ids_csv.strip())
+        days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
+        with aioresponses() as mocked:
+            for rid in roof_ids:
+                payload = (
+                    payload_by_roof[rid]
+                    if isinstance(payload_by_roof, dict) and rid in payload_by_roof
+                    else payload_by_roof
+                )
+                get_url = (
+                    f"https://api.solcast.com.au/rooftop_sites/{rid}/forecasts?hours={days_solcast}"
+                )
+                mocked.get(get_url, payload=payload)
+            return await self.fcst.get_weather_forecast(method="solcast")
+
+    # A / B / C / K: finer-or-equal grids — each timestep wholly inside a
+    # 30-min source period takes that period's average exactly, timezone
+    # conversion holds (UTC source → local grid), and per-window energy is
+    # preserved when a window is split into sub-steps. No ramped value appears.
+    async def test_solcast_overlap_fine_and_equal_grids(self):
+        windows = [(self._P1, "09:30"), (self._P2, "10:00"), (self._P3, "10:30")]
+        for freq_min in (30, 15, 5):
+            with self.subTest(freq=f"{freq_min}min"):
+                self._solcast_grid_setup(f"{freq_min}min")
+                df = await self._fetch_solcast("123456", self._three_period_payload())
+                self.assertEqual(df.index.tz, self.fcst.time_zone)
+                self.assertTrue(df["yhat"].isin([v for v, _ in windows]).all())
+                for value, start in windows:
+                    children = [
+                        self._win(start) + pd.Timedelta(minutes=freq_min * i)
+                        for i in range(30 // freq_min)
+                    ]
+                    for ts in children:
+                        self.assertAlmostEqual(df.loc[ts, "yhat"], value, places=6)
+                    energy = sum(df.loc[ts, "yhat"] for ts in children) * (freq_min / 60.0)
+                    self.assertAlmostEqual(energy, value * 0.5, places=6)
+
+    # D: coarser grid — a 60-min target covering two 30-min source periods is
+    # their mean, and no source period is dropped. Trailing partial coverage
+    # scales towards zero.
+    async def test_solcast_overlap_coarse_grid_preserves_energy(self):
+        self._solcast_grid_setup("60min", start="09:30:00", end="11:30:00")
+        df = await self._fetch_solcast("123456", self._three_period_payload())
+        # [09:30,10:30) -> mean(200, 800) = 500
+        self.assertAlmostEqual(df.loc[self._win("09:30"), "yhat"], 500.0, places=6)
+        # [10:30,11:30) -> 500 for the first half hour, then no coverage
+        #              -> 500 * 0.5h / 1h = 250
+        self.assertAlmostEqual(df.loc[self._win("10:30"), "yhat"], 250.0, places=6)
+        target_energy = df["yhat"].sum() * 1.0  # 1h steps
+        source_energy = (self._P1 + self._P2 + self._P3) * 0.5
+        self.assertAlmostEqual(target_energy, source_energy, places=6)
+
+    # E: non-divisor grid — a 20-min target that straddles a source boundary
+    # is overlap-weighted between the two source averages, NOT step-held from
+    # its own start timestamp.
+    async def test_solcast_overlap_non_divisor_grid_is_overlap_weighted(self):
+        self._solcast_grid_setup("20min", start="09:30:00", end="10:30:00")
+        df = await self._fetch_solcast("123456", self._three_period_payload())
+        # [09:50,10:10): 10min in [09:30,10:00)=200 + 10min in [10:00,10:30)=800
+        #             -> (200 + 800) / 2 = 500. A step-hold from 09:50 gives 200.
+        self.assertAlmostEqual(df.loc[self._win("09:50"), "yhat"], 500.0, places=6)
+        # [10:10,10:30) sits wholly in the 800 W period.
+        self.assertAlmostEqual(df.loc[self._win("10:10"), "yhat"], 800.0, places=6)
+
+    # F: the forecast window starts INSIDE a source period; the leading
+    # timesteps still take the period that actually contains them.
+    async def test_solcast_overlap_partial_leading_source_interval(self):
+        self._solcast_grid_setup("5min", start="09:40:00", end="10:10:00")
+        df = await self._fetch_solcast("123456", self._three_period_payload())
+        for time_str, expected in (
+            ("09:40", 200.0),
+            ("09:55", 200.0),
+            ("10:00", 800.0),
+            ("10:05", 800.0),
+        ):
+            self.assertAlmostEqual(df.loc[self._win(time_str), "yhat"], expected, places=6)
+
+    # G: intervals outside genuine Solcast coverage are zero, both before the
+    # first period start and after the last period end.
+    async def test_solcast_overlap_outside_coverage_is_zero(self):
+        self._solcast_grid_setup("30min", start="09:00:00", end="11:30:00")
+        df = await self._fetch_solcast("123456", self._three_period_payload())
+        self.assertEqual(df.loc[self._win("09:00"), "yhat"], 0.0)  # before [09:30, …)
+        self.assertEqual(df.loc[self._win("11:00"), "yhat"], 0.0)  # after […, 11:00)
+        self.assertAlmostEqual(df.loc[self._win("09:30"), "yhat"], 200.0, places=6)
+
+    # H: an internal missing source period is NOT forward-filled from the
+    # previous period — the uncovered target intervals are zero.
+    async def test_solcast_overlap_internal_gap_not_held(self):
+        self._solcast_grid_setup("15min", start="09:30:00", end="11:00:00")
+        df = await self._fetch_solcast("123456", self._three_period_payload(drop=(1,)))
+        self.assertAlmostEqual(df.loc[self._win("09:45"), "yhat"], 200.0, places=6)
+        self.assertEqual(df.loc[self._win("10:00"), "yhat"], 0.0)  # gap, not held at 200
+        self.assertEqual(df.loc[self._win("10:15"), "yhat"], 0.0)
+        self.assertAlmostEqual(df.loc[self._win("10:30"), "yhat"], 500.0, places=6)
+
+    # I: multi-rooftop aggregation still sums per interval.
+    async def test_solcast_overlap_multirooftop_sum(self):
+        self._solcast_grid_setup("15min")
+        df = await self._fetch_solcast(
+            "111111,222222",
+            {
+                "111111": self._three_period_payload(),
+                "222222": self._three_period_payload(p1=0.1, p2=0.3, p3=0.2),
+            },
+        )
+        for time_str in ("10:00", "10:15"):
+            self.assertAlmostEqual(df.loc[self._win(time_str), "yhat"], 800.0 + 300.0, places=6)
+
+    # J: the P10/P50 blend is applied to the source average before mapping, so
+    # quantile bias is unchanged by the resampling.
+    async def test_solcast_overlap_preserves_quantile_bias(self):
+        self._solcast_grid_setup("15min")
+        self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 1.0  # pure P10
+        self.addCleanup(
+            lambda: self.fcst.optim_conf.__setitem__("weather_forecast_pv_quantile_bias", 0.0)
+        )
+        df = await self._fetch_solcast("123456", self._three_period_payload(with_p10=True))
+        for time_str in ("10:00", "10:15"):  # p10 = 0.8 × 0.5 kW -> 400 W
+            self.assertAlmostEqual(df.loc[self._win(time_str), "yhat"], 400.0, places=6)
+
+    # L: over a window fully covered by Solcast, total energy on the
+    # optimisation grid equals the source-period energy for every grid.
+    async def test_solcast_overlap_source_energy_preserved(self):
+        source_energy = (self._P1 + self._P2 + self._P3) * 0.5  # Wh over [09:30, 11:00)
+        for freq_str in ("15min", "45min", "90min"):
+            with self.subTest(freq=freq_str):
+                self._solcast_grid_setup(freq_str, start="09:30:00", end="11:00:00")
+                df = await self._fetch_solcast("123456", self._three_period_payload())
+                step_h = self.fcst.freq.total_seconds() / 3600.0
+                self.assertAlmostEqual(df["yhat"].sum() * step_h, source_energy, places=6)
 
     # Test #404: Solcast multi-day fixture proves day-2 PV is real, not zero-filled
     async def test_get_weather_forecast_solcast_multiday_mock(self):
