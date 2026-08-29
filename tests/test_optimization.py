@@ -6236,6 +6236,201 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Heating energy should be at least the draw-off demand (COP amplifies electrical input)
         self.assertGreater(total_heating, 0, "Heat pump must run to compensate draw-off demand")
 
+    def test_thermal_loss_kw_rate_scaled_by_timestep(self):
+        """Regression for issue #1074.
+
+        ``thermal_loss`` is a public standby-loss RATE in kW. It must be
+        converted to kWh for the current timestep (``thermal_loss * dt_hours``)
+        before it enters the temperature balance, alongside the already
+        timestep-scaled heater energy and the kWh/timestep ``draw_off_demand``.
+
+        Before the fix the raw kW value was subtracted directly, so the energy
+        removed per timestep - and therefore the implied continuous loss power -
+        depended on the optimisation timestep length (only 60 min matched the
+        configured value).
+
+        This exercises the real ``_resolve_draw_off_demand`` helper, which is the
+        single hot-water-tank standby-loss source shared by the fresh-build,
+        cache-hit and shared-tank paths.
+        """
+        base_loss_kw = 0.035
+        hc = {"thermal_loss": base_loss_kw, "draw_off_demand": [0.0] * 6}
+
+        for timestep_min in (5, 30, 60):
+            with self.subTest(timestep_min=timestep_min):
+                rhc = dict(self.retrieve_hass_conf)
+                rhc["optimization_time_step"] = pd.Timedelta(minutes=timestep_min)
+                opt = self.create_optimization(retrieve_hass_conf=rhc)
+                dt_hours = timestep_min / 60.0
+                self.assertAlmostEqual(opt.time_step, dt_hours, places=12)
+
+                _, loss_arr = opt._resolve_draw_off_demand(hc, base_loss_kw, 6)
+
+                # Energy removed per timestep scales with dt.
+                np.testing.assert_allclose(
+                    loss_arr, np.full(6, base_loss_kw * dt_hours), atol=1e-12
+                )
+                # The inferred continuous standby-loss RATE stays at 0.035 kW.
+                self.assertAlmostEqual(loss_arr[0] / dt_hours, base_loss_kw, places=12)
+
+        # 60-minute numerical compatibility: kW * 1 h == the historical raw value.
+        rhc = dict(self.retrieve_hass_conf)
+        rhc["optimization_time_step"] = pd.Timedelta(minutes=60)
+        opt60 = self.create_optimization(retrieve_hass_conf=rhc)
+        _, loss60 = opt60._resolve_draw_off_demand(hc, base_loss_kw, 6)
+        np.testing.assert_allclose(loss60, np.full(6, base_loss_kw), atol=1e-12)
+
+        # Zero loss stays an exact zero-loss path.
+        _, loss_zero = opt60._resolve_draw_off_demand(
+            {"thermal_loss": 0.0, "draw_off_demand": [0.0] * 6}, 0.0, 6
+        )
+        np.testing.assert_array_equal(loss_zero, np.zeros(6))
+
+    def test_thermal_loss_signed_building_loss_scaled_and_sign_preserved(self):
+        """Issue #1074: the building/space-heating thermal-battery path
+        (``draw_off_demand`` absent) feeds ``calculate_thermal_loss_signed`` -
+        a signed kW magnitude - into ``param_thermal[k]["thermal_losses"]``.
+
+        That parameter must receive kWh/timestep (``kW * dt``), keeping the
+        +loss (outdoor below the start/indoor temperature) / -gain (outdoor at
+        or above it) sign convention, with no abs(), clipping or double scaling.
+        Inspects the real parameter value produced by a normal optimisation run
+        rather than calling the conversion helper directly.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # start_temperature (20 C) is the threshold used by
+        # calculate_thermal_loss_signed: first half cold -> heat loss (+),
+        # second half warm -> passive gain (-).
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 24 + [25.0] * 24
+
+        base_loss_kw = 0.035
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_battery": {
+                    "start_temperature": 20.0,
+                    "supply_temperature": 35.0,
+                    "volume": 50.0,
+                    "thermal_loss": base_loss_kw,
+                    "specific_heating_demand": 0.0,
+                    "area": 1.0,
+                    "min_temperatures": [5.0] * 48,
+                    "max_temperatures": [90.0] * 48,
+                }
+            }
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+
+        losses = np.asarray(opt.param_thermal[0]["thermal_losses"].value)
+        dt_hours = opt.time_step  # 0.5 h
+        np.testing.assert_allclose(losses[:24], np.full(24, base_loss_kw * dt_hours), atol=1e-12)
+        np.testing.assert_allclose(losses[24:], np.full(24, -base_loss_kw * dt_hours), atol=1e-12)
+        # Sign convention preserved (not abs()/clipped).
+        self.assertTrue(np.all(losses[:24] > 0))
+        self.assertTrue(np.all(losses[24:] < 0))
+
+    def test_thermal_loss_timestep_scaling_survives_cache_hit(self):
+        """Issue #1074: ``update_thermal_params`` (the cache-hit / rolling-MPC
+        runtime refresh) must re-apply the kW -> kWh/timestep conversion, not
+        leave a stale unscaled kW vector in the cached parameter.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        base_loss_kw = 0.035
+        config = {
+            "start_temperature": 50.0,
+            "volume": 0.259,
+            "density": 1000,
+            "heat_capacity": 4.186,
+            "efficiency": 1.0,
+            "thermal_loss": base_loss_kw,
+            "draw_off_demand": [0.0] * 48,
+            "min_temperatures": [0.0] * 48,
+            "max_temperatures": [100.0] * 48,
+        }
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+        self.assertIn(0, opt.param_thermal)
+
+        # Force the OLD buggy (unscaled) vector, then simulate a cache-hit refresh.
+        opt.param_thermal[0]["thermal_losses"].value = np.full(48, base_loss_kw)
+        opt.update_thermal_params(
+            self.optim_conf, self.df_input_data_dayahead, self.p_load_forecast.values.ravel()
+        )
+
+        np.testing.assert_allclose(
+            opt.param_thermal[0]["thermal_losses"].value,
+            np.full(48, base_loss_kw * opt.time_step),
+            atol=1e-12,
+            err_msg="cache-hit path did not scale thermal_loss to kWh/timestep",
+        )
+
+    def test_shared_thermal_tank_thermal_loss_timestep_scaled(self):
+        """Issue #1074: a shared thermal tank built end-to-end through
+        ``_add_shared_thermal_tank_constraints`` must decay an idle tank by the
+        timestep-scaled standby loss (``thermal_loss * dt``), not the raw kW
+        value.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        base_loss_kw = 0.035
+        volume, density, heat_capacity = 0.1, 1000, 4.186
+        conversion = 3600 / (density * heat_capacity * volume)
+
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.40}}
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "buf",
+                "load_ids": [0],
+                "start_temperature": 60.0,
+                "volume": volume,
+                "density": density,
+                "heat_capacity": heat_capacity,
+                "thermal_loss": base_loss_kw,
+                "draw_off_demand": [0.0] * 48,
+                "min_temperatures": [0.0] * 48,
+                "max_temperatures": [100.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        self.assertEqual(res["optim_status"].unique()[0], "Optimal")
+        # Profit cost function never runs the pump when min temp is 0 -> pure decay.
+        self.assertAlmostEqual(res["P_deferrable0"].iloc[0], 0.0, places=3)
+
+        actual_drop = res["predicted_temp_heater0"].iloc[0] - res["predicted_temp_heater0"].iloc[1]
+        expected_drop = conversion * base_loss_kw * opt.time_step  # ~0.150 degC at 30 min
+        buggy_drop = conversion * base_loss_kw  # ~0.301 degC (raw kW, unscaled)
+        self.assertAlmostEqual(actual_drop, expected_drop, places=2)
+        self.assertLess(actual_drop, (expected_drop + buggy_drop) / 2)
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery

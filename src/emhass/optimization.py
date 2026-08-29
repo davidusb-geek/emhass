@@ -1398,18 +1398,25 @@ class Optimization:
                 draw_off_profile = hc.get("draw_off_demand", None)
 
                 if draw_off_profile is not None and len(draw_off_profile) > 0:
-                    # Hot water tank mode: constant standby loss + tiled draw-off
-                    params["thermal_losses"].value = np.full(n, base_loss)
+                    # Hot water tank mode: constant standby loss + tiled draw-off.
+                    # thermal_loss is a public kW rate; convert to kWh/timestep.
+                    params["thermal_losses"].value = self._loss_kw_to_timestep_energy(
+                        np.full(n, base_loss)
+                    )
                     draw_off_arr = self._tile_profile(draw_off_profile, n)
                     params["heating_demand"].value = draw_off_arr
                 else:
-                    # Building heating mode: outdoor-temp-dependent losses
+                    # Building heating mode: outdoor-temp-dependent losses.
+                    # calculate_thermal_loss_signed returns a signed kW magnitude;
+                    # convert to kWh/timestep before the temperature balance.
                     thermal_losses = utils.calculate_thermal_loss_signed(
                         outdoor_temperature_forecast=outdoor_temp.tolist(),
                         indoor_temperature=new_start_temp,
                         base_loss=base_loss,
                     )
-                    params["thermal_losses"].value = np.array(thermal_losses[:n])
+                    params["thermal_losses"].value = self._loss_kw_to_timestep_energy(
+                        np.array(thermal_losses[:n])
+                    )
 
                     # Heating demand
                     if all(
@@ -2968,12 +2975,27 @@ class Optimization:
             arr = np.tile(arr, repeats)
         return arr[:required_len]
 
+    def _loss_kw_to_timestep_energy(self, loss_kw):
+        """Convert a ``thermal_loss`` value from its public contract (a constant
+        standby-loss RATE in kW) to the energy removed over one optimisation
+        timestep (kWh/timestep).
+
+        The temperature balance adds ``thermal_losses`` to the other, already
+        timestep-scaled energy terms (heater input ``P/1000 * dt`` and the
+        kWh/timestep ``heating_demand``/``draw_off_demand``), so the kW rate must
+        be multiplied by the timestep duration here. This is the single
+        authoritative conversion point; the public ``thermal_loss`` unit (kW) is
+        unchanged. Accepts a scalar or a NumPy array.
+        """
+        return loss_kw * self.time_step
+
     def _resolve_draw_off_demand(self, hc, base_loss, required_len):
         """Return (demand_arr, loss_arr) if hot-water-tank mode (draw_off_demand present), else None."""
         draw_off_profile = hc.get("draw_off_demand", None)
         if draw_off_profile is not None and len(draw_off_profile) > 0:
             demand_arr = self._tile_profile(draw_off_profile, required_len)
-            loss_arr = np.full(required_len, base_loss)
+            # thermal_loss is a public kW rate; convert to kWh/timestep.
+            loss_arr = np.full(required_len, self._loss_kw_to_timestep_energy(base_loss))
             return demand_arr, loss_arr
         return None
 
@@ -3073,7 +3095,10 @@ class Optimization:
                     indoor_temperature=start_temp_float,
                     base_loss=base_loss,
                 )
-                params["thermal_losses"].value = np.array(losses[:required_len])
+                # Signed kW magnitude -> kWh/timestep (see _loss_kw_to_timestep_energy).
+                params["thermal_losses"].value = self._loss_kw_to_timestep_energy(
+                    np.array(losses[:required_len])
+                )
 
                 # Compute heating demand
                 if all(
@@ -3186,12 +3211,15 @@ class Optimization:
             if hot_water is not None:
                 heating_demand, thermal_losses = hot_water
             else:
-                thermal_losses = np.array(
-                    utils.calculate_thermal_loss_signed(
-                        outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
-                        indoor_temperature=start_temp_float,
-                        base_loss=base_loss,
-                    )[:required_len]
+                # Signed kW magnitude -> kWh/timestep (see _loss_kw_to_timestep_energy).
+                thermal_losses = self._loss_kw_to_timestep_energy(
+                    np.array(
+                        utils.calculate_thermal_loss_signed(
+                            outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+                            indoor_temperature=start_temp_float,
+                            base_loss=base_loss,
+                        )[:required_len]
+                    )
                 )
 
                 # Compute heating demand (simplified fallback)
@@ -3504,12 +3532,15 @@ class Optimization:
         if hot_water is not None:
             heating_demand, thermal_losses = hot_water
         else:
-            thermal_losses = np.array(
-                utils.calculate_thermal_loss_signed(
-                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
-                    indoor_temperature=start_temperature,
-                    base_loss=base_loss,
-                )[:required_len]
+            # Signed kW magnitude -> kWh/timestep (see _loss_kw_to_timestep_energy).
+            thermal_losses = self._loss_kw_to_timestep_energy(
+                np.array(
+                    utils.calculate_thermal_loss_signed(
+                        outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+                        indoor_temperature=start_temperature,
+                        base_loss=base_loss,
+                    )[:required_len]
+                )
             )
             if all(
                 key in tank
