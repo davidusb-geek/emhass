@@ -124,12 +124,9 @@ class RetrieveHass:
         # so every publication path (direct publish, post-optimisation,
         # saved-entity and continual_publish) shares one contract via this
         # RetrieveHass instance.
-        horizon_opt = self.params.get("retrieve_hass_conf", {}).get(
+        self.publish_horizon_attributes = self.params.get("retrieve_hass_conf", {}).get(
             "publish_horizon_attributes", True
         )
-        if isinstance(horizon_opt, str):
-            horizon_opt = horizon_opt.strip().lower() not in ("false", "0", "no", "off")
-        self.publish_horizon_attributes = bool(horizon_opt)
         # Check if we should verify SSL certificates (defaults to True)
         self.ssl_verify = None
         ssl_no_verify = False

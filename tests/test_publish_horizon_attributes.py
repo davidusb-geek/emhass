@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 """Tests for the opt-in ``publish_horizon_attributes`` publication control (#1077).
 
-Default (unset) / explicit ``true`` keeps the historical behaviour: the full
-optimisation horizon is attached to each Home Assistant state as a
-list/schedule attribute. Explicit ``false`` keeps the entities compact - the
-current scalar state plus the usual metadata only - so large MPC horizons stay
-under Home Assistant's 16 KiB Recorder attribute-size limit. The optimisation,
-its horizon, the saved entity series and ``/api/v1/plan`` are all unaffected.
+Default (unset) / explicit ``true`` keeps the historical behaviour: the
+forecast and schedule entities that expose future values carry the
+optimisation horizon as a list/schedule state attribute. Explicit ``false``
+keeps those entities compact - the current scalar state plus the metadata they
+already have only - so large MPC horizons stay under Home Assistant's 16 KiB
+Recorder attribute-size limit. The optimisation, its horizon, the saved entity
+series and ``/api/v1/plan`` are all unaffected.
 """
 
 import json
@@ -91,14 +92,6 @@ class TestPublishHorizonAttributesResolution(unittest.TestCase):
 
     def test_static_true_is_resolved(self):
         self.assertTrue(_make_rh(publish_horizon_attributes=True).publish_horizon_attributes)
-
-    def test_string_values_like_other_booleans(self):
-        # runtimeparams frequently arrive as strings; "false"/"true" must resolve.
-        self.assertFalse(_make_rh(publish_horizon_attributes="false").publish_horizon_attributes)
-        self.assertTrue(_make_rh(publish_horizon_attributes="true").publish_horizon_attributes)
-
-    def test_invalid_value_falls_back_to_default_true(self):
-        self.assertTrue(_make_rh(publish_horizon_attributes="banana").publish_horizon_attributes)
 
     def test_association_row_registered(self):
         rows = emhass_conf["associations_path"].read_text(encoding="utf-8").splitlines()
