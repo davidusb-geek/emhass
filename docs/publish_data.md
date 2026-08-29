@@ -6,6 +6,22 @@
 
 The `publish-data` command will also publish PV and load forecast data on sensors `p_pv_forecast` and `p_load_forecast`. If using a battery, then the battery-optimized power and the SOC will be published on sensors `p_batt_forecast` and `soc_batt_forecast`. On these sensors, the future values are passed as nested attributes.
 
+### Compact Home Assistant entities (`publish_horizon_attributes`)
+
+By default every published entity carries the whole optimization horizon as a list/schedule state attribute (`forecasts`, `deferrables_schedule`, `battery_scheduled_power`, `battery_scheduled_soc`, `predicted_temperatures`, `unit_load_cost_forecasts`, ...). With a long MPC horizon (e.g. 24 h at a 5-minute step) these attribute maps can exceed Home Assistant's 16 KiB Recorder attribute-size limit, which makes the Recorder drop the *entire* attribute map for that state - including `unit_of_measurement`, `device_class` and `state_class`.
+
+Set `publish_horizon_attributes` to `false` (it defaults to `true`) to keep the Home Assistant entities compact:
+
+* `true` (default / unset): current behaviour - the full horizon is attached to each state as a list/schedule attribute.
+* `false`: EMHASS publishes only the current scalar state plus the normal metadata (`friendly_name`, and where the entity already has them `device_class`, `unit_of_measurement`, `state_class`). The full-horizon list/schedule attributes are not attached. No new metadata is added to entities that do not already have it (for example the categorical `sensor.p_deferrableX_state` keeps just its `friendly_name`).
+
+This is a publication-layer option only. It does **not** change the optimization, the optimization horizon, the result DataFrames/CSV, the saved full-series entity files, or custom entity-id/prefix behaviour. It flows through the normal EMHASS configuration and runtime-parameter precedence, like `continual_publish`, and applies consistently to direct `publish-data`, publication after an optimization, saved-entity publication and `continual_publish`.
+
+The complete plan is always available regardless of this setting:
+
+* `/api/v1/plan` remains the supported full-plan interface (the published scalar state matches the plan's current/first row).
+* `/api/v1/last-run` can be used to correlate a plan with the run that produced it and to check its freshness.
+
 If `number_of_batteries` is greater than 1 (see [Configuration](config.md)), `sensor.p_batt_forecast` stays the **fleet total** (unchanged), but there is no meaningful fleet-wide SOC, so `sensor.soc_batt_forecast` is not published. Instead, EMHASS publishes one power sensor and one SOC sensor per battery, on fixed entity ids: `sensor.p_batt_forecast_battery0`, `sensor.p_batt_forecast_battery1`, ..., and `sensor.soc_batt_forecast_battery0`, `sensor.soc_batt_forecast_battery1`, ... The friendly names get a `Battery K` suffix (e.g. `Battery Power Forecast Battery 0`). With `number_of_batteries` at its default of 1, this is a true no-op: exactly today's two entities, nothing new. These per-battery entity ids are fixed and not customizable at runtime (there is no per-battery equivalent of `custom_batt_forecast_id` - see the note below), which keeps a multi-battery config from adding new runtime surface.
 
 If you run publish manually *(or via a Home Assistant Automation)*, it is possible to provide custom sensor names for all the data exported by the `publish-data` command. For this, when using the `publish-data` endpoint we can just add some runtime parameters as dictionaries like this:

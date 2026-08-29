@@ -134,6 +134,13 @@
       "default_value": false,
       "unit": "none"
     },
+    "publish_horizon_attributes": {
+      "friendly_name": "Publish full-horizon Home Assistant attributes",
+      "Description": "Defaults to true (existing behaviour): the full optimization horizon is attached to each published Home Assistant state as a list/schedule attribute (forecasts, deferrables_schedule, battery_scheduled_power, etc.). Set to false to keep Home Assistant entities compact - current scalar state plus the usual metadata (friendly_name, device_class, unit_of_measurement, state_class) only - so large horizons stay under Home Assistant's Recorder attribute size limit. The optimization, its horizon and the /api/v1/plan endpoint are unaffected.",
+      "input": "boolean",
+      "default_value": true,
+      "unit": "none"
+    },
     "logging_level": {
       "friendly_name": "Logging level",
       "Description": "DEBUG provides detailed diagnostic information, INFO gives general operational messages, WARNING highlights potential issues, and ERROR indicates critical problems that may disrupt functionality.",

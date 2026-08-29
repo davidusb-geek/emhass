@@ -5,6 +5,7 @@
   "historic_days_to_retrieve": 2,
   "method_ts_round": "nearest",
   "continual_publish": false,
+  "publish_horizon_attributes": true,
   "data_path": "default",
   "set_total_pv_sell": false,
   "lp_solver_timeout": 45,

@@ -116,6 +116,20 @@ class RetrieveHass:
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_list = []
+        # #1077: opt-in control for attaching the full optimisation horizon to
+        # Home Assistant state attributes. Default (unset) keeps the historical
+        # behaviour; setting retrieve_hass_conf.publish_horizon_attributes to
+        # false keeps HA entities compact (scalar state + normal metadata only)
+        # while /api/v1/plan still exposes the complete plan. Resolved once here
+        # so every publication path (direct publish, post-optimisation,
+        # saved-entity and continual_publish) shares one contract via this
+        # RetrieveHass instance.
+        horizon_opt = self.params.get("retrieve_hass_conf", {}).get(
+            "publish_horizon_attributes", True
+        )
+        if isinstance(horizon_opt, str):
+            horizon_opt = horizon_opt.strip().lower() not in ("false", "0", "no", "off")
+        self.publish_horizon_attributes = bool(horizon_opt)
         # Check if we should verify SSL certificates (defaults to True)
         self.ssl_verify = None
         ssl_no_verify = False
@@ -1360,24 +1374,28 @@ class RetrieveHass:
         list_name: str,
         state: float,
         decimals: int = 2,
+        include_horizon: bool = True,
     ) -> dict:
-        list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
-        list_df.columns = ["timestamps", entity_id]
-        ts_list = [i.isoformat() for i in list_df["timestamps"].tolist()]
-        vals_list = [str(np.round(i, decimals)) for i in list_df[entity_id].tolist()]
-        forecast_list = []
-        for i, ts in enumerate(ts_list):
-            datum = {}
-            datum["date"] = ts
-            datum[entity_id.split(sensor_prefix)[1]] = vals_list[i]
-            forecast_list.append(datum)
-
         attributes = {
             "device_class": device_class,
             "unit_of_measurement": unit_of_measurement,
             "friendly_name": friendly_name,
-            list_name: forecast_list,
         }
+        # Full-horizon list attribute (#1077). When horizon publication is
+        # disabled we skip building it entirely rather than constructing the
+        # list and discarding it.
+        if include_horizon:
+            list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
+            list_df.columns = ["timestamps", entity_id]
+            ts_list = [i.isoformat() for i in list_df["timestamps"].tolist()]
+            vals_list = [str(np.round(i, decimals)) for i in list_df[entity_id].tolist()]
+            forecast_list = []
+            for i, ts in enumerate(ts_list):
+                datum = {}
+                datum["date"] = ts
+                datum[entity_id.split(sensor_prefix)[1]] = vals_list[i]
+                forecast_list.append(datum)
+            attributes[list_name] = forecast_list
 
         # Add state_class to ensure HA tracks long-term statistics
         if device_class in [
@@ -1484,6 +1502,7 @@ class RetrieveHass:
                 friendly_name,
                 "forecasts",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "deferrable":
             data = RetrieveHass.get_attr_data_dict(
@@ -1495,6 +1514,7 @@ class RetrieveHass:
                 friendly_name,
                 "deferrables_schedule",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "temperature":
             data = RetrieveHass.get_attr_data_dict(
@@ -1506,6 +1526,7 @@ class RetrieveHass:
                 friendly_name,
                 "predicted_temperatures",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "batt":
             data = RetrieveHass.get_attr_data_dict(
@@ -1517,6 +1538,7 @@ class RetrieveHass:
                 friendly_name,
                 "battery_scheduled_power",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "SOC":
             data = RetrieveHass.get_attr_data_dict(
@@ -1528,6 +1550,7 @@ class RetrieveHass:
                 friendly_name,
                 "battery_scheduled_soc",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "unit_load_cost":
             data = RetrieveHass.get_attr_data_dict(
@@ -1540,6 +1563,7 @@ class RetrieveHass:
                 "unit_load_cost_forecasts",
                 state,
                 decimals=4,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "unit_prod_price":
             data = RetrieveHass.get_attr_data_dict(
@@ -1552,6 +1576,7 @@ class RetrieveHass:
                 "unit_prod_price_forecasts",
                 state,
                 decimals=4,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "mlforecaster":
             data = RetrieveHass.get_attr_data_dict(
@@ -1563,23 +1588,25 @@ class RetrieveHass:
                 friendly_name,
                 "scheduled_forecast",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "categorical":
-            # A string/label state plus the full horizon of labels as a
-            # 'schedule' attribute. Used for interpretable per-load command
-            # sensors (e.g. 'on'/'off'/'variable'); no numeric rounding.
-            list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
-            list_df.columns = ["timestamps", entity_id]
-            schedule = [
-                {"date": ts.isoformat(), "value": str(val)}
-                for ts, val in zip(list_df["timestamps"].tolist(), list_df[entity_id].tolist())
-            ]
+            # A string/label state for interpretable per-load command sensors
+            # (e.g. 'on'/'off'/'variable'); no numeric rounding. The full
+            # horizon of labels rides along as a 'schedule' attribute unless
+            # horizon publication is disabled (#1077), in which case only the
+            # existing scalar state + friendly_name are published.
+            attributes = {"friendly_name": friendly_name}
+            if self.publish_horizon_attributes:
+                list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
+                list_df.columns = ["timestamps", entity_id]
+                attributes["schedule"] = [
+                    {"date": ts.isoformat(), "value": str(val)}
+                    for ts, val in zip(list_df["timestamps"].tolist(), list_df[entity_id].tolist())
+                ]
             data = {
                 "state": str(state),
-                "attributes": {
-                    "friendly_name": friendly_name,
-                    "schedule": schedule,
-                },
+                "attributes": attributes,
             }
         elif type_var == "energy":
             data = RetrieveHass.get_attr_data_dict(
@@ -1591,6 +1618,7 @@ class RetrieveHass:
                 friendly_name,
                 "heating_demand_forecast",
                 state,
+                include_horizon=self.publish_horizon_attributes,
             )
         elif type_var == "optim_status":
             data = {
