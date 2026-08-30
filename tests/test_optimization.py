@@ -3165,9 +3165,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df.loc[0,self.fcst.var_load_cost] = 1.0
         
         self.opt = self.create_optimization()
-        with self.assertLogs(level="WARNING") as logs:
-            res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
-        joined = "\n".join(logs.output)
+        res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
 
         logger.debug("pdef0\n{}".format(res["P_deferrable0"]))
         
