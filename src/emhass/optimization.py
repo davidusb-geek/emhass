@@ -3742,11 +3742,22 @@ class Optimization:
             # Sequence-based Deferrable Load
             if is_sequence_load:
                 power_sequence = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+
+                # Truncate power sequence if current_operating_timesteps>0
+                # (this also implies that the load is currently running,
+                # so self.param_def_current_state[k].value should be True)
+                elapsed_steps = int(self.param_current_operating_timesteps[k].value)
+                if elapsed_steps > 0:
+                    power_sequence = power_sequence[elapsed_steps:]
                 sequence_length = len(power_sequence)
 
                 # Binary variable y: which sequence to choose?
                 # We essentially slice the sequence over the horizon
-                y_len = n - sequence_length + 1
+                # if the load is currently running, we can only start it now
+                if self.param_def_current_state[k].value:
+                    y_len = 1
+                else:
+                    y_len = n - sequence_length + 1
 
                 # Handle case where Horizon < Sequence Length
                 if y_len < 1:
@@ -3758,8 +3769,9 @@ class Optimization:
 
                 y = cp.Variable(y_len, boolean=True, name=f"y_seq_{k}")
 
-                if has_max_cost:
-                    # Choose *at most* one start time if max cost exists
+                if has_max_cost and self.param_def_current_state[k].value == 0:
+                    # Choose *at most* one start time if max cost exists and the
+                    # load is not currently running
                     constraints.append(cp.sum(y) <= 1)
 
                     # Create binary variable that tracks whether load is actually scheduled
