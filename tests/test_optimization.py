@@ -3150,7 +3150,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             {
                 "set_use_battery": False,
                 "number_of_deferrable_loads": 1,
-                "nominal_power_of_deferrable_loads": [[1,2,3,4]],
+                "nominal_power_of_deferrable_loads": [[1, 2, 3, 4]],
                 "start_timesteps_of_each_deferrable_load": [0],
                 "end_timesteps_of_each_deferrable_load": [10],
                 "operating_hours_of_each_deferrable_load": [0],
@@ -3161,17 +3161,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         # to make scheduler want to schedule load late, make price
         # very high early in window
-        df[self.fcst.var_load_cost] = [0.5]*48
-        df.loc[0,self.fcst.var_load_cost] = 1.0
-        
+        df[self.fcst.var_load_cost] = [0.5] * 48
+        df.loc[0, self.fcst.var_load_cost] = 1.0
+
         self.opt = self.create_optimization()
         res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
 
         logger.debug("pdef0\n{}".format(res["P_deferrable0"]))
-        
+
         # The window should start with sequence element 1
-        self.assertTrue(np.allclose(res["P_deferrable0"], [2,3,4,0,0,0,0,0,0,0]))
-        
+        self.assertTrue(np.allclose(res["P_deferrable0"], [2, 3, 4, 0, 0, 0, 0, 0, 0, 0]))
+
     def test_nonsequence_load_short_window_warns_with_original_wording(self):
         """Issue #1081: the window-check fix is scoped to sequence loads only.
         A regular (scalar-power) deferrable load with a window shorter than
