@@ -63,6 +63,51 @@ open_meteo_max_attempts = 3
 open_meteo_backoff_seconds = (1, 2, 4)
 
 
+def _solcast_overlap_average(
+    period_starts: pd.DatetimeIndex,
+    period_ends: pd.DatetimeIndex,
+    period_power: np.ndarray,
+    target_starts: pd.DatetimeIndex,
+    target_step: pd.Timedelta,
+) -> np.ndarray:
+    """Overlap-weighted resampling of Solcast period-average power.
+
+    A Solcast row is the *average* power ``period_power[i]`` over the source
+    interval ``[period_starts[i], period_ends[i])`` -- not an instantaneous
+    sample at ``period_end``. Each optimisation interval is
+    ``[t, t + target_step)`` for ``t`` in ``target_starts``. The value
+    returned for that interval is::
+
+        sum_i(period_power[i] * overlap_seconds(source_i, target)) / target_step_seconds
+
+    i.e. the energy delivered by every overlapping *real* source interval,
+    divided by the full target duration. Consequences:
+
+    * a target wholly inside one source interval takes that interval's
+      average exactly (finer or equal grid);
+    * a target spanning several source intervals takes their
+      duration-weighted mean, so no source interval is ever dropped (coarser
+      or non-divisor grid, or a target that straddles a source boundary);
+    * any portion of a target with no delivered source data contributes
+      zero -- matching the "zero outside genuine provider coverage" contract
+      -- and an internal missing period is never held across.
+
+    Timestamps are compared as absolute instants, so a tz-aware UTC source
+    and a tz-aware local target grid line up correctly.
+    """
+    src_start = period_starts.to_numpy("datetime64[ns]")
+    src_end = period_ends.to_numpy("datetime64[ns]")
+    tgt_start = target_starts.to_numpy("datetime64[ns]")
+    step = np.timedelta64(target_step).astype("timedelta64[ns]")
+    tgt_end = tgt_start + step
+    lo = np.maximum(src_start[:, None], tgt_start[None, :])
+    hi = np.minimum(src_end[:, None], tgt_end[None, :])
+    overlap = (hi - lo).astype("timedelta64[ns]").astype("float64")
+    np.clip(overlap, 0.0, None, out=overlap)
+    energy = period_power[:, None] * overlap
+    return energy.sum(axis=0) / step.astype("float64")
+
+
 class Forecast:
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
@@ -640,15 +685,32 @@ class Forecast:
                     if len(data["forecasts"]) == 0:
                         self.logger.error("No data retrieved from Solcast service.")
                         return False
-                    # Build a timestamped DataFrame from Solcast period_end timestamps
-                    solcast_timestamps = [
-                        pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]
-                    ]
+                    # Each Solcast row is an *average* power over the interval
+                    # [period_end - period, period_end); it is not an
+                    # instantaneous sample at period_end. Map those source
+                    # intervals onto the optimisation grid by overlap-weighted
+                    # averaging (see _solcast_overlap_average) so source-period
+                    # energy is preserved for any optimization_time_step -- finer,
+                    # equal or coarser than the source period, and grids that are
+                    # not an exact divisor of it -- without inventing
+                    # interpolation ramps or holding a value across a gap.
+                    solcast_period_ends = pd.DatetimeIndex(
+                        [pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]]
+                    )
+                    if solcast_period_ends.tz is None:
+                        solcast_period_ends = solcast_period_ends.tz_localize("UTC")
+                    solcast_period_ends = solcast_period_ends.tz_convert(self.forecast_dates.tz)
+                    # Respect each row's own `period`; fall back to PT30M only for
+                    # rows that omit it (the pre-existing compatibility default).
+                    solcast_periods = pd.to_timedelta(
+                        [elm.get("period") or "PT30M" for elm in data["forecasts"]]
+                    )
+                    solcast_period_starts = solcast_period_ends - solcast_periods
                     # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
                     # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
                     # bias=1 => pure P10 (conservative / low estimate).
                     # If pv_estimate10 is absent for an element, fall back to pv_estimate.
-                    data_list = []
+                    source_power = []
                     for elm in data["forecasts"]:
                         p50 = elm["pv_estimate"]
                         if bias > 0.0:
@@ -659,22 +721,15 @@ class Forecast:
                                 est = p50
                         else:
                             est = p50
-                        data_list.append(est * 1000)
-                    data_tmp = pd.DataFrame(
-                        {"yhat": data_list},
-                        index=pd.DatetimeIndex(solcast_timestamps, name="ts"),
+                        source_power.append(est * 1000)
+                    yhat = _solcast_overlap_average(
+                        solcast_period_starts,
+                        solcast_period_ends,
+                        np.asarray(source_power, dtype="float64"),
+                        self.forecast_dates,
+                        self.freq,
                     )
-                    if data_tmp.index.tz is None:
-                        data_tmp.index = data_tmp.index.tz_localize("UTC")
-                    data_tmp.index = data_tmp.index.tz_convert(self.forecast_dates.tz)
-                    # Reindex to target forecast dates and interpolate
-                    # (handles Solcast 30-min data -> any optimization_time_step)
-                    combined_index = data_tmp.index.union(self.forecast_dates).sort_values()
-                    data_tmp = data_tmp.reindex(combined_index)
-                    data_tmp.interpolate(method="time", inplace=True)
-                    data_tmp = data_tmp.reindex(self.forecast_dates)
-                    # Zero-fill edges beyond Solcast data range
-                    data_tmp = data_tmp.fillna(0.0)
+                    data_tmp = pd.DataFrame({"yhat": yhat}, index=self.forecast_dates)
                     if len(total_data) == 0:
                         total_data = data_tmp.copy()
                     else:
