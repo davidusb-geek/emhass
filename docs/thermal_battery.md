@@ -243,10 +243,19 @@ The temperature dynamics in hot water tank mode:
 
 ```
 conversion = 3600 / (density * heat_capacity * volume)
+thermal_loss_energy = thermal_loss * dt   # kW rate -> kWh removed this timestep
 
 predicted_temp[t+1] = predicted_temp[t]
-    + conversion * (cop[t] * p_deferrable[t] / 1000 * dt - draw_off_demand[t] - thermal_loss)
+    + conversion * (cop[t] * p_deferrable[t] / 1000 * dt - draw_off_demand[t] - thermal_loss_energy)
 ```
+
+`thermal_loss` is configured and documented as a constant **kW** rate. `draw_off_demand[t]`
+and the heater term are already **kWh** for that timestep, so EMHASS multiplies
+`thermal_loss` by the timestep duration `dt` (in hours) internally before it enters the
+balance. You always supply `thermal_loss` in kW regardless of your configured timestep —
+do not pre-scale it. A 5-minute timestep then removes 1/12th of the standby-loss energy
+that a 60-minute timestep removes; at exactly 60 minutes the result is numerically
+identical to earlier EMHASS versions (`kW × 1 h = kWh`).
 
 ### Weather-compensated minimum temperature (radiator emission floor)
 
@@ -892,6 +901,12 @@ Loss = thermal_loss  (constant, not dependent on outdoor temperature)
 ```
 
 This is appropriate because a tank sits indoors at roughly constant ambient temperature.
+
+In both modes `Loss` above is a **kW** magnitude. EMHASS converts it to the energy removed
+over one timestep (`thermal_loss_energy = Loss × dt`, `dt` in hours) before subtracting it in
+the temperature balance, exactly as shown in the hot-water-tank dynamics equation earlier.
+This keeps the inferred continuous standby-loss *rate* equal to the configured kW value at
+any timestep length; `draw_off_demand` stays in kWh per timestep and needs no conversion.
 
 ### 3. Heating demand / draw-off demand
 
