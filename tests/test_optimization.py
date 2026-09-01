@@ -5303,6 +5303,75 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Expected some dispatch to satisfy draw_off demand")
 
+    def test_shared_tank_building_demand_honours_window_and_internal_gains(self):
+        """A building_demand shared tank (u_value / envelope_area / ventilation_rate /
+        heated_volume) must account for window solar gain and internal gains INSIDE
+        its demand model, exactly as the per-load thermal_config path does.
+
+        Before this fix the shared-tank physics call dropped every gain argument, so
+        its demand came out as the raw envelope loss - U*A*dT plus ventilation - no
+        matter what window_area / shgc / internal_gains_factor said. Reported on
+        #539 with 6.1 kWh/day of internal gains silently dropped against a
+        59.2 kWh/day gross demand, inflating planned heating to 1.8-2.2x measured."""
+
+        def heating_energy(with_gains):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+            ghi = np.zeros(48)
+            ghi[18:30] = 500.0  # strong midday sun
+            self.df_input_data_dayahead["ghi"] = ghi
+            self.optim_conf["number_of_deferrable_loads"] = 1
+            self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+            self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+            self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+            self.optim_conf["set_deferrable_load_single_constant"] = [False]
+            self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+            self.optim_conf["set_deferrable_max_startups"] = [0]
+            self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 40.0, "carnot_efficiency": 0.45}}
+            ]
+            tank = {
+                "id": "house",
+                "load_ids": [0],
+                "volume": 7.0,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "u_value": 0.3,
+                "envelope_area": 300.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 350.0,
+                "indoor_target_temperature": 20.0,
+                "start_temperature": 20.0,
+                "min_temperatures": [19.0] * 48,
+                "max_temperatures": [24.0] * 48,
+                "desired_temperatures": [20.0] * 48,
+                "penalty_factor": 5,
+            }
+            if with_gains:
+                tank["window_area"] = 25.0
+                tank["shgc"] = 0.6
+                tank["internal_gains_factor"] = 0.8
+            self.optim_conf["shared_thermal_tanks"] = [tank]
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                np.full(48, 0.40),  # heating is costly -> the optimiser leans on free gains
+                np.full(48, 0.02),
+            )
+            self.assertIn("Optimal", str(res["optim_status"].iloc[0]))
+            return res["P_deferrable0"].sum()
+
+        self.assertLess(
+            heating_energy(True),
+            heating_energy(False),
+            "window solar + internal gains must reduce a building_demand tank's heating",
+        )
+
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
     ):

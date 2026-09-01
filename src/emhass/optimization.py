@@ -4081,6 +4081,22 @@ class Optimization:
                     "indoor_target_temperature",
                     min_temperatures_list[0] if min_temperatures_list else 20.0,
                 )
+                # Window solar and internal gains belong INSIDE the physics demand
+                # model, exactly as the per-load thermal_config path passes them.
+                # The heat_topology compiler folds window_area / shgc /
+                # internal_gains_factor from a building_demand consumer onto the
+                # tank; dropping them here left the demand at the raw envelope
+                # loss (U*A*dT + ventilation).
+                window_area = tank.get("window_area", None)
+                shgc = float(tank.get("shgc", 0.6))
+                internal_gains_factor = float(tank.get("internal_gains_factor", 0.0))
+                solar_irradiance = None
+                if "ghi" in data_opt.columns and window_area is not None:
+                    vals = np.asarray(data_opt["ghi"].values, dtype=float)
+                    if len(vals) < required_len:
+                        vals = np.concatenate((vals, np.zeros(required_len - len(vals))))
+                    solar_irradiance = vals[:required_len]
+                internal_gains_forecast = p_load if internal_gains_factor > 0 else None
                 demand = utils.calculate_heating_demand_physics(
                     u_value=tank["u_value"],
                     envelope_area=tank["envelope_area"],
@@ -4089,6 +4105,11 @@ class Optimization:
                     indoor_target_temperature=indoor_target_temp,
                     outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                     optimization_time_step=int(self.freq.total_seconds() / 60),
+                    solar_irradiance_forecast=solar_irradiance,
+                    window_area=window_area,
+                    shgc=shgc,
+                    internal_gains_forecast=internal_gains_forecast,
+                    internal_gains_factor=internal_gains_factor,
                     sense=tank.get("sense") or "heat",
                 )
             elif "specific_heating_demand" in tank and "area" in tank:
