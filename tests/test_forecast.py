@@ -715,6 +715,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -768,6 +769,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using Solcast-multiroofs with mock get request data
     async def test_get_weather_forecast_solcast_multiroofs_method_mock(self):
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -826,6 +828,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         exercises the overlap resampling with a real payload shape instead of
         a fully zero-filled result.
         """
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         original_freq = self.fcst.freq
         original_forecast_dates = self.fcst.forecast_dates
         self.fcst.freq = pd.Timedelta("15min")
