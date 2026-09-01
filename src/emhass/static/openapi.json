@@ -340,6 +340,12 @@
             "title": "Continually publish optimization results",
             "description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities."
           },
+          "publish_horizon_attributes": {
+            "type": "boolean",
+            "default": true,
+            "title": "Publish full-horizon Home Assistant attributes",
+            "description": "Defaults to true (existing behaviour): the published forecast and schedule entities that expose future values (PV/load forecasts, deferrable schedules, battery scheduled power/SOC, predicted temperatures, unit cost/price forecasts) carry the optimization horizon as a list/schedule state attribute (forecasts, deferrables_schedule, battery_scheduled_power, etc.). Set to false to keep those entities compact - current scalar state plus the metadata they already have (friendly_name, device_class, unit_of_measurement, state_class) only - so large horizons stay under Home Assistant's Recorder attribute size limit. Scalar-only entities are unaffected, and the optimization, its horizon and the /api/v1/plan endpoint are unchanged."
+          },
           "logging_level": {
             "type": "string",
             "enum": [
