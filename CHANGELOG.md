@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.18.2 - 2026-09-02
+
+### Improvement
+- feat: make Home Assistant horizon attributes optional (#1077) (@MMicieli)
+- feat: add capacity charge consideration runtime mask (#540) (@MMicieli)
+- feat: add capacity-charge measurement-interval aggregation (#540) (@MMicieli)
+
+### Fix
+- fix: Let optimizer know a sequence load is already running. (@lutorm)
+- fix: scale thermal loss by timestep duration (#1074) (@MMicieli)
+- fix: account Solcast quota per rooftop request (@MMicieli)
+- fix: preserve Solcast period-average interval mapping (@MMicieli)
+- fix: derive the window warning from the sequence length for sequence deferrable loads (#1081) (@LesIT1)
+- fix: persist failed battery identification attempts so the model-age backoff engages (#1052) (@LesIT1)
+- fix: keep partial days in REST history retrieval for battery identification (#1061) (@LesIT1)
+- fix: build the csv/list forecast grid from the frozen start instead of re-reading the clock (#1076) (@LesIT1)
+
 ## 0.18.1 - 2026-08-15
 
 ### Improvement
