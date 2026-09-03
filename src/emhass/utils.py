@@ -4,6 +4,7 @@ import ast
 import copy
 import csv
 import logging
+import math
 import os
 import pathlib
 import shutil
@@ -3994,6 +3995,11 @@ def _charge_derating_fault(table: list[list[float]]) -> str | None:
         for name, value in (("soc_threshold", soc_threshold), ("power_max", power_max)):
             if isinstance(value, bool) or not isinstance(value, int | float):
                 return f"row {position} has {name}={value!r}, expected a number"
+            # Explicit, so the guard survives a rewrite of the range check below:
+            # nan is caught there only because every comparison against it is
+            # false, which a reordering into `value < 0 or value > 1` would undo.
+            if not math.isfinite(value):
+                return f"row {position} has {name}={value!r}, expected a finite number"
             if not 0 <= value <= 1:
                 return (
                     f"row {position} has {name}={value}, expected a value between 0 and 1 "
