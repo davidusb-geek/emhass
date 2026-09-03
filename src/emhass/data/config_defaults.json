@@ -126,6 +126,7 @@
   "number_of_batteries": 1,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
+  "battery_charge_power_derating": [],
   "battery_discharge_efficiency": 0.95,
   "battery_charge_efficiency": 0.95,
   "battery_nominal_energy_capacity": 5000,
