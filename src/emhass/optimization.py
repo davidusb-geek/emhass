@@ -2633,14 +2633,17 @@ class Optimization:
                 max_below = 1.0
                 for i, (soc_threshold, power_max) in enumerate(derating):
                     threshold = soc_threshold * cap
-                    # Big-M pins each indicator to the SOC, the same form as the
-                    # recovery block below: cap as M, recovery_margin so the two
-                    # sides cannot both hold at once.
+                    # Big-M pins each indicator to the SOC, cap as M. The two
+                    # bands meet at the threshold instead of being held apart by
+                    # a margin: a margin would leave an interval below the
+                    # threshold that neither indicator can cover, and any SOC
+                    # landing there makes the solve infeasible. At the threshold
+                    # itself both hold and the band below it applies.
                     constraints.append(
                         soc_at_step_start >= threshold - cap * (1 - above[i])
                     )
                     constraints.append(
-                        soc_at_step_start <= threshold - recovery_margin + cap * above[i]
+                        soc_at_step_start <= threshold + cap * above[i]
                     )
                     # Crossing this threshold costs the step down from the max
                     # that applied below it.
