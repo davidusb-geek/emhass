@@ -1495,6 +1495,9 @@ async def treat_runtimeparams(
             )
         for batt_param_name in BATT_WEIGHT_PARAMS:
             check_batt_weight_params(num_batteries, params["optim_conf"], batt_param_name, logger)
+        check_batt_charge_derating(
+            num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
+        )
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -3453,6 +3456,9 @@ async def build_params(
         )
     for batt_param_name in BATT_WEIGHT_PARAMS:
         check_batt_weight_params(num_batteries, params["optim_conf"], batt_param_name, logger)
+    check_batt_charge_derating(
+        num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
+    )
 
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
@@ -3972,6 +3978,115 @@ def check_batt_weight_params(
     # across every battery, so a later in-place mutation of one battery's
     # series would silently rewrite them all.
     parameter[parameter_name] = [list(current) for _ in range(num_batteries)]
+
+
+def _charge_derating_fault(table: list[list[float]]) -> str | None:
+    """Name the first fault in one battery_charge_power_derating table (#807).
+
+    Returns the offending row and value, or None when the table is usable.
+    """
+    previous_soc = 0.0
+    previous_max = 1.0
+    for position, row in enumerate(table, start=1):
+        if not isinstance(row, list | tuple) or len(row) != 2:
+            return f"row {position} is {row!r}, expected a [soc_threshold, power_max] pair"
+        soc_threshold, power_max = row
+        for name, value in (("soc_threshold", soc_threshold), ("power_max", power_max)):
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                return f"row {position} has {name}={value!r}, expected a number"
+            if not 0 <= value <= 1:
+                return (
+                    f"row {position} has {name}={value}, expected a value between 0 and 1 "
+                    f"(percentage/100, so 84% is 0.84)"
+                )
+        if soc_threshold <= previous_soc:
+            return (
+                f"row {position} has soc_threshold={soc_threshold}, which does not exceed "
+                f"the {previous_soc} before it: rows must ascend by state of charge"
+            )
+        if power_max > previous_max:
+            return (
+                f"row {position} has power_max={power_max}, above the {previous_max} that "
+                f"applies below it: the charge limit cannot rise as the battery fills"
+            )
+        previous_soc, previous_max = soc_threshold, power_max
+    return None
+
+
+def check_batt_charge_derating(
+    num_batteries: int,
+    parameter: dict,
+    parameter_name: str,
+    logger: logging.Logger,
+) -> None:
+    """
+    Normalise battery_charge_power_derating into the nested per-battery form for
+    N > 1 (#807). Mutates parameter[parameter_name] in place; returns nothing.
+
+    The value is a table: [soc_threshold, power_max] pairs, both percentage/100,
+    ascending by SOC. Above soc_threshold the charge power is capped at that much
+    of the maximum; below the first threshold the flat maximum applies.
+
+    Shared and per-battery are told apart by shape, not by length: two batteries
+    sharing a two-row table would be split into one row each. A shared table's
+    first element is a pair of numbers, a per-battery value's is a table.
+
+    1. Missing, None or empty: left alone; the flat battery_charge_power_max
+       applies, i.e. the behaviour before this parameter.
+    2. First element is a table: already per-battery, and its length must equal
+       num_batteries (never padded or truncated).
+    3. First element is a pair: one shared table. At num_batteries == 1 it is
+       left as written; above that every battery gets its own copy, so an
+       in-place edit of one cannot rewrite the others.
+    4. Anything else, content included: logged with the offending row and value,
+       then cleared.
+
+    :param num_batteries: plant_conf["number_of_batteries"]
+    :type num_batteries: int
+    :param parameter: the plant_conf dict containing parameter_name
+    :type parameter: dict
+    :param parameter_name: "battery_charge_power_derating"
+    :type parameter_name: str
+    :param logger: The logger object
+    :type logger: logging.Logger
+    """
+    current = parameter.get(parameter_name, None)
+    if not current:
+        return
+
+    # Cleared and logged rather than raised: this table refines a ceiling that
+    # already exists, so dropping it is a valid way to run. At error level
+    # because a dropped table is otherwise indistinguishable from a working one -
+    # the flat battery_charge_power_max still applies either way.
+    def _reject(problem: str) -> None:
+        logger.error(
+            f"{parameter_name}: {problem}. Ignoring it: charging is limited by the "
+            f"flat battery_charge_power_max instead."
+        )
+        parameter[parameter_name] = []
+
+    if not isinstance(current, list) or not isinstance(current[0], list | tuple) or not current[0]:
+        _reject(f"must be a list of [soc_threshold, power_max] pairs, got {current!r}")
+        return
+    if isinstance(current[0][0], list | tuple):
+        if len(current) != num_batteries:
+            _reject(f"has {len(current)} tables but number_of_batteries={num_batteries}")
+            return
+        for table in current:
+            fault = _charge_derating_fault(table)
+            if fault:
+                _reject(fault)
+                return
+        return
+    fault = _charge_derating_fault(current)
+    if fault:
+        _reject(fault)
+        return
+    if num_batteries == 1:
+        return
+    parameter[parameter_name] = [
+        [list(row) for row in current] for _ in range(num_batteries)
+    ]
 
 
 def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:
