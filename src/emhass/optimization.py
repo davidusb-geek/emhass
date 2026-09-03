@@ -2619,9 +2619,7 @@ class Optimization:
             if derating:
                 # The limit follows the SOC a step STARTS at: charging within a
                 # step must not tighten that same step's own ceiling.
-                soc_at_step_start = cp.hstack(
-                    [soc_init_k * cap, current_stored_energy[:-1]]
-                )
+                soc_at_step_start = cp.hstack([soc_init_k * cap, current_stored_energy[:-1]])
                 # One indicator row per derating step; above[i, t] is 1 iff the
                 # battery is at or past threshold i when step t starts.
                 above = cp.Variable(
@@ -2636,9 +2634,7 @@ class Optimization:
                     # Big-M pins each indicator to the SOC, the same form as the
                     # recovery block below: cap as M, recovery_margin so the two
                     # sides cannot both hold at once.
-                    constraints.append(
-                        soc_at_step_start >= threshold - cap * (1 - above[i])
-                    )
+                    constraints.append(soc_at_step_start >= threshold - cap * (1 - above[i]))
                     constraints.append(
                         soc_at_step_start <= threshold - recovery_margin + cap * above[i]
                     )

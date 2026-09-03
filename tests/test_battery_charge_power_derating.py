@@ -45,6 +45,7 @@ logger = logging.getLogger("charge_derating_test")
 # Config layer: utils.check_batt_charge_derating
 # --------------------------------------------------------------------------- #
 
+
 def _errors(caplog) -> list[str]:
     return [rec.message for rec in caplog.records if rec.levelname == "ERROR"]
 
