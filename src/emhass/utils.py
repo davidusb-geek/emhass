@@ -4090,9 +4090,7 @@ def check_batt_charge_derating(
         return
     if num_batteries == 1:
         return
-    parameter[parameter_name] = [
-        [list(row) for row in current] for _ in range(num_batteries)
-    ]
+    parameter[parameter_name] = [[list(row) for row in current] for _ in range(num_batteries)]
 
 
 def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:
