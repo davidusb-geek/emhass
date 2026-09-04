@@ -1089,18 +1089,24 @@
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "capacity_cost_per_kw": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Capacity (demand) charge cost",
             "x-unit": "¤/kW",
-            "description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. (unit: ¤/kW)"
+            "description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. A list of two or more rates prices that many independent capacity/demand components in one optimisation (see docs/cookbook/tariff_demand_charge.md, issue #540). (unit: ¤/kW)"
           },
           "capacity_charge_interval_timesteps": {
-            "type": "integer",
-            "default": 1,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 1
+            },
             "title": "Capacity charge tariff measurement interval",
             "x-unit": "timesteps",
-            "description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. (unit: timesteps)"
+            "description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. If capacity_cost_per_kw is a list of K rates, this is a single shared value or a list of exactly K; any other length is rejected (see docs/cookbook/tariff_demand_charge.md, issue #540). (unit: timesteps)"
           },
           "ignore_pv_feedback_during_curtailment": {
             "type": "boolean",

@@ -2471,6 +2471,13 @@ async def treat_runtimeparams(
                 )
             params["optim_conf"] = optim_conf
 
+    # Canonicalise the structural multi-component capacity-charge params (#540
+    # Part B): a config-UI singleton list, an empty list or a stringified list
+    # is normalised, and a wrong-length interval list is rejected here - once,
+    # before the value reaches the OptimizationCache key or the model build.
+    optim_conf = canonicalize_capacity_charge_config(optim_conf, logger)
+    params["optim_conf"] = optim_conf
+
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
     return params, retrieve_hass_conf, optim_conf, plant_conf
@@ -3536,6 +3543,14 @@ async def build_params(
         "beta": None,
     }
 
+    # Canonicalise the structural multi-component capacity-charge params (#540
+    # Part B) so a config-UI-serialised singleton list / empty list is
+    # normalised here too - /get-config and /get-json then return the canonical
+    # scalar/list form, and a wrong-length interval list is rejected at
+    # config-build time. treat_runtimeparams re-runs the same idempotent helper
+    # once runtime overrides are merged.
+    params["optim_conf"] = canonicalize_capacity_charge_config(params["optim_conf"], logger)
+
     return params
 
 
@@ -3572,6 +3587,86 @@ DEF_LOAD_ARRAY_LEGACY_NAMES: dict[str, str] = {
     "operating_hours_of_each_deferrable_load": "def_total_hours",
     "nominal_power_of_deferrable_loads": "P_deferrable_nom",
 }
+
+
+def _as_capacity_sequence(value):
+    """Return ``value`` as a plain list when it is a list / tuple / 1-D
+    ``np.ndarray`` / a stringified list (``"[3.0, 7.0]"`` from an HA template),
+    else ``None``. A bare scalar or an unparseable string returns ``None`` so
+    the caller leaves it untouched for the legacy scalar path.
+    """
+    if isinstance(value, list | tuple):
+        return list(value)
+    if isinstance(value, np.ndarray):
+        return value.ravel().tolist()
+    if isinstance(value, str) and value.strip().startswith("["):
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return None
+        return list(parsed) if isinstance(parsed, list | tuple) else None
+    return None
+
+
+def canonicalize_capacity_charge_config(
+    optim_conf: dict, logger: logging.Logger | None = None
+) -> dict:
+    """Normalise the two structural multi-component capacity-charge params to
+    their canonical form BEFORE any structural decision (issue #540 Part B).
+
+    Must run before ``OptimizationCacheKey`` construction and before the model
+    build so a config-UI-serialised singleton list, an empty list or a
+    stringified list all map to the same canonical configuration, and a
+    wrong-length interval list is rejected rather than silently reinterpreting
+    the tariff measurement basis.
+
+    ``capacity_cost_per_kw``: ``[]`` becomes ``0.0`` (disabled K=1); ``[x]`` /
+    ``(x,)`` / ``"[x]"`` becomes the scalar ``x`` (legacy K=1 - the #610
+    singleton-list-is-a-single-instance rule); a list of length >= 2 stays a
+    list (``K = len``); a bare scalar or an absent key is left unchanged.
+
+    ``capacity_charge_interval_timesteps`` is canonicalised the same way (the
+    per-component list form is only meaningful once the rate is a K>=2 list):
+    ``[n]`` / ``"[n]"`` becomes the scalar ``n`` (shared measurement basis);
+    ``[]`` becomes ``1``; a list of exactly K entries stays a list
+    (component-specific bases); any other list length raises ``ValueError``; a
+    bare scalar or an absent key is left unchanged.
+
+    Mutates and returns ``optim_conf``. Idempotent.
+    """
+    if "capacity_cost_per_kw" in optim_conf:
+        seq = _as_capacity_sequence(optim_conf["capacity_cost_per_kw"])
+        if seq is not None:
+            if len(seq) == 0:
+                optim_conf["capacity_cost_per_kw"] = 0.0
+            elif len(seq) == 1:
+                optim_conf["capacity_cost_per_kw"] = seq[0]
+            else:
+                optim_conf["capacity_cost_per_kw"] = seq
+
+    # K derived from the now-canonical rate: a bare scalar is K=1, a list is K=len.
+    canonical_rate = optim_conf.get("capacity_cost_per_kw", 0.0)
+    k_components = len(canonical_rate) if isinstance(canonical_rate, list | tuple) else 1
+
+    if "capacity_charge_interval_timesteps" in optim_conf:
+        seq = _as_capacity_sequence(optim_conf["capacity_charge_interval_timesteps"])
+        if seq is not None:
+            if len(seq) == 0:
+                optim_conf["capacity_charge_interval_timesteps"] = 1
+            elif len(seq) == 1:
+                optim_conf["capacity_charge_interval_timesteps"] = seq[0]
+            elif len(seq) == k_components:
+                optim_conf["capacity_charge_interval_timesteps"] = seq
+            else:
+                raise ValueError(
+                    f"capacity_charge_interval_timesteps has {len(seq)} entries but "
+                    f"capacity_cost_per_kw defines {k_components} capacity component(s); "
+                    "provide a single value (shared measurement basis) or a list of "
+                    f"exactly {k_components} entries (component-specific measurement "
+                    "bases). Refusing to silently reinterpret the tariff measurement "
+                    "basis."
+                )
+    return optim_conf
 
 
 def check_def_loads(
