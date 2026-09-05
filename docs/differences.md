@@ -33,6 +33,13 @@ See below for a list of associations between the parameters from `config_emhass.
 | retrieve_hass_conf | | influxdb_database | |
 | retrieve_hass_conf | | influxdb_measurement | |
 | retrieve_hass_conf | | influxdb_retention_policy | |
+| retrieve_hass_conf | | use_victoriametrics | |
+| retrieve_hass_conf | | victoriametrics_host | |
+| retrieve_hass_conf | | victoriametrics_port | |
+| retrieve_hass_conf | | victoriametrics_username | |
+| retrieve_hass_conf | | victoriametrics_password | |
+| retrieve_hass_conf | | victoriametrics_database | |
+| retrieve_hass_conf | | victoriametrics_metric_regex | |
 | params_secrets |  solcast_api_key |  optional_solcast_api_key | |
 | params_secrets |  solcast_rooftop_id |  optional_solcast_rooftop_id | |
 | params_secrets |  solar_forecast_kwp |  optional_solar_forecast_kwp | |

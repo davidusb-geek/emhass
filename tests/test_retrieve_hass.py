@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiofiles
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
@@ -859,6 +860,277 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         success = await rh_influx.get_data(days_list, ["sensor.power_a", "sensor.power_missing"])
         self.assertTrue(success)
         self.assertEqual(list(rh_influx.df_final.columns), ["sensor.power_a"])
+
+    # ------------------------------------------------------------------
+    # VictoriaMetrics data source: PromQL query_range over HTTP, mocked at the
+    # single request helper (_vm_query_range) so no network is involved.
+
+    def _make_vm_rh(self, **overrides):
+        """Build a RetrieveHass instance configured to use VictoriaMetrics."""
+        conf = {
+            "use_victoriametrics": True,
+            "victoriametrics_host": "fake-vm",
+            "victoriametrics_port": 8428,
+            "victoriametrics_username": "fake-user",
+            "victoriametrics_password": "fake-pass",  # pragma: allowlist secret
+            "victoriametrics_database": "homeassistant",
+        }
+        conf.update(overrides)
+        return RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            self.retrieve_hass_conf["long_lived_token"],
+            self.retrieve_hass_conf["optimization_time_step"],
+            self.retrieve_hass_conf["time_zone"],
+            {"retrieve_hass_conf": conf},
+            emhass_conf,
+            logger,
+            get_data_from_file=False,
+        )
+
+    @staticmethod
+    def _vm_query_side_effect(entity_data, calls=None):
+        """Build a ``_vm_query_range`` side_effect emulating VictoriaMetrics.
+
+        :param entity_data: mapping of entity_id label -> list of series, each a tuple
+            ``(metric_name, [(bucket_start_iso, value), ...])``. Timestamps are given as
+            the START of the bucket (the label EMHASS must produce); the fake server
+            returns them the way VictoriaMetrics does, at the END of the
+            ``avg_over_time`` window (bucket start + step). An empty list emulates an
+            entity with no data.
+        :param calls: optional list collecting ``(query, start, end, step)`` per call.
+        """
+
+        async def query_side_effect(session, query, start_s, end_s, step_s):
+            if calls is not None:
+                calls.append((query, start_s, end_s, step_s))
+            entity_id = query.split('entity_id="')[1].split('"')[0]
+            result = []
+            for metric_name, points in entity_data.get(entity_id, []):
+                values = []
+                for ts_iso, value in points:
+                    ts = int(pd.Timestamp(ts_iso).timestamp()) + step_s
+                    if start_s <= ts <= end_s:
+                        values.append([ts, str(value)])
+                if values:
+                    result.append(
+                        {
+                            "metric": {"__name__": metric_name, "entity_id": entity_id},
+                            "values": values,
+                        }
+                    )
+            return result
+
+        return query_side_effect
+
+    def test_vm_selector(self):
+        """The selector matches on entity_id/domain labels and a metric name regex."""
+        rh = self._make_vm_rh()
+        self.assertEqual(
+            rh._vm_selector("sensor.power_a"),
+            '{entity_id="power_a",__name__=~".+_value",domain="sensor",db="homeassistant"}',
+        )
+        # No domain in the entry and no database filter configured
+        rh = self._make_vm_rh(victoriametrics_database="", victoriametrics_metric_regex="W_value")
+        self.assertEqual(rh._vm_selector("power_a"), '{entity_id="power_a",__name__=~"W_value"}')
+        # Quotes and backslashes in a value cannot break out of the matcher
+        self.assertIn('entity_id="a\\"b\\\\c"', rh._vm_selector('sensor.a"b\\c'))
+
+    def test_vm_connection_settings(self):
+        """Host/port/ssl/auth settings map onto the HTTP client arguments."""
+        rh = self._make_vm_rh()
+        self.assertEqual(rh._vm_base_url(), "http://fake-vm:8428")
+        self.assertEqual(rh._vm_auth().login, "fake-user")
+        self.assertIsNone(rh._vm_ssl())
+        rh = self._make_vm_rh(
+            victoriametrics_username="",
+            victoriametrics_use_ssl=True,
+            victoriametrics_verify_ssl=False,
+        )
+        self.assertEqual(rh._vm_base_url(), "https://fake-vm:8428")
+        self.assertIsNone(rh._vm_auth())
+        self.assertIs(rh._vm_ssl(), False)
+
+    async def test_get_data_victoriametrics_mock(self):
+        """get_data routes to VictoriaMetrics and yields the InfluxDB-shaped frame."""
+        rh = self._make_vm_rh()
+        calls = []
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_photovoltaics": [
+                    (
+                        "W_value",
+                        [("2023-04-01T10:00:00Z", 1500.0), ("2023-04-01T10:30:00Z", 1800.0)],
+                    )
+                ],
+                "power_load_no_var_loads": [
+                    ("W_value", [("2023-04-01T10:00:00Z", 500.0), ("2023-04-01T10:30:00Z", 450.0)])
+                ],
+            },
+            calls,
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.power_photovoltaics", "sensor.power_load_no_var_loads"]
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            success = await rh.get_data(days_list, var_list)
+        self.assertTrue(success)
+
+        df = rh.df_final
+        self.assertEqual(list(df.columns), var_list)
+        self.assertEqual(len(df), 2)
+        self.assertEqual(df.index.freq, pd.Timedelta("30min"))
+        self.assertEqual(str(df.index.tz), "UTC")
+        # Buckets are labelled by their start, like InfluxDB GROUP BY time()
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[0]], 1500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][var_list[1]], 450.0)
+        self.assertEqual(rh.var_list, var_list)
+        # One query_range call per sensor, on a step-aligned grid at the optimization step
+        self.assertEqual(len(calls), 2)
+        query, start_s, end_s, step_s = calls[0]
+        self.assertEqual(step_s, 1800)
+        self.assertEqual(start_s % 1800, 0)
+        self.assertEqual(start_s, int(pd.Timestamp("2023-04-01T00:30:00Z").timestamp()))
+        self.assertEqual(end_s, int(pd.Timestamp("2023-04-02T00:00:00Z").timestamp()))
+        self.assertTrue(query.startswith("avg_over_time({entity_id="))
+        self.assertTrue(query.endswith("}[1800s])"))
+
+    async def test_get_data_victoriametrics_fill_previous(self):
+        """Empty buckets are forward-filled like InfluxDB FILL(previous)."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "price": [
+                    (
+                        "EUR/kWh_value",
+                        [("2023-04-01T10:00:00Z", 0.2), ("2023-04-01T11:30:00Z", 0.3)],
+                    )
+                ],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(await rh.get_data(days_list, ["sensor.price"]))
+        df = rh.df_final
+        self.assertEqual(len(df), 4)
+        self.assertEqual(df["sensor.price"].tolist(), [0.2, 0.2, 0.2, 0.3])
+
+    async def test_get_data_victoriametrics_multiple_metrics(self):
+        """When a sensor changed unit the metric with the most samples is kept."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_a": [
+                    ("kW_value", [("2023-04-01T09:30:00Z", 1.0)]),
+                    (
+                        "W_value",
+                        [("2023-04-01T10:00:00Z", 1000.0), ("2023-04-01T10:30:00Z", 1200.0)],
+                    ),
+                ],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        with (
+            patch.object(rh, "_vm_query_range", side_effect=side_effect),
+            self.assertLogs(logger, level="WARNING") as logs,
+        ):
+            self.assertTrue(await rh.get_data(days_list, ["sensor.power_a"]))
+        self.assertEqual(rh.df_final["sensor.power_a"].tolist(), [1000.0, 1200.0])
+        self.assertTrue(any("several VictoriaMetrics metrics" in line for line in logs.output))
+
+    async def test_get_data_victoriametrics_expression_mixed(self):
+        """var_list may mix a plain sensor and a {{ ... }} expression, as with InfluxDB."""
+        rh = self._make_vm_rh()
+        calls = []
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_a": [
+                    (
+                        "W_value",
+                        [("2023-04-01T10:00:00Z", 1500.0), ("2023-04-01T10:30:00Z", 1800.0)],
+                    )
+                ],
+                "power_b": [
+                    ("kW_value", [("2023-04-01T10:00:00Z", 0.5), ("2023-04-01T10:30:00Z", 0.3)])
+                ],
+            },
+            calls,
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        expression = "{{'sensor.power_a' - 'sensor.power_b' * 1000}}"
+        var_list = ["sensor.power_a", expression]
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(await rh.get_data(days_list, var_list))
+        df = rh.df_final
+        self.assertEqual(list(df.columns), var_list)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_a"], 1500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][expression], 1000.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][expression], 1500.0)
+        # Plain entry over the requested window, expression entities over a padded one:
+        # power_a is fetched twice (plain + expression), power_b once (expression only)
+        from emhass.retrieve_hass import INFLUX_EXPRESSION_LOOKBACK
+
+        window_starts: dict[str, list[int]] = {}
+        for q, s, _, _ in calls:
+            window_starts.setdefault(q.split('entity_id="')[1].split('"')[0], []).append(s)
+        lookback = int(INFLUX_EXPRESSION_LOOKBACK.total_seconds())
+        self.assertEqual(len(window_starts["power_a"]), 2)
+        self.assertEqual(max(window_starts["power_a"]) - min(window_starts["power_a"]), lookback)
+        self.assertEqual(window_starts["power_b"], [min(window_starts["power_a"])])
+
+    async def test_get_data_victoriametrics_missing_sensor_and_entity(self):
+        """A missing plain sensor is skipped; a missing expression entity fails cleanly."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_a": [
+                    (
+                        "W_value",
+                        [("2023-04-01T10:00:00Z", 1500.0), ("2023-04-01T10:30:00Z", 1800.0)],
+                    )
+                ],
+                "power_missing": [],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(
+                await rh.get_data(days_list, ["sensor.power_a", "sensor.power_missing"])
+            )
+            self.assertEqual(list(rh.df_final.columns), ["sensor.power_a"])
+            self.assertFalse(
+                await rh.get_data(days_list, ["{{'sensor.power_a' + 'sensor.power_missing'}}"])
+            )
+
+    async def test_get_data_victoriametrics_query_error(self):
+        """A failed query_range (None from the helper) aborts the retrieval."""
+        rh = self._make_vm_rh()
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        with patch.object(rh, "_vm_query_range", return_value=None):
+            self.assertFalse(await rh.get_data(days_list, ["sensor.power_a"]))
+
+    async def test_vm_fetch_chunks_long_windows(self):
+        """Long windows are split into contiguous chunks under the points-per-request cap."""
+        from emhass.retrieve_hass import VM_MAX_POINTS_PER_REQUEST
+
+        rh = self._make_vm_rh()
+        rh.freq = pd.Timedelta("15min")
+        calls = []
+        side_effect = self._vm_query_side_effect({}, calls)
+        start = pd.Timestamp("2025-01-01 00:00:00")
+        end = pd.Timestamp("2026-01-01 00:00:00")  # 35040 steps > 30000 default cap
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                result = await rh._fetch_sensor_data_vm(session, "sensor.power_a", start, end)
+        self.assertIsNone(result)  # no data in the fake server
+        self.assertEqual(len(calls), 4)
+        step = 900
+        for _, s, e, st in calls:
+            self.assertEqual(st, step)
+            self.assertLessEqual((e - s) // step + 1, VM_MAX_POINTS_PER_REQUEST)
+        # Chunks are contiguous, one step apart, and cover the whole window
+        for (_, _, e_prev, _), (_, s_next, _, _) in zip(calls, calls[1:], strict=False):
+            self.assertEqual(s_next, e_prev + step)
+        self.assertEqual(calls[0][1], int(start.tz_localize("UTC").timestamp()) + step)
+        self.assertEqual(calls[-1][2], int(end.tz_localize("UTC").timestamp()))
 
     # Test publish data
     async def test_publish_data(self):

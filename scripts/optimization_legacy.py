@@ -117,6 +117,8 @@ class Optimization:
         keys_to_mask = [
             "influxdb_username",
             "influxdb_password",
+            "victoriametrics_username",
+            "victoriametrics_password",
             "long_lived_token",
             "Latitude",
             "Longitude",
