@@ -1023,6 +1023,7 @@ async def _initialize_connections(params: dict) -> None:
     # Initialize persistent WebSocket connection only if use_websocket is enabled
     use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
     use_influxdb = params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
+    use_victoriametrics = params.get("retrieve_hass_conf", {}).get("use_victoriametrics", False)
     # Initialize persistent WebSocket connection if enabled
     if use_websocket:
         app.logger.info("WebSocket mode enabled - initializing connection...")
@@ -1042,9 +1043,14 @@ async def _initialize_connections(params: dict) -> None:
     # Log InfluxDB mode if enabled (No persistent connection init required here)
     elif use_influxdb:
         app.logger.info("InfluxDB mode enabled - using InfluxDB for data retrieval")
-    # Default to REST API if neither is enabled
+    # Same for VictoriaMetrics (plain HTTP API, no persistent connection)
+    elif use_victoriametrics:
+        app.logger.info("VictoriaMetrics mode enabled - using VictoriaMetrics for data retrieval")
+    # Default to REST API if none is enabled
     else:
-        app.logger.info("WebSocket and InfluxDB modes disabled - using REST API for data retrieval")
+        app.logger.info(
+            "WebSocket, InfluxDB and VictoriaMetrics modes disabled - using REST API for data retrieval"
+        )
 
 
 async def initialize(args: dict | None = None):
