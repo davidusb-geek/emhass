@@ -122,6 +122,17 @@ _XFAIL_REASON: dict[str, str] = {
         "2-entry list vs number_of_batteries=1 is an intentional ValueError "
         "by design (#610); scalar_null is guarded"
     ),
+    # #540 Part B: capacity_charge_interval_timesteps became "array." typed.
+    # canonicalize_capacity_charge_config (utils.py) intentionally raises a
+    # ValueError when a list's length does not match the number of capacity
+    # components (1 for the default scalar capacity_cost_per_kw) - the tariff
+    # measurement basis must not be silently reinterpreted, a deliberate hard
+    # error like the #610 per-battery arrays above. scalar_null still coerces
+    # to the default (1) and is excluded below so it stays a live regression.
+    "capacity_charge_interval_timesteps": (
+        "2-entry list vs 1 capacity component (default scalar capacity_cost_per_kw) "
+        "is an intentional ValueError by design (#540 Part B); scalar_null is guarded"
+    ),
 }
 
 # Per-param, per-bad-value overrides for the xfail marker.
@@ -157,6 +168,10 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         ("battery_soc_deficit_cost", "scalar_null"),
         ("battery_soc_surplus_threshold", "scalar_null"),
         ("battery_soc_surplus_cost", "scalar_null"),
+        # #540 Part B: a stringly-typed "null" scalar coerces to the default
+        # measurement interval (1) - a real guard, so this stays a live
+        # regression test even though the two list-shaped bad values are xfail'd.
+        ("capacity_charge_interval_timesteps", "scalar_null"),
     }
 )
 

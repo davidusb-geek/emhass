@@ -2743,6 +2743,49 @@ class TestOptimizationCache(unittest.TestCase):
 
         self.assertNotEqual(key1, key2)
 
+    def test_cache_key_different_for_multi_component_capacity_charge(self):
+        """Issue #540 Part B: capacity_cost_per_kw as a LIST (K independent
+        capacity/demand components) changes the mathematical structure - K
+        peak_import epigraphs instead of one - so scalar-vs-list and a change
+        in K must each produce a different cache key. Like the scalar case this
+        rides entirely on the generic optim_conf_structural_hash (the key was
+        never added to the runtime-keys exclusion set)."""
+        base = self.optim_conf.copy()
+        base["capacity_cost_per_kw"] = 2.0
+        key_scalar = OptimizationCache._compute_cache_key(
+            base, self.plant_conf, self.costfun, self.retrieve_hass_conf
+        )
+
+        k2 = self.optim_conf.copy()
+        k2["capacity_cost_per_kw"] = [2.0, 5.0]
+        key_k2 = OptimizationCache._compute_cache_key(
+            k2, self.plant_conf, self.costfun, self.retrieve_hass_conf
+        )
+
+        k3 = self.optim_conf.copy()
+        k3["capacity_cost_per_kw"] = [2.0, 5.0, 1.0]
+        key_k3 = OptimizationCache._compute_cache_key(
+            k3, self.plant_conf, self.costfun, self.retrieve_hass_conf
+        )
+
+        self.assertNotEqual(key_scalar, key_k2)
+        self.assertNotEqual(key_k2, key_k3)
+
+    def test_cache_key_same_for_runtime_only_multi_component_masks(self):
+        """The per-component runtime masks (current_period_peak,
+        capacity_charge_window/consideration/current_interval_history lists)
+        are passed_data, never optim_conf, so they must not appear in the cache
+        key - a change between MPC ticks is a warm-start HIT, not a rebuild."""
+        k2 = self.optim_conf.copy()
+        k2["capacity_cost_per_kw"] = [2.0, 5.0]
+        key_a = OptimizationCache._compute_cache_key(
+            k2, self.plant_conf, self.costfun, self.retrieve_hass_conf
+        )
+        key_b = OptimizationCache._compute_cache_key(
+            k2.copy(), self.plant_conf, self.costfun, self.retrieve_hass_conf
+        )
+        self.assertEqual(key_a, key_b)
+
     def test_cache_clear(self):
         """Test that clear() empties the cache."""
         mock_opt = MagicMock()
@@ -3542,6 +3585,82 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
             first_cache_key,
             msg="capacity_charge_consideration must be runtime-only: changing it "
             "must never change the optimization cache key",
+        )
+
+    async def test_mpc_multi_component_capacity_charge_end_to_end_and_cache_hit(self):
+        """Issue #540 Part B: capacity_cost_per_kw as a K=2 list flows
+        runtime_params -> treat_runtimeparams (passed_data) ->
+        command_line.naive_mpc_optim -> perform_naive_mpc_optim end to end, the
+        per-component list masks reach passed_data intact, and changing those
+        masks between ticks is a cache HIT (they are runtime-only)."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [0] * 10,
+            "load_power_forecast": [200 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "current_period_peak": [300.0, 500.0],
+            "capacity_charge_window": [[1] * 10, [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]],
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params["optim_conf"]["capacity_cost_per_kw"] = [2.0, 3.0]
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        pd_passed = input_data_dict["params"]["passed_data"]
+        self.assertEqual(pd_passed.get("current_period_peak"), [300.0, 500.0])
+        self.assertEqual(
+            pd_passed.get("capacity_charge_window"),
+            [[1] * 10, [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]],
+        )
+        first_cache_key = OptimizationCache.get_stats()["cache_key"]
+
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        # Second tick: different per-component masks - must be a cache HIT.
+        runtimeparams2 = dict(runtimeparams)
+        runtimeparams2["current_period_peak"] = [900.0, 100.0]
+        runtimeparams2["capacity_charge_window"] = [
+            [0, 0, 1, 1, 1, 0, 0, 0, 0, 0],
+            [1] * 10,
+        ]
+        params["passed_data"] = runtimeparams2
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params).decode("utf-8"),
+            orjson.dumps(runtimeparams2).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+        self.assertEqual(
+            OptimizationCache.get_stats()["cache_key"],
+            first_cache_key,
+            msg="per-component runtime masks must never change the cache key",
         )
 
     async def test_mpc_cache_hit_with_different_time_windows(self):

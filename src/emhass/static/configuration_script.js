@@ -311,17 +311,20 @@ function buildParamContainers(
       continue;
     }
 
-    //if parameter type == array.* and not in "Deferrable Loads" or "Battery" section,
-    //append plus and minus buttons in param div. Battery is excluded the same way
-    //Deferrable Loads is (#610): the 15 per-battery array params
-    //(BATTERY_ARRAY_PARAMS) are length-managed exclusively by the
-    //number_of_batteries header count below, so no free +/- button can desync a
-    //param's length from number_of_batteries and crash check_batt_params on save.
+    //if parameter type == array.*, append plus and minus buttons in param div so
+    //the user can grow/shrink the list. Two groups of array.* params are excluded
+    //because their length is managed elsewhere: the "Deferrable Loads" section
+    //(by number_of_deferrable_loads) and, in the "Battery" section, only the 15
+    //BATTERY_ARRAY_PARAMS (by number_of_batteries) - a free +/- button on those
+    //would desync their length and crash check_batt_params/check_def_loads on
+    //save. Any other array.* param in the Battery section (e.g. the #540 Part B
+    //capacity_cost_per_kw / capacity_charge_interval_timesteps, which are NOT
+    //per-battery) still gets the normal generic +/- controls.
     let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
       section != "Deferrable Loads" &&
-      section != "Battery"
+      !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
       array_buttons = `
                   <button type="button" class="input-plus ${parameter_definition_name}">+</button>
@@ -352,10 +355,21 @@ function buildParamContainers(
 
   //after looping though, build and appending the parameters in the corresponding section:
   //create add button (array plus) event listeners
+  //plusElements() indexes its 2nd arg as param_definitions[section][name]; this
+  //function only receives the single section's definitions, so wrap them back
+  //under the section key. (The bare `param_definitions` used here previously is
+  //not in this function's scope - the generic +/- path threw ReferenceError on
+  //click; it was only ever reached by load_peak_hour_periods until #540 Part B
+  //routed capacity_cost_per_kw / capacity_charge_interval_timesteps through it.)
   let plus = SectionContainer.querySelectorAll(".input-plus");
   plus.forEach(function (answer) {
     answer.addEventListener("click", () =>
-      plusElements(answer.classList[1], param_definitions, section, {})
+      plusElements(
+        answer.classList[1],
+        { [section]: section_parameters_definitions },
+        section,
+        {}
+      )
     );
   });
 
@@ -578,11 +592,19 @@ function plusElements(
   }
   let param_input_container =
     param_element.getElementsByClassName("param-input")[0];
-  // Add a copy of the param element
-  param_input_container.innerHTML += buildParamElement(
-    param_definitions[section][parameter_definition_name],
-    parameter_definition_name,
-    config
+  // Append a new input WITHOUT re-serialising the existing ones. `innerHTML +=`
+  // would round-trip every sibling through its HTML string form, which only
+  // carries the `value` attribute - any value the user has typed but not saved
+  // lives on the input's `.value` property and would be reset (e.g. entering
+  // 3, 7 then removing and re-adding the 2nd row blanked the first back to its
+  // default). insertAdjacentHTML parses and inserts only the new node.
+  param_input_container.insertAdjacentHTML(
+    "beforeend",
+    buildParamElement(
+      param_definitions[section][parameter_definition_name],
+      parameter_definition_name,
+      config
+    )
   );
 }
 

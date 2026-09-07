@@ -115,7 +115,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
 
-- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Only used by `naive-mpc-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. See the dedicated section below.
+- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Only used by `naive-mpc-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
@@ -300,7 +300,31 @@ When `N > 1`, `current_period_peak` must use the **same tariff metric**: the hig
 
 If the optimization horizon crosses into the next billing period, keep next-period mask entries at `0` until the actual rollover. After rollover, reset `current_period_peak` and build the new period's mask. The current single-component model cannot carry separate old-period and new-period incumbent peaks in one solve. With `N > 1`, exact rollover handling also assumes the billing-period boundary aligns with a tariff measurement-interval boundary; EMHASS does not split one aggregated interval across two billing periods.
 
-The current model represents one capacity-charge component per solve. Independent components with different rates, windows or incumbent peaks require separate future support.
+### Multiple independent capacity/demand components in one solve (issue #540 Part B)
+
+A bare `capacity_cost_per_kw` models **one** capacity/demand-charge component. Some tariffs bill more than one demand peak on the same connection concurrently (for example a seasonal-demand charge and an off-peak-demand charge). Pass `capacity_cost_per_kw` as a **list of K rates** to price K such components in the same single optimisation:
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": [8.0, 3.0],
+  "capacity_charge_interval_timesteps": [6, 6],
+  "current_period_peak": [6000, 4000],
+  "capacity_charge_window": [[/* 24 weights for component 0 */], [/* 24 weights for component 1 */]],
+  "capacity_charge_consideration": [[/* K=0 */], [/* K=1 */]],
+  "capacity_charge_current_interval_history": [[/* K=0 */], [/* K=1 */]]
+}
+```
+
+- **Canonical form.** `capacity_cost_per_kw` is normalised before anything structural is decided: `3.0` and `[3.0]` (what the config form serialises for a single value) and `[]` all collapse to the legacy scalar K=1 form — same model, same cache key, no per-component objects. Only a list of **two or more** rates selects K>1 (`K = len(list)`). `capacity_charge_interval_timesteps` is normalised the same way: `6` and `[6]` both mean a shared 6-timestep basis; `[6, 3]` means genuine per-component bases.
+- **Structural vs runtime.** `capacity_cost_per_kw` (the list, and its length K) and `capacity_charge_interval_timesteps` are structural `optim_conf` — a change rebuilds the problem and its cache key. `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are `naive-mpc-optim` runtime inputs — changing them between ticks is a warm-start cache hit.
+- Every runtime input becomes a **list of exactly K entries**, one per component in `capacity_cost_per_kw` order. `capacity_charge_interval_timesteps` may be a bare value (shared measurement basis, broadcast to every component) or a list of exactly K for independent per-component intervals — **any other list length is a configuration error** (a wrong-length interval list would silently redefine the tariff measurement basis, e.g. a 30-minute average-demand charge becoming a native per-timestep peak charge, so it is rejected rather than reinterpreted).
+- **Independent component semantics.** Each component has its own rate, measurement interval, eligibility window, MPC consideration, realised open-interval history and already-incurred incumbent peak. A peak visible only in component A's window never raises component B's peak; A's consideration mask never affects B; each incumbent floor binds only its own component; `capacity_charge_window` vs `capacity_charge_consideration` keep their existing distinct meanings per component (eligibility vs this-solve prospective participation), and consideration never scales or erases any component's incumbent peak.
+- **One optimiser.** Still one solve, one physical dispatch, one objective. The capacity term generalises from `capacity_cost_per_kw * peak_import / 1000` to `sum over k of capacity_cost_per_kw[k] * peak_import[k] / 1000`.
+- A component with rate `0` (or invalid) is economically inactive — no `peak_import` variable, no capacity epigraph, no objective term; its inert indexed window/incumbent Parameter slots may still exist. `[0.0, 0.0]` is a valid, inert K=2 configuration whose plan matches running with no capacity charge.
+- A bare scalar `capacity_cost_per_kw` is unchanged: it is the K=1 charge and every existing single-component config behaves identically.
+- A non-list or wrong-length runtime value (e.g. 3 masks for a K=2 charge, or a bare scalar `current_period_peak`) is dropped for **every** component with one warning — never partially applied.
+- **Caller-owned policy is unchanged.** EMHASS never sees a tariff name, calendar, season or clock time for any component — the caller builds each component's numeric masks. The consideration/myopia trade-off documented above applies per component.
 
 `dayahead-optim` and `perfect-optim` also aggregate when `N > 1`, but they do not receive elapsed-interval history. Their horizon start must therefore align to a tariff measurement-interval boundary.
 

@@ -10,6 +10,7 @@ Price a tariff's billed demand peak inside the same EMHASS optimization that pri
 - Demand-window use requires a build exposing `capacity_charge_window`.
 - Excluding a tariff-eligible occurrence from the current MPC solve's peak requires a build exposing `capacity_charge_consideration`.
 - Tariff-interval aggregation requires a build exposing `capacity_charge_interval_timesteps` and `capacity_charge_current_interval_history`.
+- Multiple independent capacity/demand components in one solve (`capacity_cost_per_kw` as a list of K rates) requires a build with issue #540 Part B.
 - Transport: examples below are direct EMHASS config/runtime payloads. Adapter-specific Node-RED, Home Assistant and AppDaemon transport is not claimed as tested here.
 
 ## Step 1: Set the marginal capacity-charge rate
@@ -153,6 +154,41 @@ History entries are native-interval averages, not instantaneous snapshots. An eq
 
 Expected: the first tariff interval combines realised history with the remaining planned timesteps, then subsequent completed intervals use planned data only.
 
+## Step 3e: Multiple independent capacity/demand components (K>1)
+
+<!-- source: src/emhass/data/config_defaults.json:141 -->
+<!-- source: src/emhass/static/data/param_definitions.json (capacity_cost_per_kw) -->
+<!-- source: src/emhass/optimization.py (_init_capacity_multi_params) -->
+<!-- transport: direct EMHASS configuration/runtime JSON; adapter-specific transport untested -->
+
+Some tariffs bill more than one demand peak on the same connection at the same time — for example a seasonal-demand charge and an off-peak-demand charge, each with its own rate, eligibility window and billing-period incumbent. Pass `capacity_cost_per_kw` as a **list of two or more rates** to price K such components in the same single optimisation:
+
+```json
+{
+  "prediction_horizon": 24,
+  "capacity_cost_per_kw": [8.0, 3.0],
+  "capacity_charge_interval_timesteps": 6,
+  "current_period_peak": [6000, 4000],
+  "capacity_charge_window": [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
+  ]
+}
+```
+
+Semantics:
+
+- **Canonical form.** `capacity_cost_per_kw` is normalised before anything structural is decided: `8.0`, `[8.0]` (what the config form serialises for a single value) and `[]` all collapse to the legacy scalar K=1 form (`[]` = disabled) — same model, same cache key. Only a list of two or more rates selects K>1, with `K = len(list)`. `capacity_charge_interval_timesteps` normalises the same way (`6` ≡ `[6]` = shared basis; `[6, 3]` = per-component bases).
+- Every capacity runtime input becomes a **list of exactly K entries**, one per component in `capacity_cost_per_kw` order: `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history`. `capacity_charge_interval_timesteps` may be a bare value (shared measurement basis) or a list of exactly K for independent per-component intervals — **any other list length is a configuration error**, refused rather than silently reinterpreting the tariff measurement basis.
+- Components are fully independent: separate rate, measurement interval, eligibility window, MPC consideration, realised open-interval history and incumbent peak. A peak seen only in component A's window never raises component B's peak; component A's consideration mask never affects component B; each incumbent floor binds only its own component.
+- There is still **one optimisation, one solver call, one physical dispatch**. Only the capacity portion of the objective changes, from `capacity_cost_per_kw * peak_import / 1000` to `sum over k of capacity_cost_per_kw[k] * peak_import[k] / 1000`.
+- A component whose rate is `0` (or invalid) is economically inactive — no `peak_import` variable, no epigraph, no objective term — exactly as a scalar `capacity_cost_per_kw` of `0` is a no-op. `[0.0, 0.0]` is a valid inert K=2 configuration.
+- A non-list or wrong-length **runtime** value (e.g. 3 masks for a K=2 charge, or a bare scalar `current_period_peak`) is dropped for **every** component with one warning — never partially applied.
+
+Verify each component separately with the Step 4 helper, passing that component's own window/consideration/history/incumbent and (when a list) that component's own `N`.
+
+Expected: raising one component's rate changes the dispatch; the other components' peaks, windows and incumbents are unaffected.
+
 ## Step 4: Verify the tariff metric
 
 <!-- source: src/emhass/optimization.py:1683 -->
@@ -197,7 +233,7 @@ Expected: comparisons between capacity-charge runs use the billed metric above, 
 - `dayahead-optim` and `perfect-optim` have no elapsed-interval history. With `N>1`, start their horizon on a tariff measurement-interval boundary.
 - A tariff interval incomplete at the far end of the horizon is not priced until a later receding-horizon solve can see its completion. No terminal continuation model is added here.
 - Exact billing-period rollover with `N>1` assumes the billing-period boundary aligns with a tariff measurement-interval boundary. EMHASS does not split one aggregated interval across two billing periods.
-- This implementation represents one capacity-charge component per solve. Independent components with different rates, windows or incumbent peaks require separate future support.
+- A bare `capacity_cost_per_kw` represents one capacity-charge component. For K independent components (different rates, windows, measurement intervals or incumbent peaks) in the same solve, pass `capacity_cost_per_kw` as a list of K rates and every capacity runtime input as a list of K entries — see Step 3e (issue #540 Part B).
 - `current_period_peak` and interval history are in Watts; `capacity_cost_per_kw` is currency/kW.
 - The caller owns tariff calendar/state. EMHASS does not persist billing-period peaks or compute tariff seasons/timezones.
 

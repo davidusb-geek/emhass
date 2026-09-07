@@ -60,6 +60,13 @@ _KNOWN_TYPE_MISMATCHES = frozenset(
         # byte-identical.
         "sensor_power_battery",
         "sensor_battery_state_of_charge",
+        # #540 Part B: declared array.* because they accept a list of K
+        # independent capacity/demand components, but their defaults stay bare
+        # scalars on purpose - a scalar is the K=1 capacity charge and keeps
+        # existing single-component configs byte-identical (same pattern as the
+        # battery_* block above).
+        "capacity_cost_per_kw",
+        "capacity_charge_interval_timesteps",
     }
 )
 
@@ -634,3 +641,213 @@ def test_save_configuration_object_type_invalid_json_shows_error(js_src):
     assert proc.returncode == 0, (
         f"saveConfiguration silently stored invalid JSON instead of showing error:\n{proc.stderr.strip()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Generic config-form array (+/-) list controls.
+#
+# Three released-v0.18.2 defects on this generic path only surfaced once #540
+# Part B routed capacity_cost_per_kw / capacity_charge_interval_timesteps
+# through it (before, load_peak_hour_periods was the only array.* param outside
+# the length-managed Deferrable Loads / Battery sections):
+#   1. buildParamContainers excluded the whole "Battery" section, not just the
+#      15 per-battery BATTERY_ARRAY_PARAMS.
+#   2. the + click listener referenced `param_definitions`, undefined in
+#      buildParamContainers scope -> ReferenceError on every click.
+#   3. plusElements grew the list with `innerHTML +=`, re-serialising sibling
+#      <input>s from their value *attribute* and dropping values the user had
+#      typed (a live .value) but not saved.
+#
+# One shared Node harness (_run_array_control_probe) drives the real functions
+# against a compact fake DOM and reports the observable behaviour; the tests
+# below assert on that. Each fails on the released implementation.
+# ---------------------------------------------------------------------------
+
+_CAPACITY_ARRAY_PARAMS = ("capacity_cost_per_kw", "capacity_charge_interval_timesteps")
+
+# Fake DOM + probe driver. Placeholders: __FNS__ (extracted JS), __SPEC__ (JSON:
+# {section, params:{name:input}, click:name|null, typed:str|null}). Prints one
+# JSON line: {buttons:{name:bool}, before, after, first_value, error}.
+_ARRAY_CONTROL_HARNESS = r"""
+__FNS__
+const SPEC = __SPEC__;
+
+function makeInput(v) {
+  const el = { className: "param_input", _attr: String(v), value: String(v),
+    parentNode: { tagName: "DIV" } };
+  el.getAttribute = (k) => (k === "value" ? el._attr : null);
+  el.setAttribute = (k, val) => { if (k === "value") el._attr = String(val); };
+  el.remove = () => {};
+  Object.defineProperty(el, "outerHTML", {
+    get: () => '<input class="param_input" value=' + el._attr + ">",
+  });
+  return el;
+}
+// param-input container: an <input> list that honours BOTH mutation paths the
+// production code might take. `innerHTML +=` reparses from the attribute only
+// (drops typed .value); insertAdjacentHTML appends without touching siblings.
+function makeInputContainer() {
+  const c = { _inputs: [] };
+  c.getElementsByTagName = (t) => (t === "input" ? c._inputs : []);
+  Object.defineProperty(c, "innerHTML", {
+    get: () => c._inputs.map((i) => i.outerHTML).join(""),
+    set: (v) => {
+      c._inputs = (v.match(/value=([^\s>]+)/g) || []).map((m) => makeInput(m.slice(6)));
+    },
+  });
+  c.insertAdjacentHTML = (pos, html) => {
+    const m = html.match(/value=([^\s>]+)/);
+    if (pos === "beforeend") c._inputs.push(makeInput(m ? m[1] : ""));
+  };
+  return c;
+}
+
+const paramDivs = {};
+let buttons = [];
+const body = { _html: "" };
+Object.defineProperty(body, "innerHTML", {
+  get: () => body._html,
+  set: (v) => {
+    body._html = v;
+    for (const [, id] of v.matchAll(/<div class="param" id="([^"]+)">/g)) {
+      if (paramDivs[id]) continue;
+      const c = makeInputContainer();
+      c._inputs.push(makeInput(0)); // the row buildParamElement emitted
+      paramDivs[id] = {
+        id,
+        _c: c,
+        getElementsByClassName: (k) => (k === "param-input" ? [c] : []),
+        getElementsByTagName: (t) => c.getElementsByTagName(t),
+      };
+    }
+    buttons = [...v.matchAll(/class="input-(plus|minus) ([^"]+)"/g)].map(([, kind, name]) => ({
+      classList: ["input-" + kind, name],
+      addEventListener(ev, fn) { if (ev === "click") this._h = fn; },
+    }));
+  },
+});
+const container = {
+  getElementsByClassName: (k) => (k === "section-body" ? [body] : []),
+  querySelectorAll: (sel) => {
+    if (sel === ".input-plus") return buttons.filter((b) => b.classList[0] === "input-plus");
+    if (sel === ".input-minus") return buttons.filter((b) => b.classList[0] === "input-minus");
+    return [];
+  },
+};
+var document = {
+  getElementById: (id) => (id === SPEC.section ? container : paramDivs[id] || null),
+};
+
+const defs = {};
+for (const [name, input] of Object.entries(SPEC.params)) {
+  defs[name] = { input, default_value: input.endsWith("int") ? 1 : 0, friendly_name: name, Description: "d" };
+}
+buildParamContainers(SPEC.section, defs, {}, []);
+
+const out = { buttons: {}, before: null, after: null, first_value: null, error: null };
+for (const name of Object.keys(SPEC.params)) {
+  out.buttons[name] =
+    body._html.includes('class="input-plus ' + name + '"') &&
+    body._html.includes('class="input-minus ' + name + '"');
+}
+if (SPEC.click) {
+  const div = paramDivs[SPEC.click];
+  if (SPEC.typed != null) div._c._inputs[0].value = SPEC.typed;
+  out.before = div._c._inputs.length;
+  const btn = buttons.find((b) => b.classList[0] === "input-plus" && b.classList[1] === SPEC.click);
+  try {
+    btn._h();
+    out.after = div._c._inputs.length;
+    out.first_value = div._c._inputs[0].value;
+  } catch (e) {
+    out.error = String(e);
+  }
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _run_array_control_probe(js_src, section, params, *, click=None, typed=None):
+    """Render *section* through the real buildParamContainers/plusElements against
+    a compact fake DOM; optionally type *typed* into *click*'s first row and fire
+    its ``+``. Returns the probe's JSON dict."""
+    fns = "\n".join(
+        _extract_function_src(js_src, name)
+        for name in (
+            "checkConfigParam",
+            "buildParamElement",
+            "plusElements",
+            "minusElements",
+            "buildParamContainers",
+        )
+    )
+    m = re.search(r"const\s+BATTERY_ARRAY_PARAMS\s*=\s*\[.*?\]\s*;", js_src, re.DOTALL)
+    spec = {"section": section, "params": params, "click": click, "typed": typed}
+    script = _ARRAY_CONTROL_HARNESS.replace("__FNS__", m.group(0) + "\n" + fns).replace(
+        "__SPEC__", json.dumps(spec)
+    )
+    proc = _run_node(script)
+    assert proc.returncode == 0, f"probe harness crashed:\n{proc.stderr.strip()}"
+    return json.loads(proc.stdout)
+
+
+def test_array_control_buttons_not_on_managed_battery_params(js_src):
+    """Cheap (no-Node) guard for defect 1's invariant: the capacity params must
+    stay out of BATTERY_ARRAY_PARAMS so they fall through to the generic +/-."""
+    m = re.search(r"const\s+BATTERY_ARRAY_PARAMS\s*=\s*\[(.*?)\]\s*;", js_src, re.DOTALL)
+    managed = re.findall(r'"([^"]+)"', m.group(1))
+    for name in _CAPACITY_ARRAY_PARAMS:
+        assert name not in managed, f"{name} in BATTERY_ARRAY_PARAMS -> would lose its generic +/-"
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_array_control_button_eligibility(js_src):
+    """A: generic +/- present for the capacity params, absent for a per-battery
+    array and for a Deferrable Loads managed array."""
+    battery = _run_array_control_probe(
+        js_src,
+        "Battery",
+        {
+            "capacity_cost_per_kw": "array.float",
+            "capacity_charge_interval_timesteps": "array.int",
+            "weight_battery_discharge": "array.float",
+        },
+    )["buttons"]
+    deferrable = _run_array_control_probe(
+        js_src, "Deferrable Loads", {"nominal_power_of_deferrable_loads": "array.float"}
+    )["buttons"]
+    assert battery["capacity_cost_per_kw"], "capacity_cost_per_kw lost its generic +/-"
+    assert battery["capacity_charge_interval_timesteps"], "interval param lost its generic +/-"
+    assert not battery["weight_battery_discharge"], "a per-battery array got a free +/-"
+    assert not deferrable["nominal_power_of_deferrable_loads"], (
+        "a managed def-load array got a free +/-"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_array_control_plus_click_adds_row(js_src):
+    """B: clicking + adds one row and raises nothing (guards the out-of-scope
+    ``param_definitions`` ReferenceError in the click listener)."""
+    r = _run_array_control_probe(
+        js_src, "Battery", {"capacity_cost_per_kw": "array.float"}, click="capacity_cost_per_kw"
+    )
+    assert r["error"] is None, f"+ click raised: {r['error']}"
+    assert (r["before"], r["after"]) == (1, 2), (
+        f"row count {r['before']} -> {r['after']}, expected 1 -> 2"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_array_control_plus_click_preserves_typed_value(js_src):
+    """C: a value typed but not saved in an existing row survives adding a row
+    (guards the ``innerHTML +=`` re-serialisation that reset it to the default)."""
+    r = _run_array_control_probe(
+        js_src,
+        "Battery",
+        {"capacity_cost_per_kw": "array.float"},
+        click="capacity_cost_per_kw",
+        typed="3",
+    )
+    assert r["error"] is None, f"+ click raised: {r['error']}"
+    assert r["after"] == 2, f"expected 2 rows, got {r['after']}"
+    assert r["first_value"] == "3", f"first row reset to {r['first_value']!r} (should stay '3')"
