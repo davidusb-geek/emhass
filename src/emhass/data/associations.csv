@@ -126,3 +126,4 @@ plant_conf,SOCmax,battery_maximum_state_of_charge
 plant_conf,SOCtarget,battery_target_state_of_charge
 plant_conf,battery_stress_cost,battery_stress_cost
 plant_conf,battery_stress_segments,battery_stress_segments
+plant_conf,battery_charge_power_derating,battery_charge_power_derating

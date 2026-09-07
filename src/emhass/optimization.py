@@ -1149,6 +1149,23 @@ class Optimization:
             return list(value)
         return [value] * self.n_batt
 
+    def _batt_derating_list(self, value) -> list:
+        """
+        Normalise battery_charge_power_derating into a length self.n_batt list.
+
+        utils.check_batt_charge_derating has already validated the shape and, at
+        N > 1, nested it per battery; this helper only dispatches on that shape
+        so the rest of this module can iterate over ``for k in range(n_batt)``.
+        A shared table is a list of [soc_threshold, power_max] pairs, so its first
+        element's first element is a number; a per-battery value is a list of
+        such tables, so that same position holds a pair.
+        """
+        if not value:
+            return [None] * self.n_batt
+        if isinstance(value[0][0], list | tuple):
+            return list(value)
+        return [value] * self.n_batt
+
     def _battery_conf_as_lists(self) -> dict:
         """
         Read every per-battery plant_conf/optim_conf value as a length
@@ -1195,6 +1212,9 @@ class Optimization:
             ),
             "weight_dis": self._batt_weight_list(self.optim_conf["weight_battery_discharge"]),
             "weight_chg": self._batt_weight_list(self.optim_conf["weight_battery_charge"]),
+            "charge_derating": self._batt_derating_list(
+                self.plant_conf.get("battery_charge_power_derating")
+            ),
         }
 
     def _normalize_soc_arg(self, value: float | list | None) -> list:
@@ -2589,6 +2609,41 @@ class Optimization:
             # (Subtracting because positive flow is Discharge/Depletion)
             current_stored_energy = (soc_init_k * cap) - cumulative_energy
             current_stored_energy_list.append(current_stored_energy)
+
+            # SOC-dependent charge power ceiling (issue #807).
+            # Each row is [soc_threshold, power_max], both percentage/100 and
+            # ascending by SOC: above soc_threshold the charge power is capped at
+            # that much of battery_charge_power_max. Below the first threshold
+            # the flat maximum applies. Absent the parameter nothing changes.
+            derating = batt_conf["charge_derating"][k]
+            if derating:
+                # The limit follows the SOC a step STARTS at: charging within a
+                # step must not tighten that same step's own ceiling.
+                soc_at_step_start = cp.hstack([soc_init_k * cap, current_stored_energy[:-1]])
+                # One indicator row per derating step; above[i, t] is 1 iff the
+                # battery is at or past threshold i when step t starts.
+                above = cp.Variable(
+                    (len(derating), self.num_timesteps),
+                    boolean=True,
+                    name=f"soc_above_{k}",
+                )
+                ceiling = max_chg
+                max_below = 1.0
+                for i, (soc_threshold, power_max) in enumerate(derating):
+                    threshold = soc_threshold * cap
+                    # Big-M pins each indicator to the SOC, the same form as the
+                    # recovery block below: cap as M, recovery_margin so the two
+                    # sides cannot both hold at once.
+                    constraints.append(soc_at_step_start >= threshold - cap * (1 - above[i]))
+                    constraints.append(
+                        soc_at_step_start <= threshold - recovery_margin + cap * above[i]
+                    )
+                    # Crossing this threshold costs the step down from the max
+                    # that applied below it.
+                    ceiling = ceiling - max_chg * (max_below - power_max) * above[i]
+                    max_below = power_max
+                # p_sto_neg is negative, so this caps the charge magnitude.
+                constraints.append(p_sto_neg[k] >= -(1 / eff_chg) * ceiling)
 
             # Min/Max SOC bounds with a single recovery transition.
             # Before recovery the trajectory stays on the initial out-of-band side.

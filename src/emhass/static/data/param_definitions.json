@@ -716,6 +716,12 @@
       "default_value": 1000,
       "unit": "W"
     },
+    "battery_charge_power_derating": {
+      "friendly_name": "Charge power derating",
+      "Description": "Optional table describing how the BMS steps its charge limit down as the battery fills, so the optimizer stops planning charge the battery cannot deliver. Each row is [soc_threshold, power_max], both given as percentage/100, ascending by state of charge: above soc_threshold the charge power is capped at that much of the maximum charge power. [[0.5, 0.84], [0.7, 0.42], [0.9, 0.23]] means 84% of the maximum above 50% state of charge, 42% above 70% and 23% above 90%; below the first threshold the flat maximum applies. Empty (the default) keeps the single flat maximum. With number_of_batteries > 1, accepts one shared table or a list of exactly number_of_batteries tables. An unusable value is ignored, with an error in the log.",
+      "input": "array.array.float",
+      "default_value": []
+    },
     "battery_discharge_efficiency": {
       "friendly_name": "Battery discharge efficiency",
       "Description": "The discharge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
