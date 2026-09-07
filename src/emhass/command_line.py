@@ -230,6 +230,12 @@ class OptimizationCache:
         Returns a frozen dataclass that can be directly compared for equality.
         Changes to any field require rebuilding the optimization problem.
         """
+        # Canonicalise the structural multi-component capacity-charge params
+        # (#540 Part B) on a copy before hashing, so capacity_cost_per_kw == 3.0
+        # and == [3.0] (a config-UI singleton list) yield the SAME cache key and
+        # the SAME K=1 model. treat_runtimeparams normally does this upstream;
+        # this keeps direct callers / tests consistent.
+        optim_conf = utils.canonicalize_capacity_charge_config(dict(optim_conf))
 
         def to_seconds(val):
             """Convert Timedelta/timedelta to seconds."""
