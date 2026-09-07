@@ -127,6 +127,55 @@
       "default_value": false,
       "unit": "none"
     },
+    "use_victoriametrics": {
+      "friendly_name": "Use VictoriaMetrics for data retrieval",
+      "Description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label).",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "victoriametrics_host": {
+      "friendly_name": "VictoriaMetrics host",
+      "Description": "The IP address or hostname of your VictoriaMetrics instance. Defaults to localhost.",
+      "input": "string",
+      "default_value": "localhost",
+      "unit": "none"
+    },
+    "victoriametrics_port": {
+      "friendly_name": "VictoriaMetrics port",
+      "Description": "The HTTP port of your VictoriaMetrics instance. Defaults to 8428.",
+      "input": "int",
+      "default_value": 8428,
+      "unit": "count"
+    },
+    "victoriametrics_database": {
+      "friendly_name": "VictoriaMetrics database label",
+      "Description": "Optional value of the 'db' label to filter on (the InfluxDB database name used when writing, e.g. 'homeassistant'). Leave empty to not filter on it.",
+      "input": "string",
+      "default_value": "",
+      "unit": "none"
+    },
+    "victoriametrics_metric_regex": {
+      "friendly_name": "VictoriaMetrics metric name regex",
+      "Description": "Regular expression matched against the metric name to find a sensor. Defaults to '.+_value', which matches the '<unit>_value' metrics written by the Home Assistant InfluxDB integration whatever the unit of the sensor.",
+      "input": "string",
+      "default_value": ".+_value",
+      "unit": "none"
+    },
+    "victoriametrics_use_ssl": {
+      "friendly_name": "Use HTTPS on VictoriaMetrics connection",
+      "Description": "Enables HTTPS on VictoriaMetrics connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "victoriametrics_verify_ssl": {
+      "friendly_name": "Verify HTTPS on VictoriaMetrics connection",
+      "Description": "Enables SSL verification of the certificate on VictoriaMetrics connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",

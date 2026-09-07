@@ -47,6 +47,20 @@ INFLUX_EXPRESSION_LOOKBACK = pd.Timedelta(days=1)
 # entry from materializing a multi-megabyte integer and exhausting CPU/memory.
 INFLUX_EXPRESSION_MAX_POW_EXPONENT = 1000
 
+# VictoriaMetrics refuses a single /api/v1/query_range call that would return more than
+# -search.maxPointsPerTimeseries points (30000 by default). A year at a 15 min step is
+# 35040 points, so long training windows are fetched in consecutive chunks of at most
+# this many steps each and concatenated.
+VM_MAX_POINTS_PER_REQUEST = 10000
+
+# Metric name pattern used to locate a sensor in VictoriaMetrics. The Home Assistant
+# InfluxDB integration (which VictoriaMetrics ingests over the InfluxDB line protocol)
+# stores the numeric state of a sensor as ``<unit_of_measurement>_value`` with the
+# entity id (without its domain) as the ``entity_id`` label, e.g.
+# ``W_value{entity_id="power_load", domain="sensor", db="homeassistant"}``. Matching on
+# the label and a name regex means EMHASS does not need to know the unit of every sensor.
+VM_DEFAULT_METRIC_REGEX = ".+_value"
+
 
 class RetrieveHass:
     r"""
@@ -166,6 +180,31 @@ class RetrieveHass:
             )
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
+        # Initialize VictoriaMetrics configuration (PromQL/MetricsQL over HTTP, no client lib)
+        self.use_victoriametrics = self.params.get("retrieve_hass_conf", {}).get(
+            "use_victoriametrics", False
+        )
+        if self.use_victoriametrics:
+            vm_conf = self.params.get("retrieve_hass_conf", {})
+            self.victoriametrics_host = vm_conf.get("victoriametrics_host", "localhost")
+            self.victoriametrics_port = vm_conf.get("victoriametrics_port", 8428)
+            self.victoriametrics_username = vm_conf.get("victoriametrics_username", "")
+            self.victoriametrics_password = vm_conf.get("victoriametrics_password", "")
+            self.victoriametrics_database = vm_conf.get("victoriametrics_database", "")
+            self.victoriametrics_metric_regex = (
+                vm_conf.get("victoriametrics_metric_regex", "") or VM_DEFAULT_METRIC_REGEX
+            )
+            self.victoriametrics_use_ssl = vm_conf.get("victoriametrics_use_ssl", False)
+            self.victoriametrics_verify_ssl = vm_conf.get("victoriametrics_verify_ssl", False)
+            if self.use_influxdb:
+                self.logger.warning(
+                    "Both use_influxdb and use_victoriametrics are enabled, InfluxDB takes precedence"
+                )
+            self.logger.info(
+                f"VictoriaMetrics integration enabled: {self.victoriametrics_host}:{self.victoriametrics_port}"
+            )
+        else:
+            self.logger.debug("VictoriaMetrics integration disabled")
         # Persistent HTTP session for connection reuse (lazy-initialized)
         self._session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
@@ -339,6 +378,10 @@ class RetrieveHass:
         # Use InfluxDB if configured (Prioritize over WebSocket/REST for history)
         if self.use_influxdb:
             return self.get_data_influxdb(days_list, var_list)
+
+        # Use VictoriaMetrics if configured (same role as InfluxDB: long history for ML)
+        if self.use_victoriametrics:
+            return await self.get_data_victoriametrics(days_list, var_list)
 
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
@@ -720,26 +763,9 @@ class RetrieveHass:
 
         # Convert all timestamps to UTC for comparison, then make naive for InfluxDB
         # This ensures we compare actual instants in time, not wall clock times
-        # InfluxDB queries expect naive UTC timestamps (with 'Z' suffix)
-
-        # Normalize start_time to pd.Timestamp in UTC
-        start_time = pd.Timestamp(days_list[0])
-        if start_time.tz is not None:
-            start_time = start_time.tz_convert("UTC").tz_localize(None)
-        # If naive, assume it's already UTC
-
-        # Get current time in UTC
-        now = pd.Timestamp.now(tz="UTC").tz_localize(None)
-
-        # Normalize requested_end to pd.Timestamp in UTC
-        requested_end = pd.Timestamp(days_list[-1]) + pd.Timedelta(days=1)
-        if requested_end.tz is not None:
-            requested_end = requested_end.tz_convert("UTC").tz_localize(None)
-        # If naive, assume it's already UTC
-
-        # Cap end_time at current time to avoid querying future data
-        # This prevents FILL(previous) from creating fake future datapoints
-        end_time = min(now, requested_end)
+        # InfluxDB queries expect naive UTC timestamps (with 'Z' suffix). The end is
+        # capped at the current time so FILL(previous) cannot create fake future points.
+        start_time, requested_end, end_time = self._utc_query_window(days_list)
         total_days = (end_time - start_time).days
 
         self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
@@ -756,8 +782,6 @@ class RetrieveHass:
         sensor_cache: dict[str, pd.DataFrame | None] = {}
         expr_entity_cache: dict[str, pd.DataFrame | None] = {}
         failed_variables: list[str] = []
-        global_min_time = None
-        global_max_time = None
 
         for variable in filter(None, var_list):
             if self._is_influx_expression(variable):
@@ -780,11 +804,6 @@ class RetrieveHass:
                     continue
 
             sensor_dfs.append(df_variable)
-            # Track global time range
-            sensor_min = df_variable.index.min()
-            sensor_max = df_variable.index.max()
-            global_min_time = min(global_min_time or sensor_min, sensor_min)
-            global_max_time = max(global_max_time or sensor_max, sensor_max)
 
         client.close()
 
@@ -794,20 +813,30 @@ class RetrieveHass:
             )
             return False
 
+        return self._assemble_timeseries_source_df(sensor_dfs, var_list, "InfluxDB")
+
+    def _assemble_timeseries_source_df(
+        self, sensor_dfs: list[pd.DataFrame], var_list: list, source: str
+    ) -> bool:
+        """Merge per-variable frames from an external time series database into df_final.
+
+        Shared by the InfluxDB and VictoriaMetrics paths so both produce the exact same
+        frame shape: one column per var_list entry on a complete ``self.freq`` index
+        spanning the earliest to the latest retrieved timestamp (UTC).
+        """
         if not sensor_dfs:
-            self.logger.error("No data retrieved from InfluxDB")
+            self.logger.error(f"No data retrieved from {source}")
             return False
 
         # Create complete time index covering all sensors
-        if global_min_time is not None and global_max_time is not None:
-            complete_index = pd.date_range(
-                start=global_min_time, end=global_max_time, freq=self.freq
-            )
-            self.df_final = pd.DataFrame(index=complete_index)
+        global_min_time = min(df.index.min() for df in sensor_dfs)
+        global_max_time = max(df.index.max() for df in sensor_dfs)
+        complete_index = pd.date_range(start=global_min_time, end=global_max_time, freq=self.freq)
+        self.df_final = pd.DataFrame(index=complete_index)
 
-            # Merge all sensor dataframes
-            for df_sensor in sensor_dfs:
-                self.df_final = pd.concat([self.df_final, df_sensor], axis=1)
+        # Merge all sensor dataframes
+        for df_sensor in sensor_dfs:
+            self.df_final = pd.concat([self.df_final, df_sensor], axis=1)
 
         # Set frequency and validate with error handling
         try:
@@ -818,12 +847,331 @@ class RetrieveHass:
 
         if self.df_final.index.freq != self.freq:
             self.logger.warning(
-                f"InfluxDB data frequency ({self.df_final.index.freq}) differs from expected ({self.freq})"
+                f"{source} data frequency ({self.df_final.index.freq}) differs from expected ({self.freq})"
             )
 
         self.var_list = var_list
-        self.logger.info(f"InfluxDB data retrieval completed: {self.df_final.shape}")
+        self.logger.info(f"{source} data retrieval completed: {self.df_final.shape}")
         return True
+
+    @staticmethod
+    def _utc_query_window(
+        days_list: pd.date_range,
+    ) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]:
+        """Return (start, requested_end, end) as naive UTC timestamps for a days_list.
+
+        ``end`` is ``requested_end`` capped at the current time so no future buckets are
+        requested (a forward-fill would otherwise fabricate data points).
+        """
+        start_time = pd.Timestamp(days_list[0])
+        if start_time.tz is not None:
+            start_time = start_time.tz_convert("UTC").tz_localize(None)
+        requested_end = pd.Timestamp(days_list[-1]) + pd.Timedelta(days=1)
+        if requested_end.tz is not None:
+            requested_end = requested_end.tz_convert("UTC").tz_localize(None)
+        now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+        return start_time, requested_end, min(now, requested_end)
+
+    async def get_data_victoriametrics(
+        self,
+        days_list: pd.date_range,
+        var_list: list,
+    ) -> bool:
+        """
+        Retrieve data from a VictoriaMetrics instance.
+
+        VictoriaMetrics accepts the InfluxDB line protocol for writes (so the standard Home
+        Assistant ``influxdb`` integration can feed it) but is queried with PromQL /
+        MetricsQL over its HTTP API, so the InfluxDB (InfluxQL) path cannot be reused. This
+        method fills the same role as :meth:`get_data_influxdb`: an alternative to the Home
+        Assistant recorder offering a much longer history for machine learning model training.
+
+        Every sensor is fetched with ``avg_over_time(<selector>[<step>])`` through
+        ``/api/v1/query_range`` at ``step = optimization_time_step`` and produces the same
+        DataFrame shape as the InfluxDB and Home Assistant paths (UTC index, one column per
+        var_list entry). The metric is located by the ``entity_id`` label plus a metric
+        name regex (default ``.+_value``), see :meth:`_vm_selector`.
+
+        :param days_list: A list of days to retrieve data for
+        :type days_list: pandas.date_range
+        :param var_list: List of variables to retrieve. As for InfluxDB, each entry is
+            either a plain sensor entity id or a ``{{ ... }}`` arithmetic expression over
+            several entities (see :meth:`get_data_influxdb`).
+        :type var_list: list
+        :return: Success status of data retrieval
+        :rtype: bool
+        """
+        self.logger.info("Retrieve VictoriaMetrics get data method initiated...")
+
+        if not days_list.size:
+            self.logger.error("Empty days_list provided")
+            return False
+
+        start_time, requested_end, end_time = self._utc_query_window(days_list)
+        total_days = (end_time - start_time).days
+        self.logger.info(
+            f"Retrieving {len(var_list)} sensors over {total_days} days from VictoriaMetrics"
+        )
+        self.logger.debug(f"Time range: {start_time} to {end_time}")
+        if end_time < requested_end:
+            self.logger.debug(f"End time capped at current time (requested: {requested_end})")
+
+        # Work out every entity to fetch up front so all HTTP calls can run concurrently.
+        # Plain sensors are fetched over the requested window; entities referenced by an
+        # expression over a window padded by INFLUX_EXPRESSION_LOOKBACK (the expression
+        # builder slices them back and forward-fills the leading buckets).
+        failed_variables: list[str] = []
+        plain_sensors: list[str] = []
+        expression_entities: list[str] = []
+        for variable in filter(None, var_list):
+            if self._is_influx_expression(variable):
+                try:
+                    _, entities, _ = self._extract_influx_expression_entities(variable)
+                except ValueError:
+                    self.logger.exception(f"Invalid VictoriaMetrics expression '{variable}'")
+                    failed_variables.append(variable)
+                    continue
+                expression_entities.extend(e for e in entities if e not in expression_entities)
+            elif variable not in plain_sensors:
+                plain_sensors.append(variable)
+
+        padded_start = start_time - INFLUX_EXPRESSION_LOOKBACK
+        semaphore = asyncio.Semaphore(4)
+
+        async def _fetch_one(session, entity, window_start):
+            async with semaphore:
+                return await self._fetch_sensor_data_vm(session, entity, window_start, end_time)
+
+        async with aiohttp.ClientSession() as session:
+            fetched = await asyncio.gather(
+                *[_fetch_one(session, s, start_time) for s in plain_sensors],
+                *[_fetch_one(session, e, padded_start) for e in expression_entities],
+            )
+        sensor_cache = dict(zip(plain_sensors, fetched[: len(plain_sensors)], strict=True))
+        expression_raw = dict(zip(expression_entities, fetched[len(plain_sensors) :], strict=True))
+
+        def _prefetched(_client, entity, _start, _end):
+            return expression_raw.get(entity)
+
+        # Assemble in var_list order, mirroring get_data_influxdb: a missing plain sensor is
+        # skipped, a failing expression aborts the retrieval.
+        sensor_dfs: list[pd.DataFrame] = []
+        expr_entity_cache: dict[str, pd.DataFrame | None] = {}
+        for variable in filter(None, var_list):
+            if self._is_influx_expression(variable):
+                if variable in failed_variables:
+                    continue
+                df_variable = self._build_influx_expression_df(
+                    None,
+                    variable,
+                    start_time,
+                    end_time,
+                    expr_entity_cache,
+                    fetch_fn=_prefetched,
+                )
+                if df_variable is None or df_variable.empty:
+                    failed_variables.append(variable)
+                    continue
+            else:
+                df_variable = sensor_cache.get(variable)
+                if df_variable is None:
+                    continue
+            sensor_dfs.append(df_variable)
+
+        if failed_variables:
+            self.logger.error(
+                f"VictoriaMetrics expression evaluation failed for: {sorted(set(failed_variables))}"
+            )
+            return False
+
+        return self._assemble_timeseries_source_df(sensor_dfs, var_list, "VictoriaMetrics")
+
+    def _vm_base_url(self) -> str:
+        """Base URL of the VictoriaMetrics HTTP API."""
+        scheme = "https" if self.victoriametrics_use_ssl else "http"
+        return f"{scheme}://{self.victoriametrics_host}:{self.victoriametrics_port}"
+
+    def _vm_auth(self) -> aiohttp.BasicAuth | None:
+        """HTTP Basic auth for VictoriaMetrics, or None when no username is configured."""
+        if self.victoriametrics_username:
+            return aiohttp.BasicAuth(
+                self.victoriametrics_username, self.victoriametrics_password or ""
+            )
+        return None
+
+    def _vm_ssl(self) -> bool | None:
+        """aiohttp ``ssl`` argument: False disables certificate verification over HTTPS."""
+        if self.victoriametrics_use_ssl and not self.victoriametrics_verify_ssl:
+            return False
+        return None
+
+    def _vm_selector(self, sensor: str) -> str:
+        """Build the PromQL series selector locating ``sensor`` in VictoriaMetrics.
+
+        Data written by the Home Assistant InfluxDB integration lands as
+        ``<unit_of_measurement>_value{entity_id="<object_id>", domain="<domain>", db="<database>"}``.
+        EMHASS configuration only knows the entity id, not the unit, so the metric name is
+        matched with ``victoriametrics_metric_regex`` (default ``.+_value``) and the entity
+        with its ``entity_id`` (object id) and ``domain`` labels. ``victoriametrics_database``
+        adds a ``db`` label filter when set (VictoriaMetrics attaches it from the ``?db=``
+        write parameter unless started with ``-influxSkipDatabaseLabel``).
+        """
+
+        def _quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+        domain, _, entity_id = sensor.rpartition(".")
+        matchers = [
+            f"entity_id={_quote(entity_id)}",
+            f"__name__=~{_quote(self.victoriametrics_metric_regex)}",
+        ]
+        if domain:
+            matchers.append(f"domain={_quote(domain)}")
+        if self.victoriametrics_database:
+            matchers.append(f"db={_quote(self.victoriametrics_database)}")
+        return "{" + ",".join(matchers) + "}"
+
+    async def _vm_query_range(
+        self,
+        session: aiohttp.ClientSession,
+        query: str,
+        start_s: int,
+        end_s: int,
+        step_s: int,
+    ) -> list[dict] | None:
+        """Run one ``/api/v1/query_range`` call and return the matrix result list.
+
+        Returns None on any HTTP, network or query error (already logged).
+        """
+        url = f"{self._vm_base_url()}/api/v1/query_range"
+        params = {"query": query, "start": start_s, "end": end_s, "step": step_s}
+        try:
+            async with session.get(
+                url, params=params, auth=self._vm_auth(), ssl=self._vm_ssl()
+            ) as response:
+                body = await response.read()
+                if response.status == 401:
+                    self.logger.error(
+                        "VictoriaMetrics returned 401 Unauthorized, check victoriametrics_username/password"
+                    )
+                    return None
+                if response.status > 299:
+                    self.logger.error(
+                        f"VictoriaMetrics query_range error {response.status}: {body[:300]!r}"
+                    )
+                    return None
+                payload = orjson.loads(body)
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Network error connecting to VictoriaMetrics at {url}: {e}")
+            return None
+        except (orjson.JSONDecodeError, ValueError) as e:
+            self.logger.error(f"Invalid JSON from VictoriaMetrics: {e}")
+            return None
+        if payload.get("status") != "success":
+            self.logger.error(f"VictoriaMetrics query failed: {payload.get('error', payload)}")
+            return None
+        return payload.get("data", {}).get("result", [])
+
+    @staticmethod
+    def _to_epoch_seconds(ts: pd.Timestamp) -> int:
+        """Epoch seconds of a timestamp, treating a naive timestamp as UTC."""
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        return int(ts.timestamp())
+
+    async def _fetch_sensor_data_vm(
+        self,
+        session: aiohttp.ClientSession,
+        sensor: str,
+        start_time: pd.Timestamp,
+        end_time: pd.Timestamp,
+    ) -> pd.DataFrame | None:
+        """Fetch one sensor from VictoriaMetrics resampled to ``self.freq``.
+
+        The series is evaluated with ``avg_over_time(<selector>[step])`` on a grid aligned
+        to whole steps. At evaluation time ``t`` that rollup covers ``(t - step, t]``, so the
+        returned timestamps are shifted back by one step to label each bucket by its
+        start, matching the InfluxDB ``GROUP BY time()`` and the pandas ``resample`` paths.
+        Empty buckets are forward-filled like InfluxDB's ``FILL(previous)`` (leading buckets
+        before the first sample stay absent).
+        """
+        self.logger.debug(f"Retrieving sensor: {sensor}")
+        step_s = int(self.freq.total_seconds())
+        if step_s <= 0:
+            self.logger.error(f"Invalid optimization time step for VictoriaMetrics: {self.freq}")
+            return None
+        query = f"avg_over_time({self._vm_selector(sensor)}[{step_s}s])"
+        self.logger.debug(f"VictoriaMetrics query: {query}")
+
+        # Align the grid on whole steps; the first evaluation point is the end of the
+        # first bucket that starts at (or after) start_time.
+        aligned_start = (self._to_epoch_seconds(start_time) // step_s) * step_s
+        first_eval = aligned_start + step_s
+        last_eval = self._to_epoch_seconds(end_time)
+        if last_eval < first_eval:
+            self.logger.warning(f"Requested window for {sensor} is shorter than one step")
+            return None
+
+        # Chunk long windows to stay under VictoriaMetrics' max points per request.
+        series_values: dict[str, list] = {}
+        chunk_span = VM_MAX_POINTS_PER_REQUEST * step_s
+        chunk_start = first_eval
+        while chunk_start <= last_eval:
+            chunk_end = min(chunk_start + chunk_span - step_s, last_eval)
+            result = await self._vm_query_range(session, query, chunk_start, chunk_end, step_s)
+            if result is None:
+                return None
+            for item in result:
+                labels = item.get("metric", {})
+                # MetricsQL keeps __name__ through avg_over_time; a plain PromQL backend
+                # drops it, so fall back to the full label set as the series key.
+                name = labels.get("__name__") or ",".join(
+                    f"{k}={v}" for k, v in sorted(labels.items())
+                )
+                series_values.setdefault(name, []).extend(item.get("values", []))
+            chunk_start = chunk_end + step_s
+
+        if not series_values:
+            self.logger.warning(f"No data found in VictoriaMetrics for entity: {sensor}")
+            return None
+        if len(series_values) > 1:
+            # Several metrics matched: the sensor changed unit at some point (e.g. W -> kW).
+            # Keep the one with the most samples rather than mixing units.
+            self.logger.warning(
+                f"Entity '{sensor}' matches several VictoriaMetrics metrics "
+                f"{sorted(series_values)}, keeping the one with the most samples. "
+                "Set victoriametrics_metric_regex to pin the metric."
+            )
+        metric_name, values = max(series_values.items(), key=lambda kv: len(kv[1]))
+        if not values:
+            self.logger.warning(f"No data found in VictoriaMetrics for entity: {sensor}")
+            return None
+        self.logger.info(f"Retrieved {len(values)} data points for {sensor} ({metric_name})")
+
+        df_sensor = pd.DataFrame(values, columns=["time", sensor])
+        df_sensor["time"] = pd.to_datetime(
+            df_sensor["time"].astype("int64") - step_s, unit="s", utc=True
+        )
+        df_sensor = df_sensor.set_index("time")
+        df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors="coerce")
+        duplicated = df_sensor.index.duplicated()
+        if duplicated.any():
+            # Only happens when several series came back under one key (backend dropped the
+            # metric names): the samples overlap and cannot be told apart, keep the first.
+            self.logger.warning(
+                f"Entity '{sensor}': {int(duplicated.sum())} duplicate timestamps in the "
+                "VictoriaMetrics result (overlapping series without a metric name), "
+                "keeping the first value of each"
+            )
+        df_sensor = df_sensor[~duplicated].sort_index()
+        # FILL(previous): complete the grid between the first and last sample.
+        full_index = pd.date_range(df_sensor.index.min(), df_sensor.index.max(), freq=self.freq)
+        df_sensor = df_sensor.reindex(full_index).ffill()
+        df_sensor.index.name = "time"
+        self.logger.debug(
+            f"Successfully retrieved {len(df_sensor)} data points for '{sensor}' from metric '{metric_name}'"
+        )
+        return df_sensor
 
     def _is_influx_expression(self, variable: str) -> bool:
         """Check if a var_list entry uses the arithmetic expression syntax: ``{{ ... }}``."""
@@ -870,6 +1218,7 @@ class RetrieveHass:
         start_time: pd.Timestamp,
         end_time: pd.Timestamp,
         entity_cache: dict[str, pd.DataFrame | None],
+        fetch_fn=None,
     ) -> pd.DataFrame | None:
         """Fetch the referenced entities and evaluate an arithmetic var_list expression.
 
@@ -878,7 +1227,12 @@ class RetrieveHass:
         queried over a window padded by ``INFLUX_EXPRESSION_LOOKBACK`` and sliced back to
         ``[start_time, end_time)`` so the leading buckets are forward-filled from the most
         recent prior value, keeping series that update at different phases aligned.
+
+        ``fetch_fn(client, entity, start, end)`` defaults to the InfluxDB fetcher; the
+        VictoriaMetrics path passes its own so the same expression syntax works there.
         """
+        if fetch_fn is None:
+            fetch_fn = self._fetch_sensor_data
         try:
             parsed_expression, entities, token_to_entity = self._extract_influx_expression_entities(
                 expression
@@ -897,7 +1251,7 @@ class RetrieveHass:
         series_mapping: dict[str, pd.Series] = {}
         for token, entity in token_to_entity.items():
             if entity not in entity_cache:
-                df_entity = self._fetch_sensor_data(client, entity, padded_start, end_time)
+                df_entity = fetch_fn(client, entity, padded_start, end_time)
                 if df_entity is not None:
                     df_entity = df_entity.loc[df_entity.index >= start_aware]
                 entity_cache[entity] = df_entity

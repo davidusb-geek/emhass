@@ -37,7 +37,9 @@ Additional battery recipes welcome (charging-from-grid strategies, calendar-awar
 
 ### Forecast
 
-No recipes yet. Topics that would fit: ML vs naive load forecaster selection, custom forecast injection via runtime params, dealing with forecast outages. Contributions welcome.
+- [Long training history with VictoriaMetrics](forecast_victoriametrics_long_history.md): replace the archived InfluxDB 1.x add-on by VictoriaMetrics, migrate the existing history with `vmctl`, and train the ML load forecaster on months of data through `use_victoriametrics`.
+
+Other topics that would fit: ML vs naive load forecaster selection, custom forecast injection via runtime params, dealing with forecast outages. Contributions welcome.
 
 ### Tariff
 
