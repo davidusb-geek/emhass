@@ -401,7 +401,7 @@ A few caveats apply because of how InfluxDB 1.x aggregates data:
 
 ## VictoriaMetrics as a data source
 
-[VictoriaMetrics](https://victoriametrics.com/) can be used exactly like InfluxDB: as a long-retention store that lets the machine learning forecaster train on months of history instead of the few days kept by the Home Assistant recorder. It is a good option now that the InfluxDB 1.x Home Assistant add-on is archived: VictoriaMetrics is Apache-2.0 licensed, lightweight, keeps years of high-resolution data on a small box and is available as a [Home Assistant community add-on](https://github.com/hassio-addons/addon-victoriametrics).
+[VictoriaMetrics](https://victoriametrics.com/) can be used exactly like InfluxDB (a step-by-step recipe including the migration of an existing InfluxDB 1.x history is in the [cookbook](cookbook/forecast_victoriametrics_long_history.md)): as a long-retention store that lets the machine learning forecaster train on months of history instead of the few days kept by the Home Assistant recorder. It is a good option now that the InfluxDB 1.x Home Assistant add-on is archived: VictoriaMetrics is Apache-2.0 licensed, lightweight, keeps years of high-resolution data on a small box and is available as a [Home Assistant community add-on](https://github.com/hassio-addons/addon-victoriametrics).
 
 The nice property is that VictoriaMetrics **accepts the InfluxDB line protocol for writes**, so it is fed by the standard Home Assistant `influxdb` integration with no special configuration: point the integration at the VictoriaMetrics host and port (8428) using `api_version: 1`. Reads however use PromQL/MetricsQL, not InfluxQL, which is why EMHASS has a dedicated `use_victoriametrics` data source rather than reusing `use_influxdb`.
 
@@ -413,12 +413,14 @@ influxdb:
   host: a0d7b954-victoriametrics
   port: 8428
   database: homeassistant
-  username: !secret victoriametrics_user
+  username: !secret victoriametrics_username
   password: !secret victoriametrics_password
   include:
     domains:
       - sensor
 ```
+
+The two `!secret` entries above are Home Assistant `secrets.yaml` keys used by the `influxdb` integration to write; they are independent from the EMHASS `victoriametrics_username` / `victoriametrics_password` parameters used to read (see below), even if it is convenient to give both the same values.
 
 With this setup the numeric state of every sensor is stored as a metric named `<unit_of_measurement>_value` with the entity id (without the `sensor.` domain) as a label, for example:
 
