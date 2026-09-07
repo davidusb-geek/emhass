@@ -1122,7 +1122,12 @@ class RetrieveHass:
             if result is None:
                 return None
             for item in result:
-                name = item.get("metric", {}).get("__name__", "")
+                labels = item.get("metric", {})
+                # MetricsQL keeps __name__ through avg_over_time; a plain PromQL backend
+                # drops it, so fall back to the full label set as the series key.
+                name = labels.get("__name__") or ",".join(
+                    f"{k}={v}" for k, v in sorted(labels.items())
+                )
                 series_values.setdefault(name, []).extend(item.get("values", []))
             chunk_start = chunk_end + step_s
 
@@ -1149,7 +1154,16 @@ class RetrieveHass:
         )
         df_sensor = df_sensor.set_index("time")
         df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors="coerce")
-        df_sensor = df_sensor[~df_sensor.index.duplicated()].sort_index()
+        duplicated = df_sensor.index.duplicated()
+        if duplicated.any():
+            # Only happens when several series came back under one key (backend dropped the
+            # metric names): the samples overlap and cannot be told apart, keep the first.
+            self.logger.warning(
+                f"Entity '{sensor}': {int(duplicated.sum())} duplicate timestamps in the "
+                "VictoriaMetrics result (overlapping series without a metric name), "
+                "keeping the first value of each"
+            )
+        df_sensor = df_sensor[~duplicated].sort_index()
         # FILL(previous): complete the grid between the first and last sample.
         full_index = pd.date_range(df_sensor.index.min(), df_sensor.index.max(), freq=self.freq)
         df_sensor = df_sensor.reindex(full_index).ffill()

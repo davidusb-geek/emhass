@@ -888,7 +888,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
-    def _vm_query_side_effect(entity_data, calls=None):
+    def _vm_query_side_effect(entity_data, calls=None, keep_metric_name=True):
         """Build a ``_vm_query_range`` side_effect emulating VictoriaMetrics.
 
         :param entity_data: mapping of entity_id label -> list of series, each a tuple
@@ -898,6 +898,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             ``avg_over_time`` window (bucket start + step). An empty list emulates an
             entity with no data.
         :param calls: optional list collecting ``(query, start, end, step)`` per call.
+        :param keep_metric_name: emulate MetricsQL (``__name__`` kept through
+            ``avg_over_time``, the default) or a plain PromQL backend that drops it.
         """
 
         async def query_side_effect(session, query, start_s, end_s, step_s):
@@ -912,12 +914,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                     if start_s <= ts <= end_s:
                         values.append([ts, str(value)])
                 if values:
-                    result.append(
-                        {
-                            "metric": {"__name__": metric_name, "entity_id": entity_id},
-                            "values": values,
-                        }
-                    )
+                    metric = {"entity_id": entity_id, "domain": "sensor"}
+                    if keep_metric_name:
+                        metric["__name__"] = metric_name
+                    result.append({"metric": metric, "values": values})
             return result
 
         return query_side_effect
@@ -1035,6 +1035,36 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await rh.get_data(days_list, ["sensor.power_a"]))
         self.assertEqual(rh.df_final["sensor.power_a"].tolist(), [1000.0, 1200.0])
         self.assertTrue(any("several VictoriaMetrics metrics" in line for line in logs.output))
+
+    async def test_get_data_victoriametrics_metric_name_dropped(self):
+        """A backend that drops __name__ still yields one series per label set.
+
+        Two unit metrics of one sensor then collapse into one series with overlapping
+        timestamps: the first value is kept and a warning is logged, instead of failing.
+        """
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_a": [
+                    ("kW_value", [("2023-04-01T10:00:00Z", 1.0)]),
+                    (
+                        "W_value",
+                        [("2023-04-01T10:00:00Z", 1000.0), ("2023-04-01T10:30:00Z", 1200.0)],
+                    ),
+                ],
+            },
+            keep_metric_name=False,
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        with (
+            patch.object(rh, "_vm_query_range", side_effect=side_effect),
+            self.assertLogs(logger, level="WARNING") as logs,
+        ):
+            self.assertTrue(await rh.get_data(days_list, ["sensor.power_a"]))
+        self.assertEqual(len(rh.df_final), 2)
+        self.assertEqual(rh.df_final["sensor.power_a"].tolist(), [1.0, 1200.0])
+        self.assertTrue(any("duplicate timestamps" in line for line in logs.output))
+        self.assertFalse(any("several VictoriaMetrics metrics" in line for line in logs.output))
 
     async def test_get_data_victoriametrics_expression_mixed(self):
         """var_list may mix a plain sensor and a {{ ... }} expression, as with InfluxDB."""
