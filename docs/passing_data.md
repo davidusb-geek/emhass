@@ -423,6 +423,62 @@ A few caveats apply because of how InfluxDB 1.x aggregates data:
 - If any entity referenced by an expression returns no data, the whole InfluxDB retrieval fails (a plain sensor that returns no data is still skipped, as before).
 ```
 
+## VictoriaMetrics as a data source
+
+[VictoriaMetrics](https://victoriametrics.com/) can be used exactly like InfluxDB (a step-by-step recipe including the migration of an existing InfluxDB 1.x history is in the [cookbook](cookbook/forecast_victoriametrics_long_history.md)): as a long-retention store that lets the machine learning forecaster train on months of history instead of the few days kept by the Home Assistant recorder. It is a good option now that the InfluxDB 1.x Home Assistant add-on is archived: VictoriaMetrics is Apache-2.0 licensed, lightweight, keeps years of high-resolution data on a small box and is available as a [Home Assistant community add-on](https://github.com/hassio-addons/addon-victoriametrics).
+
+The nice property is that VictoriaMetrics **accepts the InfluxDB line protocol for writes**, so it is fed by the standard Home Assistant `influxdb` integration with no special configuration: point the integration at the VictoriaMetrics host and port (8428) using `api_version: 1`. Reads however use PromQL/MetricsQL, not InfluxQL, which is why EMHASS has a dedicated `use_victoriametrics` data source rather than reusing `use_influxdb`.
+
+Home Assistant configuration (adapt the host name and the credentials to your setup, credentials are only needed when the VictoriaMetrics endpoint is protected by HTTP Basic authentication):
+
+```yaml
+influxdb:
+  api_version: 1
+  host: a0d7b954-victoriametrics
+  port: 8428
+  database: homeassistant
+  username: !secret victoriametrics_username
+  password: !secret victoriametrics_password
+  include:
+    domains:
+      - sensor
+```
+
+The two `!secret` entries above are Home Assistant `secrets.yaml` keys used by the `influxdb` integration to write; they are independent from the EMHASS `victoriametrics_username` / `victoriametrics_password` parameters used to read (see below), even if it is convenient to give both the same values.
+
+With this setup the numeric state of every sensor is stored as a metric named `<unit_of_measurement>_value` with the entity id (without the `sensor.` domain) as a label, for example:
+
+```text
+W_value{entity_id="power_load", domain="sensor", db="homeassistant"}
+```
+
+EMHASS configuration only knows the entity id, not the unit of each sensor, so the metric is located by the `entity_id` and `domain` labels combined with a regular expression on the metric name (`victoriametrics_metric_regex`, default `.+_value`). The unit therefore never has to be configured. If a sensor changed unit over time (two metrics match), the metric with the most samples is used and a warning is logged; set `victoriametrics_metric_regex` to pin one (for example `W_value`).
+
+On the EMHASS configuration set:
+
+```json
+{
+  "use_victoriametrics": true,
+  "victoriametrics_host": "a0d7b954-victoriametrics",
+  "victoriametrics_port": 8428,
+  "victoriametrics_database": "homeassistant",
+  "victoriametrics_metric_regex": ".+_value",
+  "victoriametrics_use_ssl": false,
+  "victoriametrics_verify_ssl": false,
+  "historic_days_to_retrieve": 90
+}
+```
+
+`victoriametrics_database` is optional: when set it filters on the `db` label (VictoriaMetrics attaches the database name given by the writer as that label unless it runs with `-influxSkipDatabaseLabel`). Leave it empty to not filter on it.
+
+If your VictoriaMetrics endpoint requires HTTP Basic authentication (the community add-on does unless `leave_front_door_open` is set, it validates against Home Assistant users), fill in `victoriametrics_username` and `victoriametrics_password` in the Add-on **Configuration** pane, or in the `secrets_emhass.yaml` file with the Docker standalone or legacy installation method. They are treated as secrets and never written to `config.json`.
+
+Each sensor is retrieved with `avg_over_time(<selector>[<optimization_time_step>])` through the `/api/v1/query_range` API at a step equal to the optimization time step, and the result is put on the same time grid (buckets labelled by their start, empty buckets forward-filled) as the InfluxDB and Home Assistant retrieval paths, so the forecaster and the optimizer behave the same whatever the source. Long windows are fetched in chunks to stay under the `-search.maxPointsPerTimeseries` limit of the server. The `{{ ... }}` arithmetic expressions described above for InfluxDB are supported with VictoriaMetrics as well.
+
+```{note}
+As with InfluxDB, if `use_victoriametrics` is set in `config.json` the parameters given at runtime in the POST payload (for example `historic_days_to_retrieve`) still take precedence, so make sure the fit/predict automations pass consistent values. When both `use_influxdb` and `use_victoriametrics` are enabled InfluxDB is used and a warning is logged.
+```
+
 
 ## Passing in secret parameters
 Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 

@@ -2948,6 +2948,8 @@ def get_keys_to_mask() -> list[str]:
     return [
         "influxdb_username",
         "influxdb_password",
+        "victoriametrics_username",
+        "victoriametrics_password",
         "solcast_api_key",
         "solcast_rooftop_id",
         "long_lived_token",
@@ -3032,6 +3034,8 @@ async def build_secrets(
         "solar_forecast_kwp": 5,
         "influxdb_username": "yourinfluxdbusername",
         "influxdb_password": "yourinfluxdbpassword",
+        "victoriametrics_username": "",
+        "victoriametrics_password": "",
     }
 
     # Obtain Secrets from ENV?
@@ -3191,6 +3195,14 @@ async def build_secrets(
                                     "influxdb_password": config_hass.get(
                                         "influxdb_password", params_secrets.get("influxdb_password")
                                     ),
+                                    "victoriametrics_username": config_hass.get(
+                                        "victoriametrics_username",
+                                        params_secrets.get("victoriametrics_username"),
+                                    ),
+                                    "victoriametrics_password": config_hass.get(
+                                        "victoriametrics_password",
+                                        params_secrets.get("victoriametrics_password"),
+                                    ),
                                 }
                             )
                         else:
@@ -3258,6 +3270,14 @@ async def build_secrets(
                     and options["influxdb_password"] != ""
                 ):
                     params_secrets["influxdb_password"] = options["influxdb_password"]
+
+            # Obtain VictoriaMetrics secrets from options.json (Basic auth, optional)
+            vm_secrets = ["victoriametrics_username", "victoriametrics_password"]
+            if any(x in vm_secrets for x in list(options.keys())):
+                logger.debug("Obtaining VictoriaMetrics secrets from options.json")
+                for key in vm_secrets:
+                    if options.get(key, "empty") != "empty" and options[key] != "":
+                        params_secrets[key] = options[key]
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
@@ -3492,6 +3512,10 @@ async def build_params(
     if params_secrets.get("influxdb_password") is not None:
         params["retrieve_hass_conf"]["influxdb_password"] = params_secrets.get("influxdb_password")
         params["params_secrets"]["influxdb_password"] = params_secrets.get("influxdb_password")
+    for vm_secret in ("victoriametrics_username", "victoriametrics_password"):
+        if params_secrets.get(vm_secret) is not None:
+            params["retrieve_hass_conf"][vm_secret] = params_secrets.get(vm_secret)
+            params["params_secrets"][vm_secret] = params_secrets.get(vm_secret)
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":

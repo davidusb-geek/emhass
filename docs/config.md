@@ -33,9 +33,14 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `influxdb_database`: The name of the InfluxDB database containing your Home Assistant data. Defaults to `homeassistant`.
 - `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W` for the Home Assistant integration.
 - `influxdb_retention_policy`: The retention policy to use for InfluxDB queries. Defaults to `autogen`.
+- `use_victoriametrics`: Enable VictoriaMetrics as a data source instead of the Home Assistant API. It plays the same role as InfluxDB (long history for machine learning models) and is fed by the standard Home Assistant `influxdb` integration, since VictoriaMetrics accepts the InfluxDB line protocol for writes. Queries use its PromQL/MetricsQL HTTP API. See [VictoriaMetrics as a data source](passing_data.md#victoriametrics-as-a-data-source).
+- `victoriametrics_host`: The IP address or hostname of your VictoriaMetrics instance. Defaults to `localhost`.
+- `victoriametrics_port`: The HTTP port of your VictoriaMetrics instance. Defaults to 8428.
+- `victoriametrics_database`: Optional value of the `db` label to filter on (the InfluxDB database name the Home Assistant integration writes with, e.g. `homeassistant`). Leave empty to not filter on it.
+- `victoriametrics_metric_regex`: Regular expression matched against the metric name to locate a sensor. Defaults to `.+_value`, which matches the `<unit_of_measurement>_value` metrics the Home Assistant InfluxDB integration produces whatever the unit of the sensor.
 
 ```{note}
-When InfluxDB is enabled, any sensor list parameter (such as `sensor_power_photovoltaics` or `sensor_power_load_no_var_loads`) accepts an arithmetic expression over several InfluxDB time series instead of a single entity id, using the `{{ ... }}` syntax, for example `{{'sensor.power_a' - 'sensor.power_b' * 1000}}`. This is handy whenever the quantity EMHASS needs is not stored as a single sensor, for example:
+When InfluxDB or VictoriaMetrics is enabled, any sensor list parameter (such as `sensor_power_photovoltaics` or `sensor_power_load_no_var_loads`) accepts an arithmetic expression over several InfluxDB time series instead of a single entity id, using the `{{ ... }}` syntax, for example `{{'sensor.power_a' - 'sensor.power_b' * 1000}}`. This is handy whenever the quantity EMHASS needs is not stored as a single sensor, for example:
 
 - a net power that is the difference of two meters (grid import minus export, total consumption minus a sub-metered load, ...);
 - a unit conversion, such as rescaling a series logged in kW to the W that EMHASS expects;
@@ -61,6 +66,8 @@ The **secrets** parameters are:
 - `solar_forecast_kwp`: The PV peak installed power in kW used for the 'solar.forecast' API call (weather_forecast_method=solar.forecast)
 - `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
 - `influxdb_password`: Password for authenticating with InfluxDB. Leave empty if no authentication is required.
+- `victoriametrics_username`: Username for HTTP Basic authentication with VictoriaMetrics. Leave empty if no authentication is required.
+- `victoriametrics_password`: Password for HTTP Basic authentication with VictoriaMetrics. Leave empty if no authentication is required.
 
 ## Optimization configuration parameters
 

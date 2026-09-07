@@ -334,6 +334,49 @@
             "title": "Verify HTTPS on InfluxDB connection",
             "description": "Enables SSL verification of the certificate (e.g. Let's Encrypt) on InfluxDB connections. Defaults to 'false'."
           },
+          "use_victoriametrics": {
+            "type": "boolean",
+            "default": false,
+            "title": "Use VictoriaMetrics for data retrieval",
+            "description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label)."
+          },
+          "victoriametrics_host": {
+            "type": "string",
+            "default": "localhost",
+            "title": "VictoriaMetrics host",
+            "description": "The IP address or hostname of your VictoriaMetrics instance. Defaults to localhost."
+          },
+          "victoriametrics_port": {
+            "type": "integer",
+            "default": 8428,
+            "title": "VictoriaMetrics port",
+            "x-unit": "count",
+            "description": "The HTTP port of your VictoriaMetrics instance. Defaults to 8428. (unit: count)"
+          },
+          "victoriametrics_database": {
+            "type": "string",
+            "default": "",
+            "title": "VictoriaMetrics database label",
+            "description": "Optional value of the 'db' label to filter on (the InfluxDB database name used when writing, e.g. 'homeassistant'). Leave empty to not filter on it."
+          },
+          "victoriametrics_metric_regex": {
+            "type": "string",
+            "default": ".+_value",
+            "title": "VictoriaMetrics metric name regex",
+            "description": "Regular expression matched against the metric name to find a sensor. Defaults to '.+_value', which matches the '<unit>_value' metrics written by the Home Assistant InfluxDB integration whatever the unit of the sensor."
+          },
+          "victoriametrics_use_ssl": {
+            "type": "boolean",
+            "default": false,
+            "title": "Use HTTPS on VictoriaMetrics connection",
+            "description": "Enables HTTPS on VictoriaMetrics connections. Defaults to 'false'."
+          },
+          "victoriametrics_verify_ssl": {
+            "type": "boolean",
+            "default": false,
+            "title": "Verify HTTPS on VictoriaMetrics connection",
+            "description": "Enables SSL verification of the certificate on VictoriaMetrics connections. Defaults to 'false'."
+          },
           "continual_publish": {
             "type": "boolean",
             "default": false,
