@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.18.3 - 2026-09-10
+
+### Improvement
+- feat: add VictoriaMetrics as a long-history data source (use_victoriametrics) (@scruysberghs)
+- feat: add generic multi-component capacity charges (#540 Part B) (@MMicieli)
+- feat: SOC-dependent charge power ceiling (@Sjeiz)
+
+### Fix
+- fix: missing await on rh.get_data() in export_influxdb_to_csv (@davidusb-geek)
+- fix: proposed fix for adjust_pv_forecast method validation data leakage (@davidusb-geek)
+
 ## 0.18.2 - 2026-09-02
 
 ### Improvement
