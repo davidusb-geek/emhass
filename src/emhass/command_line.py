@@ -3461,7 +3461,7 @@ async def export_influxdb_to_csv(
     )
     logger.info(f"Sensors: {sensor_list}")
     # Retrieve data from InfluxDB
-    success = rh.get_data(days_list, sensor_list)
+    success = await rh.get_data(days_list, sensor_list)
     if not success or rh.df_final is None or rh.df_final.empty:
         logger.error("Failed to retrieve data from InfluxDB")
         return False
