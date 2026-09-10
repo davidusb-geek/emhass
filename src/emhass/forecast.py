@@ -1417,7 +1417,8 @@ class Forecast:
 
         This method aligns the actual PV production data with the forecasted data,
         adds additional features for analysis, and separates the predictors (X)
-        from the target variable (y).
+        from the target variable (y). It utilizes all available valid data
+        to maximize production accuracy.
 
         :param data: A DataFrame containing the actual PV production data and the
             forecasted PV production data.
@@ -1437,22 +1438,11 @@ class Forecast:
             data.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-input-data.csv"
             )
+
         P_PV = data[self.var_pv]  # Actual PV production
         p_pv_forecast = data[self.var_pv_forecast]  # Forecasted PV production
-        # Define time ranges
-        last_day = data.index.max().normalize()  # Last available day
-        three_months_ago = last_day - pd.DateOffset(
-            days=self.retrieve_hass_conf["historic_days_to_retrieve"]
-        )
-        # Train/Test: Last historic_days_to_retrieve days (excluding the last day)
-        train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
-        self.p_pv_train_test = P_PV[train_test_mask]
-        self.p_pv_forecast_train_test = p_pv_forecast[train_test_mask]
-        # Validation: Last day only
-        validation_mask = data.index >= last_day
-        self.p_pv_validation = P_PV[validation_mask]
-        self.p_pv_forecast_validation = p_pv_forecast[validation_mask]
-        # Ensure data is aligned
+
+        # Ensure data is aligned using the full dataset
         self.data_adjust_pv = pd.concat(
             [P_PV.rename("actual"), p_pv_forecast.rename("forecast")], axis=1
         ).dropna()
@@ -1486,14 +1476,18 @@ class Forecast:
         self.data_adjust_pv = Forecast.add_cyclic_hour_features(self.data_adjust_pv)
 
         self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
+
         # Features (X) and target (y)
         self.x_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
         self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
+
         self.logger.debug("adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv)
         if self.logger.isEnabledFor(logging.DEBUG):
             self.data_adjust_pv.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-output-data.csv"
             )
+
+        return self.data_adjust_pv
 
     async def adjust_pv_forecast_fit(
         self,
@@ -1533,20 +1527,32 @@ class Forecast:
             self.logger,
         )
         pipeline, param_grid = mlr._get_model_and_params()
+
         # Time-series split
         tscv = TimeSeriesSplit(n_splits=n_splits)
         grid_search = GridSearchCV(
             pipeline, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0
         )
+
         # Train model
         await asyncio.to_thread(grid_search.fit, self.x_adjust_pv, self.y_adjust_pv)
         self.model_adjust_pv = grid_search.best_estimator_
-        # Calculate training metrics
+
+        # Calculate and log Time-Series Cross-Validation metrics
+        if hasattr(grid_search, "best_score_"):
+            cv_rmse = np.sqrt(-grid_search.best_score_)
+            self.logger.info(f"PV adjust Time-Series CV RMSE: {cv_rmse:.2f}")
+
+        # Calculate in-sample training metrics for legacy monitoring
         y_pred_train = self.model_adjust_pv.predict(self.x_adjust_pv)
         self.rmse = np.sqrt(mean_squared_error(self.y_adjust_pv, y_pred_train))
         self.r2 = r2_score(self.y_adjust_pv, y_pred_train)
-        # Log the metrics
-        self.logger.info(f"PV adjust Training metrics: RMSE = {self.rmse}, R2 = {self.r2}")
+
+        # Log the in-sample metrics
+        self.logger.info(
+            f"PV adjust Training metrics (in-sample): RMSE = {self.rmse}, R2 = {self.r2}"
+        )
+
         # Save model
         if not debug:
             filename = "adjust_pv_regressor.pkl"
@@ -1554,32 +1560,28 @@ class Forecast:
             async with aiofiles.open(filename_path, "wb") as outp:
                 await outp.write(pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL))
 
-    def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame | None = None) -> pd.DataFrame:
+    def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame) -> pd.DataFrame:
         """
         Predict the adjusted photovoltaic (PV) forecast.
 
         This method uses the trained regression model to predict the adjusted PV forecast
-        based on either the validation data stored in `self` or a new forecasted PV data
-        passed as input. It applies additional features such as date and solar angles to
-        the forecasted PV production data before making predictions. The solar elevation
-        is used to avoid negative values and to fix values at the beginning and end of the day.
+        based on new forecasted PV data passed as input. It applies additional features
+        such as date and solar angles to the forecasted PV production data before making
+        predictions. The solar elevation is used to avoid negative values and to fix
+        values at the beginning and end of the day.
 
-        :param forecasted_pv: Optional. A DataFrame containing the forecasted PV production data.
+        :param forecasted_pv: A DataFrame containing the forecasted PV production data.
                             It must have a DateTime index and a column named "forecast".
-                            If not provided, the method will use `self.p_pv_forecast_validation`.
-        :type forecasted_pv: pd.DataFrame, optional
+        :type forecasted_pv: pd.DataFrame
         :return: A DataFrame containing the adjusted PV forecast with additional features.
         :rtype: pd.DataFrame
         """
-        # Use the provided forecasted PV data or fall back to the validation data in `self`
-        if forecasted_pv is not None:
-            # Ensure the input DataFrame has the required structure
-            if "forecast" not in forecasted_pv.columns:
-                raise ValueError("The input DataFrame must contain a 'forecast' column.")
-            forecast_data = forecasted_pv.copy()
-        else:
-            # Use the validation data stored in `self`
-            forecast_data = self.p_pv_forecast_validation.rename("forecast").to_frame()
+        # Ensure the input DataFrame has the required structure
+        if "forecast" not in forecasted_pv.columns:
+            raise ValueError("The input DataFrame must contain a 'forecast' column.")
+
+        forecast_data = forecasted_pv.copy()
+
         # Prepare the forecasted PV data (same feature set as the fit side:
         # calendar features without the raw hour, plus the cyclic hour encoding)
         forecast_data = add_date_features(
@@ -1588,6 +1590,7 @@ class Forecast:
         )
         forecast_data = Forecast.add_cyclic_hour_features(forecast_data)
         forecast_data = Forecast.compute_solar_angles(forecast_data, self.lat, self.lon)
+
         # Predict the adjusted forecast
         forecast_data["adjusted_forecast"] = self.model_adjust_pv.predict(forecast_data)
 
@@ -1610,25 +1613,18 @@ class Forecast:
                 return row["adjusted_forecast"]
 
         forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)
+
         # Clamp to non-negative: PV power is physically >= 0, but the daytime branch
         # above returns the raw regression output (e.g. Lasso is unconstrained and can
         # extrapolate below zero on cloudy days after sunny training history). See #521.
         forecast_data["adjusted_forecast"] = forecast_data["adjusted_forecast"].clip(lower=0)
-        # If using validation data, calculate validation metrics
-        if forecasted_pv is None:
-            y_true = self.p_pv_validation.values
-            y_pred = forecast_data["adjusted_forecast"].values
-            self.validation_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-            self.validation_r2 = r2_score(y_true, y_pred)
-            # Log the validation metrics
-            self.logger.info(
-                f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}"
-            )
+
         self.logger.debug("adjust_pv_forecast_predict forecast data:\n%s", forecast_data)
         if self.logger.isEnabledFor(logging.DEBUG):
             forecast_data.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-predict-forecast-data.csv"
             )
+
         # Return the DataFrame with the adjusted forecast
         return forecast_data
 
