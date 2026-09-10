@@ -211,30 +211,41 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Clean nan's
         data = data.interpolate(method="linear", axis=0, limit=5)
         data = data.fillna(0.0)
+
         # Call data preparation method
         self.fcst.adjust_pv_forecast_data_prep(data)
         self.assertIsInstance(self.fcst.data_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.x_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
+
         # Time of day must be encoded continuously (no raw integer hour): the
         # raw hour feature caused hour-boundary sawtooth in the adjusted forecast
         self.assertNotIn("hour", self.fcst.x_adjust_pv.columns)
         self.assertIn("hour_sin", self.fcst.x_adjust_pv.columns)
         self.assertIn("hour_cos", self.fcst.x_adjust_pv.columns)
+
         # Call the fit method
         await self.fcst.adjust_pv_forecast_fit(
             n_splits=5, regression_model="LassoRegression", debug=False
         )
+
         # Call the predict method
-        p_pv_forecast = self.fcst.adjust_pv_forecast_predict()
-        self.assertEqual(len(p_pv_forecast), len(self.fcst.p_pv_forecast_validation))
+        # We must provide forecasted_pv since the internal validation fallback was removed
+        forecasted_pv = data[[self.fcst.var_pv_forecast]].rename(
+            columns={self.fcst.var_pv_forecast: "forecast"}
+        )
+        p_pv_forecast = self.fcst.adjust_pv_forecast_predict(forecasted_pv=forecasted_pv)
+
+        self.assertEqual(len(p_pv_forecast), len(forecasted_pv))
         self.assertFalse(p_pv_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
-        self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
-        self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
-        self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
+
+        # Assert on the in-sample training metrics since explicit validation metrics were removed
+        self.assertGreaterEqual(self.fcst.rmse, 0.0, "RMSE should be non-negative")
+        self.assertLessEqual(self.fcst.r2, 1.0, "R² score should be at most 1")
+        self.assertGreaterEqual(self.fcst.r2, -1.0, "R² score should be at least -1")
 
         # import plotly.express as px
-        # data_to_plot = self.fcst.p_pv_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
+        # data_to_plot = p_pv_forecast[["forecast", "adjusted_forecast"]].reset_index()
         # fig = px.line(
         #     data_to_plot,
         #     x="index",  # Assuming the index is the timestamp
