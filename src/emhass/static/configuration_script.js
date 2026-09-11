@@ -323,7 +323,7 @@ function buildParamContainers(
     let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
-      parameter_definition_object["input"] !== "array.array.float" &&
+      parameter_definition_name !== "battery_charge_power_derating" &&
       section != "Deferrable Loads" &&
       !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
@@ -511,8 +511,10 @@ function buildParamElement(
   //check if a param value is saved in the config file (if so overwrite definition default)
   let value = checkConfigParam(placeholder, config, parameter_definition_name);
 
-  // Keep the complete nested value in one JSON input, including per-battery tables.
-  if (parameter_definition_object["input"] === "array.array.float") {
+  // Battery tables use one JSON field. Other nested-array parameters can allow
+  // null entries and follow their existing per-load rendering and save paths.
+  if (parameter_definition_name === "battery_charge_power_derating" &&
+      parameter_definition_object["input"] === "array.array.float") {
     const json = typeof value === "string" ? value : JSON.stringify(value ?? []);
     const escaped = json.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -886,7 +888,8 @@ async function saveConfiguration(param_definitions) {
           //build parameters using values extracted from param_inputs
 
           // Nested numeric arrays must be saved as JSON, not flattened strings.
-          if (parameter_definition_object["input"] === "array.array.float") {
+          if (parameter_definition_name === "battery_charge_power_derating" &&
+              parameter_definition_object["input"] === "array.array.float") {
             try {
               const value = JSON.parse((param_values[0] ?? "").trim() || "[]");
               const numericRow = (row) => Array.isArray(row) &&
