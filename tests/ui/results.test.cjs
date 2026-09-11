@@ -8,8 +8,8 @@ function setup(response, rejects = false) {
   const classes = new Set();
   const loader = { innerHTML: '', classList: { add: x => classes.add(x), remove: x => classes.delete(x) } };
   const alert = { style: {} }, text = {};
-  const ctx = { window: {}, document: { getElementById: id => ({ loader, alert, 'alert-text': text }[id] || null) },
-    fetch: async () => { if (rejects) throw new Error('Offline'); return response; } };
+  const ctx = { fetchCalls: 0, window: {}, document: { getElementById: id => ({ loader, alert, 'alert-text': text }[id] || null) },
+    fetch: async () => { ctx.fetchCalls++; if (rejects) throw new Error('Offline'); return response; } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
   ctx.refreshed = 0; ctx.saved = 0;
   ctx.getTemplate = () => { ctx.refreshed++; };
@@ -44,5 +44,6 @@ test('network rejection clears spinner and displays error', async () => {
 test('invalid runtime input does not submit', async () => {
   const s = setup(null); s.ctx.inputToJson = () => 0;
   assert.equal(await s.ctx.formAction('dayahead-optim', 'advanced'), false);
+  assert.equal(s.ctx.fetchCalls, 0);
   assert.equal(s.classes.has('loading'), false);
 });
