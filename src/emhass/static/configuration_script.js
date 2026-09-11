@@ -323,6 +323,7 @@ function buildParamContainers(
     let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
+      parameter_definition_object["input"] !== "array.array.float" &&
       section != "Deferrable Loads" &&
       !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
@@ -509,6 +510,14 @@ function buildParamElement(
   //definitions default value is used if none is found in the configs, or an array element has been added in the ui (deferrable load number increase or plus button pressed)
   //check if a param value is saved in the config file (if so overwrite definition default)
   let value = checkConfigParam(placeholder, config, parameter_definition_name);
+
+  // Keep the complete nested value in one JSON input, including per-battery tables.
+  if (parameter_definition_object["input"] === "array.array.float") {
+    const json = typeof value === "string" ? value : JSON.stringify(value ?? []);
+    const escaped = json.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+    return `<input class="param_input" type="text" placeholder="[]" value="${escaped}">`;
+  }
 
   //generate and return param input html,
   //check if param value is not an object, if so assume its a single value.
@@ -875,6 +884,25 @@ async function saveConfiguration(param_definitions) {
           );
 
           //build parameters using values extracted from param_inputs
+
+          // Nested numeric arrays must be saved as JSON, not flattened strings.
+          if (parameter_definition_object["input"] === "array.array.float") {
+            try {
+              const value = JSON.parse((param_values[0] ?? "").trim() || "[]");
+              const numericRow = (row) => Array.isArray(row) &&
+                row.every((item) => typeof item === "number" && Number.isFinite(item));
+              const numericTable = (table) => Array.isArray(table) && table.every(numericRow);
+              if (!numericTable(value) &&
+                  !(Array.isArray(value) && value.every(numericTable))) {
+                throw new Error("Expected nested numeric arrays");
+              }
+              config[parameter_definition_name] = value;
+            } catch (_) {
+              errorAlert(parameter_definition_name + ": enter a JSON array of numeric rows or tables, for example [[0.5, 1000]].");
+              return 0;
+            }
+            continue;
+          }
 
           // object-type: JSON.parse the text-box value; treat "" and "null" as JSON null
           if (parameter_definition_object["input"] === "object") {
