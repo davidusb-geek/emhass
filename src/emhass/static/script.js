@@ -154,6 +154,7 @@ async function formAction(action, page) {
   if (data !== 0) {
     //don't run if there is an error in the input (box/list) Json data
     showChangeStatus("loading", {}); // show loading div for status
+    let actionCompleted = false;
     try {
       const response = await fetch(`action/` + action, {
         method: "POST",
@@ -161,10 +162,12 @@ async function formAction(action, page) {
         body: JSON.stringify(data),
       });
       if (response.ok) {
-        showChangeStatus(response.status, []);
+        actionCompleted = true;
         if (page !== "basic") {
           saveStorage();
         }
+        await getTemplate();
+        showChangeStatus(response.status, []);
         return true;
       }
       let errorPayload;
@@ -179,7 +182,10 @@ async function formAction(action, page) {
       showChangeStatus(response.status, errorPayload);
       return false;
     } catch (error) {
-      showChangeStatus("request-error", [error.message || "Request failed"]);
+      const message = error.message || "Request failed";
+      showChangeStatus("request-error", [actionCompleted
+        ? `Action completed, but updating the results failed: ${message}`
+        : message]);
       return false;
     } finally {
       document.getElementById("loader").classList.remove("loading");
@@ -191,8 +197,12 @@ async function formAction(action, page) {
 }
 
 //function in control of status icons of post above
-async function showChangeStatus(status, logJson) {
+function showChangeStatus(status, logJson) {
   let loading = document.getElementById("loader"); //element showing statuses
+  const alert = document.getElementById("alert");
+  if (alert && (status === "loading" || (typeof status === "number" && status >= 200 && status < 300))) {
+    alert.style.display = "none";
+  }
   if (status === "remove") {
     //remove all
     loading.innerHTML = "";
@@ -205,7 +215,6 @@ async function showChangeStatus(status, logJson) {
     // Match response.ok: any successful HTTP response shows a tick.
     loading.classList.remove("loading");
     loading.innerHTML = `<p class=tick>&#x2713;</p>`;
-    getTemplate(); //get updated templates
   } else {
     //then show a cross
     loading.classList.remove("loading");
@@ -226,9 +235,13 @@ async function getTemplate() {
   let response = await fetch(`template`, {
     method: "GET",
   });
+  if (!response.ok) {
+    throw new Error(`Template refresh failed with HTTP ${response.status}`);
+  }
   let blob = await response.blob(); //get data blob
   htmlTemplateData = await new Response(blob).text(); //obtain html from blob
   let templateDiv = document.getElementById("template"); //get template container element to override
+  clearStickyTables();
   templateDiv.innerHTML = htmlTemplateData; //override container inner html with new data
   let scripts = Array.from(templateDiv.getElementsByTagName("script")); //replace script tags manually
   for (const script of scripts) {
@@ -239,15 +252,15 @@ async function getTemplate() {
   initStickyTables();
 }
 
+let stickyTableCleanups = [];
+
+function clearStickyTables() {
+  stickyTableCleanups.forEach((cleanup) => cleanup());
+  stickyTableCleanups = [];
+}
+
 function initStickyTables() {
-  // Remove clones and listeners from any previous call
-  document.querySelectorAll(".sticky-header-wrapper").forEach((el) => el.remove());
-  document.querySelectorAll("table.mystyle").forEach((table) => {
-    if (table._stickyScrollListener)
-      window.removeEventListener("scroll", table._stickyScrollListener);
-    if (table._stickyHScrollListener && table._stickyContainer)
-      table._stickyContainer.removeEventListener("scroll", table._stickyHScrollListener);
-  });
+  clearStickyTables();
 
   document.querySelectorAll("table.mystyle").forEach((table) => {
     const thead = table.querySelector("thead");
@@ -270,15 +283,21 @@ function initStickyTables() {
     // Sync wrapper position and column widths with the live table
     const syncGeometry = () => {
       const r = container.getBoundingClientRect();
-      wrapper.style.left = r.left + "px";
+      const tableRect = table.getBoundingClientRect();
+      const left = r.left + container.clientLeft;
+      wrapper.style.left = left + "px";
       wrapper.style.width = container.clientWidth + "px";
-      cloneTable.style.width = table.getBoundingClientRect().width + "px";
+      cloneTable.style.width = tableRect.width + "px";
+      cloneTable.style.margin = `0 0 0 ${tableRect.left - left + container.scrollLeft}px`;
       thead.querySelectorAll("th").forEach((th, i) => {
         const cloneTh = cloneTable.querySelectorAll("th")[i];
-        if (cloneTh) cloneTh.style.width = th.getBoundingClientRect().width + "px";
+        if (cloneTh) {
+          cloneTh.style.width = th.getBoundingClientRect().width + "px";
+        }
       });
+      syncHScroll();
+      updateVisibility();
     };
-    requestAnimationFrame(syncGeometry);
     window.addEventListener("resize", syncGeometry, { passive: true });
 
     // Horizontal scroll: sync wrapper.scrollLeft — avoids transform stacking context,
@@ -291,11 +310,9 @@ function initStickyTables() {
       }
     };
     container.addEventListener("scroll", syncHScroll, { passive: true });
-    table._stickyHScrollListener = syncHScroll;
-    table._stickyContainer = container;
 
     // Vertical scroll: toggle visibility only — no per-frame transform update
-    let shown = false;
+    let shown = null;
     const updateVisibility = () => {
       const shouldShow =
         thead.getBoundingClientRect().top <= 0 &&
@@ -306,7 +323,14 @@ function initStickyTables() {
       }
     };
     window.addEventListener("scroll", updateVisibility, { passive: true });
-    table._stickyScrollListener = updateVisibility;
+    const frame = requestAnimationFrame(syncGeometry);
+    stickyTableCleanups.push(() => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", syncGeometry);
+      window.removeEventListener("scroll", updateVisibility);
+      container.removeEventListener("scroll", syncHScroll);
+      wrapper.remove();
+    });
   });
 }
 
@@ -556,4 +580,3 @@ async function checkInfluxDBAndShowExport() {
     console.error("Error checking InfluxDB configuration:", error);
   }
 }
-
