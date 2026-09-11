@@ -154,26 +154,36 @@ async function formAction(action, page) {
   if (data !== 0) {
     //don't run if there is an error in the input (box/list) Json data
     showChangeStatus("loading", {}); // show loading div for status
-    const response = await fetch(`action/` + action, {
-      //fetch data from webserver.py
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        'Transfer-Encoding': 'chunked'
-      },
-      body: JSON.stringify(data), //note that post can only send data via strings
-    });
-    if (response.status == 201) {
-      showChangeStatus(response.status, {});
-      if (page !== "basic") {
-        saveStorage(); //save to storage if successful
+    try {
+      const response = await fetch(`action/` + action, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (response.ok) {
+        showChangeStatus(response.status, []);
+        if (page !== "basic") {
+          saveStorage();
+        }
+        return true;
       }
-      return true;
-    } //if successful
-    else {
-      showChangeStatus(response.status, await response.json());
+      let errorPayload;
+      try {
+        errorPayload = await response.json();
+      } catch (_) {
+        errorPayload = [`Request failed with HTTP ${response.status}`];
+      }
+      if (!Array.isArray(errorPayload)) {
+        errorPayload = [`Request failed with HTTP ${response.status}`];
+      }
+      showChangeStatus(response.status, errorPayload);
       return false;
-    } // else get Log data from response
+    } catch (error) {
+      showChangeStatus("request-error", [error.message || "Request failed"]);
+      return false;
+    } finally {
+      document.getElementById("loader").classList.remove("loading");
+    }
   } else {
     showChangeStatus("remove"); //replace loading, show tick or cross with none
     return false;
@@ -191,8 +201,8 @@ async function showChangeStatus(status, logJson) {
     //show loading logo
     loading.innerHTML = "";
     loading.classList.add("loading"); //append class with loading animation styling
-  } else if (status === 201) {
-    //if status is 201, then show a tick
+  } else if (typeof status === "number" && status >= 200 && status < 300) {
+    // Match response.ok: any successful HTTP response shows a tick.
     loading.classList.remove("loading");
     loading.innerHTML = `<p class=tick>&#x2713;</p>`;
     getTemplate(); //get updated templates
@@ -275,6 +285,10 @@ function initStickyTables() {
     // so overflow:hidden clips correctly on both sides
     const syncHScroll = () => {
       wrapper.scrollLeft = container.scrollLeft;
+      const firstTh = cloneTable.querySelector("thead th:first-child");
+      if (firstTh) {
+        firstTh.style.transform = `translateX(${wrapper.scrollLeft}px)`;
+      }
     };
     container.addEventListener("scroll", syncHScroll, { passive: true });
     table._stickyHScrollListener = syncHScroll;
@@ -542,3 +556,4 @@ async function checkInfluxDBAndShowExport() {
     console.error("Error checking InfluxDB configuration:", error);
   }
 }
+
