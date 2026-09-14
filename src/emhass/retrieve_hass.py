@@ -1656,18 +1656,26 @@ class RetrieveHass:
         """
         self.logger.debug("prepare_data self.var_list=%s", self.var_list)
         self.logger.debug("prepare_data var_load=%s", var_load)
-        # Silent Filter for Missing Sensors
-        # Instead of calling self._validate_sensor_list (which warns),
-        # we silently drop sensors that are not in the current fetched data.
+        # Filter Missing Sensors
+        # Entries not present in the fetched data are dropped from the repair
+        # lists (debug-logged only). What got dropped is recorded so the end of
+        # this method can warn if the drop left unrepaired NaNs behind (#1084).
+        dropped_replace_zero = []
         if var_replace_zero:
             # Optional: Log if we are dropping items to help debugging
-            missing_sensors = [x for x in var_replace_zero if x not in self.var_list]
-            if missing_sensors:
+            dropped_replace_zero = [x for x in var_replace_zero if x not in self.var_list]
+            if dropped_replace_zero:
                 self.logger.debug(
-                    f"Sensors in 'sensor_replace_zero' not found in data: {missing_sensors}"
+                    f"Sensors in 'sensor_replace_zero' not found in data: {dropped_replace_zero}"
                 )
             var_replace_zero = [x for x in var_replace_zero if x in self.var_list]
+        dropped_interp = []
         if var_interp:
+            dropped_interp = [x for x in var_interp if x not in self.var_list]
+            if dropped_interp:
+                self.logger.debug(
+                    f"Sensors in 'sensor_linear_interp' not found in data: {dropped_interp}"
+                )
             var_interp = [x for x in var_interp if x in self.var_list]
         # Rename Load Columns (Handle sign change)
         if not self._process_load_column_renaming(var_load, load_negative, skip_renaming):
@@ -1712,6 +1720,42 @@ class RetrieveHass:
         if self.time_zone is not None:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
         self.df_final = self.df_final[~self.df_final.index.duplicated(keep="first")]
+        # Issue #1084: a sensor name dropped from 'sensor_replace_zero' or
+        # 'sensor_linear_interp' silently loses its repair. That is harmless
+        # when nothing needed repairing, but if NaNs are still present after
+        # cleaning it is a strong signal that a configured sensor name does
+        # not match what was actually retrieved from HA. Warn once, naming
+        # both the dropped entries and the still-affected columns.
+        # Two deliberate exclusions keep this quiet on healthy setups:
+        # - skip_renaming=True marks the single-sensor ML paths (model fit /
+        #   tune / predict, forecast calibration), which retrieve only their
+        #   target sensor while forwarding the full configured lists, so
+        #   dropped entries are structural there, not a misconfiguration;
+        # - protected_columns are exempt from the set_zero_min repair by
+        #   design (e.g. signed battery power), so residual NaN in them is
+        #   expected and handled downstream, not a missing repair.
+        if not skip_renaming:
+            dropped_entries = {}
+            if dropped_replace_zero:
+                dropped_entries["sensor_replace_zero"] = dropped_replace_zero
+            if dropped_interp:
+                dropped_entries["sensor_linear_interp"] = dropped_interp
+            if dropped_entries:
+                columns_to_check = [
+                    c for c in self.df_final.columns if c not in (protected_columns or [])
+                ]
+                nan_cols = [c for c in columns_to_check if self.df_final[c].isna().any()]
+                # Report the load column under its configured name, not the
+                # internal var_load + "_positive" rename applied above.
+                nan_cols = [var_load if c == var_load + "_positive" else c for c in nan_cols]
+                if nan_cols:
+                    self.logger.warning(
+                        "prepare_data: the following configured sensor names were not "
+                        f"found in the retrieved data and were dropped: {dropped_entries}; "
+                        f"these columns still contain NaN values after cleaning: {nan_cols}. "
+                        "Please verify that these sensor names match the sensors connected "
+                        "to EMHASS."
+                    )
         return True
 
     @staticmethod
