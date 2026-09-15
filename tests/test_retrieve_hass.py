@@ -467,6 +467,33 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         # The by-design NaN in the protected column must survive untouched.
         self.assertTrue(self.rh.df_final[battery_sensor].isna().any())
 
+    # protected_columns holds CONFIGURED sensor names, but the load column is
+    # renamed to var_load + "_positive" before the dropped-sensor NaN check
+    # runs, so a protected load must keep its exclusion across the rename. A
+    # zero load reading turned NaN by set_zero_min plus a structurally dropped
+    # entry must not fire the warning for the protected load.
+    def test_prepare_data_protected_load_keeps_exclusion_across_rename(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        idx = self.rh.df_final.index[:4]
+        self.rh.df_final = pd.DataFrame(
+            {load_sensor: [100.0, 0.0, 200.0, 150.0]},
+            index=idx,
+        )
+        self.rh.var_list = [load_sensor]
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=["sensor.power_photovoltaics_not_retrieved"],
+                var_interp=["sensor.power_photovoltaics_not_retrieved"],
+                protected_columns=[load_sensor],
+            )
+        # The unrepaired NaN really is present under the renamed column, so
+        # the no-warning assertion above exercised the exclusion, not an
+        # accidentally clean frame.
+        self.assertTrue(self.rh.df_final[load_sensor + "_positive"].isna().any())
+
     # The single-sensor ML paths (model fit/tune/predict, forecast calibration)
     # retrieve only their target sensor while forwarding the full configured
     # lists, and mark themselves with skip_renaming=True. Dropped entries are
