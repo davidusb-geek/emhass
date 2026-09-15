@@ -22,7 +22,7 @@ for (const value of [[], [[0.5,1000],[0.9,200]], [[[0.5,1000]],[[0.8,500]]]]) {
     const html = ctx.buildParamElement(definition, name, { [name]: value });
     assert.equal((html.match(/<input /g)||[]).length, 1);
     const raw = html.match(/value="([^"]*)"/)[1];
-    assert.deepEqual(JSON.parse(raw), value);
+    assert.deepEqual(JSON.parse(raw.replace(/&quot;/g, '"')), value);
     const save = setup(raw);
     await save.saveConfiguration({ Battery: { [name]: definition } });
     assert.deepEqual(save.sent[name], value);
