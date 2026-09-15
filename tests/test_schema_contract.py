@@ -781,9 +781,14 @@ def _run_array_control_probe(js_src, section, params, *, click=None, typed=None)
             "buildParamContainers",
         )
     )
-    m = re.search(r"const\s+BATTERY_ARRAY_PARAMS\s*=\s*\[.*?\]\s*;", js_src, re.DOTALL)
+    # buildParamContainers references both allow-lists (#1116); the probe must
+    # define whichever consts it uses regardless of which section is under test.
+    consts = "\n".join(
+        re.search(rf"const\s+{name}\s*=\s*\[.*?\]\s*;", js_src, re.DOTALL).group(0)
+        for name in ("BATTERY_ARRAY_PARAMS", "DEFERRABLE_ARRAY_PARAMS")
+    )
     spec = {"section": section, "params": params, "click": click, "typed": typed}
-    script = _ARRAY_CONTROL_HARNESS.replace("__FNS__", m.group(0) + "\n" + fns).replace(
+    script = _ARRAY_CONTROL_HARNESS.replace("__FNS__", consts + "\n" + fns).replace(
         "__SPEC__", json.dumps(spec)
     )
     proc = _run_node(script)

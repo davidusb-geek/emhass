@@ -21,7 +21,8 @@
 <div id="Deferrable Loads" class="section-card">
   <div class="section-card-header">
     <h4>Deferrable Loads</h4>
-    <input id="number_of_deferrable_loads" min="1" type="number">
+    <!-- #1116: 0 is a valid deferrable-load count (EMHASS accepts num_def_loads=0) -->
+    <input id="number_of_deferrable_loads" min="0" type="number">
     </label>
   </div>
   <div class="section-body"> </div> <!--  parameters will get generated here -->
