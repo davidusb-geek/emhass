@@ -1164,6 +1164,7 @@ class Forecast:
         col: str,
         ignore_pv_feedback: bool = False,
         logger: logging.Logger | None = None,
+        configured_col: str | None = None,
     ) -> pd.DataFrame:
         """A simple correction method for forecasted data using the current real values of a variable.
 
@@ -1189,6 +1190,11 @@ class Forecast:
             returned unchanged; a warning naming the NaN operand(s) and ``col`` \
             is only emitted when a logger is supplied, defaults to None
         :type logger: logging.Logger, optional
+        :param configured_col: The user-configured sensor name behind ``col`` \
+            when the two differ (the load column is renamed internally to \
+            ``var_load + "_positive"``). Only used to label the NaN warning \
+            with the name the user would recognize, defaults to None
+        :type configured_col: str, optional
         :return: The output DataFrame with the corrected values, or unchanged \
             when the correction was skipped
         :rtype: pd.DataFrame
@@ -1226,10 +1232,13 @@ class Forecast:
                 if live_is_nan:
                     nan_operands.append("the latest live sensor value")
                 # The load column is renamed internally to var_load + "_positive";
-                # show the configured name alongside so users can find the sensor.
-                configured_col = col.removesuffix("_positive")
+                # the caller passes the configured name alongside so users can
+                # find the sensor. Columns passed under their configured name
+                # (e.g. PV) are shown as-is, even if the name ends in "_positive".
                 col_label = (
-                    col if configured_col == col else f"{col} (configured as '{configured_col}')"
+                    f"{col} (configured as '{configured_col}')"
+                    if configured_col and configured_col != col
+                    else col
                 )
                 verb = "are" if len(nan_operands) == 2 else "is"
                 logger.warning(
@@ -2340,6 +2349,7 @@ class Forecast:
                 self.var_load_new,
                 False,  # Never ignore feedback for load forecasts
                 logger=self.logger,
+                configured_col=self.var_load,
             )
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast

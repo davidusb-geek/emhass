@@ -1741,9 +1741,13 @@ class RetrieveHass:
             if dropped_interp:
                 dropped_entries["sensor_linear_interp"] = dropped_interp
             if dropped_entries:
-                columns_to_check = [
-                    c for c in self.df_final.columns if c not in (protected_columns or [])
-                ]
+                # protected_columns holds configured sensor names, but the load
+                # column was renamed to var_load + "_positive" above, so a
+                # protected load would no longer match. Track it under both names.
+                protected_names = set(protected_columns or [])
+                if var_load in protected_names:
+                    protected_names.add(var_load + "_positive")
+                columns_to_check = [c for c in self.df_final.columns if c not in protected_names]
                 nan_cols = [c for c in columns_to_check if self.df_final[c].isna().any()]
                 # Report the load column under its configured name, not the
                 # internal var_load + "_positive" rename applied above.

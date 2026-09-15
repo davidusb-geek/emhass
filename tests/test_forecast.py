@@ -3513,18 +3513,44 @@ class TestGetMixForecast(unittest.TestCase):
 
     def test_nan_warning_names_configured_load_sensor_not_rename(self):
         # The load call site passes the internally renamed column
-        # (var_load + "_positive"); the warning must surface the configured
-        # sensor name alongside it so users can find the sensor.
+        # (var_load + "_positive") plus the configured name via
+        # configured_col; the warning must surface the configured sensor
+        # name alongside it so users can find the sensor.
         from unittest.mock import MagicMock
 
         col = "sensor.power_load_no_var_loads_positive"
         forecast = pd.Series([1000.0, 900.0, 800.0])
         df_now = pd.DataFrame({col: [600, np.nan]})
         mock_logger = MagicMock()
-        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        out = Forecast.get_mix_forecast(
+            df_now,
+            forecast.copy(),
+            0.5,
+            0.5,
+            col,
+            logger=mock_logger,
+            configured_col="sensor.power_load_no_var_loads",
+        )
         pd.testing.assert_series_equal(out, forecast)
         warning_msg = mock_logger.warning.call_args[0][0]
         self.assertIn("configured as 'sensor.power_load_no_var_loads'", warning_msg)
+
+    def test_nan_warning_leaves_non_load_positive_name_untouched(self):
+        # A sensor legitimately named *_positive that is NOT the renamed
+        # load column (no configured_col supplied, as at the PV call site)
+        # must be reported under its real name, with no "configured as"
+        # hint pointing at a nonexistent truncated sensor.
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_positive"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, np.nan]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        pd.testing.assert_series_equal(out, forecast)
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn(col, warning_msg)
+        self.assertNotIn("configured as", warning_msg)
 
     def test_clean_operands_blend_matches_noop_counterfactual_no_warning(self):
         # No-op check: with clean operands the result must be byte-identical
