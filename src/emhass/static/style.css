@@ -1409,3 +1409,13 @@ p {
 
 
 }
+
+/* Center the existing responsive Plotly width within its result row. */
+#template > .table_div > .plotly-graph-div {
+  margin-inline: auto !important;
+}
+
+/* The clone uses explicit counter-scrolling; do not also apply sticky:left. */
+.sticky-header-wrapper .mystyle thead th:first-child {
+  position: relative;
+}
