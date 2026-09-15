@@ -327,6 +327,197 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rh.df_final[actual_pv_sensor].isna().sum(), 0)
         self.assertEqual(self.rh.df_final[forecast_pv_sensor].isna().sum(), 0)
 
+    # Issue #1084: a var_replace_zero/var_interp entry that doesn't match any
+    # retrieved sensor is silently dropped. If that silence coincides with
+    # NaNs surviving cleaning elsewhere, it is a strong signal of a
+    # sensor-name typo in the config, so prepare_data must warn once, naming
+    # both the dropped entry and the still-affected column.
+    def test_prepare_data_dropped_sensor_warns_when_nan_remains(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+        # Zero out a value in a column NOT covered by either repair list below,
+        # so set_zero_min turns it into an unrepaired NaN.
+        self.rh.df_final.loc[self.rh.df_final.index[0], forecast_pv_sensor] = 0.0
+        with self.assertLogs(logger, level="WARNING") as cm:
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=[actual_pv_sensor],
+                var_interp=[actual_pv_sensor, load_sensor, "sensor.missing_typo"],
+            )
+        self.assertEqual(
+            sum("sensor.missing_typo" in line for line in cm.output),
+            1,
+            f"expected exactly one warning naming the dropped sensor, got: {cm.output}",
+        )
+        self.assertTrue(
+            any(forecast_pv_sensor in line for line in cm.output),
+            f"expected the warning to name the still-NaN column, got: {cm.output}",
+        )
+
+    # Mirror of the test above for the sensor_replace_zero half: a dropped
+    # replace-zero entry plus a surviving NaN must fire the warning naming
+    # the parameter and the dropped entry.
+    def test_prepare_data_dropped_replace_zero_warns_when_nan_remains(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+        self.rh.df_final.loc[self.rh.df_final.index[0], forecast_pv_sensor] = 0.0
+        with self.assertLogs(logger, level="WARNING") as cm:
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=[actual_pv_sensor, "sensor.missing_typo"],
+                var_interp=[actual_pv_sensor, load_sensor],
+            )
+        warning_lines = [line for line in cm.output if "sensor.missing_typo" in line]
+        self.assertEqual(len(warning_lines), 1, f"expected one dropped-sensor warning: {cm.output}")
+        self.assertIn("sensor_replace_zero", warning_lines[0])
+        self.assertIn(forecast_pv_sensor, warning_lines[0])
+
+    # Correctly-configured lists (nothing dropped) must never trigger the
+    # dropped-sensor warning, even when an unrelated NaN legitimately survives.
+    def test_prepare_data_no_warning_when_no_sensor_dropped(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+        # Same unrepaired-NaN setup as above, but every configured sensor name
+        # actually matches a retrieved column this time: nothing is dropped.
+        self.rh.df_final.loc[self.rh.df_final.index[0], forecast_pv_sensor] = 0.0
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=[actual_pv_sensor],
+                var_interp=[actual_pv_sensor, load_sensor],
+            )
+
+    # A dropped entry with nothing left to warn about (every column is fully
+    # repaired) must not trigger a warning either.
+    def test_prepare_data_no_warning_when_dropped_but_no_nan_remains(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=[actual_pv_sensor, forecast_pv_sensor, "sensor.missing_typo"],
+                var_interp=[
+                    actual_pv_sensor,
+                    forecast_pv_sensor,
+                    load_sensor,
+                    "sensor.missing_typo",
+                ],
+            )
+
+    # The exact #1084 trap: the load sensor is missing from the repair lists
+    # (stale entry dropped), its zero readings become unrepaired NaN, and the
+    # warning must name it under its CONFIGURED name, not the internal
+    # var_load + "_positive" rename.
+    def test_prepare_data_warning_names_configured_load_name_not_rename(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        # A zero load reading becomes NaN via set_zero_min; the load sensor is
+        # absent from var_interp, so nothing repairs it.
+        self.rh.df_final.loc[self.rh.df_final.index[0], load_sensor] = 0.0
+        with self.assertLogs(logger, level="WARNING") as cm:
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=[actual_pv_sensor],
+                var_interp=[actual_pv_sensor, "sensor.missing_typo"],
+            )
+        warning_lines = [line for line in cm.output if "sensor.missing_typo" in line]
+        self.assertEqual(len(warning_lines), 1, f"expected one dropped-sensor warning: {cm.output}")
+        self.assertIn(load_sensor, warning_lines[0])
+        self.assertNotIn(load_sensor + "_positive", warning_lines[0])
+
+    # The battery-identification path deliberately retrieves a subset of the
+    # configured sensors (no PV) and keeps by-design NaN in its protected
+    # battery columns, so structurally dropped entries plus protected-column
+    # NaN must never trigger the dropped-sensor warning.
+    def test_prepare_data_no_warning_for_protected_nan_only(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        battery_sensor = "sensor.power_battery"
+        idx = self.rh.df_final.index[:8]
+        self.rh.df_final = pd.DataFrame(
+            {
+                load_sensor: [100.0] * 8,
+                battery_sensor: [50.0, -50.0, np.nan, 30.0, -30.0, 0.0, 20.0, 10.0],
+            },
+            index=idx,
+        )
+        self.rh.var_list = [load_sensor, battery_sensor]
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=["sensor.power_photovoltaics_not_retrieved"],
+                var_interp=["sensor.power_photovoltaics_not_retrieved", load_sensor],
+                protected_columns=[battery_sensor],
+            )
+        # The by-design NaN in the protected column must survive untouched.
+        self.assertTrue(self.rh.df_final[battery_sensor].isna().any())
+
+    # protected_columns holds CONFIGURED sensor names, but the load column is
+    # renamed to var_load + "_positive" before the dropped-sensor NaN check
+    # runs, so a protected load must keep its exclusion across the rename. A
+    # zero load reading turned NaN by set_zero_min plus a structurally dropped
+    # entry must not fire the warning for the protected load.
+    def test_prepare_data_protected_load_keeps_exclusion_across_rename(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        idx = self.rh.df_final.index[:4]
+        self.rh.df_final = pd.DataFrame(
+            {load_sensor: [100.0, 0.0, 200.0, 150.0]},
+            index=idx,
+        )
+        self.rh.var_list = [load_sensor]
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                load_sensor,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=["sensor.power_photovoltaics_not_retrieved"],
+                var_interp=["sensor.power_photovoltaics_not_retrieved"],
+                protected_columns=[load_sensor],
+            )
+        # The unrepaired NaN really is present under the renamed column, so
+        # the no-warning assertion above exercised the exclusion, not an
+        # accidentally clean frame.
+        self.assertTrue(self.rh.df_final[load_sensor + "_positive"].isna().any())
+
+    # The single-sensor ML paths (model fit/tune/predict, forecast calibration)
+    # retrieve only their target sensor while forwarding the full configured
+    # lists, and mark themselves with skip_renaming=True. Dropped entries are
+    # structural there and must never trigger the dropped-sensor warning, even
+    # when the target column keeps an unrepaired NaN (e.g. a legitimate zero
+    # reading turned NaN by set_zero_min).
+    def test_prepare_data_no_warning_when_skip_renaming(self):
+        var_model = "sensor.my_custom_model_input"
+        idx = self.rh.df_final.index[:4]
+        self.rh.df_final = pd.DataFrame(
+            {var_model: [100.0, 0.0, 200.0, 150.0]},
+            index=idx,
+        )
+        self.rh.var_list = [var_model]
+        with self.assertNoLogs(logger, level="WARNING"):
+            self.rh.prepare_data(
+                var_model,
+                load_negative=False,
+                set_zero_min=True,
+                var_replace_zero=["sensor.power_photovoltaics"],
+                var_interp=["sensor.power_photovoltaics", "sensor.power_load_no_var_loads"],
+                skip_renaming=True,
+            )
+
     # Battery identification needs the signed battery power and a possible
     # measured 0% SoC to survive prepare_data's set_zero_min treatment (#1041).
     # Base-safe: the protected_columns kwarg is only passed when the running

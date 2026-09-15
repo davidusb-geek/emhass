@@ -3456,6 +3456,134 @@ class TestGetMixForecast(unittest.TestCase):
         self.assertEqual(int(out.iloc[1]), 900)
         self.assertEqual(int(out.iloc[2]), 800)
 
+    def test_nan_forecast_operand_skips_blend_and_warns(self):
+        # Issue #1084: a NaN in the forecast's first value used to reach
+        # `int(round(nan))` and raise ValueError, crashing the whole
+        # optimization call. It must instead skip the blend and warn.
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([np.nan, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, 500]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        pd.testing.assert_series_equal(out, forecast)
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("the first forecast value", warning_msg)
+        self.assertNotIn("the latest live sensor value", warning_msg)
+        self.assertIn(col, warning_msg)
+
+    def test_nan_live_operand_skips_blend_and_warns(self):
+        # Issue #1084: a NaN in the latest live/current sensor value must
+        # also skip the blend rather than crash, and the warning must
+        # identify the live/current operand (not the forecast one).
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, np.nan]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        pd.testing.assert_series_equal(out, forecast)
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("the latest live sensor value", warning_msg)
+        self.assertNotIn("the first forecast value", warning_msg)
+        self.assertIn(col, warning_msg)
+
+    def test_nan_both_operands_skips_blend_and_warns_once(self):
+        # Both operands NaN at once: still one warning, naming both operands
+        # joined by " and ".
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([np.nan, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, np.nan]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        pd.testing.assert_series_equal(out, forecast)
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn(
+            "the first forecast value and the latest live sensor value",
+            warning_msg,
+        )
+        self.assertIn(col, warning_msg)
+
+    def test_nan_warning_names_configured_load_sensor_not_rename(self):
+        # The load call site passes the internally renamed column
+        # (var_load + "_positive") plus the configured name via
+        # configured_col; the warning must surface the configured sensor
+        # name alongside it so users can find the sensor.
+        from unittest.mock import MagicMock
+
+        col = "sensor.power_load_no_var_loads_positive"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, np.nan]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(
+            df_now,
+            forecast.copy(),
+            0.5,
+            0.5,
+            col,
+            logger=mock_logger,
+            configured_col="sensor.power_load_no_var_loads",
+        )
+        pd.testing.assert_series_equal(out, forecast)
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("configured as 'sensor.power_load_no_var_loads'", warning_msg)
+
+    def test_nan_warning_leaves_non_load_positive_name_untouched(self):
+        # A sensor legitimately named *_positive that is NOT the renamed
+        # load column (no configured_col supplied, as at the PV call site)
+        # must be reported under its real name, with no "configured as"
+        # hint pointing at a nonexistent truncated sensor.
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_positive"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, np.nan]})
+        mock_logger = MagicMock()
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col, logger=mock_logger)
+        pd.testing.assert_series_equal(out, forecast)
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn(col, warning_msg)
+        self.assertNotIn("configured as", warning_msg)
+
+    def test_clean_operands_blend_matches_noop_counterfactual_no_warning(self):
+        # No-op check: with clean operands the result must be byte-identical
+        # to today's behaviour (int(round(alpha*fcst + beta*live))), and no
+        # warning should be logged.
+        from unittest.mock import MagicMock
+
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([1000.0, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, 500]})
+        mock_logger = MagicMock()
+        # Asymmetric weights so a swapped-operand or swapped-weight
+        # implementation cannot produce the same value by accident.
+        alpha, beta = 0.8, 0.2
+        out = Forecast.get_mix_forecast(
+            df_now, forecast.copy(), alpha, beta, col, logger=mock_logger
+        )
+        expected_first = int(round(alpha * forecast.iloc[0] + beta * df_now[col].iloc[-1]))
+        self.assertEqual(expected_first, 900)  # 0.8*1000 + 0.2*500, pinned
+        self.assertEqual(int(out.iloc[0]), expected_first)
+        self.assertEqual(int(out.iloc[1]), 900)
+        self.assertEqual(int(out.iloc[2]), 800)
+        mock_logger.warning.assert_not_called()
+
+    def test_nan_operand_with_no_logger_does_not_crash(self):
+        # logger=None must silently skip the blend rather than raise, so
+        # existing callers that don't pass a logger keep working.
+        col = "sensor.pv_production_watts"
+        forecast = pd.Series([np.nan, 900.0, 800.0])
+        df_now = pd.DataFrame({col: [600, 500]})
+        out = Forecast.get_mix_forecast(df_now, forecast.copy(), 0.5, 0.5, col)
+        pd.testing.assert_series_equal(out, forecast)
+
 
 class TestForecastDatesTieAlignment(unittest.IsolatedAsyncioTestCase):
     """Forecast date-range construction when now() lands exactly on a half-interval tie.
