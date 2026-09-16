@@ -864,16 +864,56 @@ class Forecast:
         return data
 
     def _get_weather_list(self) -> pd.DataFrame:
-        """Helper to retrieve weather data from a passed list."""
+        """Helper to retrieve weather data from a passed external PV forecast."""
         data_list = self.params["passed_data"]["pv_power_forecast"]
+        p10_list = self.params["passed_data"].get("pv_power_forecast_p10")
         forecast_dates = self.forecast_dates_tz
+        if data_list is not None and p10_list is not None and len(data_list) != len(p10_list):
+            self.logger.error(
+                "Passed pv_power_forecast/pv_power_forecast_p10 length mismatch: %d/%d",
+                len(data_list),
+                len(p10_list),
+            )
+            return None
         if data_list is None or (
             len(data_list) < len(forecast_dates)
             and self.params["passed_data"]["prediction_horizon"] is None
         ):
             self.logger.error(error_msg_list_not_long_enough)
             return None
+
         data_list = data_list[: len(forecast_dates)]
+
+        # #1128: an explicitly supplied external P10 companion must already
+        # have passed the strict pair validation/alignment in treat_runtimeparams.
+        # Still guard the Forecast boundary so a malformed direct caller cannot
+        # silently ignore or truncate P10. Validate even at bias=0: providing an
+        # invalid companion is an input error, while omitting the companion keeps
+        # the historical P50-only behavior unchanged.
+        if p10_list is not None:
+            if len(p10_list) < len(forecast_dates):
+                self.logger.error(
+                    "Passed pv_power_forecast_p10 is not long enough for the forecast horizon"
+                )
+                return None
+            p10_list = p10_list[: len(forecast_dates)]
+            try:
+                p50_values = np.asarray(data_list, dtype=float)
+                p10_values = np.asarray(p10_list, dtype=float)
+            except (TypeError, ValueError):
+                self.logger.error(
+                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-numeric values"
+                )
+                return None
+            if not np.isfinite(p50_values).all() or not np.isfinite(p10_values).all():
+                self.logger.error(
+                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-finite values"
+                )
+                return None
+            bias = self._parse_pv_quantile_bias()
+            if bias > 0.0:
+                data_list = (bias * p10_values + (1.0 - bias) * p50_values).tolist()
+
         data_dict = {"ts": forecast_dates, "yhat": data_list}
         data = pd.DataFrame.from_dict(data_dict)
         data.set_index("ts", inplace=True)
@@ -964,16 +1004,24 @@ class Forecast:
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
         self.weather_forecast_method = method
-        # The P50/P10 quantile-bias blend is only available from Solcast, the
-        # only provider that returns pv_estimate10. If the knob is set for any
-        # other method, warn and ignore it so the Solcast dependency is explicit
-        # rather than a silent no-op. (Short-circuits before parsing for solcast,
-        # so this never double-logs with the parse inside _get_weather_solcast.)
-        if method != "solcast" and self._parse_pv_quantile_bias() > 0.0:
+        # The quantile-bias blend is supported by native Solcast and by the
+        # caller-supplied list path when a P10 companion is present (#1128).
+        # Other methods, including a P50-only list, retain a visible warning
+        # rather than silently accepting a bias that cannot be applied.
+        list_has_external_p10 = (
+            method == "list"
+            and self.params.get("passed_data", {}).get("pv_power_forecast_p10") is not None
+        )
+        if (
+            method != "solcast"
+            and not list_has_external_p10
+            and self._parse_pv_quantile_bias() > 0.0
+        ):
             self.logger.warning(
                 "weather_forecast_pv_quantile_bias is set but only applies to the "
-                "'solcast' weather_forecast_method (the only provider returning P10 "
-                "quantiles); ignoring it for weather_forecast_method=%r.",
+                "'solcast' weather_forecast_method or to 'list' when "
+                "pv_power_forecast_p10 is supplied; ignoring it for "
+                "weather_forecast_method=%r.",
                 method,
             )
         if method in ["open-meteo", "scrapper"]:
