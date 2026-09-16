@@ -4,7 +4,7 @@ import json
 import logging
 import pathlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import orjson
@@ -66,6 +66,7 @@ class TestExternalPvP10(unittest.TestCase):
         fcst.forecast_dates_tz = list(
             pd.date_range("2026-09-16T00:00:00+00:00", periods=len(p50), freq="30min")
         )
+        fcst.emhass_conf = {"data_path": ROOT / "data/"}
         fcst.logger = logger
         return fcst
 
@@ -93,6 +94,48 @@ class TestExternalPvP10(unittest.TestCase):
     def test_non_finite_external_p10_fails(self):
         fcst = self._forecast([100.0, 200.0, 300.0], [40.0, float("nan"), 120.0], 0.5)
         self.assertIsNone(fcst._get_weather_list())
+
+    def test_direct_pair_length_mismatch_is_not_silently_truncated(self):
+        fcst = self._forecast(
+            [100.0, 200.0, 300.0, 400.0],
+            [40.0, 80.0, 120.0],
+            0.5,
+        )
+        fcst.forecast_dates_tz = fcst.forecast_dates_tz[:3]
+        self.assertIsNone(fcst._get_weather_list())
+
+
+class TestExternalPvP10PublicForecast(unittest.IsolatedAsyncioTestCase):
+    async def test_list_pair_bias_is_supported_without_false_solcast_warning(self):
+        fcst = TestExternalPvP10._forecast(
+            [100.0, 200.0, 300.0],
+            [40.0, 80.0, 120.0],
+            0.5,
+        )
+        solcast = AsyncMock(side_effect=AssertionError("list path must not call Solcast"))
+        with (
+            patch.object(fcst, "_get_weather_solcast", solcast),
+            patch.object(logger, "warning") as warning,
+        ):
+            result = await fcst.get_weather_forecast(method="list")
+
+        self.assertEqual(result["yhat"].tolist(), [70.0, 140.0, 210.0])
+        self.assertFalse(
+            any("only applies to the 'solcast'" in str(call) for call in warning.call_args_list)
+        )
+        solcast.assert_not_awaited()
+
+    async def test_p50_only_list_still_warns_and_remains_unblended(self):
+        fcst = TestExternalPvP10._forecast(
+            [100.0, 200.0, 300.0],
+            None,
+            0.5,
+        )
+        with self.assertLogs(logger, level="WARNING") as captured:
+            result = await fcst.get_weather_forecast(method="list")
+
+        self.assertEqual(result["yhat"].tolist(), [100.0, 200.0, 300.0])
+        self.assertTrue(any("only applies to the 'solcast'" in line for line in captured.output))
 
 
 class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
@@ -137,10 +180,13 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
             optim_conf["delta_forecast_daily"].days,
             retrieve_hass_conf["time_zone"],
         )
-        keys = [str(forecast_dates[i]) for i in (2, 4, 6)]
+        p50_keys = [str(forecast_dates[i]) for i in (2, 4, 6)]
+        p10_keys = [
+            pd.Timestamp(forecast_dates[i]).tz_convert("UTC").isoformat() for i in (2, 4, 6)
+        ]
         payload = {
-            "pv_power_forecast": dict(zip(keys, [100.0, 200.0, 300.0])),
-            "pv_power_forecast_p10": dict(zip(keys, [50.0, 100.0, 150.0])),
+            "pv_power_forecast": dict(zip(p50_keys, [100.0, 200.0, 300.0])),
+            "pv_power_forecast_p10": dict(zip(p10_keys, [50.0, 100.0, 150.0])),
         }
 
         treated, _, optim_conf, _ = await utils.treat_runtimeparams(
@@ -205,6 +251,13 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 {
+                    "pv_power_forecast": [1.0, 1.0],
+                    "pv_power_forecast_p10": [0.5, 0.5],
+                },
+                "do not cover the full forecast horizon",
+            ),
+            (
+                {
                     "pv_power_forecast": [1.0] * 96,
                     "pv_power_forecast_p10": [0.5] * 95 + [None],
                 },
@@ -215,6 +268,31 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
             with self.subTest(expected=expected):
                 with self.assertLogs(logger, level="ERROR") as captured:
                     params, _, _, _ = await _treat_runtime(payload)
+                self.assertIsNone(params["passed_data"]["pv_power_forecast"])
+                self.assertEqual(params["passed_data"]["pv_power_forecast_p10"], [])
+                self.assertTrue(any(expected in line for line in captured.output))
+
+    async def test_missing_p50_and_representation_mismatch_are_explicit(self):
+        cases = [
+            (
+                {"pv_power_forecast_p10": [0.5] * 96},
+                "requires pv_power_forecast",
+            ),
+            (
+                {
+                    "pv_power_forecast": [1.0] * 96,
+                    "pv_power_forecast_p10": {
+                        "2026-09-16T00:00:00+00:00": 0.5,
+                    },
+                },
+                "must both be lists or both be timestamped mappings",
+            ),
+        ]
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertLogs(logger, level="ERROR") as captured:
+                    params, _, optim_conf, _ = await _treat_runtime(payload)
+                self.assertEqual(optim_conf["weather_forecast_method"], "list")
                 self.assertIsNone(params["passed_data"]["pv_power_forecast"])
                 self.assertEqual(params["passed_data"]["pv_power_forecast_p10"], [])
                 self.assertTrue(any(expected in line for line in captured.output))
