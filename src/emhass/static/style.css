@@ -1411,7 +1411,7 @@ p {
 }
 
 /* Center the existing responsive Plotly width within its result row. */
-#template > .table_div > .plotly-graph-div {
+#template > .table_div .plotly-graph-div {
   margin-inline: auto !important;
 }
 
