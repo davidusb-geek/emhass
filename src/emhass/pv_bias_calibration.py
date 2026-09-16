@@ -19,9 +19,10 @@ forecast at a user-chosen target rate, and keeps it there as conditions drift.
 It is a **reporting / recommendation engine with no side effects**: given a
 history of ``(P10, P50, realised PV)`` observations it returns a recommended
 ``bias`` plus diagnostics. It never touches the optimization, the LP or the live
-forecast. A caller (e.g. a CLI action, once the P10/P50-vs-actual history is
-being logged) decides whether to surface the recommendation or apply it; the
-default behaviour of EMHASS is unchanged.
+forecast. The supported ``pv-bias-calibration`` action can surface this
+report from caller-supplied P10/P50/actual history; applying the returned
+recommendation remains a separate explicit user action. The default
+behaviour of EMHASS is unchanged.
 
 The recursion (one update per resolved observation) is::
 

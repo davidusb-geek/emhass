@@ -864,8 +864,9 @@ class Forecast:
         return data
 
     def _get_weather_list(self) -> pd.DataFrame:
-        """Helper to retrieve weather data from a passed list."""
+        """Helper to retrieve weather data from a passed external PV forecast."""
         data_list = self.params["passed_data"]["pv_power_forecast"]
+        p10_list = self.params["passed_data"].get("pv_power_forecast_p10")
         forecast_dates = self.forecast_dates_tz
         if data_list is None or (
             len(data_list) < len(forecast_dates)
@@ -873,7 +874,39 @@ class Forecast:
         ):
             self.logger.error(error_msg_list_not_long_enough)
             return None
+
         data_list = data_list[: len(forecast_dates)]
+
+        # #1128: an explicitly supplied external P10 companion must already
+        # have passed the strict pair validation/alignment in treat_runtimeparams.
+        # Still guard the Forecast boundary so a malformed direct caller cannot
+        # silently ignore or truncate P10. Validate even at bias=0: providing an
+        # invalid companion is an input error, while omitting the companion keeps
+        # the historical P50-only behavior unchanged.
+        if p10_list is not None:
+            if len(p10_list) < len(forecast_dates):
+                self.logger.error(
+                    "Passed pv_power_forecast_p10 is not long enough for the forecast horizon"
+                )
+                return None
+            p10_list = p10_list[: len(forecast_dates)]
+            try:
+                p50_values = np.asarray(data_list, dtype=float)
+                p10_values = np.asarray(p10_list, dtype=float)
+            except (TypeError, ValueError):
+                self.logger.error(
+                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-numeric values"
+                )
+                return None
+            if not np.isfinite(p50_values).all() or not np.isfinite(p10_values).all():
+                self.logger.error(
+                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-finite values"
+                )
+                return None
+            bias = self._parse_pv_quantile_bias()
+            if bias > 0.0:
+                data_list = (bias * p10_values + (1.0 - bias) * p50_values).tolist()
+
         data_dict = {"ts": forecast_dates, "yhat": data_list}
         data = pd.DataFrame.from_dict(data_dict)
         data.set_index("ts", inplace=True)

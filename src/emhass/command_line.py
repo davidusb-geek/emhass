@@ -33,6 +33,7 @@ from emhass.forecast_calibration import (
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
+from emhass.pv_bias_calibration import compute_pv_bias_calibration
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import log_runtime_banner, stage_timer
 
@@ -3069,6 +3070,49 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
     return result
 
 
+async def pv_bias_calibration(runtimeparams: str | dict | None, logger: logging.Logger) -> dict:
+    """Return the caller-fed PV P10/P50 bias calibration report (#1128).
+
+    This is intentionally only an action/reporting adapter around
+    ``compute_pv_bias_calibration``. It does not retrieve HA history, build a
+    Forecast/Optimization object, persist anything, or apply the recommendation.
+    """
+    if runtimeparams is None:
+        payload = {}
+    elif isinstance(runtimeparams, str):
+        payload = orjson.loads(runtimeparams)
+    elif isinstance(runtimeparams, dict):
+        payload = runtimeparams
+    else:
+        raise ValueError("pv-bias-calibration payload must be a JSON object")
+
+    if not isinstance(payload, dict):
+        raise ValueError("pv-bias-calibration payload must be a JSON object")
+
+    missing = [key for key in ("p10", "p50", "actual") if key not in payload]
+    if missing:
+        raise ValueError(
+            "pv-bias-calibration requires caller-supplied p10, p50, actual; missing "
+            + ", ".join(missing)
+        )
+
+    optional_keys = (
+        "curtailed",
+        "curtailment_margin",
+        "target_shortfall_rate",
+        "gamma",
+        "bias0",
+    )
+    kwargs = {key: payload[key] for key in optional_keys if key in payload}
+    return compute_pv_bias_calibration(
+        payload["p10"],
+        payload["p50"],
+        payload["actual"],
+        logger=logger,
+        **kwargs,
+    )
+
+
 async def forecast_model_predict(
     input_data_dict: dict,
     logger: logging.Logger,
@@ -4241,7 +4285,7 @@ async def main():
 
     - action: Set the desired action, options are: perfect-optim, dayahead-optim,
       naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune,
-      forecast-calibration
+      forecast-calibration, pv-bias-calibration
 
     - config: Define path to the config.yaml file
 
@@ -4263,7 +4307,7 @@ async def main():
         type=str,
         help="Set the desired action, options are: perfect-optim, dayahead-optim,\
         naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune,\
-        forecast-calibration",
+        forecast-calibration, pv-bias-calibration",
     )
     parser.add_argument(
         "--config", type=str, help="Define path to the config.json/defaults.json file"
@@ -4421,6 +4465,16 @@ async def main():
     if args.params:
         params.update(orjson.loads(args.params))
 
+    # #1128: pure caller-fed calibration bypasses set_input_data_dict()
+    # entirely. In particular, it must not contact Home Assistant, construct an
+    # optimizer, write config, or apply its recommendation.
+    if args.action == "pv-bias-calibration":
+        result = await pv_bias_calibration(args.runtimeparams, logger)
+        logger.info(result)
+        ch.close()
+        logger.removeHandler(ch)
+        return result
+
     input_data_dict = await set_input_data_dict(
         emhass_conf,
         args.costfun,
@@ -4484,7 +4538,7 @@ async def main():
     else:
         logger.error("The passed action argument is not valid")
         logger.error(
-            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, forecast-calibration, export-influxdb-to-csv or publish-data"
+            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, forecast-calibration, pv-bias-calibration, export-influxdb-to-csv or publish-data"
         )
         opt_res = None
     logger.info(opt_res)
