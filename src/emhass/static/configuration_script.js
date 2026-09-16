@@ -954,7 +954,7 @@ async function saveConfiguration(param_definitions) {
               }
               config[parameter_definition_name] = value;
             } catch (_) {
-              errorAlert(parameter_definition_name + ": enter a JSON array of numeric rows or tables, for example [[0.5, 1000]].");
+              errorAlert(parameter_definition_name + ": enter a JSON array of numeric rows or tables, for example [[0.5, 0.84]].");
               return 0;
             }
             continue;
