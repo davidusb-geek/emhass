@@ -10434,6 +10434,116 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             err_msg="def_current_power changed a single_const load (must be ignored)",
         )
 
+    def test_current_power_shared_tank_member_not_pinned(self):
+        """A continuous heat pump feeding a SHARED thermal tank is a thermal load,
+        so def_current_power must not pin its t=0 power.
+
+        "Is this load thermal" was tested as ``k in self.param_thermal``, which is
+        only populated for loads whose def_load_config carries ``thermal_config`` or
+        ``thermal_battery``. A member of a shared tank carries ``thermal_source``
+        instead and is built by ``_add_shared_thermal_tank_constraints``, so it never
+        lands in param_thermal and was misclassified as an ordinary continuous load.
+        With the tank sitting just under its ceiling, hard-pinning the reported
+        3000 W at t=0 forces the tank past max_temperatures: the MILP is Infeasible
+        and the relaxed-LP rescue rebuilds the same pin, so it cannot recover either.
+        """
+        n = 10
+        prices = [0.9] + [0.05] * (n - 1)
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        def shared_tank_overrides(**extra):
+            """One continuous heat pump (thermal_source) feeding one shared tank.
+
+            The tank starts at 54.9 C against a 55.0 C ceiling: one 30-min step at
+            3000 W electric is ~5.5 kWh thermal on a 0.2 m3 store (~20 K), so any
+            t=0 injection necessarily breaches max_temperatures.
+            """
+            oc = {
+                "costfun": "cost",
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [3000.0],
+                "minimum_power_of_deferrable_loads": [0.0],
+                "operating_hours_of_each_deferrable_load": [0.0],
+                "treat_deferrable_load_as_semi_cont": [False],
+                "set_deferrable_load_single_constant": [False],
+                "set_deferrable_startup_penalty": [0.0],
+                "set_deferrable_max_startups": [0],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [0],
+                "def_load_config": [
+                    {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.45}}
+                ],
+                "shared_thermal_tanks": [
+                    {
+                        "id": "dhw",
+                        "load_ids": [0],
+                        "volume": 0.20,
+                        "density": 1000,
+                        "heat_capacity": 4.186,
+                        "start_temperature": 54.9,
+                        "thermal_loss": 0.0,
+                        "draw_off_demand": [0.0] * n,
+                        "min_temperatures": [40.0] * n,
+                        "max_temperatures": [55.0] * n,
+                    }
+                ],
+                "deferrable_load_groups": [],
+                "set_use_battery": False,
+            }
+            oc.update(extra)
+            return oc
+
+        # --- Control: no def_current_power. The tank is full, so the HP stays off. ---
+        opt_base, res_base = self._run_min_on_optim(shared_tank_overrides(), df, n)
+        self.assertEqual(
+            opt_base.optim_status,
+            "Optimal",
+            f"Control solve (no def_current_power) must be cleanly Optimal, "
+            f"got {opt_base.optim_status!r}",
+        )
+        p0_base = res_base["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p0_base,
+            0.0,
+            delta=1.0,
+            msg=f"Control FAILED: a full tank must leave the HP off at t=0, got {p0_base} W",
+        )
+
+        # --- With def_current_power=[3000]: the shared-tank member is thermal, so
+        # the reported power must be ignored and the plan must be unchanged. ---
+        opt_dcp, res_dcp = self._run_min_on_optim(
+            shared_tank_overrides(def_current_power=[3000.0]), df, n
+        )
+        self.assertEqual(
+            opt_dcp.optim_status,
+            opt_base.optim_status,
+            f"def_current_power broke the solve for a shared-tank member: "
+            f"{opt_dcp.optim_status!r} vs control {opt_base.optim_status!r} "
+            "(base code pins 3000 W at t=0 and the tank ceiling makes it Infeasible)",
+        )
+        p0_dcp = res_dcp["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p0_dcp,
+            p0_base,
+            delta=1.0,
+            msg=(
+                f"def_current_power changed a shared-tank member's t=0 power: "
+                f"{p0_dcp} W vs control {p0_base} W (must be ignored, the tank "
+                "dynamics govern)"
+            ),
+        )
+
+        # --- Parameter level: the member must never be armed for the pin. ---
+        self.assertFalse(
+            opt_dcp._def_current_power_affected[0],
+            "A shared-tank member must not be marked affected by def_current_power",
+        )
+        self.assertEqual(
+            opt_dcp.param_def_current_power_active[0].value,
+            0.0,
+            "The t=0 power pin must stay disarmed for a shared-tank member",
+        )
+
     # ---------------------------------------------------------------------------
     # Tests for def_current_operating_timesteps (issue #983)
     # Runtime-only, per-load "completed operating timesteps today" signal that
