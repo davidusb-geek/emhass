@@ -1126,6 +1126,10 @@ class Optimization:
         nominal_powers = self.optim_conf.get("nominal_power_of_deferrable_loads", [])
         semi_cont_flags = self.optim_conf.get("treat_deferrable_load_as_semi_cont", [])
         single_const_flags = self.optim_conf.get("set_deferrable_load_single_constant", [])
+        # Shared-tank members carry `thermal_source`, not `thermal_config` /
+        # `thermal_battery`, so they never land in param_thermal: count them as
+        # thermal here too, exactly like the param_load_active check does.
+        shared_tank_membership = self._load_shared_tank_membership()
 
         for k in range(num_def_loads):
             val = dcp_conf[k] if k < n_conf else 0
@@ -1137,7 +1141,7 @@ class Optimization:
             is_semi_cont = semi_cont_flags[k] if k < len(semi_cont_flags) else False
             is_single_const = single_const_flags[k] if k < len(single_const_flags) else False
             is_sequence_load = k < len(nominal_powers) and isinstance(nominal_powers[k], list)
-            is_thermal = k in self.param_thermal
+            is_thermal = k in self.param_thermal or k in shared_tank_membership
 
             # A load is AFFECTED by def_current_power only when injecting its t=0
             # power/on-state is meaningful and safe. Excluded entirely:
@@ -4765,6 +4769,7 @@ class Optimization:
                 and not is_single_const
                 and not is_sequence_load
                 and k not in self.param_thermal
+                and k not in shared_tank_membership
                 and k < len(self.param_def_current_power)
                 and k < len(self.param_def_current_power_active)
             ):
