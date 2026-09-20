@@ -321,6 +321,118 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
         self.assert_valid_optimization_result(self.opt_res)
 
+    def _perfect_forecast_two_day_scenario(self, shared_tank):
+        """Two perfectly-forecast days that differ only in outdoor temperature.
+
+        One continuous deferrable load, day 1 (2024-01-01) freezing at 0 C and day 2
+        (2024-01-02) mild at 35 C. With ``shared_tank`` the load is a Carnot heat pump
+        feeding a shared thermal tank, otherwise it is an ordinary electrical load.
+        """
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        if shared_tank:
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 40.0, "carnot_efficiency": 0.45}},
+            ]
+            self.optim_conf["shared_thermal_tanks"] = [
+                {
+                    "id": "buffer",
+                    "load_ids": [0],
+                    # ~3 kWh/K of water; constant 0.2 kW standing loss
+                    "volume": 2.58,
+                    "thermal_loss": 0.2,
+                    "start_temperature": 35.0,
+                    "min_temperatures": [30.0] * 48,
+                    "max_temperatures": [60.0] * 48,
+                    "draw_off_demand": [2.0] * 48,
+                }
+            ]
+        else:
+            self.optim_conf["def_load_config"] = [{}]
+            self.optim_conf.pop("shared_thermal_tanks", None)
+
+        time_zone = self.retrieve_hass_conf["time_zone"]
+        freq = self.retrieve_hass_conf["optimization_time_step"]
+        var_pv = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        var_load_new = self.retrieve_hass_conf["sensor_power_load_no_var_loads"] + "_positive"
+
+        day_range = pd.date_range(start="2024-01-01", periods=96, freq=freq, tz=time_zone)
+        df_input_data = pd.DataFrame(index=day_range)
+        df_input_data[var_pv] = 0.0
+        df_input_data[var_load_new] = 200.0
+        df_input_data["unit_load_cost"] = 0.20
+        df_input_data["unit_prod_price"] = 0.02
+        # First 48 rows = day 1 (freezing), next 48 rows = day 2 (mild).
+        df_input_data["outdoor_temperature_forecast"] = [0.0] * 48 + [35.0] * 48
+
+        # perform_perfect_forecast_optim drops the last entry ("today"), so exactly
+        # 2024-01-01 and 2024-01-02 are solved.
+        days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz=time_zone)
+        return df_input_data, days_list
+
+    def _run_perfect_forecast_capturing_prob_ids(self, df_input_data, days_list):
+        """Run a perfect-forecast optimization, recording id(opt.prob) once per day."""
+        opt = self.create_optimization(
+            var_load_cost="unit_load_cost", var_prod_price="unit_prod_price"
+        )
+        prob_ids = []
+        orig = type(opt).perform_optimization
+
+        def _capture(self, *args, **kwargs):
+            result = orig(self, *args, **kwargs)
+            prob_ids.append(id(self.prob))
+            return result
+
+        opt.perform_optimization = _capture.__get__(opt, type(opt))
+        res = opt.perform_perfect_forecast_optim(df_input_data, days_list)
+        return res, prob_ids
+
+    def test_perfect_forecast_rebuilds_problem_per_day_with_shared_tank(self):
+        """A shared tank bakes its physics (COP, losses, temperatures) in as constants
+        when the problem is first built, so re-using the problem across the days of a
+        perfect-forecast run silently re-solves day 2 against day 1's weather (#970)."""
+        df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=True)
+        res, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+
+        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
+        day1 = res.loc["2024-01-01"]
+        day2 = res.loc["2024-01-02"]
+        self.assertIn(day1["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
+        self.assertIn(day2["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
+        self.assertNotEqual(
+            prob_ids[0],
+            prob_ids[1],
+            "The problem must be rebuilt for day 2 so the shared tank sees day 2's weather",
+        )
+        p_def_day1 = day1["P_deferrable0"].to_numpy()
+        p_def_day2 = day2["P_deferrable0"].to_numpy()
+        self.assertFalse(
+            np.allclose(p_def_day1, p_def_day2, atol=50.0),
+            "The heat pump schedule must react to the 0 C -> 35 C outdoor swing, got "
+            f"{p_def_day1[:6]} and {p_def_day2[:6]}",
+        )
+
+    def test_perfect_forecast_reuses_problem_per_day_without_shared_tank(self):
+        """Without shared thermal tanks the warm-start problem re-use must survive:
+        the per-day rebuild guard is only for shared tanks."""
+        df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=False)
+        _, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+
+        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
+        self.assertEqual(
+            prob_ids[0],
+            prob_ids[1],
+            "An ordinary deferrable load must keep re-using the built problem",
+        )
+
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
         self.df_input_data_dayahead = self.prepare_forecast_data()

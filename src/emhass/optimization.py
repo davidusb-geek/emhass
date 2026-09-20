@@ -6409,6 +6409,14 @@ class Optimization:
         results_list = []
 
         for day in self.days_list_tz:
+            # Shared thermal tanks bake their forecast-dependent physics (COP,
+            # thermal losses, min/max and start temperatures) in as constants when
+            # the problem is built, and there is no refresh path for them. Re-using
+            # the problem here would re-solve every day against the FIRST day's
+            # weather, so force a rebuild - same cache bypass command_line.py
+            # already applies for issue #970.
+            if self.optim_conf.get("shared_thermal_tanks"):
+                self.prob = None
             self.logger.info(
                 "Solving for day: " + str(day.day) + "-" + str(day.month) + "-" + str(day.year)
             )
