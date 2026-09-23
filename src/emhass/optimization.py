@@ -3476,7 +3476,14 @@ class Optimization:
                     predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
                 )
 
-            constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            # Suppress heating past the overshoot threshold. p_def_bin2 only tracks
+            # power for semi-continuous loads; a continuous load's p_def_bin2 is
+            # never linked to its power, so bound the power itself - the same split
+            # the thermal_battery and shared-tank paths use.
+            if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            else:
+                constraints.append(p_deferrable <= nominal_power * (1 - is_overshoot))
 
             # Penalty Calculation
             # Filter for valid indices (not None, within bounds, skip index 0)

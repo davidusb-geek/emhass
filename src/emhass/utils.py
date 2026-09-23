@@ -568,9 +568,7 @@ def compile_heat_topology(topology: dict) -> dict:
     for kind, entries in (("sources", sources), ("storage", storage)):
         for i, entry in enumerate(entries):
             if not isinstance(entry, dict) or not entry.get("id"):
-                raise ValueError(
-                    f"heat_topology.{kind}[{i}] is missing the required 'id' field"
-                )
+                raise ValueError(f"heat_topology.{kind}[{i}] is missing the required 'id' field")
 
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
