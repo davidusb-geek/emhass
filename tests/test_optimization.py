@@ -11847,6 +11847,46 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             },
         ]
 
+    def test_thermal_config_overshoot_cuts_continuous_load(self):
+        """overshoot_temperature must switch a CONTINUOUS thermal_config load off
+        while the store sits beyond it, exactly as it does on the thermal_battery
+        and shared-tank paths. The per-load path tied the overshoot indicator only
+        to p_def_bin2, and a continuous load (no semi-cont, no min power, no startup
+        penalty) never links p_def_bin2 to its power - so the cutoff constrained a
+        free boolean and the load heated straight through the threshold at Optimal."""
+        self.optim_conf["treat_deferrable_load_as_semi_cont"][0] = False
+        self.optim_conf["set_deferrable_load_single_constant"][0] = False
+        self.optim_conf["minimum_power_of_deferrable_loads"][0] = 0.0
+        self.optim_conf["set_deferrable_startup_penalty"][0] = 0.0
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 5,
+                            "overshoot_temperature": 21,
+                            "desired_temperatures": [25] * 10,
+                            "min_temperatures": [0] * 10,
+                            "max_temperatures": [30] * 10,
+                            "sense": "heat",
+                        }
+                    }
+                ]
+            }
+        )
+        self.run_thermal_forecast(prices=[0.0] * 10)
+        temps = self.opt_res_dayahead["predicted_temp_heater0"].to_numpy()
+        # One 30-min step at nominal adds heating_rate * dt = 2.5 K, so a working
+        # cutoff can overshoot 21 by at most one step; without it the load runs on
+        # to the 25 C comfort target.
+        self.assertLessEqual(
+            temps.max(),
+            21 + 5 * 0.5 + 0.1,
+            f"continuous load heated past overshoot_temperature: {temps}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
