@@ -1223,6 +1223,139 @@ def update_params_with_ha_config(
     return params
 
 
+def _align_runtime_forecast_mapping(
+    forecast_input: dict,
+    forecast_dates: list[str],
+    optimization_time_step: int,
+    time_zone,
+) -> list[float]:
+    """Align a timestamped runtime forecast onto the EMHASS forecast grid.
+
+    This is the existing runtime mapping path extracted into one helper so the
+    optional external PV P10 companion can use exactly the same resampling and
+    hold-last semantics as ``pv_power_forecast``.
+    """
+    forecast_data_df = pd.DataFrame.from_dict(forecast_input, orient="index").reset_index()
+    forecast_data_df.columns = ["time", "value"]
+    forecast_data_df["time"] = pd.to_datetime(
+        forecast_data_df["time"], format="ISO8601", utc=True
+    ).dt.tz_convert(time_zone)
+
+    # Aggregate any sub-step points to the optimization time step. Resample in
+    # the local time zone so buckets line up with get_forecast_dates(), including
+    # sub-hour UTC offsets.
+    forecast_data_df = forecast_data_df.resample(
+        pd.to_timedelta(optimization_time_step, "minutes"),
+        on="time",
+    ).aggregate({"value": "mean"})
+
+    # Align by instant in UTC across DST boundaries.
+    forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
+    target_dates = pd.to_datetime(forecast_dates, utc=True)
+
+    # Existing runtime mapping semantics: each supplied point holds until the
+    # next point. A point before the horizon anchors the first target step.
+    combined_index = forecast_data_df.index.union(target_dates)
+    forecast_data_df = forecast_data_df.reindex(combined_index)
+    forecast_data_df["value"] = forecast_data_df["value"].ffill().bfill()
+    forecast_data_df = forecast_data_df.reindex(target_dates)
+    return forecast_data_df["value"].tolist()
+
+
+def _validate_and_align_external_pv_pair(
+    p50_input,
+    p10_input,
+    forecast_dates: list[str],
+    optimization_time_step: int,
+    time_zone,
+) -> tuple[list | None, list | None, str | None]:
+    """Validate and align an external PV P50/P10 pair on one source timeline."""
+    if p50_input is None:
+        return None, None, "pv_power_forecast_p10 requires pv_power_forecast"
+
+    both_lists = isinstance(p50_input, list) and isinstance(p10_input, list)
+    both_mappings = isinstance(p50_input, dict) and isinstance(p10_input, dict)
+    if not (both_lists or both_mappings):
+        return (
+            None,
+            None,
+            "pv_power_forecast and pv_power_forecast_p10 must both be lists "
+            "or both be timestamped mappings",
+        )
+
+    if both_lists:
+        if len(p50_input) != len(p10_input):
+            return (
+                None,
+                None,
+                "pv_power_forecast/pv_power_forecast_p10 length mismatch: "
+                f"{len(p50_input)}/{len(p10_input)}",
+            )
+        if len(p50_input) < len(forecast_dates):
+            return (
+                None,
+                None,
+                "pv_power_forecast/pv_power_forecast_p10 do not cover the full "
+                f"forecast horizon: {len(p50_input)} values for "
+                f"{len(forecast_dates)} required steps",
+            )
+        numeric_inputs = [p50_input, p10_input]
+    else:
+        if not p50_input or not p10_input:
+            return None, None, "timestamped external PV P50/P10 mappings must not be empty"
+        try:
+            p50_index = pd.DatetimeIndex(
+                pd.to_datetime(list(p50_input), format="ISO8601", utc=True)
+            )
+            p10_index = pd.DatetimeIndex(
+                pd.to_datetime(list(p10_input), format="ISO8601", utc=True)
+            )
+        except (TypeError, ValueError) as exc:
+            return None, None, f"invalid timestamp in external PV P50/P10 mapping: {exc}"
+        if p50_index.has_duplicates or p10_index.has_duplicates:
+            return (
+                None,
+                None,
+                "external PV P50/P10 mappings contain duplicate timestamps after normalising to UTC",
+            )
+        if not p50_index.sort_values().equals(p10_index.sort_values()):
+            return (
+                None,
+                None,
+                "pv_power_forecast and pv_power_forecast_p10 timestamp mismatch; "
+                "both mappings must describe the same forecast timeline",
+            )
+        numeric_inputs = [list(p50_input.values()), list(p10_input.values())]
+
+    try:
+        numeric = np.asarray(numeric_inputs, dtype=float)
+    except (TypeError, ValueError):
+        return None, None, "external PV P50/P10 must contain only numeric values"
+    if numeric.ndim != 2 or numeric.shape[0] != 2:
+        return None, None, "external PV P50/P10 must be one-dimensional series"
+    if not np.isfinite(numeric).all():
+        return None, None, "external PV P50/P10 contains non-finite values"
+
+    if both_lists:
+        horizon = len(forecast_dates)
+        return p50_input[:horizon], p10_input[:horizon], None
+    return (
+        _align_runtime_forecast_mapping(
+            dict(zip(p50_input, numeric[0])),
+            forecast_dates,
+            optimization_time_step,
+            time_zone,
+        ),
+        _align_runtime_forecast_mapping(
+            dict(zip(p10_input, numeric[1])),
+            forecast_dates,
+            optimization_time_step,
+            time_zone,
+        ),
+        None,
+    )
+
+
 async def treat_runtimeparams(
     runtimeparams: str,
     params: dict[str, dict],
@@ -1887,7 +2020,9 @@ async def treat_runtimeparams(
                             "start_temperature"
                         ] = runtimeparams["heater_start_temperatures"][k]
 
-        # Treat passed forecast data lists
+        # Treat passed forecast data lists. When an external P10
+        # companion is supplied, P50/P10 are validated and aligned together below
+        # so they cannot silently drift onto different timelines.
         list_forecast_key = [
             "pv_power_forecast",
             "load_power_forecast",
@@ -1902,50 +2037,23 @@ async def treat_runtimeparams(
             "production_price_forecast_method",
             "outdoor_temperature_forecast_method",
         ]
+        paired_external_pv = "pv_power_forecast_p10" in runtimeparams
 
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
+            # The paired external-PV path owns both P50 and P10 so the P50
+            # mapping is not independently normalised first.
+            if forecast_key == "pv_power_forecast" and paired_external_pv:
+                continue
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
                 if isinstance(forecast_input, dict):
-                    forecast_data_df = pd.DataFrame.from_dict(
-                        forecast_input, orient="index"
-                    ).reset_index()
-                    forecast_data_df.columns = ["time", "value"]
-                    forecast_data_df["time"] = pd.to_datetime(
-                        forecast_data_df["time"], format="ISO8601", utc=True
-                    ).dt.tz_convert(time_zone)
-
-                    # Aggregate any sub-step points to the optimization time step.
-                    # Resample in the local time_zone so the buckets line up with the
-                    # forecast grid, which get_forecast_dates floors in local time
-                    # (this matters for sub-hour UTC offsets such as +05:30).
-                    forecast_data_df = forecast_data_df.resample(
-                        pd.to_timedelta(optimization_time_step, "minutes"),
-                        on="time",
-                    ).aggregate({"value": "mean"})
-                    # Now move to UTC so the union/reindex below align by instant
-                    # across DST edges without mixing two differently-localized
-                    # indexes. forecast_dates is a list of ISO strings; parse it to
-                    # the same UTC index. tz_convert only relabels, the instants are
-                    # unchanged, so the local-time aggregation above is preserved.
-                    forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
-                    target_dates = pd.to_datetime(forecast_dates, utc=True)
-                    # Align with forecast_dates using hold-last (step) semantics: each
-                    # value holds until the next provided point. Union the provided
-                    # index with the horizon first so points defined before
-                    # forecast_dates[0] still anchor the forward-fill; reindexing
-                    # straight onto forecast_dates with method="nearest" dropped that
-                    # anchor and let the trailing bfill fill the leading slots with the
-                    # NEXT value instead (issue #1003).
-                    combined_index = forecast_data_df.index.union(target_dates)
-                    forecast_data_df = forecast_data_df.reindex(combined_index)
-                    # ffill applies the hold-last; bfill then covers any slots before
-                    # the first provided point (a dict that starts after the window
-                    # start) by extending that first value back over them.
-                    forecast_data_df["value"] = forecast_data_df["value"].ffill().bfill()
-                    forecast_data_df = forecast_data_df.reindex(target_dates)
-                    forecast_input = forecast_data_df["value"].tolist()
+                    forecast_input = _align_runtime_forecast_mapping(
+                        forecast_input,
+                        forecast_dates,
+                        optimization_time_step,
+                        time_zone,
+                    )
                 if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
                     params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
@@ -1975,6 +2083,38 @@ async def treat_runtimeparams(
                         )
             else:
                 params["passed_data"][forecast_key] = None
+
+        # Optional external P10 companion (#1128). This is deliberately
+        # pair-oriented rather than a sixth independent forecast: both series
+        # must use the same representation/timeline and are aligned through the
+        # exact same mapping helper. Supplying P10 explicitly selects the list
+        # weather path; an invalid companion leaves a visible invalid sentinel so
+        # Forecast._get_weather_list() fails the action instead of falling back.
+        if paired_external_pv:
+            params["optim_conf"]["weather_forecast_method"] = "list"
+            p50_values, p10_values, pair_error = _validate_and_align_external_pv_pair(
+                runtimeparams.get("pv_power_forecast"),
+                runtimeparams.get("pv_power_forecast_p10"),
+                forecast_dates,
+                optimization_time_step,
+                time_zone,
+            )
+            if pair_error is not None:
+                logger.error("ERROR: external PV P10 companion rejected: %s", pair_error)
+                params["passed_data"]["pv_power_forecast"] = None
+                params["passed_data"]["pv_power_forecast_p10"] = []
+            else:
+                params["passed_data"]["pv_power_forecast"] = p50_values
+                params["passed_data"]["pv_power_forecast_p10"] = p10_values
+                if isinstance(runtimeparams["pv_power_forecast"], dict):
+                    logger.info(
+                        "Aligned paired external PV P50/P10 forecast from %d timestamped "
+                        "point(s) onto %d optimization timestep(s).",
+                        len(runtimeparams["pv_power_forecast"]),
+                        len(forecast_dates),
+                    )
+        else:
+            params["passed_data"]["pv_power_forecast_p10"] = None
 
         # Explicitly handle historic_days_to_retrieve from runtimeparams BEFORE validation
         if "historic_days_to_retrieve" in runtimeparams:

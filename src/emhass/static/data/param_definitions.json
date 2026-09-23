@@ -303,7 +303,7 @@
     },
     "weather_forecast_pv_quantile_bias": {
       "friendly_name": "PV forecast conservative bias",
-      "Description": "Blend factor that biases the Solcast PV forecast toward its conservative P10 (low) estimate. 0 (default) uses the central P50 estimate, i.e. unchanged behaviour. 1 uses the P10 estimate. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. Higher values produce more defensive plans (more battery reserve held when solar is uncertain). Only effective with weather_forecast_method set to solcast. Defaults to 0.",
+      "Description": "Blend factor that biases a central P50 PV forecast toward its conservative P10 (low) companion. 0 (default) uses P50, preserving existing behaviour. 1 uses P10. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. With weather_forecast_method set to solcast, EMHASS uses Solcast pv_estimate/pv_estimate10. For caller-supplied forecasts, the same blend applies when pv_power_forecast_p10 is supplied alongside pv_power_forecast; without that companion the existing P50-only path is unchanged. Defaults to 0.",
       "input": "float",
       "default_value": 0.0,
       "unit": "none"
