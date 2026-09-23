@@ -101,7 +101,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
-This parameter is Solcast-only; it has no effect when `weather_forecast_method` is set to any other method. If a forecast period does not include a `pv_estimate10` value, EMHASS falls back to the central `pv_estimate` for that period.
+For EMHASS's native Solcast path, if a forecast period does not include a `pv_estimate10` value, EMHASS falls back to the central `pv_estimate` for that period. For caller-supplied PV forecasts, the same bias semantics are available when the optional `pv_power_forecast_p10` companion is supplied alongside `pv_power_forecast`; see [Passing your own forecast data](#passing-your-own-forecast-data).
 
 ```{note}
 When the Solcast cache is enabled (`weather_forecast_cache: true`), the blended forecast is what gets cached. Changing `weather_forecast_pv_quantile_bias` therefore only takes effect on the next cache refresh; to apply a new value immediately, refresh the weather-forecast cache or run with the cache disabled.
@@ -123,8 +123,27 @@ A run of shortfalls pushes the bias toward P10 (more conservative); quiet stretc
 
 `compute_pv_bias_calibration(...)` is a **side-effect-free recommendation engine**: it returns a recommended `bias` plus diagnostics (the achieved shortfall rate, the feasible range, the static shortfall-vs-bias curve, and the full bias trajectory) and never changes the live forecast or the optimization. It reports the value you can then set as `weather_forecast_pv_quantile_bias`. It also accepts a pluggable per-step *score* so a cost-aware objective (for example a threshold-weighted CRPS, which prices how much conservatism costs on clear days) can replace the plain shortfall indicator without changing the recursion.
 
+The supported `pv-bias-calibration` action exposes that same engine for caller-supplied history. It is reporting-only: it does not retrieve Home Assistant history, run an optimization, write configuration, or apply the returned bias.
+
+```bash
+curl -i -H 'Content-Type:application/json' -X POST \
+  -d '{
+    "p10": [1.8, 2.1, 2.4, 2.0],
+    "p50": [2.5, 2.9, 3.1, 2.8],
+    "actual": [2.2, 2.0, 2.7, 2.3],
+    "target_shortfall_rate": 0.10,
+    "gamma": 0.05,
+    "bias0": 0.0
+  }' \
+  http://localhost:5000/action/pv-bias-calibration
+```
+
+`p10`, `p50`, and `actual` are required equal-length ordered histories. Optional action fields map directly to the existing engine: `curtailed`, `curtailment_margin`, `target_shortfall_rate`, `gamma`, and `bias0`. The JSON response is the engine's existing result unchanged, including `recommended_bias`, `target_feasible`, `feasible_shortfall_range`, achieved shortfall rates, `converged`, observation/exclusion counts, the bias trajectory, and the static shortfall curve.
+
+An infeasible target is a valid diagnostic result, not an error. For example, if realised PV falls below even P10 too often for a 10% shortfall target to be expressed by any P10-P50 convex blend, `target_feasible` is `false`, `converged` remains `false`, and `feasible_shortfall_range` reports the achievable range honestly.
+
 ```{note}
-This ships the recommendation engine (the algorithm). Automatically logging the per-period P10/P50 you planned against versus the realised PV — the input this engine consumes — is a companion step; until that history is available you can feed the engine your own logged series.
+The calibration action consumes history supplied by the caller; it does not automatically log P10/P50 versus realised PV. Applying `recommended_bias` to `weather_forecast_pv_quantile_bias` remains a separate, explicit user-authorised action.
 ```
 
 **Curtailment.** If your system curtails (export limiting, inverter clipping), the realised PV you log is capped below what the array could have produced. A plan that was actually met then looks like a shortfall, and the tuner pushes the bias up for the wrong reason — the same contamination that is already excluded from the adjusted-PV training data (see [Adjusting PV Forecasts using machine learning](#adjusting-pv-forecasts-using-machine-learning)). Flag those steps with the `curtailed` argument and they are dropped from the recursion; you can pass either a boolean mask or the published curtailment power series (`custom_pv_curtailment_id`, by default `sensor.p_pv_curtailment`), which is thresholded at `> 0` just as the adjusted-PV path does. Prefer available (pre-curtailment) PV over metered export where your inverter reports it. On raw timesteps, `curtailment_margin=1` also drops the neighbouring steps to absorb execution lag, matching the adjusted-PV behaviour; it defaults to 0 here because a step in this history is often a whole day, where a margin would discard two good days per curtailed one. The result reports `n_curtailed_excluded`, and warns when so much was dropped that the recommendation only describes your non-curtailed operating regime.

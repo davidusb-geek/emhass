@@ -33,6 +33,7 @@ from emhass.command_line import (
     naive_mpc_optim,
     perfect_forecast_optim,
     publish_data,
+    pv_bias_calibration,
     regressor_model_fit,
     regressor_model_predict,
     set_input_data_dict,
@@ -530,6 +531,18 @@ async def _handle_action_dispatch(
     Returns (response_msg, status_code).
     """
     # Actions that don't require input_data_dict or have specific flows
+    # #1128: pure caller-fed calibration has no HA/config/optimizer side
+    # effects, so it is dispatched directly from the request payload.
+    if action_name == "pv-bias-calibration":
+        action_str = " >> Performing pv-bias-calibration..."
+        logger.info(action_str)
+        try:
+            result = await pv_bias_calibration(runtimeparams, logger)
+        except (TypeError, ValueError) as exc:
+            logger.error("PV bias calibration: %s", exc)
+            return {"error": str(exc)}, 400
+        return result, 200
+
     if action_name == "weather-forecast-cache":
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
@@ -775,7 +788,11 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(" >> Obtaining params: "), 400)
 
     # Check for actions that do not need input_data_dict
-    if action_name in ["weather-forecast-cache", "export-influxdb-to-csv"]:
+    if action_name in [
+        "weather-forecast-cache",
+        "export-influxdb-to-csv",
+        "pv-bias-calibration",
+    ]:
         msg, status = await _handle_action_dispatch(
             action_name, None, emhass_conf, params, runtimeparams, app.logger
         )

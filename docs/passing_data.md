@@ -47,7 +47,9 @@ emhass --action 'dayahead-optim' --config ~/emhass/config.json --runtimeparams '
 
 The possible dictionary keys to pass data are:
 
-- `pv_power_forecast` for the PV power production forecast.
+- `pv_power_forecast` for the central (P50) PV power production forecast.
+
+- `pv_power_forecast_p10` as an optional conservative P10 companion to `pv_power_forecast`. It must use the same representation (list or timestamped mapping) and the same source timeline as P50. When present, the pair is validated/aligned together and `weather_forecast_pv_quantile_bias` applies `bias * P10 + (1 - bias) * P50`. Omitting the companion leaves the existing P50-only behavior unchanged.
 
 - `load_power_forecast` for the Load power forecast.
 
@@ -59,12 +61,32 @@ The possible dictionary keys to pass data are:
 
 Instead of a plain list, any of these forecast keys can be passed as an object that maps ISO 8601 timestamps to values. EMHASS aggregates the points to the optimization time step and then holds each value until the next provided point (step interpolation), so you only need to supply a point where the value changes. A point whose timestamp falls before the start of the optimization window is used to anchor the first values of the horizon.
 
+For an external PV percentile pair, supply both `pv_power_forecast` and `pv_power_forecast_p10` as timestamped mappings with the same timestamps. The P10 companion reuses this exact alignment path. A list/mapping type mismatch, list-length mismatch, timestamp mismatch, missing P50, or non-finite P50/P10 value is rejected explicitly rather than independently shifting or silently dropping the companion. Once the source timelines match, the normal timestamp-mapping hold-last semantics apply through the requested horizon, including the existing backfill of leading horizon steps when the first supplied mapping point is later than the window start.
+
 ```json
 {
   "load_cost_forecast": {
     "2024-01-01T00:00:00+01:00": 0.20,
     "2024-01-01T06:00:00+01:00": 0.15,
     "2024-01-01T18:00:00+01:00": 0.30
+  }
+}
+```
+
+For example, an aligned external P50/P10 PV pair can be supplied directly:
+
+```json
+{
+  "weather_forecast_pv_quantile_bias": 0.5,
+  "pv_power_forecast": {
+    "2026-09-16T00:00:00+10:00": 0,
+    "2026-09-16T06:00:00+10:00": 1200,
+    "2026-09-16T12:00:00+10:00": 5200
+  },
+  "pv_power_forecast_p10": {
+    "2026-09-16T00:00:00+10:00": 0,
+    "2026-09-16T06:00:00+10:00": 700,
+    "2026-09-16T12:00:00+10:00": 3600
   }
 }
 ```
