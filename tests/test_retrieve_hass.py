@@ -2195,6 +2195,28 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             # but it returns the same session each time
             self.assertEqual(mock_get_session.call_count, 3)
 
+    async def test_post_scalar_sensor_numpy_values(self):
+        """Test that post_scalar_sensor serialises numpy scalars (#1131)."""
+        self.rh.get_data_from_file = False
+
+        with patch.object(self.rh, "_get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_response = AsyncMock()
+            mock_response.ok = True
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            mock_get_session.return_value = mock_session
+
+            posted = await self.rh.post_scalar_sensor(
+                "sensor.battery_identified_capacity",
+                np.float64(9.8765),
+                {"ci_low": np.float64(9.5), "ci_high": np.float64(10.25)},
+            )
+
+        self.assertTrue(posted)
+        body = orjson.loads(mock_session.post.call_args.kwargs["data"])
+        self.assertEqual(body["state"], 9.8765)
+        self.assertEqual(body["attributes"], {"ci_low": 9.5, "ci_high": 10.25})
+
     async def test_session_close(self):
         """Test that close() properly closes the session."""
         # Create a session first

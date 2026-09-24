@@ -2244,7 +2244,7 @@ class RetrieveHass:
             async with session.post(
                 url,
                 headers=headers,
-                data=orjson.dumps(data).decode("utf-8"),
+                data=orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"),
                 ssl=self.ssl_verify,
             ) as response:
                 await response.read()
