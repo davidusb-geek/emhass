@@ -4132,10 +4132,15 @@ class Optimization:
         if all(
             key in tank for key in ["u_value", "envelope_area", "ventilation_rate", "heated_volume"]
         ):
-            indoor_target_temp = tank.get(
-                "indoor_target_temperature",
-                min_temperatures_list[0] if min_temperatures_list else 20.0,
-            )
+            # Without an explicit target, a building-only store is assumed to be
+            # the room itself (its floor is the indoor target). A combi tank with
+            # a draw-off profile is a hot-water store, whose floor is far above
+            # room temperature, so it falls back to 20 C instead.
+            if hot_water is not None or not min_temperatures_list:
+                default_indoor = 20.0
+            else:
+                default_indoor = min_temperatures_list[0]
+            indoor_target_temp = tank.get("indoor_target_temperature", default_indoor)
             # Window solar and internal gains belong INSIDE the physics demand
             # model, exactly as the per-load thermal_battery path passes them.
             # The heat_topology compiler folds window_area / shgc /

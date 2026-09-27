@@ -5752,6 +5752,44 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Never started while the tank was already above the threshold.
         self.assertLess(power[temp > 52.05].max() if (temp > 52.05).any() else 0.0, 1e-3)
 
+    def test_combi_tank_building_demand_defaults_to_room_temperature(self):
+        """A tank with both a draw-off profile and the building physics model
+        (a combi tank) and no indoor_target_temperature must compute the building
+        demand against 20 C, not against the hot-water floor."""
+
+        def demand(extra):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+            self._setup_single_hp(nominal=6000)
+            self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+            tank = {
+                "id": "combi",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.05,
+                "draw_off_demand": [0.1] * 48,
+                "u_value": 0.5,
+                "envelope_area": 300.0,
+                "ventilation_rate": 0.5,
+                "heated_volume": 250.0,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                **extra,
+            }
+            self.optim_conf["shared_thermal_tanks"] = [tank]
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+            return res["heating_demand_heater0"].to_numpy()
+
+        np.testing.assert_allclose(demand({}), demand({"indoor_target_temperature": 20.0}))
+
     def test_shared_tank_desired_only_penalty_pulls_temperature(self):
         """desired_temperatures without any overshoot gates is a pure soft
         target: no source is blocked, but the shortfall penalty pulls the tank
