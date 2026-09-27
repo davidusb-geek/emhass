@@ -53,6 +53,8 @@ The possible dictionary keys to pass data are:
 
 - `shared_tank_start_temperatures` a per-storage start-temperature override keyed by storage id, e.g. `{"dhw": 48.5}`. It is applied after the `heat_topology` compile, so it patches manual and compiled tanks alike: the per-run equivalent of `soc_init` or `heater_start_temperatures` for an MPC loop that reads a live tank temperature sensor. Unknown ids and non-numeric values are ignored with a warning.
 
+- `shared_tank_prior_heat` per-storage heat already produced but not yet arrived because of `thermal_inertia`, keyed by storage id: thermal kWh for each of the last L steps, oldest first, e.g. `{"house": [0.8, 1.4]}`. The initial condition for the lag under rolling MPC (see [heat_topology.md](heat_topology.md)). Absent keeps the cold-start behaviour; a malformed entry is ignored with a warning.
+
 - `pv_power_forecast` for the central (P50) PV power production forecast.
 
 - `pv_power_forecast_p10` as an optional conservative P10 companion to `pv_power_forecast`. It must use the same representation (list or timestamped mapping) and the same source timeline as P50. When present, the pair is validated/aligned together and `weather_forecast_pv_quantile_bias` applies `bias * P10 + (1 - bias) * P50`. Omitting the companion leaves the existing P50-only behavior unchanged.
