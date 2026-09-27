@@ -257,7 +257,8 @@ feeds) and `heating_demand_heater{k}` for every such load, just as for a
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
 When several flows feed the same storage, each of those loads reports that
-storage's temperature, so one entry is enough.
+storage's temperature. The ids are matched by position, so to reach load `k` the
+lists need entries for loads `0` to `k`; the entries for other loads publish too.
 
 ## Validation and troubleshooting
 
@@ -297,7 +298,9 @@ temperature forecast:
 - an `outdoor_temperature_forecast` passed at runtime takes precedence over
   both.
 
-If none of these is available (for example an offline install on the `list`
-method), EMHASS logs a warning and uses a constant 15 degrees Celsius. The plan
-is still produced, but COP and heating demand are then too optimistic in cold
+If none of these is available, EMHASS uses a constant 15 degrees Celsius
+without a separate warning. This happens, for example, on an offline install on
+the `list` method, or with a PV forecast method that does not return weather data
+(such as Solcast or solar.forecast); window solar gain is then zero as well. The
+plan is still produced, but COP and heating demand are too optimistic in cold
 weather, so pass `outdoor_temperature_forecast` in that case.
