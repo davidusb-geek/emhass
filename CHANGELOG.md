@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.4 - 2026-09-27
+
+### Improvement
+- feat: support caller-supplied PV P10 and bias calibration (@MMicieli)
+
+### Fix
+- fix: serialise numpy scalars when publishing battery identification sensors (@Blizzeq)
+- fix: correct battery derating example and Plotly centering selector (@WartoWiedziec)
+- fix: scope deferrable load UI cardinality (#1116) (@MMicieli)
+- fix: skip the mix-forecast blend on a NaN operand and warn when a dropped repair sensor leaves NaNs behind (@LesIT1)
+- fix: preserve nested configuration arrays (#1115) (@WartoWiedziec)
+- fix: stabilize results UI (#1104) (@WartoWiedziec)
+
 ## 0.18.3 - 2026-09-10
 
 ### Improvement
