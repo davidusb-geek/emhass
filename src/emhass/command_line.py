@@ -77,9 +77,9 @@ def _record_optim_snapshot(
         # verdict: a failed/infeasible run is still recorded by last_run (status
         # error/infeasible) but must not surface on /api/v1/plan as status "ok" —
         # the plan endpoint keeps serving the last VALID plan (or no-run). Gating on
-        # optim_status == "Optimal" mirrors last_run's own "ok" criterion, so the
+        # last_run.OK_OPTIM_STATUSES reuses last_run's own "ok" criterion, so the
         # two endpoints stay consistent (plan published iff last-run is "ok").
-        if optim_status == "Optimal":
+        if optim_status in last_run.OK_OPTIM_STATUSES:
             plan_store.record(
                 input_data_dict["emhass_conf"]["data_path"],
                 plan=plan_store.serialize(opt_res),

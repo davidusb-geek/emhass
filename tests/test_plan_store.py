@@ -144,3 +144,29 @@ class TestRecordOptimSnapshotWritesPlan(unittest.TestCase):
         self.assertIsNone(plan_store.read(self.tmp_path))
         # last_run still records the failed run, as 'infeasible'
         self.assertEqual(last_run.read(self.tmp_path)["status"], "infeasible")
+
+    def test_record_optim_snapshot_publishes_plan_for_optimal_inaccurate(self):
+        """An "Optimal_Inaccurate" run is published to the sensors like an optimal
+        one and last_run classifies it "ok", so the "plan published iff last-run
+        is ok" invariant requires /api/v1/plan to serve it too."""
+        import logging
+
+        from emhass import command_line
+
+        idx = pd.to_datetime(["2026-06-17T00:00:00+00:00"], utc=True)
+        idx.name = "timestamp"
+        opt_res = pd.DataFrame(
+            {"P_Load": [123.0], "optim_status": ["Optimal_Inaccurate"]}, index=idx
+        )
+        input_data_dict = {"emhass_conf": {"data_path": self.tmp_path}, "stage_times": {}}
+        command_line._record_optim_snapshot(
+            input_data_dict,
+            last_run.ACTION_DAYAHEAD_OPTIM,
+            opt_res,
+            0.0,
+            logging.getLogger("test_plan_store"),
+        )
+        self.assertEqual(last_run.read(self.tmp_path)["status"], "ok")
+        plan = plan_store.read(self.tmp_path)
+        self.assertIsNotNone(plan, "last-run says ok but no plan was published")
+        self.assertEqual(plan["plan"][0]["P_Load"], 123.0)
