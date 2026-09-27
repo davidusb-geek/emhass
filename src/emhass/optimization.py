@@ -750,6 +750,10 @@ class Optimization:
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
+        # Effective per-step floor of each shared tank (static list and
+        # min_temperature_curve combined), keyed by tank index; filled when the
+        # tank is built and published as min_temp_heater{k} for its members.
+        self._shared_tank_min_floors = {}
         def_load_config = self.optim_conf.get("def_load_config", []) or []
         for k in range(num_def_loads):
             if k < len(def_load_config) and def_load_config[k]:
@@ -4088,6 +4092,7 @@ class Optimization:
                 f"Shared tank {tank_id}: requires non-empty min_temperatures "
                 "or min_temperature_curve"
             )
+        self._shared_tank_min_floors[tank_idx] = list(min_temperatures_list)
 
         # Heating demand resolution: same options as single-source thermal_battery
         # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
@@ -5086,6 +5091,11 @@ class Optimization:
                     if isinstance(desired_raw, int | float):
                         desired_raw = [float(desired_raw)] * self.num_timesteps
                     conf = {**tank, "desired_temperatures": desired_raw}
+                    # Publish the floor the solver enforced (static list and
+                    # min_temperature_curve combined), not the raw static list.
+                    floor = self._shared_tank_min_floors.get(shared_tank_membership[k])
+                    if floor:
+                        conf["min_temperatures"] = floor
 
                 # Store Target/Desired Temperatures (Legacy behavior)
                 # Only look for 'desired_temperatures'.

@@ -11826,6 +11826,42 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("predicted_temp_heater0", res.columns)
         self.assertIn("heating_demand_heater0", res.columns)
 
+    def test_shared_tank_member_publishes_curve_floor(self):
+        """min_temp_heater{k} of a shared-tank member must be the floor the solver
+        enforced: the element-wise max of the static min_temperatures and the
+        weather-compensated min_temperature_curve, not the static list alone."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = -5.0
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "buffer",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 45.0,
+                "thermal_loss": 0.05,
+                "min_temperatures": [30.0] * 48,
+                # -5 C outdoor -> 35 + 1.0 * 5 = 40 C, above the static 30 C.
+                "min_temperature_curve": {
+                    "slope": 1.0,
+                    "offset": 35,
+                    "min_supply": 30,
+                    "max_supply": 55,
+                },
+                "max_temperatures": [55.0] * 48,
+            },
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue((res["min_temp_heater0"] == 40.0).all())
+
     def _setup_single_hp(self, supply_temperature=40.0, nominal=3000):
         """optim_conf for one heat-pump (Carnot) deferrable load feeding a tank."""
         self.optim_conf["number_of_deferrable_loads"] = 1

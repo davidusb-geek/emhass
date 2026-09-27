@@ -257,7 +257,8 @@ feeds) and `heating_demand_heater{k}` for every such load, just as for a
 `thermal_battery`. When the storage sets `desired_temperature(s)`,
 `min_temperature(s)` or `max_temperature(s)`, each of its loads also carries
 `target_temp_heater{k}`, `min_temp_heater{k}` and `max_temp_heater{k}`, so the
-comfort band can be plotted next to the predicted temperature. To publish them
+comfort band can be plotted next to the predicted temperature. `min_temp_heater{k}`
+is the floor the optimizer enforced, including a `min_temperature_curve`. To publish them
 to Home Assistant, pass
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
