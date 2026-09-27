@@ -287,6 +287,7 @@ are optional; without them a storage is a water tank as before.
 | `thermal_mass` | kWh/K | Heat capacity, instead of `volume`. |
 | `loss_coefficient` | kW/K | Heat-loss coefficient UA. The loss becomes `UA * (T - outdoor)`, so a warmer zone loses more and the optimizer can pre-heat on cheap power and coast through a price peak. Cannot be combined with a `building_demand` consumer, which also models the loss to outdoor. |
 | `thermal_inertia` | hours | Delay between the storage's own source heat and the temperature response, as in the thermal model. Applied in whole timesteps (rounded down) and capped at the horizon. Transfers are not lagged, so on a storage fed only by transfers it is ignored (with a warning). Over the first lagged steps no source heat arrives, so the minimum temperature there is priced rather than hard. |
+| `prior_heat` | kWh per step | Heat already produced but still in flight because of `thermal_inertia`, oldest first. Usually sent per run with `shared_tank_prior_heat` instead; see [Rolling MPC](#rolling-mpc). |
 | `window_area`, `shgc` | m2, fraction | Solar gain through glazing from the GHI forecast (`window_area * shgc * GHI`), which offsets the zone's heating need. `shgc` defaults to `0.6`. Applied only to a zone with `loss_coefficient`, and only when the weather data has GHI (open-meteo); otherwise it is zero. |
 
 For example, a house held between 19.5 and 21.5 degrees Celsius, with a
@@ -539,8 +540,10 @@ The values are the thermal kWh delivered in each of the last `L` steps, oldest
 first; a shorter list is right-aligned (the most recent steps are the ones still
 in flight). Omitting it keeps the cold-start behaviour.
 
-To keep it up to date, on every MPC run drop the oldest value and append the
-thermal kWh actually delivered during the step that just ran. Do not refill it
+To keep it up to date, each time an optimization time step completes, drop the
+oldest value and append the thermal kWh actually delivered during that step. If
+MPC runs more often than once per time step (for example every 5 minutes on a
+30-minute grid), resend the same list on the runs in between. Do not refill it
 from the new plan's own first `L` steps: that feeds the model its intentions
 rather than what the hardware did, which is exactly what this initial condition
 corrects. The best source is a differenced heat or energy counter on the unit

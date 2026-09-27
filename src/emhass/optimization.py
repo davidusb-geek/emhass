@@ -3727,8 +3727,7 @@ class Optimization:
         """
         return loss_kw * self.time_step
 
-    @staticmethod
-    def _resolve_prior_heat(raw, lag_steps, label):
+    def _resolve_prior_heat(self, raw, lag_steps, label):
         """Return the length-`lag_steps` initial condition for a lagged thermal model.
 
         With `thermal_inertia` the heat produced at step t only reaches the store at
@@ -3762,6 +3761,18 @@ class Optimization:
             raise ValueError(
                 f"{label}: prior_heat entries must be >= 0 (magnitude of delivered heat; "
                 "the tank's sense already sets the direction)"
+            )
+        if len(vals) != prior.size:
+            # Not an error (a short list is expected after a restart), but the
+            # alignment must not be silent: a misjudged lag shifts the heat in flight.
+            self.logger.info(
+                "%s: prior_heat has %d values for a %d-step lag; %s",
+                label,
+                len(vals),
+                prior.size,
+                "using the most recent ones"
+                if len(vals) > prior.size
+                else "aligned to the most recent steps, earlier ones are 0",
             )
         vals = vals[-prior.size :]
         if vals:
