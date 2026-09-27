@@ -126,6 +126,8 @@ For multi-source storage, the [heat topology graph model](heat_topology.md) can 
 
 EMHASS needs to know how much heat your building requires. There are two methods to calculate this, and EMHASS automatically selects the appropriate method based on which parameters you provide.
 
+A thermal battery needs exactly one demand model: the physics keys below (Method 1), `specific_heating_demand` + `area` (Method 2), or a `draw_off_demand` profile (see Hot water tank mode). If none is configured, EMHASS stops with an error that names the three options.
+
 #### Method 1: Physics-based (recommended)
 
 This method models the actual building physics and is more accurate. It requires these parameters:
@@ -263,7 +265,7 @@ For radiator-based heating systems, the buffer / storage temperature must stay a
 
 Set `min_temperature_curve` to make the floor track outdoor temperature via the same linear law as `heating_curve`:
 
-* **min_temperature_curve**: Dict describing the weather-compensated minimum: `T_min = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, the per-slot effective minimum is `max(static_min_temperatures[t], curve_min[t])` so any static absolute floor still wins if it's higher.
+* **min_temperature_curve**: Dict describing the weather-compensated minimum: `T_min = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, the per-slot effective minimum is `max(static_min_temperatures[t], curve_min[t])` so any static absolute floor still wins if it's higher. A `null` entry in `min_temperatures` means "no static floor for this slot": the curve floor alone applies there.
     * `slope`, `offset`: same form as the source's heating curve.
     * `min_supply`: Absolute floor in °C, never below this regardless of mild weather. Choose this as the buffer T below which your radiators cannot deliver useful heat (typically 28-30 °C).
     * `max_supply`: Upper bound on the dynamic floor (not the tank max - that's still `max_temperatures`).

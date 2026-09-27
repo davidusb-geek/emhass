@@ -63,7 +63,7 @@ watts of source input:
 | `id` | Unique source ID. |
 | `type` | `heatpump`, `heat_pump`, `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
 | `nominal_power` | Maximum source input power in W. |
-| `min_power` | Optional minimum input power in W; default `0`. |
+| `min_power` | Optional minimum input power in W; default `0`. Must not exceed `nominal_power`. |
 | `treat_as_semi_cont` | Optional on/off-at-nominal behavior; default `true`. |
 | `supply_temperature` | Fixed heat-pump supply temperature in degrees Celsius. |
 | `heating_curve` | Alternative heat-pump supply-temperature curve. |
@@ -120,7 +120,12 @@ Consumers are folded into their target storage:
 - `type: "profile"` supplies `profile`, a daily draw-off profile in kWh per
   timestep. EMHASS repeats it to fill a longer horizon.
 - `type: "building_demand"` supplies the building-physics or degree-day fields
-  described in [Thermal battery](thermal_battery.md).
+  described in [Thermal battery](thermal_battery.md). With the physics model
+  (`u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`), the
+  optional `window_area`, `shgc`, and `internal_gains_factor` fields reduce the
+  heating demand by window solar gain and internal gains, exactly as they do
+  for a `thermal_battery`. Window solar gain needs a GHI forecast, which
+  EMHASS already retrieves for PV.
 - `type: "pool_comfort"` supplies `solar_absorption_area` and optionally
   `solar_absorption_factor`.
 
@@ -242,6 +247,18 @@ individual minimum and nominal limits while respecting the group cap. A group
 cap below a required member's feasible power can make the thermal problem
 infeasible.
 
+## Publishing results
+
+Each flow compiles to one deferrable load, numbered in the order of `flows`
+(the first flow is load 0). The optimization results carry
+`predicted_temp_heater{k}` (the temperature of the storage that load `k`
+feeds) and `heating_demand_heater{k}` for every such load, just as for a
+`thermal_battery`. To publish them to Home Assistant, pass
+`custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
+per load index; see [Thermal battery](thermal_battery.md) for an example.
+When several flows feed the same storage, each of those loads reports that
+storage's temperature, so one entry is enough.
+
 ## Validation and troubleshooting
 
 EMHASS validates the graph before optimization and reports the offending field
@@ -252,6 +269,7 @@ path for:
 - consumers that target unknown storage;
 - unsupported source or consumer types;
 - missing heat-pump supply-temperature data;
+- a source `min_power` greater than its `nominal_power`;
 - missing constant source efficiency; and
 - missing cost-track references.
 
@@ -268,3 +286,18 @@ If the topology is ignored, confirm that:
 3. disabled configuration uses JSON `null`, not `"null"`; and
 4. all temperature, demand, and cost arrays use the same timestep convention
    as the optimization horizon.
+
+Heat-pump COP, heating curves, and building demand depend on the outdoor
+temperature forecast:
+
+- with `weather_forecast_method: "open-meteo"`, EMHASS retrieves it
+  automatically;
+- with the `list` method (PV passed as `pv_power_forecast`), EMHASS still
+  fetches the open-meteo outdoor temperature and GHI for a heat topology; and
+- an `outdoor_temperature_forecast` passed at runtime takes precedence over
+  both.
+
+If none of these is available (for example an offline install on the `list`
+method), EMHASS logs a warning and uses a constant 15 degrees Celsius. The plan
+is still produced, but COP and heating demand are then too optimistic in cold
+weather, so pass `outdoor_temperature_forecast` in that case.
