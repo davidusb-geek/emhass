@@ -4131,6 +4131,51 @@ class TestCompileHeatTopology(unittest.TestCase):
             utils.compile_heat_topology(topo)
         self.assertIn("missing", str(ctx.exception))
 
+    def test_min_power_above_nominal_power_rejected(self):
+        """A source whose min_power exceeds its nominal_power is structurally
+        unsatisfiable (a semi-continuous load cannot honour both p >= min_power
+        and p <= nominal_power), so it is rejected at compile time instead of
+        handing the optimizer an infeasible per-load bound. The boundary case
+        min_power == nominal_power (always off or pinned at nominal) stays valid.
+        """
+
+        def topo(min_power):
+            return {
+                "sources": [
+                    {
+                        "id": "hp",
+                        "type": "heatpump",
+                        "supply_temperature": 55,
+                        "carnot_efficiency": 0.40,
+                        "nominal_power": 3000,
+                        "min_power": min_power,
+                    }
+                ],
+                "storage": [
+                    {
+                        "id": "buf",
+                        "volume": 0.05,
+                        "start_temperature": 35,
+                        "min_temperature": [25] * 48,
+                        "max_temperature": [50] * 48,
+                        "thermal_loss": 0.06,
+                    }
+                ],
+                "flows": [{"from": "hp", "to": "buf"}],
+            }
+
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo(4000))
+        msg = str(ctx.exception)
+        self.assertIn("hp", msg)
+        self.assertIn("min_power", msg)
+        self.assertIn("nominal_power", msg)
+
+        # Boundary: min_power == nominal_power is a legitimate configuration.
+        out = utils.compile_heat_topology(topo(3000))
+        self.assertEqual(out["minimum_power_of_deferrable_loads"], [3000.0])
+        self.assertEqual(out["nominal_power_of_deferrable_loads"], [3000.0])
+
     def test_compile_heat_topology_rejects_non_dict(self):
         """Non-dict inputs (string "null", None, "") must return {} without raising."""
         self.assertEqual(utils.compile_heat_topology("null"), {})
