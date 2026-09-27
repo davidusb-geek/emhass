@@ -5712,6 +5712,46 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(booster.sum(), 0, "Booster should serve the band above 55 C")
 
+    def test_shared_tank_overshoot_keeps_semi_continuous_source_feasible(self):
+        """A semi-continuous source whose one full-power step lifts the tank by
+        more than (overshoot - min) must still be able to run: it is switched off
+        while the tank is above the threshold at the start of a step, not
+        forbidden from ever crossing it. Otherwise the tank cannot hold its floor
+        and the run drops to the relaxed fallback."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True]
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.05,
+                "draw_off_demand": [0.2] * 48,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                "desired_temperatures": 50.0,
+                "overshoot_temperature": 52.0,
+            },
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        temp = res["predicted_temp_heater0"].reset_index(drop=True)
+        power = res["P_deferrable0"].reset_index(drop=True)
+        self.assertGreater(power.sum(), 0)
+        # Never started while the tank was already above the threshold.
+        self.assertLess(power[temp > 52.05].max() if (temp > 52.05).any() else 0.0, 1e-3)
+
     def test_shared_tank_desired_only_penalty_pulls_temperature(self):
         """desired_temperatures without any overshoot gates is a pure soft
         target: no source is blocked, but the shortfall penalty pulls the tank

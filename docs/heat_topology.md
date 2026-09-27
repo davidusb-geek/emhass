@@ -109,10 +109,18 @@ its ceiling, so the booster is scheduled exactly for the band above it.
 ```json
 "sources": [
   {"id": "hp", "type": "heatpump", "nominal_power": 3500,
-   "supply_temperature": 55, "max_supply_temperature": 53},
+   "supply_temperature": 55, "max_supply_temperature": 53,
+   "treat_as_semi_cont": false},
   {"id": "booster", "type": "electric", "nominal_power": 3000, "efficiency": 1.0}
 ]
 ```
+
+A source may not push the storage past its ceiling within a step. A
+semi-continuous source (the default) runs at its full nominal power, so if one
+full-power step heats the storage by more than the gap between its temperature
+and the ceiling, that source never runs and the other source does all the work,
+with no warning. Make a capped source continuous (`"treat_as_semi_cont": false`),
+as above, or use a shorter optimization time step.
 
 This is a physical limit, not a preference: it also holds in the relaxed
 fallback. To stop a source at a lower temperature while it can physically go
