@@ -1574,6 +1574,28 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(data.columns), ["yhat"])
         self.assertIn("no data", "\n".join(cm.output))
 
+    async def test_get_weather_forecast_list_cold_start_fetch_failure_is_soft(self):
+        """#997 fail-soft, one level down: on a cold start (no JSON cache yet) a
+        failed Open-Meteo request makes get_cached_open_meteo_forecast_json return
+        None. That used to surface as a TypeError ('NoneType' object is not
+        subscriptable), which the fail-soft guard does not catch, so an offline
+        list-method setup with a thermal load crashed instead of keeping its plain
+        list frame."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=True)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            unittest.mock.patch.dict(fcst.emhass_conf, {"data_path": pathlib.Path(tmp)}),
+        ):
+            with unittest.mock.patch.object(
+                fcst,
+                "get_cached_open_meteo_forecast_json",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ):
+                with self.assertLogs(logger, level="WARNING") as cm:
+                    data = await fcst.get_weather_forecast(method="list")
+        self.assertEqual(list(data.columns), ["yhat"])
+        self.assertIn("issue #997", "\n".join(cm.output))
+
     async def test_get_cached_forecast_data_list_method_refetches_stale(self):
         """#997: under the open-meteo weather augmentation (method='list'), a cache
         that does not cover the window is treated like open-meteo (deleted for a
