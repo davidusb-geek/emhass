@@ -162,10 +162,9 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         ("deferrable_load_max_cost", "none_element"),
         # def_minimum_on_time / def_minimum_off_time joined DEF_LOAD_ARRAY_PARAMS
         # (padded like their siblings, #900). A None element never reaches the
-        # timestep coercion: check_def_loads pads length without touching
-        # elements, and the load holding the None (index 0) is single-constant,
-        # whose path skips the min-on/off-time block entirely - so the case runs
-        # clean and is a live regression test. The stringly variants still raise the
+        # timestep coercion: check_def_loads replaces None elements with the
+        # default (0) while padding, so the case runs clean and is a live
+        # regression test. The stringly variants still raise the
         # contextual error and stay xfail.
         ("def_minimum_on_time", "none_element"),
         ("def_minimum_off_time", "none_element"),

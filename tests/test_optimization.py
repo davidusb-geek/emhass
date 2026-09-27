@@ -5457,7 +5457,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 np.full(48, 0.40),  # heating is costly -> the optimiser leans on free gains
                 np.full(48, 0.02),
             )
-            self.assertIn("Optimal", str(res["optim_status"].iloc[0]))
+            self.assertEqual(res["optim_status"].iloc[0], "Optimal")
             return res["P_deferrable0"].sum()
 
         self.assertLess(

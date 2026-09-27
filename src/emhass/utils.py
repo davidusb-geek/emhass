@@ -3758,7 +3758,7 @@ DEF_LOAD_ARRAY_PARAMS: dict[str, bool | int | float] = {
     "def_minimum_on_time": 0,
     "def_minimum_off_time": 0,
 }
-# Legacy (pre-#342) names for the same 9 arrays, from
+# Legacy (pre-#342) names for the same arrays, from
 # src/emhass/data/associations.csv column 2. The association loop accepts
 # either the modern name (column 3) or this legacy one, so the
 # runtime-provided check in treat_runtimeparams has to match both.

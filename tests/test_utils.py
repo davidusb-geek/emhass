@@ -1621,10 +1621,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_params_pads_def_minimum_on_off_time(self):
         """def_minimum_on_time / def_minimum_off_time must be padded to
-        number_of_deferrable_loads like every sibling per-load array - otherwise
-        raising the load count silently disables short-cycle protection for the
-        new loads (optimization.py falls back to 0 for out-of-range indices,
-        with no log)."""
+        number_of_deferrable_loads like every sibling per-load array, so every
+        load has an explicit entry (padded with 0, i.e. no minimum) instead of
+        relying on optimization.py's silent out-of-range fallback."""
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         config["number_of_deferrable_loads"] = 3
         config["def_minimum_on_time"] = [3, 0]
