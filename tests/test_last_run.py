@@ -49,6 +49,10 @@ def test_record_optimal_inaccurate_maps_to_ok(data_path):
     """CVXPY's optimal_inaccurate reaches last_run as "Optimal_Inaccurate". The
     optimizer publishes that plan like an optimal one, so health checks built on
     /api/v1/last-run must not report the run as an error."""
+    import cvxpy as cp
+
+    # The optimizer title-cases cvxpy's status; guard the spelling against both.
+    assert cp.OPTIMAL_INACCURATE.title() in last_run.OK_OPTIM_STATUSES
     last_run.record(
         data_path,
         action="dayahead-optim",
