@@ -1619,6 +1619,54 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result_config["costfun"], "profit")
         self.assertTrue(result_config["set_use_battery"])
 
+    async def test_publish_ids_cover_loads_added_by_heat_topology(self):
+        """The default per-load publish ids are built from the configured load
+        count, before a heat_topology compile can raise it. They must be padded to
+        the final count, or publish-data indexes past the end of the list."""
+        params = await TestUtils.get_test_params()
+        self.assertEqual(params["optim_conf"]["number_of_deferrable_loads"], 2)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        topology = {
+            "sources": [
+                {"id": f"e{i}", "type": "electric", "nominal_power": 2000, "efficiency": 1.0}
+                for i in range(3)
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [65] * 48,
+                }
+            ],
+            "flows": [{"from": f"e{i}", "to": "dhw"} for i in range(3)],
+        }
+        runtimeparams_json = orjson.dumps({"heat_topology": topology}).decode("utf-8")
+        out_params, _, out_optim, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out_optim["number_of_deferrable_loads"], 3)
+        passed = orjson.loads(out_params)["passed_data"]
+        for key in (
+            "custom_deferrable_forecast_id",
+            "custom_deferrable_state_id",
+            "custom_predicted_temperature_id",
+            "custom_heating_demand_id",
+        ):
+            self.assertEqual(len(passed[key]), 3, key)
+        self.assertEqual(
+            passed["custom_deferrable_forecast_id"][2]["entity_id"], "sensor.p_deferrable2"
+        )
+
     async def test_build_params_pads_def_minimum_on_off_time(self):
         """def_minimum_on_time / def_minimum_off_time must be padded to
         number_of_deferrable_loads like every sibling per-load array, so every

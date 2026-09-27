@@ -257,8 +257,9 @@ feeds) and `heating_demand_heater{k}` for every such load, just as for a
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
 When several flows feed the same storage, each of those loads reports that
-storage's temperature. The ids are matched by position, so to reach load `k` the
-lists need entries for loads `0` to `k`; the entries for other loads publish too.
+storage's temperature. The ids are matched by position (entry `k` is load `k`);
+loads without an entry publish under the default names, such as
+`sensor.p_deferrable{k}` and `sensor.temp_predicted{k}`.
 
 ## Validation and troubleshooting
 
