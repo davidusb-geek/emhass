@@ -26,6 +26,10 @@ ACTION_PERFECT_OPTIM = "perfect-optim"
 ACTION_DAYAHEAD_OPTIM = "dayahead-optim"
 ACTION_NAIVE_MPC_OPTIM = "naive-mpc-optim"
 
+# optim_status values whose plan is published and that count as a healthy run.
+# Shared with the /api/v1/plan gate in command_line.py so the two endpoints agree.
+OK_OPTIM_STATUSES = frozenset({"Optimal", "Optimal_Inaccurate"})
+
 
 def _path(data_path: Path) -> Path:
     return Path(data_path) / _LAST_RUN_FILENAME
@@ -71,13 +75,15 @@ def record(
     a lock. File write failure is logged-and-swallowed so a disk error never
     breaks the caller's return path.
 
-    Status mapping: optim_status "Optimal" -> "ok", "Infeasible" (or
+    Status mapping: optim_status "Optimal" or "Optimal_Inaccurate" (CVXPY's
+    optimal_inaccurate, whose plan the optimizer publishes like an optimal
+    one) -> "ok", "Infeasible" (or
     infeasible=True) -> "infeasible", anything else -> "error". This errs
     on the side of caution: an unrecognised solver status is surfaced as
     "error" rather than silently classified as healthy.
     """
     global _cache
-    if optim_status == "Optimal":
+    if optim_status in OK_OPTIM_STATUSES:
         status = "ok"
     elif optim_status == "Infeasible" or infeasible:
         status = "infeasible"

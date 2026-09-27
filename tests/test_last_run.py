@@ -45,6 +45,39 @@ def test_record_then_read_round_trip(data_path):
     assert "emhass_version" in snap
 
 
+def test_record_optimal_inaccurate_maps_to_ok(data_path):
+    """CVXPY's optimal_inaccurate reaches last_run as "Optimal_Inaccurate". The
+    optimizer publishes that plan like an optimal one, so health checks built on
+    /api/v1/last-run must not report the run as an error."""
+    last_run.record(
+        data_path,
+        action="dayahead-optim",
+        stage_times={},
+        optim_status="Optimal_Inaccurate",
+        infeasible=False,
+        duration_total_seconds=1.0,
+        schema_version="1.0",
+    )
+    assert last_run.read(data_path)["status"] == "ok"
+
+
+@pytest.mark.parametrize("status", ["Optimal (Relaxed)", "User_Limit"])
+def test_record_other_statuses_still_map_to_error(data_path, status):
+    """Only the listed statuses are healthy. The relaxed-LP fallback status is
+    deliberately left out: whether a plan that drops the binary constraints
+    counts as healthy is a separate decision."""
+    last_run.record(
+        data_path,
+        action="dayahead-optim",
+        stage_times={},
+        optim_status=status,
+        infeasible=False,
+        duration_total_seconds=1.0,
+        schema_version="1.0",
+    )
+    assert last_run.read(data_path)["status"] == "error"
+
+
 def test_read_returns_none_when_no_run(data_path):
     assert last_run.read(data_path) is None
 
