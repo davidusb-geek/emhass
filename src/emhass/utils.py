@@ -1369,6 +1369,45 @@ def _validate_and_align_external_pv_pair(
     )
 
 
+_LOAD_PUBLISH_ID_KEYS = (
+    "custom_deferrable_forecast_id",
+    "custom_deferrable_state_id",
+    "custom_predicted_temperature_id",
+    "custom_heating_demand_id",
+)
+
+
+def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str, dict]:
+    """Default Home Assistant entities for deferrable load ``k``, keyed by the
+    passed_data id list each belongs to."""
+    return {
+        "custom_deferrable_forecast_id": {
+            "entity_id": f"sensor.p_deferrable{k}",
+            "device_class": "power",
+            "unit_of_measurement": "W",
+            "friendly_name": f"Deferrable Load {k}",
+        },
+        "custom_deferrable_state_id": {
+            "entity_id": f"sensor.p_deferrable{k}_state",
+            "device_class": "enum",
+            "unit_of_measurement": "",
+            "friendly_name": f"Deferrable Load {k} Command",
+        },
+        "custom_predicted_temperature_id": {
+            "entity_id": f"sensor.temp_predicted{k}",
+            "device_class": "temperature",
+            "unit_of_measurement": temperature_unit,
+            "friendly_name": f"Predicted temperature {k}",
+        },
+        "custom_heating_demand_id": {
+            "entity_id": f"sensor.heating_demand{k}",
+            "device_class": "energy",
+            "unit_of_measurement": "kWh",
+            "friendly_name": f"Heating demand {k}",
+        },
+    }
+
+
 async def treat_runtimeparams(
     runtimeparams: str,
     params: dict[str, dict],
@@ -1419,43 +1458,14 @@ async def treat_runtimeparams(
     default_temperature_unit = "°C"
 
     # Some default data needed
-    custom_deferrable_forecast_id = []
-    custom_deferrable_state_id = []
-    custom_predicted_temperature_id = []
-    custom_heating_demand_id = []
-    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
-        custom_deferrable_forecast_id.append(
-            {
-                "entity_id": f"sensor.p_deferrable{k}",
-                "device_class": "power",
-                "unit_of_measurement": "W",
-                "friendly_name": f"Deferrable Load {k}",
-            }
-        )
-        custom_deferrable_state_id.append(
-            {
-                "entity_id": f"sensor.p_deferrable{k}_state",
-                "device_class": "enum",
-                "unit_of_measurement": "",
-                "friendly_name": f"Deferrable Load {k} Command",
-            }
-        )
-        custom_predicted_temperature_id.append(
-            {
-                "entity_id": f"sensor.temp_predicted{k}",
-                "device_class": "temperature",
-                "unit_of_measurement": default_temperature_unit,
-                "friendly_name": f"Predicted temperature {k}",
-            }
-        )
-        custom_heating_demand_id.append(
-            {
-                "entity_id": f"sensor.heating_demand{k}",
-                "device_class": "energy",
-                "unit_of_measurement": "kWh",
-                "friendly_name": f"Heating demand {k}",
-            }
-        )
+    load_ids = [
+        _default_load_publish_ids(k, default_temperature_unit)
+        for k in range(params["optim_conf"]["number_of_deferrable_loads"])
+    ]
+    custom_deferrable_forecast_id = [ids["custom_deferrable_forecast_id"] for ids in load_ids]
+    custom_deferrable_state_id = [ids["custom_deferrable_state_id"] for ids in load_ids]
+    custom_predicted_temperature_id = [ids["custom_predicted_temperature_id"] for ids in load_ids]
+    custom_heating_demand_id = [ids["custom_heating_demand_id"] for ids in load_ids]
     default_passed_dict = {
         "custom_pv_forecast_id": {
             "entity_id": "sensor.p_pv_forecast",
@@ -2627,6 +2637,18 @@ async def treat_runtimeparams(
                     logger,
                 )
             params["optim_conf"] = optim_conf
+            # The default publish ids were built from the load count before the
+            # steps above could change it (a heat_topology compile, a runtime
+            # def_load_config). Pad each per-load id list with the defaults for
+            # the extra loads, or publish-data indexes past its end.
+            passed_data = params.get("passed_data") or {}
+            for ids_key in _LOAD_PUBLISH_ID_KEYS:
+                ids = passed_data.get(ids_key)
+                if isinstance(ids, list) and len(ids) < final_num_def_loads:
+                    passed_data[ids_key] = list(ids) + [
+                        _default_load_publish_ids(k)[ids_key]
+                        for k in range(len(ids), final_num_def_loads)
+                    ]
 
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
