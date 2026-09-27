@@ -3460,6 +3460,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(p_def[6:].sum(), 0.0)
         self.assertEqual(Optimization.validate_def_timewindow(6, 0, 2, 10), (6, 10, None))
 
+    def test_prior_heat_length_mismatch_is_logged(self):
+        """A prior_heat list that does not match the lag is right-aligned or
+        truncated, and that alignment is logged rather than silent."""
+        opt = self.create_optimization()
+        with self.assertLogs(logger, level="INFO") as logs:
+            short = opt._resolve_prior_heat([5.0], 3, "Load 0")
+            long = opt._resolve_prior_heat([1.0, 2.0, 3.0, 4.0], 3, "Load 0")
+        np.testing.assert_array_equal(short, [0.0, 0.0, 5.0])
+        np.testing.assert_array_equal(long, [2.0, 3.0, 4.0])
+        self.assertEqual(sum("prior_heat has" in line for line in logs.output), 2)
+        with self.assertNoLogs(logger, level="INFO"):
+            opt._resolve_prior_heat([1.0, 2.0, 3.0], 3, "Load 0")
+
     def test_thermal_inertia_and_prior_heat_not_flagged_unknown(self):
         """Issue #943 linter: thermal_inertia and prior_heat are read from the
         same per-load thermal_config dict (hc.get("thermal_inertia") /
@@ -3474,7 +3487,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     "min_temperatures": [20.0] * 48,
                     "max_temperatures": [24.0] * 48,
                     "thermal_inertia": 1.5,
-                    "prior_heat": 0.3,
+                    "prior_heat": [300.0, 300.0, 300.0],
                 }
             }
         ]
