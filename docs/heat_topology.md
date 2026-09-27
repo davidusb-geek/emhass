@@ -520,6 +520,34 @@ send at runtime, or send only `shared_tank_start_temperatures` (for example
 `{"dhw": 48.5}`) to override the start temperature per storage id without
 resending the topology. The solve takes a few seconds longer than a warm start.
 
+With `thermal_inertia`, heat produced at step `t` only reaches the storage at
+step `t + 1 + L`, where `L` is `thermal_inertia` divided by the time step,
+rounded down. In a one-shot day-ahead plan the first `L` steps therefore get no
+source heat, which is correct: nothing precedes the horizon. A rolling MPC run
+starts mid-flight, though: heat committed by the previous runs is still on its
+way. Without an initial condition, the temperature over those first steps does
+not depend on anything the optimizer can choose, so it keeps re-injecting heat
+and returns an Optimal plan that over-provisions heating.
+
+Pass that heat per run with `shared_tank_prior_heat`, keyed by storage id:
+
+```json
+{"shared_tank_prior_heat": {"house": [0.8, 1.4]}}
+```
+
+The values are the thermal kWh delivered in each of the last `L` steps, oldest
+first; a shorter list is right-aligned (the most recent steps are the ones still
+in flight). Omitting it keeps the cold-start behaviour.
+
+To keep it up to date, on every MPC run drop the oldest value and append the
+thermal kWh actually delivered during the step that just ran. Do not refill it
+from the new plan's own first `L` steps: that feeds the model its intentions
+rather than what the hardware did, which is exactly what this initial condition
+corrects. The best source is a differenced heat or energy counter on the unit
+(thermal kWh per step, or electrical kWh times that step's COP); the executed
+step of the previous plan is a usable fallback when there is no counter and the
+unit follows its setpoints closely.
+
 ## Combining with other deferrable loads
 
 By default the compiler replaces the whole deferrable-load set with the
