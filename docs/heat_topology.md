@@ -21,8 +21,11 @@ Set `heat_topology` in `optim_conf` for a static configuration, or pass it as a
 top-level runtime parameter to an optimization endpoint. Runtime parameters
 take precedence over the static configuration.
 
-In the add-on configuration page, the field is an object input. Paste valid
-JSON, not a quoted JSON string. For example, the Python configuration below
+In the add-on configuration page, the field is a multi-line text box. Paste
+valid JSON, not a quoted JSON string. When you save, EMHASS compiles the
+topology first: an invalid topology is not saved, and the alert names the
+offending field (for example
+`flows[2].from=ghost_source does not match any source.id`). For example, the Python configuration below
 can be converted to JSON with:
 
 ```python
@@ -71,6 +74,10 @@ watts of source input:
 | `efficiency` | Required constant conversion efficiency for gas, oil, district, electric, and constant-efficiency sources. |
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
+| `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
+| `overshoot_temperature` | Optional soft threshold (degrees Celsius): with the storage's desired temperature set, this source stops while the storage is above it. Overrides the storage-level `overshoot_temperature`. |
+| `startup_penalty` | Optional cost per off-to-on switch, to discourage short cycling; default `0`. |
+| `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
 
 A heat pump requires either `supply_temperature` or a `heating_curve`. A
 constant-efficiency source requires `efficiency`.
@@ -83,6 +90,35 @@ Source type controls electric-balance membership by default:
 
 An explicit `electric: true` or `electric: false` overrides the default. This
 keeps a gas boiler's fuel input out of the household electric power balance.
+
+#### Per-source temperature ceiling
+
+When two sources feed the same storage but reach different maximum
+temperatures, for example a DHW tank fed by a heat pump (condenser limit about
+53 degrees Celsius) and an electric booster (up to 65 degrees Celsius), the
+optimizer would otherwise let the cheaper heat pump cover the band above its
+limit too, which it physically cannot deliver. `max_supply_temperature` makes
+that limit hard: the source only injects heat while the storage is at or below
+its ceiling, so the booster is scheduled exactly for the band above it.
+
+```json
+"sources": [
+  {"id": "hp", "type": "heatpump", "nominal_power": 3500,
+   "supply_temperature": 55, "max_supply_temperature": 53},
+  {"id": "booster", "type": "electric", "nominal_power": 3000, "efficiency": 1.0}
+]
+```
+
+This is a physical limit, not a preference: it also holds in the relaxed
+fallback. For a soft preference, use `overshoot_temperature` with a desired
+temperature on the storage (see below); the two compose.
+
+`supply_temperature` only sets the heat pump's COP; it is not a ceiling. Without
+`max_supply_temperature` the optimizer may plan to heat the storage above the
+supply temperature, and the compiler logs a warning for such a heat pump. To
+cap the storage at the supply temperature, set `max_supply_temperature` equal
+to `supply_temperature`. The cap is opt-in because it makes a storage whose
+minimum temperature sits at the supply temperature infeasible.
 
 ### Storage
 
@@ -109,6 +145,13 @@ comfort control is available through `desired_temperature` or
 `desired_temperatures`, `overshoot_temperature`, `penalty_factor`, and
 `comfort_sense` (`heat` or `cool`).
 
+The storage's `overshoot_temperature` applies to every source that feeds it,
+unless a source sets its own. That makes a two-stage setup a preference: with
+`desired_temperatures: 60` on the tank, `overshoot_temperature: 55` on the heat
+pump and `75` on the electric element, the element lifts the band above
+55 degrees Celsius only when the comfort penalty justifies it. The band stays
+soft, so comfort alone cannot make the problem infeasible.
+
 For predictable constraints, make the maximum-temperature array cover the
 optimization horizon. A shorter minimum-temperature array is extended using
 its final value, but a maximum-temperature array is not currently extended.
@@ -132,6 +175,11 @@ Consumers are folded into their target storage:
 
 Only one `building_demand` consumer is allowed per storage. Multiple profile
 consumers targeting one storage are added element by element.
+
+A `profile` and a `building_demand` consumer on the same storage add up, so one
+storage can serve hot water and space heating at once (a combi tank). The
+standing loss is counted once: the flat `thermal_loss` when a draw-off profile
+is present, otherwise the indoor/outdoor loss.
 
 ### Cost tracks
 
@@ -276,7 +324,40 @@ A topology is rebuilt on every run instead of reusing the cached (warm-start)
 problem, so each run uses the live `start_temperature` and the current
 forecast. This also holds for every day of a perfect-forecast run. Pass the
 measured storage temperature as `start_temperature` in the `heat_topology` you
-send at runtime; the solve takes a few seconds longer than a warm start.
+send at runtime, or send only `shared_tank_start_temperatures` (for example
+`{"dhw": 48.5}`) to override the start temperature per storage id without
+resending the topology. The solve takes a few seconds longer than a warm start.
+
+## Combining with other deferrable loads
+
+By default the compiler replaces the whole deferrable-load set with the
+topology's flows, because it cannot tell configured loads apart from the
+shipped defaults. If you also have ordinary deferrable loads (washing machine,
+EV charger, ...) in the per-load arrays, set `extend_deferrable_loads` at the
+top level of the topology:
+
+```json
+{
+  "heat_topology": {
+    "extend_deferrable_loads": true,
+    "sources": ["..."],
+    "storage": ["..."],
+    "flows": ["..."]
+  }
+}
+```
+
+Your configured loads then keep indices `0..N-1`, and the topology's loads are
+appended at `N..N+M-1`. Shared-tank `load_ids` and actuator-group references are
+shifted accordingly, and manually declared `shared_thermal_tanks` or
+`deferrable_load_groups` entries are kept, with the compiled ones appended.
+
+```{warning}
+The appended topology loads are numbered after your configured loads, so adding
+or removing a manual load later renumbers them (`sensor.p_deferrable2` silently
+changes meaning). Keep the manual load count stable once a topology is in use, or
+remap the published entities with `custom_deferrable_forecast_id`.
+```
 
 ## Validation and troubleshooting
 
