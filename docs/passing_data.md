@@ -204,7 +204,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
 
-- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Only used by `naive-mpc-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
+- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Used by `naive-mpc-optim` and `dayahead-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 

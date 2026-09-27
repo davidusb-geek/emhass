@@ -48,7 +48,7 @@ This is a power charge, so it is not multiplied by the optimization timestep.
 
 Expected: `N=1` preserves the pre-aggregation capacity-charge semantics.
 
-## Step 3: Feed the incumbent billing-period peak (MPC)
+## Step 3: Feed the incumbent billing-period peak (MPC and day-ahead)
 
 <!-- source: src/emhass/utils.py:1771 -->
 <!-- transport: direct EMHASS naive-mpc-optim runtime JSON; adapter-specific transport untested -->
@@ -64,6 +64,8 @@ Pass `current_period_peak` in Watts. With `N=1`, use the highest eligible positi
 ```
 
 The currently open tariff interval is not part of this incumbent until it completes.
+
+`dayahead-optim` honours `current_period_peak` the same way, so a day-ahead plan also imports freely up to the peak you have already paid for instead of flattening the grid below it. The other capacity runtime inputs (`capacity_charge_window`, `capacity_charge_consideration`, `capacity_charge_current_interval_history`) remain MPC-only.
 
 Expected: EMHASS does not spend flexibility trying to reduce the planned peak below a billed peak that is already locked in.
 
@@ -226,7 +228,7 @@ Expected: comparisons between capacity-charge runs use the billed metric above, 
 
 ## Caveats
 
-- `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are MPC runtime inputs. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
+- `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are MPC runtime inputs; `current_period_peak` is accepted by both `naive-mpc-optim` and `dayahead-optim`. The structural `capacity_charge_interval_timesteps` applies to the shared capacity-charge model.
 - `capacity_charge_consideration` is separate from `capacity_charge_window`: it narrows which otherwise tariff-eligible occurrences count toward THIS solve's peak, and it never widens eligibility.
 - Two different "history" quantities behave differently under consideration, and the distinction matters at `N>1`. `capacity_charge_current_interval_history` holds realised samples inside a **still-open** tariff interval; that interval's billed average does not exist until it closes, so the whole interval candidate is prospective and the endpoint consideration weight **does** scale it - the planned portion and the realised-history portion alike, all-or-nothing. `current_period_peak` is the already-completed, irreversible billed-history floor; it is an independent constraint that consideration **never** scales or erases, at any `N`.
 - For well-aligned `N>1` consideration input, hold the chosen `capacity_charge_consideration` value constant across every planned native timestep of a given completed tariff interval - including, for the first, still-open interval, every decision index from `0` through its own endpoint - rather than only at the endpoint. The endpoint alone sets the applied weight, but a differing planned span still trips EMHASS's own misalignment warning. Never rewrite `capacity_charge_current_interval_history` to compensate; it holds only already-realised samples.
