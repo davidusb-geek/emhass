@@ -1410,8 +1410,8 @@ p {
 
 }
 
-/* Center the existing responsive Plotly width within its result row. */
-#template > .table_div .plotly-graph-div {
+/* Center the width-bearing wrapper generated around each Plotly graph. */
+#template > .table_div > div:has(> .plotly-graph-div) {
   margin-inline: auto !important;
 }
 
