@@ -3197,6 +3197,61 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Available timeframe is shorter than the specified number of hours to operate", joined
         )
 
+    def test_thermal_inertia_not_flagged_unknown(self):
+        """Issue #943 linter: thermal_inertia is read from the per-load
+        thermal_config dict (hc.get("thermal_inertia")), so warning that it is
+        "ignored" is wrong."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 0.25,
+                    "cooling_constant": 0.01,
+                    "start_temperature": 22.0,
+                    "min_temperatures": [20.0] * 48,
+                    "max_temperatures": [24.0] * 48,
+                    "thermal_inertia": 1.5,
+                }
+            }
+        ]
+        with self.assertLogs(logger, level="WARNING") as logs:
+            # Sentinel so the capture never fails for lack of any record; the
+            # assertions below are on absence of the unknown-key warnings.
+            logger.warning("sentinel record for log capture")
+            self.create_optimization()
+        joined = "\n".join(logs.output)
+        self.assertNotIn("unknown key 'thermal_inertia'", joined)
+
+    def test_thermal_battery_no_demand_model_raises(self):
+        """A thermal_battery load that configures NONE of the three demand models
+        (draw_off_demand, the four physics keys, or specific_heating_demand+area)
+        must fail with a ValueError naming all three options, not a bare
+        KeyError('specific_heating_demand') from deep inside the demand call."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        with self.assertRaises(ValueError) as ctx:
+            self.run_optimization_with_config(
+                [
+                    {
+                        "thermal_battery": {
+                            "start_temperature": 20.0,
+                            "supply_temperature": 55.0,
+                            "carnot_efficiency": 0.40,
+                            "volume": 50.0,
+                            # no draw_off_demand, no physics keys, no
+                            # specific_heating_demand/area pair
+                            "min_temperatures": [18.0] * 48,
+                            "max_temperatures": [22.0] * 48,
+                        }
+                    },
+                ]
+            )
+        msg = str(ctx.exception)
+        self.assertIn("draw_off_demand", msg)
+        self.assertIn("u_value", msg)
+        self.assertIn("specific_heating_demand", msg)
+
     def test_thermal_config_unknown_key_warns(self):
         """Issue #943: a thermal_config with an unrecognized key (e.g. the
         singular min_temperature instead of the list min_temperatures, or a

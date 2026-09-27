@@ -601,8 +601,18 @@ def compile_heat_topology(topology: dict) -> dict:
 
     for i, f in enumerate(flows):
         src = src_by_id[f["from"]]
-        nominal_power.append(float(src.get("nominal_power", 0)))
-        min_power.append(float(src.get("min_power", 0)))
+        src_nominal_power = float(src.get("nominal_power", 0))
+        src_min_power = float(src.get("min_power", 0))
+        # p >= min_power and p <= nominal_power cannot both hold, so this bound is
+        # unsatisfiable; reject it here rather than let it surface as a generic
+        # Infeasible. Equality is legal (off, or pinned at the nominal power).
+        if src_min_power > src_nominal_power:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].min_power must be <= nominal_power, "
+                f"got min_power={src_min_power}, nominal_power={src_nominal_power}"
+            )
+        nominal_power.append(src_nominal_power)
+        min_power.append(src_min_power)
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
         # Source-side fields - shape expected by resolve_thermal_battery_cop
