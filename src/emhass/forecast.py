@@ -500,6 +500,9 @@ class Forecast:
                 self.optim_conf["open_meteo_cache_max_age"],
                 self.optim_conf["delta_forecast_daily"].days,
             )
+            if data_raw is None:
+                # Cold start: the request failed and there is no JSON cache to fall back to.
+                raise ValueError("Open-Meteo returned no forecast data and no cache is available")
             data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
             # Date/times in the Open-Meteo JSON are unix timestamps
             data_15min["time"] = pd.to_datetime(data_15min["time"], unit="s", utc=True)
