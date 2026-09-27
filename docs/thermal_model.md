@@ -53,7 +53,7 @@ You can define the following parameters inside the `thermal_config` dictionary:
 * **min_temperatures**: (List of floats) The minimum allowed temperature per timestep.
 * **max_temperatures**: (List of floats) The maximum allowed temperature per timestep.
 * **desired_temperatures**: (Legacy) A specific target temperature per timestep. Used with `penalty_factor`.
-* **overshoot_temperature**: (Legacy) A global maximum temperature limit.
+* **overshoot_temperature**: (Legacy) A global maximum temperature limit. Used with `desired_temperatures`: while the temperature is beyond it, the load is switched off, whether it is semi-continuous or continuous.
 
 **Note on Constraint Modes:**
 It is recommended to use `min_temperatures` and `max_temperatures` to define a "Comfort Range". This allows the optimizer to "float" the temperature within this range to find the cheapest time to operate, resulting in clear On/Off blocks.
