@@ -1694,6 +1694,44 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["is_electric_load"], [True] * (original_num + 2))
         self.assertIn("thermal_source", out["def_load_config"][original_num])
 
+    async def test_heat_topology_extend_does_not_leak_minimum_times(self):
+        """A def_minimum_on/off_time array longer than the user's load count must
+        not leak its extra entries onto the appended topology loads."""
+        params = await TestUtils.get_test_params()
+        original_num = params["optim_conf"]["number_of_deferrable_loads"]
+        params["optim_conf"]["def_minimum_on_time"] = [3] * (original_num + 4)
+        params["optim_conf"]["def_minimum_off_time"] = [2] * (original_num + 4)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=True)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out["def_minimum_on_time"], [3] * original_num + [0, 0])
+        self.assertEqual(out["def_minimum_off_time"], [2] * original_num + [0, 0])
+
+    def test_compile_heat_topology_rejects_wrong_types(self):
+        """Wrong top-level types raise the documented ValueError instead of an
+        AttributeError, and a string extend flag is not treated as true."""
+        for topology, field in (
+            ({"sources": [], "flows": "x"}, "flows"),
+            ({"sources": {"id": "hp"}}, "sources"),
+            ({"sources": [], "cost_tracks": ["gas"]}, "cost_tracks"),
+            ({"sources": [], "extend_deferrable_loads": "false"}, "extend_deferrable_loads"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, f"heat_topology.{field}"):
+                    utils.compile_heat_topology(topology)
+
     async def test_treat_runtimeparams_heat_topology_replace_stays_default(self):
         """Without the flag the compiler keeps today's replace behaviour:
         the topology defines the whole load set, indices start at 0."""

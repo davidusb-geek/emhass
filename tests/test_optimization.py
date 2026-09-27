@@ -5816,7 +5816,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         carrying combined draw-off + building demand AND soft comfort fields,
         with operating_hours = 0 (temperature-driven sources, which requires
         the shared-tank activation fix) and a shared_tank_start_temperatures
-        override. No single feature branch can run this combination."""
+        override."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
         draw_off = [0.0] * 48
