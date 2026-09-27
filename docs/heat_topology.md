@@ -507,8 +507,10 @@ A storage fed only by a transfer has no load of its own; its temperature is in
 its position in the tank list (its position in `storage`, after any manual
 `shared_thermal_tanks` in extend mode). Each transfer adds a `P_transfer_{from}_{to}` column
 to the result (delivered heat, W): the schedule to drive the circulation pump
-with. These columns are in the result CSV and the `/api/v1/plan` output; they
-are not published as Home Assistant sensors.
+with. Both the transfer-only storage's temperature and the `P_transfer_*`
+columns are in the result CSV and the `/api/v1/plan` output, but they are not
+published as Home Assistant sensors, because neither belongs to a deferrable
+load.
 
 ### Rolling MPC
 
