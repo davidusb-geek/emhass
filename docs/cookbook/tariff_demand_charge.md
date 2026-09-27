@@ -51,7 +51,7 @@ Expected: `N=1` preserves the pre-aggregation capacity-charge semantics.
 ## Step 3: Feed the incumbent billing-period peak (MPC and day-ahead)
 
 <!-- source: src/emhass/utils.py:1771 -->
-<!-- transport: direct EMHASS naive-mpc-optim runtime JSON; adapter-specific transport untested -->
+<!-- transport: direct EMHASS naive-mpc-optim / dayahead-optim runtime JSON; adapter-specific transport untested -->
 
 Pass `current_period_peak` in Watts. With `N=1`, use the highest eligible positive-import timestep already incurred in the current billing period. With `N>1`, use the highest eligible completed tariff-interval average instead.
 
