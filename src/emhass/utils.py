@@ -555,6 +555,13 @@ def compile_heat_topology(topology: dict) -> dict:
     """
     if not isinstance(topology, dict) or not topology:
         return {}
+    for key in ("sources", "storage", "consumers", "flows", "actuator_groups"):
+        if not isinstance(topology.get(key) or [], list):
+            raise ValueError(f"heat_topology.{key} must be a list")
+    if not isinstance(topology.get("cost_tracks") or {}, dict):
+        raise ValueError("heat_topology.cost_tracks must be an object")
+    if not isinstance(topology.get("extend_deferrable_loads", False), bool):
+        raise ValueError("heat_topology.extend_deferrable_loads must be true or false")
     sources = topology.get("sources", []) or []
     storage = topology.get("storage", []) or []
     consumers = topology.get("consumers", []) or []
@@ -1060,6 +1067,15 @@ def _extend_optim_conf_with_compiled_topology(
         existing = list(existing) if isinstance(existing, list) else []
         existing += [default] * (offset - len(existing))
         optim_conf[key] = existing[:offset] + list(compiled[key])
+    # Minimum on/off times are not compiled; keep the user's entries for their
+    # own loads and give the topology loads no minimum (a longer user array
+    # must not leak onto the appended loads).
+    n_compiled = len(compiled["def_load_config"])
+    for key in ("def_minimum_on_time", "def_minimum_off_time"):
+        existing = optim_conf.get(key)
+        if isinstance(existing, list):
+            existing = list(existing)[:offset]
+            optim_conf[key] = existing + [0] * (offset - len(existing)) + [0] * n_compiled
     # def_load_config pads with fresh dicts (no shared instance between slots).
     def_cfgs = optim_conf.get("def_load_config")
     def_cfgs = list(def_cfgs) if isinstance(def_cfgs, list) else []
@@ -2308,8 +2324,10 @@ async def treat_runtimeparams(
                     logger.warning(
                         "Both heat_topology and runtime shared_thermal_tanks are "
                         "set; the compiled topology replaces the runtime tank "
-                        "list. Pass heat_topology itself at runtime to change "
-                        "tanks per run."
+                        "list (with extend_deferrable_loads: true the runtime "
+                        "tanks are kept and the topology's tanks appended). "
+                        "Pass heat_topology itself at runtime to change tanks "
+                        "per run."
                     )
             else:
                 logger.warning(
