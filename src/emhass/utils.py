@@ -563,8 +563,8 @@ def compile_heat_topology(topology: dict) -> dict:
     cost_tracks = topology.get("cost_tracks", {}) or {}
 
     # Validate ids up front so a malformed entry raises the documented
-    # ValueError naming the offending field, not an internal KeyError (callers
-    # like the web UI's save-time validation only catch ValueError).
+    # ValueError naming the offending field, not an internal KeyError (the
+    # documented contract: an invalid topology raises ValueError).
     for kind, entries in (("sources", sources), ("storage", storage)):
         for i, entry in enumerate(entries):
             if not isinstance(entry, dict) or not entry.get("id"):

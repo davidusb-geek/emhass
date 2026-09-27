@@ -273,7 +273,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         bypassed when shared tanks are present, otherwise every MPC tick
         re-solves against the first tick's tank temperature (issue #970).
 
-        On master this FAILS: the first call stores the object in the cache and
+        Without the bypass, the first call stores the object in the cache and
         the second call returns the same cached (stale) object.
         """
         OptimizationCache.clear(logger)

@@ -1941,8 +1941,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_compile_heat_topology_missing_fields_raise_valueerror(self):
         """Missing required fields must raise ValueError naming the field, not a
-        bare KeyError: callers (the web UI's save-time validation) only catch
-        ValueError, so a KeyError surfaced as an unhandled 500."""
+        bare KeyError: the documented contract is that an invalid topology
+        raises ValueError."""
         no_efficiency = {
             "sources": [{"id": "gas", "type": "gas", "nominal_power": 20000}],
             "storage": [{"id": "dhw", "volume": 0.2}],
@@ -4290,9 +4290,8 @@ class TestCompileHeatTopology(unittest.TestCase):
 
     def test_missing_id_raises_value_error_with_field_path(self):
         """A source/storage entry without an `id` must raise the documented
-        ValueError naming the offending field, not an internal KeyError - the
-        web UI's save-time validation (and any other caller) only catches
-        ValueError, so a KeyError surfaces as an unhandled 500."""
+        ValueError naming the offending field, not an internal KeyError: the
+        documented contract is that an invalid topology raises ValueError."""
         no_source_id = {
             "sources": [{"type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
             "storage": [{"id": "dhw", "volume": 0.2}],
