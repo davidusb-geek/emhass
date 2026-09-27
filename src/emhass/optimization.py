@@ -4356,17 +4356,16 @@ class Optimization:
                     constraints.append(
                         predicted_temp - overshoot - big_m_os * (1 - is_overshoot) <= 0
                     )
-                # Suppress THIS source while the tank is beyond its threshold -
-                # same gating split as the thermal_battery soft constraints.
-                if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
-                    constraints.append(is_overshoot[1:] + self.vars["p_def_bin2"][k][:-1] <= 1)
-                else:
-                    nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    if isinstance(nominal_k, list | np.ndarray):
-                        nominal_k = max(nominal_k)
-                    constraints.append(
-                        self.vars["p_deferrable"][k] <= nominal_k * (1 - is_overshoot)
-                    )
+                # Suppress THIS source while the tank is beyond its threshold at
+                # the start of a step. Bounding the power works for continuous and
+                # semi-continuous sources alike; gating on the temperature at t+1
+                # instead would forbid a semi-continuous source from ever crossing
+                # the threshold, which is infeasible when one full-power step lifts
+                # the tank past it.
+                nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                if isinstance(nominal_k, list | np.ndarray):
+                    nominal_k = max(nominal_k)
+                constraints.append(self.vars["p_deferrable"][k] <= nominal_k * (1 - is_overshoot))
 
             # Comfort-shortfall penalty toward the desired band: only deviation
             # below desired (sense=heat) / above desired (sense=cool) is priced.
