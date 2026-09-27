@@ -662,6 +662,10 @@ def compile_heat_topology(topology: dict) -> dict:
                 )
             source_block["carnot_efficiency"] = float(src.get("carnot_efficiency", 0.4))
         elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
+            if src.get("efficiency") is None:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}] (type={src_type}) requires 'efficiency'"
+                )
             source_block["efficiency"] = float(src["efficiency"])
         else:
             raise ValueError(
@@ -700,6 +704,11 @@ def compile_heat_topology(topology: dict) -> dict:
             storage_demand[target] = {"profile": None, "building": None, "pool": None}
         ctype = (c.get("type") or "").lower()
         if ctype == "profile":
+            if c.get("profile") is None:
+                raise ValueError(
+                    f"heat_topology.consumers[{c.get('id', target)}] (type=profile) "
+                    "requires 'profile'"
+                )
             prof = list(c["profile"])
             existing = storage_demand[target]["profile"]
             if existing is None:
