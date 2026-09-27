@@ -201,7 +201,9 @@ consumers targeting one storage are added element by element.
 A `profile` and a `building_demand` consumer on the same storage add up, so one
 storage can serve hot water and space heating at once (a combi tank). The
 standing loss is counted once: the flat `thermal_loss` when a draw-off profile
-is present, otherwise the indoor/outdoor loss.
+is present, otherwise the indoor/outdoor loss. Set `indoor_target_temperature`
+on the `building_demand` consumer; without it, a combi tank computes the
+building demand against 20 degrees Celsius.
 
 ### Cost tracks
 
