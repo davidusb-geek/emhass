@@ -633,15 +633,13 @@ def compile_heat_topology(topology: dict) -> dict:
         penalty = float(src.get("startup_penalty", 0.0))
         if penalty < 0:
             raise ValueError(
-                f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, "
-                f"got {penalty}"
+                f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, got {penalty}"
             )
         startup_penalty.append(penalty)
         starts_cap = int(src.get("max_startups", 0))
         if starts_cap < 0:
             raise ValueError(
-                f"heat_topology.sources[{src['id']}].max_startups must be >= 0, "
-                f"got {starts_cap}"
+                f"heat_topology.sources[{src['id']}].max_startups must be >= 0, got {starts_cap}"
             )
         max_startups.append(starts_cap)
         # Source-side fields - shape expected by resolve_thermal_battery_cop

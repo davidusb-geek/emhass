@@ -450,7 +450,10 @@ async def parameter_set():
     if isinstance(heat_topology, dict) and heat_topology:
         try:
             compile_heat_topology(heat_topology)
-        except ValueError as e:
+        except (ValueError, KeyError, TypeError) as e:
+            # The compiler raises ValueError with a field path; KeyError/TypeError
+            # are a backstop for malformed entries it does not check explicitly,
+            # which would otherwise surface as an unhandled 500.
             app.logger.warning("Rejected config save: heat_topology invalid: %s", e)
             return await make_response([f"heat_topology is invalid: {e}"], 400)
 

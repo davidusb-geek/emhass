@@ -2928,6 +2928,7 @@ class TestOptimizationCache(unittest.TestCase):
         )
 
         self.assertNotEqual(key1, key2)
+
     def test_cache_key_tracks_thermal_source_block(self):
         """A thermal_source block (shared-tank source) must be hashed into the
         cache key: its fields (max_supply_temperature, COP parameters) are baked
