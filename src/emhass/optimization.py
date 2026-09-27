@@ -8081,7 +8081,7 @@ class Optimization:
         p_load: pd.Series,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
-        current_period_peak: float | None = None,
+        current_period_peak: float | list | None = None,
         stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
@@ -8117,8 +8117,10 @@ class Optimization:
             (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
             floored at this value, so importing up to the already-paid peak is free \
             (only NEW peaks above it are priced). Mirrors the MPC path; without it \
-            the dayahead solver minimises the absolute peak and ignores the floor.
-        :type current_period_peak: float, optional
+            the dayahead solver minimises the absolute peak and ignores the floor. \
+            With several capacity components (a list ``capacity_cost_per_kw``), \
+            one value per component.
+        :type current_period_peak: float | list, optional
         :param stage_times: Optional dict to record nested sub-stage timings
             (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
         :type stage_times: dict, optional
