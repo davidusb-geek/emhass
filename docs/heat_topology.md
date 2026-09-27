@@ -24,8 +24,9 @@ take precedence over the static configuration.
 In the add-on configuration page, the field is a multi-line text box. Paste
 valid JSON, not a quoted JSON string. When you save, EMHASS compiles the
 topology first: an invalid topology is not saved, and the alert names the
-offending field (for example
-`flows[2].from=ghost_source does not match any source.id`). For example, the Python configuration below
+offending field, for example:
+`heat_topology is invalid: heat_topology.flows[2].from='ghost_source' does not match any source.id`.
+For example, the Python configuration below
 can be converted to JSON with:
 
 ```python
