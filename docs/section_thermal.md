@@ -35,15 +35,22 @@ directly:
 | `thermal_battery` field | In `heat_topology` |
 | --- | --- |
 | `supply_temperature`, `heating_curve`, `carnot_efficiency` | a `heatpump` source |
-| `efficiency` (constant-efficiency mode) | a `gas`, `oil`, `district`, `electric` or `constant_efficiency` source |
+| `efficiency` (constant-efficiency mode) | an `electric` or `constant_efficiency` source; a `gas`, `oil` or `district` source only together with a `cost_track` for its fuel price, because such a source is not on the electricity bill |
 | `volume`, `density`, `heat_capacity`, `thermal_loss` | a storage entry |
 | `start_temperature`, `min_temperatures`, `max_temperatures`, `min_temperature_curve`, `desired_temperatures`, `overshoot_temperature`, `penalty_factor` | the same storage entry |
 | `sense` (`heat` or `cool`) | the storage's `comfort_sense` |
 | `draw_off_demand` | a `profile` consumer on that storage |
-| `u_value`, `envelope_area`, `ventilation_rate`, `heated_volume` (or `specific_heating_demand`, `area`), `window_area`, `shgc`, `internal_gains_factor` | a `building_demand` consumer on that storage |
+| `u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`, `indoor_target_temperature` (or `specific_heating_demand`, `area`, `base_temperature`, `annual_reference_hdd`), `window_area`, `shgc`, `internal_gains_factor` | a `building_demand` consumer on that storage |
+| `solar_absorption_area`, `solar_absorption_factor` | a `pool_comfort` consumer on that storage |
+| `cooling_curve` | the `heatpump` source |
+| `thermal_inertia_time_constant` | no direct equivalent: a storage's `thermal_inertia` is a pure delay, not a low-pass filter |
 | the nominal power of the deferrable load | the source's `nominal_power` |
 
-Then remove the `thermal_battery` entry from `def_load_config`. The compiler
+Then remove the `thermal_battery` entry from `def_load_config`, lower
+`number_of_deferrable_loads` by one, and remove that load's entry from every
+per-load array (`nominal_power_of_deferrable_loads`,
+`operating_hours_of_each_deferrable_load`, `treat_deferrable_load_as_semi_cont`
+and the others), so the remaining loads keep matching entries. The compiler
 creates one deferrable load per source-to-storage flow, numbered in the order of
 `flows`, so the load index (and `sensor.p_deferrable{k}`) of the heat pump may
 change: update `custom_deferrable_forecast_id` and
@@ -56,7 +63,8 @@ deferrable loads, set `extend_deferrable_loads` (see
 A heat pump's COP falls as it heats the store hotter. The optimizer plans against
 a COP at an assumed temperature; with `cop_solver: auto` it checks the plan
 against the true temperature-dependent COP afterwards and refines it only when
-the two disagree (default `static`: no refinement). See
+the two disagree (default `static`: no refinement). `cop_solver` is a setting in
+the configuration, not a topology field. See
 [heat_topology](heat_topology.md) for when to turn it on and
 [the mathematical model](advanced_math_model.md) for how it works.
 
