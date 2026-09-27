@@ -3372,7 +3372,10 @@ class Optimization:
 
         # Thermal Inertia Logic
         thermal_inertia = hc.get("thermal_inertia", 0.0)
-        L = int(thermal_inertia / self.time_step)
+        # Clamp to the horizon: a lag of required_len - 1 already puts every step
+        # after t=0 in the dead zone below, and anything longer would build
+        # mismatched slices that cvxpy rejects before any solve.
+        L = max(0, min(int(thermal_inertia / self.time_step), required_len - 1))
 
         # Define Temperature State Variable
         predicted_temp = cp.Variable(required_len, name=f"temp_load_{k}")
@@ -3384,12 +3387,16 @@ class Optimization:
 
         # Main Dynamics (Delayed Power)
         # T[t+1] depends on T[t] and P[t-L]
-        constraints.append(
-            predicted_temp[1 + L :]
-            == predicted_temp[L:-1]
-            + (p_deferrable[: -1 - L] * sense_coeff * heat_factor)
-            - (cool_factor * (predicted_temp[L:-1] - outdoor_temp[L:-1]))
-        )
+        # At the top of the clamp (L == required_len - 1) this block spans zero rows:
+        # the dead zone below already pins every remaining step, and building it
+        # anyway is a cvxpy dimension error.
+        if 1 + L < required_len:
+            constraints.append(
+                predicted_temp[1 + L :]
+                == predicted_temp[L:-1]
+                + (p_deferrable[: -1 - L] * sense_coeff * heat_factor)
+                - (cool_factor * (predicted_temp[L:-1] - outdoor_temp[L:-1]))
+            )
 
         # Startup "Dead Zone" Dynamics
         if L > 0:

@@ -3587,6 +3587,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg="T[3] should rise (or stop dropping) as heating kicks in",
         )
 
+    def test_thermal_inertia_at_or_beyond_horizon_builds(self):
+        """A thermal_inertia at (or past) the end of the horizon must not crash the
+        build. At 23.5 h on a 0.5 h step the lag is required_len - 1, so the lagged
+        dynamics block spans zero rows; at 30 h the lag is longer than the horizon
+        and the dead-zone slices no longer line up. Both used to raise a cvxpy
+        dimension ValueError before any solve; the lag is now clamped to the
+        horizon, where the dead zone alone governs every step."""
+        for inertia in (23.5, 30.0):
+            with self.subTest(thermal_inertia=inertia):
+                self.df_input_data_dayahead = self.prepare_forecast_data()
+                self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+                self.optim_conf["def_load_config"] = [
+                    {},
+                    {
+                        "thermal_config": {
+                            "heating_rate": 10.0,
+                            "cooling_constant": 0.1,
+                            "start_temperature": 20.0,
+                            "thermal_inertia": inertia,
+                            "sense": "heat",
+                            "min_temperatures": [0.0] * 48,
+                            "max_temperatures": [30.0] * 48,
+                        }
+                    },
+                ]
+                self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+                opt = self.create_optimization()
+                res = opt.perform_optimization(
+                    self.df_input_data_dayahead,
+                    self.p_pv_forecast.values.ravel(),
+                    self.p_load_forecast.values.ravel(),
+                    self.df_input_data_dayahead[opt.var_load_cost].values,
+                    self.df_input_data_dayahead[opt.var_prod_price].values,
+                )
+                self.assertEqual(opt.optim_status, "Optimal")
+                # Every step is in the dead zone: pure cooling, no heat arrives.
+                temp = res["predicted_temp_heater1"].to_numpy()
+                self.assertTrue(np.all(np.diff(temp) <= 1e-6))
+
     def test_thermal_inertia_no_regression(self):
         """
         Test backward compatibility: If thermal_inertia is 0 (or missing),
