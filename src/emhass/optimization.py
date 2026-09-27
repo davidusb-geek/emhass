@@ -6210,6 +6210,10 @@ class Optimization:
             self.logger.warning(
                 f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
             )
+            # cvxpy leaves status and value from the PREVIOUS solve in place when
+            # solve() raises, so a reused problem would republish the old plan as
+            # Optimal. Mark the attempt as failed so the rescue path runs.
+            self.prob._status = None
 
         # The problem whose status/value the extraction below reads. Stays
         # self.prob on a clean solve; points at the relaxed problem after a

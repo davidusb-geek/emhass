@@ -11887,6 +11887,37 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"continuous load heated past overshoot_temperature: {temps}",
         )
 
+    def _solve_default_inputs(self, opt):
+        return opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+
+    def test_solver_exception_does_not_republish_previous_plan(self):
+        """cvxpy leaves a problem's status and value untouched when solve() raises,
+        so on an instance that already solved once, an exception on the next run
+        left status 'optimal' from the PREVIOUS run in place: the rescue was skipped
+        and the old plan was published again as Optimal. An exception must be
+        treated as a failed solve and go through the rescue."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt = self.create_optimization()
+        self._solve_default_inputs(opt)
+        self.assertEqual(opt.optim_status, "Optimal")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated solver crash")
+
+        opt.prob.solve = boom
+        self._solve_default_inputs(opt)
+        self.assertNotEqual(
+            opt.optim_status,
+            "Optimal",
+            "a crashed solve must not publish the previous run's status",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
