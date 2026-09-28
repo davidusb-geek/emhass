@@ -741,7 +741,24 @@ def compile_heat_topology(topology: dict) -> dict:
             # the user can add max_supply_temperature to cap it. (Left opt-in:
             # auto-capping at supply_temperature makes a tank whose min_temperature
             # sits at the supply temperature infeasible.)
-            if "supply_temperature" in source_block:
+            # Not needed when the storage's own ceiling already sits at or below
+            # the supply temperature, and not meaningful for a cooling source.
+            storage_max = target_storage.get(
+                "max_temperatures", target_storage.get("max_temperature")
+            )
+            storage_max_values = [
+                float(v)
+                for v in (storage_max if isinstance(storage_max, list) else [storage_max])
+                if isinstance(v, int | float)
+            ]
+            already_capped = bool(storage_max_values) and max(storage_max_values) <= float(
+                source_block.get("supply_temperature", float("inf"))
+            )
+            if (
+                "supply_temperature" in source_block
+                and source_block.get("sense", "heat") != "cool"
+                and not already_capped
+            ):
                 logging.getLogger(__name__).warning(
                     "heat_topology.sources[%s] is a fixed-supply heat pump "
                     "(supply_temperature=%.0f C) without max_supply_temperature: "

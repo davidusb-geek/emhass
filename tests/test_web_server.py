@@ -757,6 +757,39 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertIn("efficiency", body[0])
         mock_build_params.assert_not_called()
 
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("os.path.exists")
+    @patch("emhass.web_server.build_params")
+    @patch("emhass.web_server.param_to_config")
+    async def test_parameter_set_rejects_malformed_list_entries(
+        self, mock_p2c, mock_build_params, mock_exists, mock_file
+    ):
+        """A string where a flow, consumer or group object is expected, or a
+        non-string source type, must return the 400 validation message, not a
+        500 from an AttributeError."""
+        mock_exists.return_value = True
+        f_defaults = AsyncMock()
+        f_defaults.read.return_value = orjson.dumps({"default": 1})
+        mock_file.return_value.__aenter__.return_value = f_defaults
+        storage = [{"id": "dhw", "volume": 0.2}]
+        gas = {"id": "gas", "type": "gas", "nominal_power": 20000, "efficiency": 0.9}
+        for bad in (
+            {"sources": [gas], "storage": storage, "flows": ["x"]},
+            {"sources": [gas], "storage": storage, "consumers": ["x"]},
+            {"sources": [gas], "storage": storage, "actuator_groups": ["x"]},
+            {
+                "sources": [{**gas, "type": 5}],
+                "storage": storage,
+                "flows": [{"from": "gas", "to": "dhw"}],
+            },
+        ):
+            with self.subTest(topology=bad):
+                response = await self.client.post("/set-config", json={"heat_topology": bad})
+                self.assertEqual(response.status_code, 400)
+                body = await response.get_json()
+                self.assertIn("heat_topology is invalid", body[0])
+        mock_build_params.assert_not_called()
+
 
 class TestAPIV1LastRun(unittest.IsolatedAsyncioTestCase):
     """Integration tests for GET /api/v1/last-run (AC-3)."""

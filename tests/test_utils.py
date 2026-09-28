@@ -3847,6 +3847,19 @@ class TestCompileHeatTopology(unittest.TestCase):
         # With the cap set the warning must not fire.
         with self.assertNoLogs(logger, level="WARNING"):
             utils.compile_heat_topology(topo(with_cap=True))
+        # Nor when the storage's own ceiling is already at or below the supply
+        # temperature, or for a cooling storage.
+        capped_storage = topo(with_cap=False)
+        capped_storage["storage"][0]["max_temperature"] = [40] * 48
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(capped_storage)
+        cooling = topo(with_cap=False)
+        cooling["sources"][0]["supply_temperature"] = 7
+        cooling["storage"][0].update(
+            {"comfort_sense": "cool", "min_temperature": [16] * 48, "max_temperature": [26] * 48}
+        )
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(cooling)
 
     def test_two_sources_one_storage(self):
         """HP + gas both feed the same DHW tank."""
