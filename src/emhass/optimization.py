@@ -3615,7 +3615,7 @@ class Optimization:
                 f"Load {k}: thermal_battery requires a demand model - 'draw_off_demand' "
                 "(hot-water profile), the physics keys 'u_value' + 'envelope_area' + "
                 "'ventilation_rate' + 'heated_volume', or 'specific_heating_demand' + "
-                "'area' (degree-day model); none configured"
+                "'area' (degree-day model); none is configured completely"
             )
 
         # Use parameterized values if available (enables warm-start on cache hit)
@@ -4107,14 +4107,15 @@ class Optimization:
                     min_temperatures_list[0] if min_temperatures_list else 20.0,
                 )
                 # Window solar and internal gains belong INSIDE the physics demand
-                # model, exactly as the per-load thermal_config path passes them.
+                # model, exactly as the per-load thermal_battery path passes them.
                 # The heat_topology compiler folds window_area / shgc /
                 # internal_gains_factor from a building_demand consumer onto the
                 # tank; dropping them here left the demand at the raw envelope
                 # loss (U*A*dT + ventilation).
                 window_area = tank.get("window_area", None)
-                shgc = float(tank.get("shgc", 0.6))
-                internal_gains_factor = float(tank.get("internal_gains_factor", 0.0))
+                # An explicit JSON null means "use the default", as elsewhere.
+                shgc = float(tank.get("shgc") if tank.get("shgc") is not None else 0.6)
+                internal_gains_factor = float(tank.get("internal_gains_factor") or 0.0)
                 solar_irradiance = None
                 if "ghi" in data_opt.columns and window_area is not None:
                     vals = np.asarray(data_opt["ghi"].values, dtype=float)

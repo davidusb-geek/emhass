@@ -124,8 +124,9 @@ Consumers are folded into their target storage:
   (`u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`), the
   optional `window_area`, `shgc`, and `internal_gains_factor` fields reduce the
   heating demand by window solar gain and internal gains, exactly as they do
-  for a `thermal_battery`. Window solar gain needs a GHI forecast, which
-  EMHASS already retrieves for PV.
+  for a `thermal_battery`. Window solar gain needs a GHI forecast: the
+  open-meteo weather method provides it (also on the `list` method, see below);
+  other PV forecast methods do not, and the gain is then zero.
 - `type: "pool_comfort"` supplies `solar_absorption_area` and optionally
   `solar_absorption_factor`.
 
@@ -256,6 +257,9 @@ feeds) and `heating_demand_heater{k}` for every such load, just as for a
 `thermal_battery`. To publish them to Home Assistant, pass
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
+When several flows feed the same storage, each of their
+`heating_demand_heater{k}` columns carries the storage's whole demand; do not
+add them up.
 When several flows feed the same storage, each of those loads reports that
 storage's temperature. The ids are matched by position (entry `k` is load `k`);
 loads without an entry publish under the default names, such as

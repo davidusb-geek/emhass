@@ -1667,6 +1667,39 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             passed["custom_deferrable_forecast_id"][2]["entity_id"], "sensor.p_deferrable2"
         )
 
+    async def test_short_user_publish_id_list_is_padded_with_a_warning(self):
+        """A publish id list the caller passes that is shorter than the load count
+        is padded with the default names (publish-data would otherwise index past
+        its end), and the padding is logged rather than silent."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams = {
+            "custom_predicted_temperature_id": [
+                {
+                    "entity_id": "sensor.my_t0",
+                    "unit_of_measurement": "°C",
+                    "friendly_name": "T0",
+                }
+            ]
+        }
+        with self.assertLogs(logger, level="WARNING") as logs:
+            out_params, _, _, _ = await treat_runtimeparams(
+                orjson.dumps(runtimeparams).decode("utf-8"),
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+        ids = orjson.loads(out_params)["passed_data"]["custom_predicted_temperature_id"]
+        self.assertEqual([i["entity_id"] for i in ids], ["sensor.my_t0", "sensor.temp_predicted1"])
+        self.assertTrue(
+            any("custom_predicted_temperature_id has 1 entries" in m for m in logs.output)
+        )
+
     async def test_build_params_pads_def_minimum_on_off_time(self):
         """def_minimum_on_time / def_minimum_off_time must be padded to
         number_of_deferrable_loads like every sibling per-load array, so every

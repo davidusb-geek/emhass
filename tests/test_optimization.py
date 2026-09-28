@@ -5400,7 +5400,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     def test_shared_tank_building_demand_honours_window_and_internal_gains(self):
         """A building_demand shared tank (u_value / envelope_area / ventilation_rate /
         heated_volume) must account for window solar gain and internal gains INSIDE
-        its demand model, exactly as the per-load thermal_config path does.
+        its demand model, exactly as the per-load thermal_battery path does. An
+        explicit null shgc / internal_gains_factor means the default, not a crash.
 
         Before this fix the shared-tank physics call dropped every gain argument, so
         its demand came out as the raw envelope loss - U*A*dT plus ventilation - no
@@ -5408,7 +5409,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         #539 with 6.1 kWh/day of internal gains silently dropped against a
         59.2 kWh/day gross demand, inflating planned heating to 1.8-2.2x measured."""
 
-        def heating_energy(with_gains):
+        def heating_energy(with_gains, null_gains=False):
             self.df_input_data_dayahead = self.prepare_forecast_data()
             self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
             ghi = np.zeros(48)
@@ -5448,6 +5449,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 tank["window_area"] = 25.0
                 tank["shgc"] = 0.6
                 tank["internal_gains_factor"] = 0.8
+            if null_gains:
+                tank["shgc"] = None
+                tank["internal_gains_factor"] = None
             self.optim_conf["shared_thermal_tanks"] = [tank]
             opt = self.create_optimization()
             res = opt.perform_optimization(
@@ -5464,6 +5468,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             heating_energy(True),
             heating_energy(False),
             "window solar + internal gains must reduce a building_demand tank's heating",
+        )
+        self.assertAlmostEqual(
+            heating_energy(False, null_gains=True), heating_energy(False), places=3
         )
 
     def _run_shared_tank_no_cap(
