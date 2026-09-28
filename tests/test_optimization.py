@@ -5935,15 +5935,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             (res["P_deferrable0"].sum() * 3.0 + res["P_deferrable1"].sum() * 1.0) * dt / 1000.0
         )
         self.assertGreater(thermal_in_kwh, 2.2 + 0.7 * building_sum)
-        # The per-source overshoot gate holds end-to-end: the cheap source
-        # stays off while the tank is above its 55 C threshold.
+        # The per-source overshoot gate holds end-to-end: the comfort target
+        # (58 C) lifts the tank above the heat pump's 55 C threshold, and the
+        # (continuous) heat pump never heats in a step that ends above it.
         tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
         self.assertTrue(tank_cols)
         temp = res[tank_cols[0]].reset_index(drop=True)
         hp = res["P_deferrable0"].reset_index(drop=True)
-        above = temp > 55.05
-        if above.any():
-            self.assertLess(hp[above].max(), 1e-3)
+        self.assertTrue((temp > 55.05).any(), "the tank never went above 55 C")
+        ends_above = (temp.shift(-1) > 55.05).fillna(False)
+        self.assertLess(hp[ends_above].max(), 1e-3)
 
     async def test_full_stack_topology_extend_with_other_loads_end_to_end(self):
         """The compiled-topology counterpart of the runtime-tanks test: a

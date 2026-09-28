@@ -77,8 +77,13 @@ watts of source input:
 | `electric` | Optional override for electric-balance membership. |
 | `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
 | `overshoot_temperature` | Optional soft threshold (degrees Celsius): with the storage's desired temperature set, this source stops while the storage is above it. Overrides the storage-level `overshoot_temperature`. |
-| `startup_penalty` | Optional cost per off-to-on switch, to discourage short cycling; default `0`. |
+| `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
 | `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
+
+`startup_penalty` and `max_startups` act on the source's on/off state, which is
+tied to its power only when the source is semi-continuous or has a `min_power`.
+A continuous source without `min_power` can stay "on" at 0 W, so both have
+little or no effect on it; give it a `min_power` if short cycling matters.
 
 A heat pump requires either `supply_temperature` or a `heating_curve`. A
 constant-efficiency source requires `efficiency`.
@@ -359,7 +364,9 @@ top level of the topology:
 ```
 
 Your configured loads then keep indices `0..N-1`, and the topology's loads are
-appended at `N..N+M-1`. Shared-tank `load_ids` and actuator-group references are
+appended at `N..N+M-1`. `N` is your `number_of_deferrable_loads`: the shipped
+defaults configure two example loads (3000 W for 4 h, and 750 W), so set
+it to the number of ordinary loads you really have, or to 0. Shared-tank `load_ids` and actuator-group references are
 shifted accordingly, and manually declared `shared_thermal_tanks` or
 `deferrable_load_groups` entries are kept, with the compiled ones appended.
 
