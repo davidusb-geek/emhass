@@ -101,6 +101,31 @@ SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
 # run hotter (e.g. industrial or glycol systems).
 SHARED_TANK_CAP_BIG_M_TEMP = 100.0
 
+# Minimum recovery window (in optimization steps) granted to a shared thermal
+# tank that starts below its hard minimum temperature. A momentary out-of-band
+# sensor read (e.g. a heating zone dipping below its comfort floor on a cold
+# morning) would otherwise make the problem infeasible, because a rate-limited
+# tank cannot jump back into band in a single step. Over this window the hard
+# floor is ramped from the live start temperature up to the configured minimum,
+# so the tank is only required to recover at a feasible pace. 6 steps is ~3h on
+# a 30-minute grid - long enough for a slow zone or buffer to climb a few
+# degrees; the configured minimum applies in full once the window closes.
+SHARED_TANK_START_RECOVERY_STEPS = 6
+
+# Conservative recovery rate (deg C per optimization step) used to size the
+# grace window when a tank starts further below its floor than the minimum
+# window would cover: window = max(min_steps, ceil(gap / rate)). 0.5 C/step is
+# deliberately slow so the ramp stays feasible for a rate-limited zone; a faster
+# tank simply outruns the floor and reaches band earlier on its own.
+SHARED_TANK_START_RECOVERY_RATE = 0.5
+
+# Objective weight (per degree C per step) on the shortfall below the configured
+# floor inside the recovery window. The ramp above only keeps the problem
+# feasible; this weight dominates energy prices, so a tank whose sources can
+# recover faster than the ramp still does so, and only a tank that physically
+# cannot catch up is allowed to follow the ramp.
+SHARED_TANK_START_RECOVERY_PENALTY = 1000.0
+
 
 class Optimization:
     r"""
@@ -3412,6 +3437,53 @@ class Optimization:
                 battery_first_penalty >= p_grid_pos - cp.multiply(max_from_grid, import_gate)
             )
 
+    # ------------------------------------------------------------------
+    # Shared thermal-comfort building blocks (used by the classic
+    # thermal_config, the thermal_battery, and the shared-tank models, to
+    # avoid re-implementing the same min/max bounds, overshoot indicator and
+    # comfort penalty three times). Behaviour-preserving extraction.
+    # ------------------------------------------------------------------
+    def _add_temp_bound(self, constraints, predicted_temp, config_list, param, n, lower):
+        """Per-step hard temperature bound (lower=True -> min, else max), skipping
+        index 0 (pinned by start_temperature) and any None/nan entries (an
+        unbounded step). Uses a cp.Parameter when given (warm-start), else the raw
+        config values."""
+        if not config_list:
+            return
+        valid = [
+            i for i, v in enumerate(config_list) if v is not None and not np.isnan(v) and 0 < i < n
+        ]
+        if not valid:
+            return
+        rhs = param[valid] if param is not None else np.array([config_list[i] for i in valid])
+        constraints.append(predicted_temp[valid] >= rhs if lower else predicted_temp[valid] <= rhs)
+
+    def _overshoot_indicator(self, constraints, predicted_temp, overshoot, sense, big_m, name, n):
+        """Two-sided big-M indicator: is_overshoot[t] == 1 iff the temperature is
+        past the overshoot threshold (above it for sense='heat'). The caller adds
+        the model-specific power suppression that links it to the load."""
+        is_overshoot = cp.Variable(n, boolean=True, name=name)
+        if sense == "heat":
+            constraints.append(predicted_temp - overshoot - big_m * is_overshoot <= 0)
+            constraints.append(predicted_temp - overshoot + big_m * (1 - is_overshoot) >= 0)
+        else:
+            constraints.append(predicted_temp - overshoot + big_m * is_overshoot >= 0)
+            constraints.append(predicted_temp - overshoot - big_m * (1 - is_overshoot) <= 0)
+        return is_overshoot
+
+    def _comfort_penalty(self, predicted_temp, desired_list, param, penalty_factor, sense_coeff, n):
+        """Comfort-shortfall penalty toward a desired band: prices only deviation
+        below desired (heat) / above (cool). Returns the summed penalty term, or
+        None when there is no valid target."""
+        valid = [
+            i for i, v in enumerate(desired_list) if v is not None and not np.isnan(v) and 0 < i < n
+        ]
+        if not valid:
+            return None
+        target = param[valid] if param is not None else np.array([desired_list[i] for i in valid])
+        deviation = (predicted_temp[valid] - target) * sense_coeff
+        return cp.sum(-cp.pos(-deviation * penalty_factor))
+
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
         Handle constraints for thermal deferrable loads (Vectorized).
@@ -3512,77 +3584,38 @@ class Optimization:
                 == predicted_temp[:L] - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
             )
 
-        # Min/Max Temperature Constraints
-        # Only add constraints if config actually specifies min/max temps
-        # Skip index 0 (already constrained by start_temperature)
-        min_temps_config = hc.get("min_temperatures", [])
-        max_temps_config = hc.get("max_temperatures", [])
+        # Hard min/max temperature bounds (shared helper).
+        self._add_temp_bound(
+            constraints,
+            predicted_temp,
+            hc.get("min_temperatures", []),
+            min_temps_param,
+            required_len,
+            lower=True,
+        )
+        self._add_temp_bound(
+            constraints,
+            predicted_temp,
+            hc.get("max_temperatures", []),
+            max_temps_param,
+            required_len,
+            lower=False,
+        )
 
-        if min_temps_config:
-            if min_temps_param is not None:
-                # Use parameter (allows warm-start updates), but only for valid config indices
-                valid_indices = [
-                    i
-                    for i, v in enumerate(min_temps_config)
-                    if v is not None and i < required_len and i > 0
-                ]
-                if valid_indices:
-                    constraints.append(
-                        predicted_temp[valid_indices] >= min_temps_param[valid_indices]
-                    )
-            else:
-                valid_indices = [
-                    i
-                    for i, v in enumerate(min_temps_config)
-                    if v is not None and i < required_len and i > 0
-                ]
-                if valid_indices:
-                    limit_vals = np.array([min_temps_config[i] for i in valid_indices])
-                    constraints.append(predicted_temp[valid_indices] >= limit_vals)
-
-        if max_temps_config:
-            if max_temps_param is not None:
-                valid_indices = [
-                    i
-                    for i, v in enumerate(max_temps_config)
-                    if v is not None and i < required_len and i > 0
-                ]
-                if valid_indices:
-                    constraints.append(
-                        predicted_temp[valid_indices] <= max_temps_param[valid_indices]
-                    )
-            else:
-                valid_indices = [
-                    i
-                    for i, v in enumerate(max_temps_config)
-                    if v is not None and i < required_len and i > 0
-                ]
-                if valid_indices:
-                    limit_vals = np.array([max_temps_config[i] for i in valid_indices])
-                    constraints.append(predicted_temp[valid_indices] <= limit_vals)
-
-        # Overshoot Logic
-        penalty_expr = 0
+        # Soft comfort: shared overshoot indicator + load-specific power
+        # suppression + shared comfort penalty.
+        total_penalty = 0
         desired_temps_list = hc.get("desired_temperatures", [])
-
         if desired_temps_list and overshoot_temperature is not None:
-            is_overshoot = cp.Variable(required_len, boolean=True, name=f"is_overshoot_{k}")
-            big_m = 100
-            if sense == "heat":
-                constraints.append(
-                    predicted_temp - overshoot_temperature - (big_m * is_overshoot) <= 0
-                )
-                constraints.append(
-                    predicted_temp - overshoot_temperature + (big_m * (1 - is_overshoot)) >= 0
-                )
-            else:
-                constraints.append(
-                    predicted_temp - overshoot_temperature - (-big_m * is_overshoot) >= 0
-                )
-                constraints.append(
-                    predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
-                )
-
+            is_overshoot = self._overshoot_indicator(
+                constraints,
+                predicted_temp,
+                overshoot_temperature,
+                sense,
+                100,
+                f"is_overshoot_{k}",
+                required_len,
+            )
             # Suppress heating past the overshoot threshold: no heat at step t when
             # the temperature at t+1 is beyond it. p_def_bin2 only tracks power for
             # semi-continuous loads; a continuous load's p_def_bin2 is never linked
@@ -3594,32 +3627,20 @@ class Optimization:
                 constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
             else:
                 constraints.append(p_deferrable[:-1] <= nominal_power * (1 - is_overshoot[1:]))
-
-            # Penalty Calculation
-            # Filter for valid indices (not None, within bounds, skip index 0)
-            penalty_factor = hc.get("penalty_factor", 10)
-            valid_indices = [
-                i
-                for i, val in enumerate(desired_temps_list)
-                if val is not None and i < required_len and i > 0
-            ]
-            if valid_indices:
-                if desired_temps_param is not None:
-                    # Use parameter for actual values (allows warm-start value updates)
-                    deviation = (
-                        predicted_temp[valid_indices] - desired_temps_param[valid_indices]
-                    ) * sense_coeff
-                else:
-                    # Fallback to raw values
-                    des_temps = np.array([desired_temps_list[i] for i in valid_indices])
-                    deviation = (predicted_temp[valid_indices] - des_temps) * sense_coeff
-                penalty_expr = -cp.pos(-deviation * penalty_factor)
+            pen = self._comfort_penalty(
+                predicted_temp,
+                desired_temps_list,
+                desired_temps_param,
+                hc.get("penalty_factor", 10),
+                sense_coeff,
+                required_len,
+            )
+            total_penalty = pen if pen is not None else 0
 
         # Semi-Continuous Constraint
         if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
             constraints.append(p_deferrable == p_def_bin2 * nominal_power)
 
-        total_penalty = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else 0
         return predicted_temp, None, total_penalty
 
     @staticmethod
@@ -4075,54 +4096,39 @@ class Optimization:
         sense_coeff = 1 if sense == "heat" else -1
 
         if desired_temps_list and overshoot_temperature is not None:
-            is_overshoot = cp.Variable(required_len, boolean=True, name=f"is_overshoot_tb_{k}")
-            big_m = 100
-
-            if sense == "heat":
-                constraints.append(
-                    predicted_temp_thermal - overshoot_temperature - (big_m * is_overshoot) <= 0
-                )
-                constraints.append(
-                    predicted_temp_thermal - overshoot_temperature + (big_m * (1 - is_overshoot))
-                    >= 0
-                )
-            else:
-                constraints.append(
-                    predicted_temp_thermal - overshoot_temperature - (-big_m * is_overshoot) >= 0
-                )
-                constraints.append(
-                    predicted_temp_thermal - overshoot_temperature + (-big_m * (1 - is_overshoot))
-                    <= 0
-                )
-
-            # Prevent heating when in overshoot — use p_def_bin2 if available, else bound power directly
+            is_overshoot = self._overshoot_indicator(
+                constraints,
+                predicted_temp_thermal,
+                overshoot_temperature,
+                sense,
+                100,
+                f"is_overshoot_tb_{k}",
+                required_len,
+            )
+            # Prevent heating when in overshoot - p_def_bin2 if semi-cont, else bound power.
             if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
                 p_def_bin2 = self.vars["p_def_bin2"][k]
                 constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
             else:
-                # For non-semi-cont loads, suppress power directly when in overshoot
                 nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 if isinstance(nominal_power, list):
                     nominal_power = max(nominal_power)
                 constraints.append(p_deferrable <= nominal_power * (1 - is_overshoot))
 
-            # Penalty calculation
-            penalty_factor = hc.get("penalty_factor", 10)
-            if valid_indices := [
-                i
-                for i, val in enumerate(desired_temps_list)
-                if val is not None and i < required_len and i > 0
-            ]:
-                if k in self.param_thermal and "desired_temps" in self.param_thermal[k]:
-                    desired_temps_param = self.param_thermal[k]["desired_temps"]
-                    deviation = (
-                        predicted_temp_thermal[valid_indices] - desired_temps_param[valid_indices]
-                    ) * sense_coeff
-                else:
-                    des_temps = np.array([desired_temps_list[i] for i in valid_indices])
-                    deviation = (predicted_temp_thermal[valid_indices] - des_temps) * sense_coeff
-
-                penalty_expr = -cp.pos(-deviation * penalty_factor)
+            desired_param = (
+                self.param_thermal[k]["desired_temps"]
+                if k in self.param_thermal and "desired_temps" in self.param_thermal[k]
+                else None
+            )
+            pen = self._comfort_penalty(
+                predicted_temp_thermal,
+                desired_temps_list,
+                desired_param,
+                hc.get("penalty_factor", 10),
+                sense_coeff,
+                required_len,
+            )
+            penalty_expr = pen if pen is not None else 0
 
         penalty_term = None if isinstance(penalty_expr, int) else cp.sum(penalty_expr)
         return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
@@ -4130,6 +4136,11 @@ class Optimization:
     def _get_shared_thermal_tanks(self) -> list[dict]:
         """Return the configured shared_thermal_tanks list (or empty)."""
         return list(self.optim_conf.get("shared_thermal_tanks", []) or [])
+
+    def _get_tank_transfers(self) -> list[dict]:
+        """Return tank->tank heat transfers (e.g. a buffer feeding a room through
+        emitters). Each: {from, to, transfer_coefficient (kW/K), max_transfer_power (W)}."""
+        return list(self.optim_conf.get("tank_transfers", []) or [])
 
     def _load_shared_tank_membership(self) -> dict[int, int]:
         """Map load index -> shared_thermal_tanks index (-1 if standalone)."""
@@ -4185,13 +4196,17 @@ class Optimization:
                 )
                 return
 
-    def _add_shared_thermal_tank_constraints(self, constraints, tank_idx, data_opt, p_load):
+    def _add_shared_thermal_tank_constraints(
+        self, constraints, tank_idx, data_opt, p_load, transfer_vars=None
+    ):
         """Build dynamics for ONE shared thermal tank fed by MULTIPLE sources.
 
         Each source `k` in `tank['load_ids']` contributes
             cop_k[t] * p_deferrable[k][t] / 1000 * dt  (kWh thermal)
         where cop_k is resolved via utils.resolve_thermal_battery_cop (Carnot
-        for heat pumps, flat for constant-efficiency sources like gas).
+        for heat pumps, flat for constant-efficiency sources like gas). A tank may
+        also exchange heat with another tank via `transfer_vars` (e.g. a buffer
+        feeding a room) - the matching transfer power is added/subtracted here.
 
         Returns: (predicted_temp_var, heating_demand_arr, penalty_term) where
         penalty_term is the signed comfort penalty (<= 0, added to the Maximize
@@ -4201,18 +4216,61 @@ class Optimization:
         tank_id = tank.get("id", f"tank{tank_idx}")
         required_len = self.num_timesteps
         load_ids = [int(k) for k in tank.get("load_ids", [])]
-        if not load_ids:
+        # A tank with no sources is still real if another tank feeds it (a room
+        # heated only by the buffer) - build it when it is a transfer endpoint.
+        is_transfer_endpoint = any(
+            tr["from"] == tank_id or tr["to"] == tank_id for tr in self._get_tank_transfers()
+        )
+        if not load_ids and not is_transfer_endpoint:
             return None, None, None
 
-        # Tank physics
-        volume = tank["volume"]
-        density = tank.get("density", 1000)
-        heat_capacity = tank.get("heat_capacity", 4.186)
-        if density <= 0 or heat_capacity <= 0 or volume <= 0:
-            raise ValueError(
-                f"Shared tank {tank_id}: positive volume/density/heat_capacity required"
+        # Tank physics. A building zone can declare its heat capacity directly via
+        # `thermal_mass` (kWh/K); a water store derives it from volume/density/cp.
+        # conversion is degC gained per kWh of net heat (== 1 / heat_capacity).
+        thermal_mass = tank.get("thermal_mass")
+        if thermal_mass is not None:
+            thermal_mass = float(thermal_mass)
+            if thermal_mass <= 0:
+                raise ValueError(f"Shared tank {tank_id}: thermal_mass must be > 0 kWh/K")
+            conversion = 1.0 / thermal_mass
+        else:
+            volume = tank.get("volume")
+            density = tank.get("density", 1000)
+            heat_capacity = tank.get("heat_capacity", 4.186)
+            if volume is None or volume <= 0 or density <= 0 or heat_capacity <= 0:
+                raise ValueError(
+                    f"Shared tank {tank_id}: positive volume/density/heat_capacity "
+                    "(or a thermal_mass) required"
+                )
+            conversion = 3600 / (density * heat_capacity * volume)
+
+        # Optional building-zone behaviour. None/0 keeps the existing fixed-loss,
+        # zero-lag water-tank dynamics unchanged.
+        #   loss_coefficient (kW/K) -> state-dependent loss UA*(T-outdoor)
+        #   thermal_inertia  (h)    -> heat input lags the temperature by L steps
+        loss_coefficient = tank.get("loss_coefficient")
+        if loss_coefficient is not None:
+            loss_coefficient = float(loss_coefficient)
+            if loss_coefficient < 0:
+                raise ValueError(f"Shared tank {tank_id}: loss_coefficient must be >= 0 kW/K")
+        # Same whole-step convention as the per-load thermal_config path (truncate),
+        # clamped to the horizon so the lagged window never runs past it.
+        lag_steps = max(
+            0,
+            min(
+                int(float(tank.get("thermal_inertia", 0.0)) / self.time_step),
+                required_len - 1,
+            ),
+        )
+        if lag_steps > 0 and not load_ids:
+            # The lag applies to this storage's own sources; tank-to-tank transfers
+            # are not lagged, so on a storage fed only by transfers it does nothing.
+            self.logger.warning(
+                "Shared tank '%s': thermal_inertia has no effect on a storage fed only "
+                "by tank-to-tank transfers (transfers are not lagged)",
+                tank_id,
             )
-        conversion = 3600 / (density * heat_capacity * volume)
+            lag_steps = 0
 
         start_temperature = float(tank.get("start_temperature", 20.0))
         max_temperatures_list = tank.get("max_temperatures", [])
@@ -4337,6 +4395,23 @@ class Optimization:
         if solar_gain is not None:
             heating_demand = heating_demand - solar_gain
 
+        # Window solar gain for a building zone (kWh/step): sunlight transmitted
+        # through glazing (window_area m2 * SHGC) offsets the heat the zone needs,
+        # so on a sunny day the plan coasts instead of heating. Reuses the GHI
+        # forecast already fetched for PV. Only for zone tanks (loss_coefficient):
+        # a building_demand tank receives its window solar and internal gains inside
+        # the physics demand call above.
+        if (
+            tank.get("loss_coefficient") is not None
+            and tank.get("window_area")
+            and "ghi" in data_opt.columns
+        ):
+            ghi = np.asarray(data_opt["ghi"].values)[:required_len]
+            shgc = float(tank.get("shgc", 0.6))
+            dt_h = self.freq.total_seconds() / 3600.0
+            window_gain = ghi * float(tank["window_area"]) * shgc / 1000.0 * dt_h
+            heating_demand = heating_demand - window_gain
+
         # Per-source COP arrays (HP uses Carnot, gas / oil / district use flat
         # efficiency). Resolve each source's conversion factor from its config.
         cop_arrays: list[np.ndarray] = []
@@ -4376,35 +4451,148 @@ class Optimization:
         predicted_temp = cp.Variable(required_len, name=f"temp_shared_{tank_id}")
         constraints.append(predicted_temp[0] == start_temperature)
 
+        # Per-step loss (kWh). With a loss_coefficient the loss is STATE-dependent
+        # - UA*(T[t]-outdoor[t]) - so a building-zone tank's temperature is free to
+        # drift inside its comfort band (the term is linear in the temperature
+        # variable, so the problem stays DPP/affine). Otherwise the precomputed
+        # fixed-reference standing loss is used, unchanged.
+        if loss_coefficient is not None:
+            loss_vec = loss_coefficient * (predicted_temp - outdoor_temp_arr) * self.time_step
+        else:
+            loss_vec = thermal_losses
+
         # Heat input is the SUM of contributions from all member sources
-        # raw_heat[t] = sum_k(cop_k[t] * p_deferrable[k][t] / 1000 * dt)
-        raw_heat = 0
-        for k, cops in zip(load_ids, cop_arrays):
-            p_k = self.vars["p_deferrable"][k]
-            raw_heat = raw_heat + cp.multiply(cops[:-1], p_k[:-1]) / 1000 * self.time_step
+        # raw_heat[t] = sum_k(cop_k[t] * p_deferrable[k][t] / 1000 * dt). With
+        # thermal_inertia the heat from L steps earlier is what moves T[t+1].
+        L = lag_steps
 
-        # First-order thermal dynamics
-        # T[t+1] = T[t] + conversion * (sense_coeff*raw_heat[t] - demand[t] - loss[t])
-        # In cool mode (sense_coeff = -1) running a source LOWERS the tank temperature.
-        constraints.append(
-            predicted_temp[1:]
-            == predicted_temp[:-1]
-            + conversion * (sense_coeff * raw_heat - heating_demand[:-1] - thermal_losses[:-1])
+        def _raw_heat(upper):
+            total = 0
+            for k, cops in zip(load_ids, cop_arrays):
+                p_k = self.vars["p_deferrable"][k]
+                total = total + cp.multiply(cops[:upper], p_k[:upper]) / 1000 * self.time_step
+            return total
+
+        # Net tank->tank transfer per step (kWh): +inflow (this tank is a 'to'),
+        # -outflow (this tank is a 'from'). Length required_len-1; zeros if none.
+        xfer_net = np.zeros(required_len - 1)
+        for tr in self._get_tank_transfers() if transfer_vars else []:
+            q_var = transfer_vars.get((tr["from"], tr["to"]))
+            if q_var is None:
+                continue
+            if tr["to"] == tank_id:
+                xfer_net = xfer_net + q_var[:-1] * self.time_step
+            if tr["from"] == tank_id:
+                xfer_net = xfer_net - q_var[:-1] * self.time_step
+
+        # First-order thermal dynamics: T[t+1] = T[t] + conversion*(heat - demand - loss).
+        # sense_coeff flips the SOURCE term so a cool-sense tank's sources remove heat
+        # (a reversible heat pump in cooling mode lowers the tank temperature); the
+        # tank->tank transfers, demand and losses keep their physical signs.
+        if L <= 0:
+            constraints.append(
+                predicted_temp[1:]
+                == predicted_temp[:-1]
+                + conversion
+                * (sense_coeff * _raw_heat(-1) + xfer_net - heating_demand[:-1] - loss_vec[:-1])
+            )
+        else:
+            # Dead zone: the first L steps cool/draw with no source heat delivered
+            # yet (transfers still apply - they are not subject to the source lag).
+            constraints.append(
+                predicted_temp[1 : 1 + L]
+                == predicted_temp[:L]
+                + conversion * (xfer_net[:L] - heating_demand[:L] - loss_vec[:L])
+            )
+            # At the top of the clamp (L == required_len - 1) the dead zone above
+            # already covers the whole remaining horizon, so this block spans zero
+            # rows: there is nothing left for it to constrain, and building it anyway
+            # is a cvxpy dimension error.
+            if 1 + L < required_len:
+                constraints.append(
+                    predicted_temp[1 + L :]
+                    == predicted_temp[L:-1]
+                    + conversion
+                    * (
+                        sense_coeff * _raw_heat(-1 - L)
+                        + xfer_net[L:]
+                        - heating_demand[L:-1]
+                        - loss_vec[L:-1]
+                    )
+                )
+
+        # Recovery grace: if the tank STARTS below a hard minimum it must satisfy
+        # soon (a momentary out-of-band sensor read - e.g. a zone dips below its
+        # comfort floor on a cold morning), demanding the full min from t=1 is
+        # infeasible for a rate-limited tank that cannot jump back into band in one
+        # step, and the relaxed-LP fallback cannot rescue that conflict. Instead,
+        # ramp every early floor up from the live start at a conservative rate, so the
+        # tank is only required to recover at a feasible pace; floors already at or
+        # below the ramp line are untouched, and each configured floor reapplies in
+        # full once the ramp line overtakes it. Index 0 is the pinned live start and
+        # is never bounded (see _add_temp_bound), so only the constrained floors at
+        # t >= 1 drive the trigger - a setback floor that rises only at t >= 1 (where
+        # min_temperatures[0] may sit below the start) is caught too. Only near-term
+        # floors (the first SHARED_TANK_START_RECOVERY_STEPS steps) trigger it: a
+        # floor that steps up later (e.g. a scheduled legionella cycle) can be
+        # reached by planning ahead and stays hard.
+        constrained_floors = [
+            v
+            for t, v in enumerate(min_temperatures_list)
+            if 1 <= t <= SHARED_TANK_START_RECOVERY_STEPS and v is not None
+        ]
+        max_deficit = max((v - start_temperature for v in constrained_floors), default=0.0)
+        recovery_idx, recovery_floor = [], []
+        if max_deficit > 1e-6:
+            # Never steeper than the conservative rate, and small shortfalls are still
+            # spread over at least the minimum window so recovery stays gentle.
+            rate = min(
+                SHARED_TANK_START_RECOVERY_RATE, max_deficit / SHARED_TANK_START_RECOVERY_STEPS
+            )
+            window = int(np.ceil(max_deficit / rate))
+            min_temperatures_list = list(min_temperatures_list)
+            for t in range(min(window, len(min_temperatures_list), required_len)):
+                cfg = min_temperatures_list[t]
+                if cfg is None:
+                    continue
+                ramp = start_temperature + rate * t
+                if t >= 1 and ramp < cfg:
+                    recovery_idx.append(t)
+                    recovery_floor.append(cfg)
+                min_temperatures_list[t] = min(cfg, ramp)
+            if recovery_idx:
+                self.logger.info(
+                    "Shared tank '%s': start %.1f C below a near-term floor (max shortfall "
+                    "%.1f C) - the floor is soft over the next %d steps so the tank can "
+                    "recover at a feasible pace",
+                    tank_id,
+                    start_temperature,
+                    max_deficit,
+                    recovery_idx[-1],
+                )
+
+        # Thermal-inertia dead zone: over the first L steps no source heat arrives,
+        # so the temperature there does not depend on this run's source decisions.
+        # A hard floor at those steps would make a zone that sits on its floor
+        # (where the optimizer parks it) infeasible on the next run; price the
+        # shortfall instead, like the recovery window above.
+        if L > 0:
+            min_temperatures_list = list(min_temperatures_list)
+            recovered = set(recovery_idx)
+            for t in range(1, min(L, required_len - 1) + 1):
+                if t < len(min_temperatures_list) and min_temperatures_list[t] is not None:
+                    if t not in recovered:
+                        recovery_idx.append(t)
+                        recovery_floor.append(min_temperatures_list[t])
+                    min_temperatures_list[t] = None
+
+        # Hard min/max temperature bounds (shared helper; index 0 already pinned).
+        self._add_temp_bound(
+            constraints, predicted_temp, min_temperatures_list, None, required_len, lower=True
         )
-
-        # Hard min/max temperature constraints (skipping index 0 - already pinned)
-        min_idx = [
-            i for i, v in enumerate(min_temperatures_list) if v is not None and 0 < i < required_len
-        ]
-        if min_idx:
-            min_vals = np.array([min_temperatures_list[i] for i in min_idx])
-            constraints.append(predicted_temp[min_idx] >= min_vals)
-        max_idx = [
-            i for i, v in enumerate(max_temperatures_list) if v is not None and 0 < i < required_len
-        ]
-        if max_idx:
-            max_vals = np.array([max_temperatures_list[i] for i in max_idx])
-            constraints.append(predicted_temp[max_idx] <= max_vals)
+        self._add_temp_bound(
+            constraints, predicted_temp, max_temperatures_list, None, required_len, lower=False
+        )
 
         # Per-source temperature ceiling. A source with `max_supply_temperature`
         # (e.g. a heat pump that cannot raise water above its supply/condenser
@@ -4530,19 +4718,15 @@ class Optimization:
                 big_m_os = max(big_m_os, max(upper) - overshoot)
                 lower = [*finite_min_temps, float(start_temperature)]
                 big_m_os = max(big_m_os, overshoot - min(lower))
-                is_overshoot = cp.Variable(
-                    required_len, boolean=True, name=f"is_overshoot_shared_{tank_id}_{k}"
+                is_overshoot = self._overshoot_indicator(
+                    constraints,
+                    predicted_temp,
+                    overshoot,
+                    sense,
+                    big_m_os,
+                    f"is_overshoot_shared_{tank_id}_{k}",
+                    required_len,
                 )
-                if sense == "heat":
-                    constraints.append(predicted_temp - overshoot - big_m_os * is_overshoot <= 0)
-                    constraints.append(
-                        predicted_temp - overshoot + big_m_os * (1 - is_overshoot) >= 0
-                    )
-                else:
-                    constraints.append(predicted_temp - overshoot + big_m_os * is_overshoot >= 0)
-                    constraints.append(
-                        predicted_temp - overshoot - big_m_os * (1 - is_overshoot) <= 0
-                    )
                 # Suppress THIS source beyond its threshold. A continuous source
                 # can modulate, so it may heat at t as long as the tank at t+1
                 # stays at or below the threshold; that also lets it heat from a
@@ -4570,17 +4754,23 @@ class Optimization:
                         constraints.append(temp_end - overshoot >= -big_m_end * (1 - allow_end))
                     constraints.append(p_k[-1] <= nominal_k * allow_end)
 
-            # Comfort-shortfall penalty toward the desired band: only deviation
-            # below desired (sense=heat) / above desired (sense=cool) is priced.
-            penalty_factor = tank.get("penalty_factor", 10)
-            if valid_indices := [
-                i
-                for i, val in enumerate(desired_temps_list)
-                if val is not None and 0 < i < required_len
-            ]:
-                des_temps = np.array([desired_temps_list[i] for i in valid_indices])
-                deviation = (predicted_temp[valid_indices] - des_temps) * sense_coeff
-                penalty_term = cp.sum(-cp.pos(-deviation * penalty_factor))
+            # Comfort-shortfall penalty toward the desired band (shared helper):
+            # only deviation below desired (heat) / above (cool) is priced.
+            penalty_term = self._comfort_penalty(
+                predicted_temp,
+                desired_temps_list,
+                None,
+                tank.get("penalty_factor", 10),
+                sense_coeff,
+                required_len,
+            )
+
+        # Inside the recovery window the configured floor is soft: price every
+        # degree below it so the tank recovers as fast as its sources allow.
+        if recovery_idx:
+            shortfall = cp.pos(np.array(recovery_floor) - predicted_temp[recovery_idx])
+            recovery_term = -SHARED_TANK_START_RECOVERY_PENALTY * cp.sum(shortfall)
+            penalty_term = recovery_term if penalty_term is None else penalty_term + recovery_term
 
         return predicted_temp, heating_demand, penalty_term
 
@@ -5135,25 +5325,94 @@ class Optimization:
                     - M * (1 - self.param_def_current_power_active[k])
                 )
 
+        # Pre-create one transfer-power variable per tank->tank flow (kW), bounded
+        # by its max delivered power. The temperature-gradient bound is added after
+        # both endpoint tanks have been built (their temperature variables exist).
+        transfers = self._get_tank_transfers()
+        transfer_vars = {}
+        for tr in transfers:
+            q_var = cp.Variable(
+                self.num_timesteps, nonneg=True, name=f"xfer_{tr['from']}_{tr['to']}"
+            )
+            constraints.append(q_var <= tr["max_transfer_power"] / 1000.0)
+            transfer_vars[(tr["from"], tr["to"])] = q_var
+
         # Process shared thermal tanks once each, after the per-load loop. Each
-        # shared tank is fed by N >= 1 deferrable loads; their per-load
-        # thermal_battery dynamics were skipped above.
+        # shared tank is fed by N >= 0 deferrable loads and/or tank->tank transfers.
+        n_loads = self.optim_conf["number_of_deferrable_loads"]
+        tank_temp_by_id = {}
         for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
             shared_pred_temp, shared_demand, shared_penalty = (
-                self._add_shared_thermal_tank_constraints(constraints, tank_idx, data_opt, p_load)
+                self._add_shared_thermal_tank_constraints(
+                    constraints, tank_idx, data_opt, p_load, transfer_vars
+                )
             )
             if shared_penalty is not None:
                 penalty_terms_total += shared_penalty
             if shared_pred_temp is not None:
-                # Surface the tank state on the first member load so downstream
-                # publishing has a temperature column to report. Subsequent
-                # members reuse the same predicted_temp.
-                for k in tank.get("load_ids", []):
-                    k = int(k)
-                    if k not in predicted_temps:
-                        predicted_temps[k] = shared_pred_temp
-                    if k not in heating_demands and shared_demand is not None:
-                        heating_demands[k] = shared_demand
+                tank_temp_by_id[tank["id"]] = shared_pred_temp
+                load_ids = [int(k) for k in tank.get("load_ids", [])]
+                if load_ids:
+                    # Surface the tank state on its member loads (predicted_temp_heater{k}).
+                    for k in load_ids:
+                        if k not in predicted_temps:
+                            predicted_temps[k] = shared_pred_temp
+                        if k not in heating_demands and shared_demand is not None:
+                            heating_demands[k] = shared_demand
+                else:
+                    # Transfer-only tank (e.g. the room): no member load, so surface
+                    # under a synthetic index beyond the real loads to get a column.
+                    predicted_temps[n_loads + tank_idx] = shared_pred_temp
+
+        # Couple each transfer to the temperature gradient: a pumped emitter can only
+        # move heat from the hotter tank to the cooler one, at a rate bounded by the
+        # conductance * (T_from - T_to). One-directional, gated on/off by a binary.
+        # Without the binary, `q <= k*(from-to)` together with `q >= 0` has an EMPTY
+        # feasible set the instant the receiving tank is hotter than the feeder (e.g.
+        # an anchored buffer cooler than a warm pool) - making the WHOLE optimisation
+        # infeasible rather than simply setting the flow to zero. xfer_on=0 forces
+        # q=0 (feasible at any gradient); xfer_on=1 applies the gradient limit.
+        for tr in transfers:
+            q_var = transfer_vars[(tr["from"], tr["to"])]
+            t_from = tank_temp_by_id.get(tr["from"])
+            t_to = tank_temp_by_id.get(tr["to"])
+            if t_from is not None and t_to is not None:
+                k_xfer = tr["transfer_coefficient"]
+                qmax = tr["max_transfer_power"] / 1000.0
+                xfer_on = cp.Variable(
+                    self.num_timesteps, boolean=True, name=f"xfer_on_{tr['from']}_{tr['to']}"
+                )
+                big_m_xfer = k_xfer * SHARED_TANK_CAP_BIG_M_TEMP
+                constraints.append(q_var <= k_xfer * (t_from - t_to) + big_m_xfer * (1 - xfer_on))
+                # The same limit at the END of the step: the gradient at the start
+                # alone lets one step move more heat than it takes to equalise the
+                # two tanks, leaving the receiver hotter than the tank that fed it.
+                constraints.append(
+                    q_var[:-1] <= k_xfer * (t_from[1:] - t_to[1:]) + big_m_xfer * (1 - xfer_on[:-1])
+                )
+                constraints.append(q_var <= qmax * xfer_on)
+            else:
+                # One or both endpoint temperatures are absent (a tank id in
+                # tank_transfers that no shared tank produced a temperature variable
+                # for). Without both temperatures the hot->cold gradient guard cannot
+                # be built; leaving q bounded only by 0 <= q <= max_power would let the
+                # solver pump energy uphill (cold -> hot) with no thermodynamic check.
+                # Force the transfer to zero and warn rather than fail silently.
+                missing = [
+                    tid for tid, temp in ((tr["from"], t_from), (tr["to"], t_to)) if temp is None
+                ]
+                self.logger.warning(
+                    "tank_transfers entry %s->%s references tank id(s) %s with no shared-tank "
+                    "temperature variable; forcing this transfer to zero.",
+                    tr["from"],
+                    tr["to"],
+                    missing,
+                )
+                constraints.append(q_var == 0)
+
+        # Expose the per-flow pump decisions so the results frame can surface them
+        # after the solve (read via q_var.value in _build_results_dataframe).
+        self.transfer_vars = transfer_vars
 
         return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
@@ -5219,6 +5478,7 @@ class Optimization:
         heating_demands,
         debug,
         q_inputs=None,
+        transfer_vars=None,
     ):
         """Build the final results DataFrame (Vectorized extraction)."""
         opt_tp = pd.DataFrame(index=data_opt.index)
@@ -5252,6 +5512,13 @@ class Optimization:
             p_def_k = get_val(self.vars["p_deferrable"][k])
             opt_tp[f"P_deferrable{k}"] = p_def_k
             p_def_sum += p_def_k
+
+        # Tank-to-tank transfers (modulated pump flows): one additive column per
+        # flow, in W to match the other power columns - the actionable pump schedule.
+        if transfer_vars is None:
+            transfer_vars = getattr(self, "transfer_vars", {})
+        for (frm, to), q_var in transfer_vars.items():
+            opt_tp[f"P_transfer_{frm}_{to}"] = get_val(q_var) * 1000.0  # kW -> W
 
         # Battery Results (#610). This independently recomputes the SOC/P_batt
         # recursion per battery in numpy space over realized values; it must
@@ -5373,8 +5640,10 @@ class Optimization:
             temp_values = get_val(pred_temp_var)
             opt_tp[f"predicted_temp_heater{k}"] = np.round(temp_values, 2)
 
-            if "def_load_config" in self.optim_conf:
-                # Robustly get config (support both thermal_config and thermal_battery)
+            if "def_load_config" in self.optim_conf and k < len(self.optim_conf["def_load_config"]):
+                # Robustly get config (support both thermal_config and thermal_battery).
+                # k beyond the load list = a transfer-only tank (e.g. a room fed by a
+                # buffer); its temperature column is emitted above, no per-load config.
                 load_conf = self.optim_conf["def_load_config"][k]
                 conf = load_conf.get("thermal_config") or load_conf.get("thermal_battery") or {}
                 if not conf and k in shared_tank_membership:
@@ -6543,6 +6812,10 @@ class Optimization:
         # intact for the next run (issue #1048: caching prob_relaxed made the
         # stress-free, binary-relaxed rescue permanent).
         solved_prob = self.prob
+        # Transfer variables of the problem whose values are published; the
+        # relaxed rescue builds its own and the restore below points
+        # self.transfer_vars back at the cached problem's.
+        solved_transfer_vars = getattr(self, "transfer_vars", {})
 
         # Check for failure or "bad" status
         # Note: "user_limit" often means timeout. "infeasible" means configuration conflict.
@@ -6585,6 +6858,7 @@ class Optimization:
                 for k, params in self.param_thermal.items()
                 if "q_input_var" in params
             }
+            original_transfer_vars = getattr(self, "transfer_vars", {})
 
             # Relax Configuration: Disable Binary Logic
             n_def = self.optim_conf["number_of_deferrable_loads"]
@@ -6659,6 +6933,7 @@ class Optimization:
                 # pointing at the clean cached problem: the relaxed solve is a
                 # one-shot rescue, never a permanent replacement (issue #1048).
                 solved_prob = prob_relaxed
+                solved_transfer_vars = self.transfer_vars
             except Exception as e:
                 self.logger.error(f"Relaxed optimization crashed: {e}")
 
@@ -6669,6 +6944,7 @@ class Optimization:
             # Restore the instance-held references the rebuild replaced, so the
             # next run reads the cached problem's own objects (issue #1048).
             self.vars.update(original_hybrid_vars)
+            self.transfer_vars = original_transfer_vars
             for k, params in self.param_thermal.items():
                 if k in original_q_input_vars:
                     params["q_input_var"] = original_q_input_vars[k]
@@ -6727,6 +7003,7 @@ class Optimization:
             heating_demands,
             debug,
             q_inputs=q_inputs,
+            transfer_vars=solved_transfer_vars,
         )
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
