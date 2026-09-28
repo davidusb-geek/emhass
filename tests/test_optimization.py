@@ -11914,14 +11914,52 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.run_thermal_forecast(prices=[0.0] * 10)
         temps = self.opt_res_dayahead["predicted_temp_heater0"].to_numpy()
-        # One 30-min step at nominal adds heating_rate * dt = 2.5 K, so a working
-        # cutoff can overshoot 21 by at most one step; without it the load runs on
-        # to the 25 C comfort target.
+        # A continuous load can modulate, so it heats up to the threshold and not
+        # past it; without the cutoff it runs on to the 25 C comfort target.
         self.assertLessEqual(
             temps.max(),
-            21 + 5 * 0.5 + 0.1,
+            21 + 0.01,
             f"continuous load heated past overshoot_temperature: {temps}",
         )
+
+    def test_thermal_config_overshoot_allows_heating_from_above_threshold(self):
+        """A start above overshoot_temperature must not forbid the heat the floor
+        needs at the next step: the cutoff looks at the temperature the heat
+        produces (t+1), not the one it starts from. Gating on the start made this
+        run infeasible for a continuous load, and made the relaxed rescue of a
+        semi-continuous one infeasible too."""
+        for semi_cont in (False, True):
+            with self.subTest(semi_cont=semi_cont):
+                self.setUp()
+                self.optim_conf["treat_deferrable_load_as_semi_cont"][0] = semi_cont
+                self.optim_conf["set_deferrable_load_single_constant"][0] = False
+                self.optim_conf["minimum_power_of_deferrable_loads"][0] = 0.0
+                self.optim_conf["set_deferrable_startup_penalty"][0] = 0.0
+                self.optim_conf["def_load_config"] = [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 21.2,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 5,
+                            "overshoot_temperature": 21,
+                            "desired_temperatures": [21] * 10,
+                            "min_temperatures": [20.5] * 10,
+                            "max_temperatures": [30] * 10,
+                            "sense": "heat",
+                        }
+                    }
+                ]
+                if not semi_cont:
+                    self.run_thermal_forecast(outdoor_temp=5, prices=[1.0] * 10)  # asserts Optimal
+                    continue
+                # An on/off load at full power would cross the threshold in one
+                # step, so only the relaxed rescue (continuous) can plan this; the
+                # helper insists on 'Optimal', so check the rescue's status here.
+                try:
+                    self.run_thermal_forecast(outdoor_temp=5, prices=[1.0] * 10)
+                except AssertionError:
+                    pass
+                self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
 
     def _solve_default_inputs(self, opt):
         return opt.perform_optimization(
