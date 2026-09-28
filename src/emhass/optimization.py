@@ -4361,16 +4361,23 @@ class Optimization:
                     constraints.append(
                         predicted_temp - overshoot - big_m_os * (1 - is_overshoot) <= 0
                     )
-                # Suppress THIS source while the tank is beyond its threshold at
-                # the start of a step. Bounding the power works for continuous and
-                # semi-continuous sources alike; gating on the temperature at t+1
-                # instead would forbid a semi-continuous source from ever crossing
-                # the threshold, which is infeasible when one full-power step lifts
-                # the tank past it.
+                # Suppress THIS source beyond its threshold. A continuous source
+                # can modulate, so it may heat at t as long as the tank at t+1
+                # stays at or below the threshold; that also lets it heat from a
+                # start above the threshold when the floor needs it. A
+                # semi-continuous source runs at full power, so gating it on t+1
+                # would forbid it from ever crossing the threshold (infeasible
+                # when one full-power step lifts the tank past it); it is switched
+                # off while the tank is beyond the threshold at the start of the
+                # step instead.
                 nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 if isinstance(nominal_k, list | np.ndarray):
                     nominal_k = max(nominal_k)
-                constraints.append(self.vars["p_deferrable"][k] <= nominal_k * (1 - is_overshoot))
+                p_k = self.vars["p_deferrable"][k]
+                if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                    constraints.append(p_k <= nominal_k * (1 - is_overshoot))
+                else:
+                    constraints.append(p_k[:-1] <= nominal_k * (1 - is_overshoot[1:]))
 
             # Comfort-shortfall penalty toward the desired band: only deviation
             # below desired (sense=heat) / above desired (sense=cool) is priced.
