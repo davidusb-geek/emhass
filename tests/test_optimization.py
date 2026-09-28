@@ -16476,87 +16476,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     async def test_hybrid_heating_walkthrough_example_solves(self):
         """The heat_topology in docs/study_cases/hybrid_heating_walkthrough.md must
-        compile and solve: heat pump + gas boiler, DHW tank + buffer feeding a
-        house zone through a transfer, with a mutual-exclusion group. Keep this in
-        sync with the page so the documented example cannot silently rot."""
-        horizon = 48
-        heat_topology = {
-            "sources": [
-                {
-                    "id": "hp",
-                    "type": "heatpump",
-                    "nominal_power": 3000,
-                    "heating_curve": {
-                        "slope": 0.6,
-                        "offset": 40,
-                        "min_supply": 30,
-                        "max_supply": 55,
-                    },
-                    "carnot_efficiency": 0.45,
-                    "max_supply_temperature": 55,
-                    "treat_as_semi_cont": False,
-                },
-                {
-                    "id": "boiler",
-                    "type": "gas",
-                    "nominal_power": 20000,
-                    "efficiency": 0.9,
-                    "cost_track": "gas",
-                    "treat_as_semi_cont": False,
-                },
-            ],
-            "storage": [
-                {
-                    "id": "dhw",
-                    "volume": 0.2,
-                    "start_temperature": 50,
-                    "min_temperature": [45],
-                    "max_temperature": [60],
-                    "thermal_loss": 0.05,
-                },
-                {
-                    "id": "buffer",
-                    "volume": 0.5,
-                    "start_temperature": 40,
-                    "min_temperature": [30],
-                    "max_temperature": [55],
-                    "thermal_loss": 0.05,
-                },
-                {
-                    "id": "house",
-                    "thermal_mass": 8,
-                    "loss_coefficient": 0.25,
-                    "start_temperature": 20.5,
-                    "min_temperature": [19.5],
-                    "max_temperature": [22],
-                    "desired_temperature": 20.5,
-                    "window_area": 15,
-                },
-            ],
-            "flows": [
-                {"from": "hp", "to": "dhw"},
-                {"from": "hp", "to": "buffer"},
-                {"from": "boiler", "to": "dhw"},
-                {
-                    "from": "buffer",
-                    "to": "house",
-                    "transfer_coefficient": 0.8,
-                    "max_transfer_power": 8000,
-                },
-            ],
-            "consumers": [
-                {
-                    "id": "showers",
-                    "type": "profile",
-                    "target": "dhw",
-                    "profile": [0.0] * 14 + [1.5, 1.0] + [0.0] * 24 + [1.0, 1.5] + [0.0] * 6,
-                },
-            ],
-            "actuator_groups": [
-                {"flows": [["hp", "dhw"], ["hp", "buffer"]], "mutual_exclusion": True},
-            ],
-            "cost_tracks": {"gas": [0.09] * horizon},
-        }
+        compile and solve: a heat pump in two modes (two sources in one
+        mutual-exclusion group) + gas boiler, DHW tank + buffer feeding a house
+        zone through a transfer. The configuration is read from the page itself,
+        so the documented example cannot silently rot."""
+        page = (root / "docs" / "study_cases" / "hybrid_heating_walkthrough.md").read_text(
+            encoding="utf-8"
+        )
+        block = next(
+            b.split("```", 1)[0] for b in page.split("```python\n")[1:] if "heat_topology = {" in b
+        )
+        namespace = {}
+        exec(block, namespace)  # noqa: S102 - the documented example, from the repo
+        heat_topology = namespace["heat_topology"]
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = (
             [2.0] * 16 + [8.0] * 16 + [4.0] * 16
@@ -16605,6 +16537,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         both = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
         self.assertFalse(both.any())
         self.assertAlmostEqual(res["predicted_temp_heater0"].iloc[0], 48.0, places=1)
+        # Load 2 (boiler -> DHW) publishes the DHW temperature again.
+        np.testing.assert_allclose(
+            res["predicted_temp_heater2"], res["predicted_temp_heater0"], atol=1e-6
+        )
 
 
 if __name__ == "__main__":
