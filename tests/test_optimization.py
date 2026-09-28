@@ -5790,6 +5790,39 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         np.testing.assert_allclose(demand({}), demand({"indoor_target_temperature": 20.0}))
 
+    def test_shared_tank_overshoot_lets_continuous_source_heat_from_above(self):
+        """A continuous source may heat from a start above the overshoot threshold
+        when the floor needs it, as long as the tank does not end the step beyond
+        the threshold. Gating it on the start temperature made this infeasible."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.2,
+                "start_temperature": 52.2,
+                "thermal_loss": 0.5,  # about 1 K per step without heat
+                "min_temperatures": [51.5] * 48,
+                "max_temperatures": [65.0] * 48,
+                "desired_temperatures": 51.5,
+                "overshoot_temperature": 52.0,
+            },
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        temps = res["predicted_temp_heater0"].to_numpy()
+        self.assertLessEqual(temps[1:].max(), 52.0 + 0.01)
+
     def test_shared_tank_desired_only_penalty_pulls_temperature(self):
         """desired_temperatures without any overshoot gates is a pure soft
         target: no source is blocked, but the shortfall penalty pulls the tank
