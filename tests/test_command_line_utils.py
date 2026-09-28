@@ -2072,6 +2072,22 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(res)
         self.assertEqual(list(res.columns), ["sensor1"])
 
+    async def test_publish_from_saved_entities_only_temp_files_falls_back(self):
+        """When the only saved files are metadata and in-flight temp files, there
+        is nothing to publish: fall back to opt_res_latest (None) instead of
+        failing on an empty concat."""
+        with tempfile.TemporaryDirectory() as td:
+            data_path = pathlib.Path(td)
+            entity_dir = data_path / "entities"
+            entity_dir.mkdir()
+            (entity_dir / "metadata.json").write_text("{}")
+            (entity_dir / "sensor.p_pv.json.12.ab.tmp").write_text("{}")
+            input_data_dict = {"emhass_conf": {"data_path": data_path}}
+            for prefix in ("all", "sensor.p_pv"):
+                params = {"passed_data": {"publish_prefix": prefix}}
+                res = await _publish_from_saved_entities(input_data_dict, MagicMock(), params)
+                self.assertIsNone(res, prefix)
+
     @patch("emhass.command_line.pd.read_json")
     @patch("emhass.command_line.aiofiles.open")
     @patch("os.path.isfile")
