@@ -9672,6 +9672,65 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Mutual exclusion violated: both loads active simultaneously",
         )
 
+    def test_mutual_exclusion_honoured_for_shared_tank_sources(self):
+        """Mutual exclusion must hold for shared-tank heat sources (issue #539).
+        Two continuous heat-pump sources feed one shared tank; a group marks them
+        mutually exclusive (one compressor cannot serve two flows at once). Demand
+        is met comfortably by a single source, so the constraint is feasible and
+        must be honoured - the two sources never run in the same timestep. (The
+        relaxed fallback is covered by
+        test_mutual_exclusion_survives_forced_relaxed_fallback.)"""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 45.0, "carnot_efficiency": 0.45}},
+            {"thermal_source": {"supply_temperature": 45.0, "carnot_efficiency": 0.45}},
+        ]
+        draw = [0.0] * 48
+        for i in range(10, 44):
+            draw[i] = 0.8
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.3,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.1,
+                "draw_off_demand": draw,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [60.0] * 48,
+            }
+        ]
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        both_active = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
+        self.assertFalse(
+            both_active.any(),
+            "Mutual exclusion violated for shared-tank sources: both fired in the same slot",
+        )
+
     def test_deferrable_load_group_no_groups(self):
         """Test that empty deferrable_load_groups works (backward compatibility)."""
         self.optim_conf["deferrable_load_groups"] = []
@@ -13636,78 +13695,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(total, 0, "Sources must dispatch to hold the 45-60 C band")
 
-    def test_cap_survives_relaxed_lp_fallback(self):
-        """The cap gate is a physical limit, so it must keep holding in the
-        relaxed-LP fallback (which keeps its booleans, like the tank's hard
-        min/max temperatures). Two mutually exclusive standard loads needing
-        13 h each on a 24 h horizon make the MILP provably infeasible; the
-        relaxation drops mutual exclusion and solves, but the heat pump must
-        still stay off above its max_supply_temperature."""
-        self.df_input_data_dayahead = self.prepare_forecast_data()
-        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
-        min_t = [45.0] * 48
-        for i in range(28, 34):
-            min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
-        self.optim_conf["number_of_deferrable_loads"] = 4
-        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000, 1000, 1000]
-        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
-        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0, 13, 13]
-        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 4
-        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
-        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
-        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
-        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
-        self.optim_conf["is_electric_load"] = [True] * 4
-        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
-        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
-        self.optim_conf["def_load_config"] = [
-            {
-                "thermal_source": {
-                    "supply_temperature": 55.0,
-                    "carnot_efficiency": 0.40,
-                    "max_supply_temperature": 53.0,
-                }
-            },
-            {"thermal_source": {"efficiency": 1.0}},
-            {},
-            {},
-        ]
-        self.optim_conf["shared_thermal_tanks"] = [
-            {
-                "id": "dhw",
-                "load_ids": [0, 1],
-                "volume": 0.20,
-                "density": 1000,
-                "heat_capacity": 4.186,
-                "start_temperature": 48.0,
-                "thermal_loss": 0.0,
-                "min_temperatures": min_t,
-                "max_temperatures": [65.0] * 48,
-            }
-        ]
-        # Loads 2 and 3 may never run simultaneously, yet each must deliver
-        # 13 h x 1 kW: 26 h of combined runtime in a 24 h horizon. The MILP is
-        # infeasible by construction; the relaxation drops mutual exclusion.
-        self.optim_conf["deferrable_load_groups"] = [
-            {"names": ["deferrable2", "deferrable3"], "mutual_exclusion": True}
-        ]
-        opt = self.create_optimization()
-        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
-        upp = self.df_input_data_dayahead[opt.var_prod_price].values
-        res = opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            ulc,
-            upp,
-        )
-        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
-        booster = res["P_deferrable1"].reset_index(drop=True)
-        self.assertGreater(booster.sum(), 0, "Booster must serve the band above the HP cap")
-        self._assert_hp_off_above_cap(
-            res, 53.0, "Relaxed fallback must not weaken the max_supply_temperature gate"
-        )
-
     def test_tank_to_tank_transfer_buffer_feeds_room(self):
         """tank->tank transfer (issue #539): HP+boiler heat a BUFFER, the buffer
         feeds a transfer-only HOUSE zone through an emitter. The room has no direct
@@ -16473,6 +16460,137 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 opt._warn_capped_level_below_min_power("t", 0, cop, 15000, 4, after_dp=True), 2
             )
         self.assertIn("after the DP COP refinement", logs.output[0])
+
+    def test_mutual_exclusion_survives_relaxed_lp_fallback(self):
+        """Mutual exclusion is a physical constraint (one source cannot drive two
+        targets at once), so it must survive the relaxed-LP fallback rather than be
+        silently dropped (#539, reported by Micr0mega: a shared-tank source in a
+        mutual_exclusion group ran both loads at once). Two mutually exclusive loads
+        needing 13 h each on a 24 h horizon are infeasible by construction: because
+        the fallback keeps mutual exclusion (alongside the tank's hard min/max and
+        the max_supply_temperature cap), the run is now honestly reported Infeasible
+        instead of masked as 'Optimal (Relaxed)' with both loads scheduled at once."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
+        self.optim_conf["number_of_deferrable_loads"] = 4
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000, 1000, 1000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0, 13, 13]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 4
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
+        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
+        self.optim_conf["is_electric_load"] = [True] * 4
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": 55.0,
+                    "carnot_efficiency": 0.40,
+                    "max_supply_temperature": 53.0,
+                }
+            },
+            {"thermal_source": {"efficiency": 1.0}},
+            {},
+            {},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 48.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        # Loads 2 and 3 may never run simultaneously, yet each must deliver
+        # 13 h x 1 kW: 26 h of combined runtime in a 24 h horizon. The MILP is
+        # infeasible by construction, and so is the fallback, which keeps mutual
+        # exclusion.
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable2", "deferrable3"], "mutual_exclusion": True}
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        # 26 h of mutually exclusive runtime cannot fit a 24 h horizon. The relaxed
+        # rebuild keeps mutual exclusion, so the run is honestly reported Infeasible
+        # rather than dropping the constraint to mask it as a (both-loads) solve.
+        self.assertEqual(opt.optim_status, "Infeasible")
+
+    def test_cap_survives_relaxed_lp_fallback(self):
+        """The cap gate is a physical limit, so it must keep holding in the
+        relaxed-LP fallback. The fallback is forced here (a mutex-infeasible
+        setup no longer reaches it, since mutual exclusion is kept there too);
+        the heat pump must still stay off above its max_supply_temperature while
+        the uncapped booster serves the band above it."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 2
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 2
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 2
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 2
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 2
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 2
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": 55.0,
+                    "carnot_efficiency": 0.40,
+                    "max_supply_temperature": 53.0,
+                }
+            },
+            {"thermal_source": {"efficiency": 1.0}},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "start_temperature": 48.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        opt._needs_relaxed_retry = lambda *a, **k: True  # force the fallback
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertGreater(booster.sum(), 0, "Booster must serve the band above the HP cap")
+        self._assert_hp_off_above_cap(
+            res, 53.0, "Relaxed fallback must not weaken the max_supply_temperature gate"
+        )
 
 
 if __name__ == "__main__":
