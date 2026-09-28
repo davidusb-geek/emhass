@@ -42,7 +42,13 @@ if major != 1:
 11 fixed columns plus four variable groups: `P_deferrable{k}`,
 `predicted_temp_heater{k}`, `heating_demand_heater{k}` (for each configured
 deferrable / thermal load), and `cost_fun_<name>` (one column per cost-function
-component the chosen `costfun` decomposes into).
+component the chosen `costfun` decomposes into). A `heat_topology` with
+tank-to-tank transfers also adds one `P_transfer_{from}_{to}` column per transfer
+(delivered heat, W, non-negative). A storage that is only fed by a transfer has
+no load of its own: its temperature is in `predicted_temp_heater{n + i}`, where
+`n` is the number of deferrable loads and `i` the storage's position in the
+tank list (its position in `storage`, after any manual `shared_thermal_tanks` in
+extend mode). Adding a source flow changes `n`, and so this index. Neither is published to Home Assistant.
 
 | Column | Source helper | Unit | Sign convention | Conditional | HA scaling | `type_var` | Notes |
 |--------|---------------|------|-----------------|-------------|------------|------------|-------|
