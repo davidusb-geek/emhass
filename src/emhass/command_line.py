@@ -2813,6 +2813,11 @@ async def dayahead_forecast_optim(
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
     logger.info(
         f"Performing day-ahead forecast optimization with soc_init: {soc_init}, soc_final: {soc_final}"
+        + (
+            f", current_period_peak: {current_period_peak}"
+            if current_period_peak is not None
+            else ""
+        )
     )
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):

@@ -6,7 +6,7 @@ Price a tariff's billed demand peak inside the same EMHASS optimization that pri
 
 ## Prerequisites
 
-- Base capacity charging (`capacity_cost_per_kw` and `current_period_peak`) is available from EMHASS 0.17.7.
+- Base capacity charging (`capacity_cost_per_kw` and `current_period_peak`) is available from EMHASS 0.17.7. `current_period_peak` in `dayahead-optim` requires a build that includes day-ahead support for it; older builds ignore it there.
 - Demand-window use requires a build exposing `capacity_charge_window`.
 - Excluding a tariff-eligible occurrence from the current MPC solve's peak requires a build exposing `capacity_charge_consideration`.
 - Tariff-interval aggregation requires a build exposing `capacity_charge_interval_timesteps` and `capacity_charge_current_interval_history`.
