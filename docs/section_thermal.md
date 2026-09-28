@@ -25,7 +25,8 @@ thermal configuration, so the optimization is exactly the electrical one.
 The first two are single-load models configured under `def_load_config`. The
 heat topology describes the system as a small graph of sources, stores and
 flows, which EMHASS compiles into deferrable loads and shared thermal tanks. It
-can express both single-load models as one-source stores.
+can express most single-load setups as one-source stores; the exceptions are
+listed below.
 
 ## Moving from `thermal_battery` to `heat_topology`
 
@@ -36,15 +37,18 @@ directly:
 | --- | --- |
 | `supply_temperature`, `heating_curve`, `carnot_efficiency` | a `heatpump` source |
 | `efficiency` (constant-efficiency mode) | an `electric` or `constant_efficiency` source; a `gas`, `oil` or `district` source only together with a `cost_track` for its fuel price, because such a source is not on the electricity bill |
-| `volume`, `density`, `heat_capacity`, `thermal_loss` | a storage entry |
+| `volume`, `density`, `heat_capacity`, `thermal_loss` | a storage entry. The defaults differ: `thermal_battery` assumes concrete (`density` 2400, `heat_capacity` 0.88), a storage assumes water (1000 and 4.186), about twice the heat capacity per m³. For a floor slab, set both explicitly. |
 | `start_temperature`, `min_temperatures`, `max_temperatures`, `min_temperature_curve`, `desired_temperatures`, `overshoot_temperature`, `penalty_factor` | the same storage entry |
 | `sense` (`heat` or `cool`) | the storage's `comfort_sense` |
 | `draw_off_demand` | a `profile` consumer on that storage |
 | `u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`, `indoor_target_temperature` (or `specific_heating_demand`, `area`, `base_temperature`, `annual_reference_hdd`), `window_area`, `shgc`, `internal_gains_factor` | a `building_demand` consumer on that storage |
 | `solar_absorption_area`, `solar_absorption_factor` | a `pool_comfort` consumer on that storage |
 | `cooling_curve` | the `heatpump` source |
-| `thermal_inertia_time_constant` | no direct equivalent: a storage's `thermal_inertia` is a pure delay, not a low-pass filter |
-| the nominal power of the deferrable load | the source's `nominal_power` |
+| `thermal_inertia_time_constant`, `q_input_initial` | no direct equivalent: a storage's `thermal_inertia` is a pure delay, not a low-pass filter |
+| the load's `nominal_power_of_deferrable_loads` entry | the source's `nominal_power` |
+| the load's `treat_deferrable_load_as_semi_cont` entry | the source's `treat_as_semi_cont`, which defaults to `true`: set it to `false` for a continuous load |
+| the load's `minimum_power_of_deferrable_loads`, `set_deferrable_startup_penalty` and `set_deferrable_max_startups` entries | the source's `min_power`, `startup_penalty` and `max_startups` |
+| the load's `start_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load` entries | no equivalent: a topology load may run over the whole horizon |
 
 Then remove the `thermal_battery` entry from `def_load_config`, lower
 `number_of_deferrable_loads` by one, and remove that load's entry from every
@@ -63,8 +67,10 @@ deferrable loads, set `extend_deferrable_loads` (see
 A heat pump's COP falls as it heats the store hotter. The optimizer plans against
 a COP at an assumed temperature; with `cop_solver: auto` it checks the plan
 against the true temperature-dependent COP afterwards and refines it only when
-the two disagree (default `static`: no refinement). `cop_solver` is a setting in
-the configuration, not a topology field. See
+the two disagree (default `static`: no refinement). This applies to heat pumps
+with a `heating_curve` (or `cooling_curve`) on a `heat_topology` storage; a
+`thermal_battery` and a fixed-supply heat pump keep their COP. `cop_solver` is a
+setting in the configuration, not a topology field. See
 [heat_topology](heat_topology.md) for when to turn it on and
 [the mathematical model](advanced_math_model.md) for how it works.
 
