@@ -5511,8 +5511,11 @@ class Optimization:
         mode = self._cop_solver
         if not entries or mode == "static" or self.prob is None or self.prob.value is None:
             return
-        if self._needs_relaxed_retry(self.prob.status, self.prob.value):
-            return  # a failed or timed-out solve has no plan to refine
+        feasible_incumbent = self.prob.status == "user_limit" and self._has_feasible_incumbent(
+            self.prob
+        )
+        if self._needs_relaxed_retry(self.prob.status, self.prob.value, feasible_incumbent):
+            return  # a failed solve, or a time-out without a solution, has nothing to refine
         from emhass.thermal_dp import ThermalDPParams, solve_thermal_dp
 
         # The refinement re-values Parameters of the cached problem (the heat
@@ -5793,9 +5796,13 @@ class Optimization:
             )
             # Accept with EXACTLY the main path's policy (shared predicate): any
             # result the main path would discard for the relaxed fallback
-            # (infeasible, unbounded, time-limited, no value) restores the static
-            # solve instead.
-            if self._accept_dp_resolve(prob2.status, prob2.value):
+            # (infeasible, unbounded, no value, or time-limited without a feasible
+            # solution) restores the static solve instead.
+            if self._accept_dp_resolve(
+                prob2.status,
+                prob2.value,
+                prob2.status == "user_limit" and self._has_feasible_incumbent(prob2),
+            ):
                 return prob2  # hand it to the caller; never replace the cached self.prob (#1048)
             else:
                 _restore_static_solve(saved_values)
@@ -6784,16 +6791,52 @@ class Optimization:
         return opt_tp
 
     @staticmethod
-    def _needs_relaxed_retry(status, value) -> bool:
-        """Whether a solve is discarded for the binary-relaxed LP fallback.
+    def _has_feasible_incumbent(prob, tol: float = 1e-3) -> bool:
+        """Whether a time-limited solve actually holds a feasible solution.
 
-        Infeasible, unbounded, a time-limited ``user_limit`` result, no status, or no
-        objective value at all.
+        cvxpy reports ``user_limit`` with an objective value whether or not the
+        solver found a solution before the limit: with HiGHS, a time-out with no
+        incumbent comes back as ``user_limit`` with value 0.0 and every variable
+        at 0, violating the constraints. So a value is no proof. HiGHS reports the
+        primal solution status (2 = feasible); for other solvers the constraints
+        are checked directly.
         """
-        return status in ("infeasible", "unbounded", "user_limit", None) or value is None
+        if prob is None or getattr(prob, "value", None) is None:
+            return False
+        try:
+            stats = getattr(prob, "solver_stats", None)
+            extra = getattr(stats, "extra_stats", None)
+            primal_status = getattr(extra, "primal_solution_status", None)
+            if primal_status is not None:
+                return int(primal_status) == 2
+            for constraint in prob.constraints:
+                violation = constraint.violation()
+                if violation is None:
+                    return False
+                if np.max(np.abs(np.atleast_1d(violation)), initial=0.0) > tol:
+                    return False
+            return True
+        except Exception:
+            return False
 
     @staticmethod
-    def _accept_dp_resolve(status, value) -> bool:
+    def _needs_relaxed_retry(status, value, feasible_incumbent: bool = False) -> bool:
+        """Whether a solve is discarded for the binary-relaxed fallback.
+
+        A ``user_limit`` status means the MILP solver hit its time limit. When it
+        carries a feasible incumbent (``feasible_incumbent``, see
+        ``_has_feasible_incumbent``) that near-optimal plan is BETTER than the
+        relaxed fallback (which drops the semi-continuous binaries, so it can run a
+        min-power source below its physical floor), so it is kept. Without proof of
+        a feasible incumbent it is discarded. Otherwise fall back only when the
+        solve is unusable: infeasible, unbounded, no status, or no objective value.
+        """
+        if status == "user_limit":
+            return not feasible_incumbent or value is None
+        return status in ("infeasible", "unbounded", None) or value is None
+
+    @staticmethod
+    def _accept_dp_resolve(status, value, feasible_incumbent: bool = False) -> bool:
         """Whether the DP refinement's re-solve result is usable.
 
         Defined as the exact complement of ``_needs_relaxed_retry`` so the DP
@@ -6801,7 +6844,7 @@ class Optimization:
         solve path. A single shared predicate keeps the two from drifting apart.
         """
         status_norm = str(status).lower() if status is not None else None
-        return not Optimization._needs_relaxed_retry(status_norm, value)
+        return not Optimization._needs_relaxed_retry(status_norm, value, feasible_incumbent)
 
     @staticmethod
     def _dp_resolve_opts(solver_opts: dict) -> dict:
@@ -6812,8 +6855,8 @@ class Optimization:
         wall clock on exactly the hard problems that hit the limit. Half the
         budget (floor 10 s) applies to each solver's own limit option: HiGHS
         ``time_limit``, Gurobi ``TimeLimit`` and CPLEX ``cplex_params['timelimit']``.
-        A re-solve that times out is rejected by ``_accept_dp_resolve`` and the
-        static solve is kept. Returns a copy - never mutates the input.
+        A re-solve that times out without a feasible solution is rejected by
+        ``_accept_dp_resolve`` and the static solve is kept. Returns a copy - never mutates the input.
         """
 
         def half(value):
@@ -7968,14 +8011,20 @@ class Optimization:
         # self.transfer_vars back at the cached problem's.
         solved_transfer_vars = getattr(self, "transfer_vars", {})
 
-        # Check for failure or "bad" status
-        # Note: "user_limit" often means timeout. "infeasible" means configuration conflict.
+        # Check for failure or "bad" status. A 'user_limit' (time-limited) solve that
+        # still carries a feasible incumbent is kept, not discarded for the
+        # binary-relaxed LP fallback - see _needs_relaxed_retry.
         # An accepted DP re-solve already passed the same acceptance policy, so it
         # never needs the rescue; only the static solve is a retry candidate.
-        if refined is None and self._needs_relaxed_retry(self.prob.status, self.prob.value):
+        feasible_incumbent = self.prob.status == "user_limit" and self._has_feasible_incumbent(
+            self.prob
+        )
+        if refined is None and self._needs_relaxed_retry(
+            self.prob.status, self.prob.value, feasible_incumbent
+        ):
             self.logger.warning(
                 f"Optimization failed with status: '{self.prob.status}'. "
-                "Retrying with relaxed constraints (Continuous LP)..."
+                "Retrying with the on/off constraints relaxed..."
             )
 
             # Backup Configuration
@@ -8079,10 +8128,21 @@ class Optimization:
                 # Solve Relaxed Problem
                 prob_relaxed = cp.Problem(objective_expr, constraints_relaxed)
                 try:
-                    self.logger.info("Solving relaxed problem (LP)...")
+                    self.logger.info("Solving relaxed problem...")
                     prob_relaxed.solve(solver=selected_solver, **solver_opts)
 
-                    if prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                    relaxed_ok = prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]
+                    if prob_relaxed.status == "user_limit" and self._has_feasible_incumbent(
+                        prob_relaxed
+                    ):
+                        # The relaxed problem keeps the mutual-exclusion binaries, so it
+                        # is a MILP too and can itself hit the time limit; a feasible
+                        # incumbent is still a usable relaxed plan.
+                        self.logger.info(
+                            "Relaxed optimization hit the time limit; using its incumbent"
+                        )
+                        relaxed_ok = True
+                    if relaxed_ok:
                         self.logger.info("Relaxed optimization successful!")
                         # Mark status so user knows it was relaxed
                         prob_relaxed._status = "Optimal (Relaxed)"
@@ -8115,6 +8175,18 @@ class Optimization:
                         params["q_input_var"] = original_q_input_vars[k]
                     else:
                         params.pop("q_input_var", None)
+        elif solved_prob.status == "user_limit":
+            extra = getattr(getattr(solved_prob, "solver_stats", None), "extra_stats", None)
+            gap = getattr(extra, "mip_gap", None)
+            self.logger.info(
+                "Accepting time-limited solution (objective %.4g, MIP gap %s) - feasible "
+                "incumbent, skipping the relaxed LP fallback.",
+                solved_prob.value,
+                f"{gap:.2%}" if isinstance(gap, int | float) and np.isfinite(gap) else "unknown",
+            )
+            # Mark it so the downstream status gate keeps this binary-respecting
+            # incumbent instead of discarding it.
+            solved_prob._status = "Optimal (Incumbent)"
 
         # Stage-timer breadcrumb: end of solve phase, start of extract phase.
         _extract_start_perf = time.perf_counter() if stage_times is not None else 0.0
@@ -8130,6 +8202,7 @@ class Optimization:
             cp.OPTIMAL,
             cp.OPTIMAL_INACCURATE,
             "Optimal (Relaxed)",
+            "Optimal (Incumbent)",
         ]:
             self.logger.warning("Cost function cannot be evaluated or Infeasible/Unbounded")
 
