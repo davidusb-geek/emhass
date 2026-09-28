@@ -2085,6 +2085,49 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(out["deferrable_load_groups"][0]["max_power"], 15000.0)
 
+    def test_compile_heat_topology_rejects_unusable_storage_and_transfers(self):
+        """A storage without volume or thermal_mass, a non-positive capacity, or a
+        non-positive transfer field is rejected by the compiler (so the config save
+        refuses it), not at the next optimization run."""
+
+        def topo(storage_extra=None, transfer_extra=None):
+            house = {
+                "id": "house",
+                "thermal_mass": 8,
+                "loss_coefficient": 0.25,
+                "start_temperature": 20,
+                "min_temperature": [19] * 4,
+                "max_temperature": [22] * 4,
+            }
+            buffer = {
+                "id": "buffer",
+                "volume": 0.3,
+                "start_temperature": 40,
+                "min_temperature": [30] * 4,
+                "max_temperature": [55] * 4,
+            }
+            buffer.update(storage_extra or {})
+            transfer = {"from": "buffer", "to": "house", **(transfer_extra or {})}
+            return {
+                "sources": [
+                    {"id": "e", "type": "electric", "efficiency": 1.0, "nominal_power": 3000}
+                ],
+                "storage": [buffer, house],
+                "flows": [{"from": "e", "to": "buffer"}, transfer],
+            }
+
+        utils.compile_heat_topology(topo())  # the valid baseline compiles
+        for storage_extra, transfer_extra, field in (
+            ({"volume": None}, None, "volume"),
+            ({"volume": -0.1}, None, "volume"),
+            ({"heat_capacity": 0}, None, "heat_capacity"),
+            (None, {"max_transfer_power": -5}, "max_transfer_power"),
+            (None, {"transfer_coefficient": float("nan")}, "transfer_coefficient"),
+        ):
+            with self.subTest(field=field, storage=storage_extra, transfer=transfer_extra):
+                with self.assertRaisesRegex(ValueError, field):
+                    utils.compile_heat_topology(topo(storage_extra, transfer_extra))
+
     def test_compile_heat_topology_rejects_wrong_types(self):
         """Wrong top-level types raise the documented ValueError instead of an
         AttributeError, and a string extend flag is not treated as true."""
@@ -2936,6 +2979,85 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError) as cm:
             utils.compile_heat_topology(no_profile)
         self.assertIn("profile", str(cm.exception))
+
+    async def test_compile_heat_topology_rejects_id_used_by_source_and_storage(self):
+        """A flow's `from` is resolved against sources first, so an id shared by a
+        source and a storage silently turned a tank->tank transfer into a source
+        load (a phantom heater with the source's power) with no error."""
+        topo = {
+            "sources": [
+                {"id": "buf", "type": "electric", "efficiency": 1.0, "nominal_power": 5000}
+            ],
+            "storage": [
+                {"id": "buf", "volume": 0.1, "start_temperature": 40.0},
+                {"id": "room", "thermal_mass": 10.0, "start_temperature": 20.0},
+            ],
+            "flows": [
+                {"from": "buf", "to": "buf"},
+                {
+                    "from": "buf",
+                    "to": "room",
+                    "transfer_coefficient": 0.5,
+                    "max_transfer_power": 4000,
+                },
+            ],
+        }
+        with self.assertRaises(ValueError) as cm:
+            utils.compile_heat_topology(topo)
+        self.assertIn("buf", str(cm.exception))
+
+    async def _treat_with_optim_conf(self, extra_optim_conf):
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        optim_conf.update(extra_optim_conf)
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            orjson.dumps({}).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        return optim_conf_out
+
+    async def test_heat_topology_merge_replaces_stale_tank_transfers(self):
+        """tank_transfers is compiler output like shared_thermal_tanks, so a
+        re-treated optim_conf must carry the CURRENT topology's transfers: replace
+        mode kept a stale value, extend mode appended to it."""
+        stale = [
+            {"from": "old", "to": "gone", "transfer_coefficient": 1.0, "max_transfer_power": 1}
+        ]
+        base = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3000, "supply_temperature": 45}
+            ],
+            "storage": [
+                {"id": "buffer", "volume": 0.1, "start_temperature": 40.0},
+                {"id": "house", "thermal_mass": 18.0, "start_temperature": 20.0},
+            ],
+            "flows": [{"from": "hp", "to": "buffer"}],
+        }
+        out = await self._treat_with_optim_conf({"heat_topology": base, "tank_transfers": stale})
+        self.assertEqual(out.get("tank_transfers") or [], [], "replace mode kept stale transfers")
+
+        extend = dict(base)
+        extend["extend_deferrable_loads"] = True
+        extend["flows"] = base["flows"] + [
+            {
+                "from": "buffer",
+                "to": "house",
+                "transfer_coefficient": 0.7,
+                "max_transfer_power": 8000,
+            }
+        ]
+        out = await self._treat_with_optim_conf({"heat_topology": extend, "tank_transfers": stale})
+        pairs = [(tr["from"], tr["to"]) for tr in out.get("tank_transfers") or []]
+        self.assertEqual(
+            pairs, [("buffer", "house")], "extend mode must not append to stale transfers"
+        )
 
 
 class TestHeatingDemand(unittest.TestCase):
@@ -4281,6 +4403,19 @@ class TestResolveMinTemperatures(unittest.TestCase):
         cfg = {"min_temperatures": [25.0] * 48}
         out = utils.resolve_min_temperatures(cfg, None, length=48)
         self.assertEqual(out, [25.0] * 48)
+
+    def test_null_entries_become_none_not_nan(self):
+        """A null/None entry (an unbounded step) must come back as None, not nan.
+        np.asarray(dtype=float) turns None into nan; if that leaked, the downstream
+        `v is not None` guards in the bound/penalty builders would pass it straight
+        into the LP as a `>= nan` constraint."""
+        cfg = {"min_temperatures": [45.0, None, 45.0, None, 45.0]}
+        out = utils.resolve_min_temperatures(cfg, None, length=5)
+        self.assertEqual(out, [45.0, None, 45.0, None, 45.0])
+        self.assertFalse(
+            any(isinstance(v, float) and np.isnan(v) for v in out),
+            "no nan may leak from a null floor entry",
+        )
 
     def test_curve_only(self):
         """A config with only `min_temperature_curve` returns per-slot derived floor."""

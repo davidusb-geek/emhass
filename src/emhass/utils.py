@@ -392,7 +392,7 @@ def resolve_min_temperatures(
     config: dict,
     outdoor_temperature_forecast: np.ndarray | pd.Series | list | None,
     length: int,
-) -> list[float]:
+) -> list[float | None]:
     """Compute the effective per-slot lower temperature bound for a storage tank.
 
     Combines two sources, taking the element-wise max so the more conservative
@@ -454,7 +454,11 @@ def resolve_min_temperatures(
     else:
         effective = static_arr
 
-    return [float(v) for v in effective]
+    # A null/None entry in the static list survives np.asarray(dtype=float) as nan.
+    # Map it back to None so the downstream "v is not None" guards (the hard-bound and
+    # comfort-penalty builders, the recovery ramp) correctly read it as "no floor at
+    # this step" rather than letting a nan propagate into the LP.
+    return [None if np.isnan(v) else float(v) for v in effective]
 
 
 def resolve_thermal_battery_cop(
@@ -681,16 +685,37 @@ def compile_heat_topology(topology: dict) -> dict:
         raise ValueError("heat_topology.sources contains duplicate ids")
     if len(sto_by_id) != len(storage):
         raise ValueError("heat_topology.storage contains duplicate ids")
+    # Flows resolve `from` against sources first, so an id shared by a source and a
+    # storage would silently turn a tank->tank transfer into a source load.
+    shared_ids = sorted(set(src_by_id) & set(sto_by_id))
+    if shared_ids:
+        raise ValueError(
+            f"heat_topology: ids used by both a source and a storage: {shared_ids}; "
+            "source and storage ids must be distinct"
+        )
 
-    # Validate flows reference real source/storage ids
+    # Split flows: source->storage flows become deferrable loads; storage->storage
+    # flows are tank->tank heat transfers (e.g. a buffer feeding a room through the
+    # emitters). Both must point at a real storage; the source side differs.
+    source_flows = []
+    transfer_flows = []
     for i, f in enumerate(flows):
-        if f.get("from") not in src_by_id:
-            raise ValueError(
-                f"heat_topology.flows[{i}].from='{f.get('from')}' does not match any source.id"
-            )
         if f.get("to") not in sto_by_id:
             raise ValueError(
                 f"heat_topology.flows[{i}].to='{f.get('to')}' does not match any storage.id"
+            )
+        if f.get("from") in src_by_id:
+            source_flows.append(f)
+        elif f.get("from") in sto_by_id:
+            if f["from"] == f["to"]:
+                raise ValueError(
+                    f"heat_topology.flows[{i}] is a self-transfer ('{f['from']}' -> itself)"
+                )
+            transfer_flows.append(f)
+        else:
+            raise ValueError(
+                f"heat_topology.flows[{i}].from='{f.get('from')}' does not match any "
+                "source.id or storage.id"
             )
 
     # Validate consumers target real storage
@@ -700,8 +725,8 @@ def compile_heat_topology(topology: dict) -> dict:
                 f"heat_topology.consumers[{i}].target='{c.get('target')}' does not match any storage.id"
             )
 
-    # Build deferrable loads from flows
-    num_loads = len(flows)
+    # Build deferrable loads from the source->storage flows only
+    num_loads = len(source_flows)
     nominal_power = []
     min_power = []
     treat_semi_cont = []
@@ -714,7 +739,7 @@ def compile_heat_topology(topology: dict) -> dict:
     flow_to_load_idx: dict[tuple[str, str], int] = {}
     cap_by_src_id: dict[str, float | list | None] = {}
 
-    for i, f in enumerate(flows):
+    for i, f in enumerate(source_flows):
         src = src_by_id[f["from"]]
         src_nominal_power = float(src.get("nominal_power", 0))
         src_min_power = float(src.get("min_power", 0))
@@ -955,15 +980,38 @@ def compile_heat_topology(topology: dict) -> dict:
                 "profile, building_demand, pool_comfort"
             )
 
+    def _positive(value, field):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not np.isfinite(number) or number <= 0:
+            raise ValueError(f"heat_topology.{field} must be a positive number, got {value!r}")
+        return number
+
     # Build shared_thermal_tanks from storage + aggregated demand + flows
     shared_tanks = []
     for s in storage:
         sid = s["id"]
-        load_ids = [flow_to_load_idx[(f["from"], f["to"])] for f in flows if f["to"] == sid]
+        # Heat capacity: a water volume (with density and heat capacity) or a
+        # thermal_mass. Checked here so an unusable storage is rejected when the
+        # configuration is saved, not at the next unattended run.
+        if s.get("thermal_mass") is not None:
+            _positive(s["thermal_mass"], f"storage[{sid}].thermal_mass")
+        elif s.get("volume") is not None:
+            _positive(s["volume"], f"storage[{sid}].volume")
+            for _cap_key in ("density", "heat_capacity"):
+                if s.get(_cap_key) is not None:
+                    _positive(s[_cap_key], f"storage[{sid}].{_cap_key}")
+        else:
+            raise ValueError(
+                f"heat_topology.storage[{sid}] needs a 'volume' (m3) or a 'thermal_mass' (kWh/K)"
+            )
+        load_ids = [flow_to_load_idx[(f["from"], f["to"])] for f in source_flows if f["to"] == sid]
         tank: dict = {
             "id": sid,
             "load_ids": load_ids,
-            "volume": float(s["volume"]),
+            "volume": float(s["volume"]) if s.get("volume") is not None else None,
             "density": float(s.get("density", 1000)),
             "heat_capacity": float(s.get("heat_capacity", 4.186)),
             "start_temperature": float(s.get("start_temperature", 20.0)),
@@ -980,7 +1028,7 @@ def compile_heat_topology(topology: dict) -> dict:
         # hot enough can still hold the minimum, and the solver decides. Only the
         # static list is checked here; a min_temperature_curve resolves against
         # weather at solve time.
-        feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
+        feeding_caps = [cap_by_src_id[f["from"]] for f in source_flows if f["to"] == sid]
         is_cooling = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
         if not is_cooling and feeding_caps and all(c is not None for c in feeding_caps):
             for t, min_val in enumerate(tank["min_temperatures"]):
@@ -1011,7 +1059,7 @@ def compile_heat_topology(topology: dict) -> dict:
         # on the storage) can pass it: the check needs every feeding source to be
         # continuous and to have one.
         desired = s.get("desired_temperature", s.get("desired_temperatures"))
-        feeding_srcs = [src_by_id[f["from"]] for f in flows if f["to"] == sid]
+        feeding_srcs = [src_by_id[f["from"]] for f in source_flows if f["to"] == sid]
         feeding_overshoots = [
             src.get("overshoot_temperature")
             if src.get("overshoot_temperature") is not None
@@ -1084,6 +1132,22 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"heat_topology.storage[{sid}].comfort_sense='{sense}' must be 'heat' or 'cool'"
                 )
             tank["sense"] = sense
+        # Unified thermal-tank options (consolidation, issue #539): a storage MAY
+        # opt into building-zone physics. All optional; omitting every one of them
+        # preserves the existing water-tank behaviour byte-for-byte.
+        #   thermal_mass     (kWh/K) - heat capacity directly, instead of volume
+        #   loss_coefficient (kW/K)  - state-dependent loss UA*(T-outdoor)
+        #   thermal_inertia  (h)     - lag between heat input and temperature
+        #   window_area (m2) + shgc - solar gain through glazing (offsets heating)
+        for _zone_key in (
+            "thermal_mass",
+            "loss_coefficient",
+            "thermal_inertia",
+            "window_area",
+            "shgc",
+        ):
+            if s.get(_zone_key) is not None:
+                tank[_zone_key] = float(s[_zone_key])
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1091,6 +1155,14 @@ def compile_heat_topology(topology: dict) -> dict:
             tank.update(demand["building"])
         if demand.get("pool"):
             tank.update(demand["pool"])
+        # loss_coefficient (state-dependent UA loss) and a building_demand consumer
+        # both model heat loss to outdoor - reject both on one storage to avoid
+        # double counting the space-heating demand.
+        if tank.get("loss_coefficient") is not None and demand.get("building"):
+            raise ValueError(
+                f"heat_topology.storage[{sid}]: loss_coefficient and a building_demand "
+                "consumer both model heat loss to outdoor; configure only one."
+            )
         shared_tanks.append(tank)
 
     # Build deferrable_load_groups from actuator_groups
@@ -1129,6 +1201,31 @@ def compile_heat_topology(topology: dict) -> dict:
             def_group["max_power"] = float(limit)
         def_groups.append(def_group)
 
+    # Tank->tank heat transfers (e.g. a buffer feeding a room through the
+    # emitters). Each carries an emitter conductance (transfer_coefficient, kW/K)
+    # and a maximum delivered power (max_transfer_power, W).
+    tank_ids = {s["id"] for s in storage}
+    tank_transfers = []
+    for f in transfer_flows:
+        if f["from"] not in tank_ids or f["to"] not in tank_ids:
+            raise ValueError(
+                f"heat_topology transfer flow {f.get('from')}->{f.get('to')} must connect two storage ids"
+            )
+        tank_transfers.append(
+            {
+                "from": f["from"],
+                "to": f["to"],
+                "transfer_coefficient": _positive(
+                    f.get("transfer_coefficient", 1.0),
+                    f"flows[{f['from']}->{f['to']}].transfer_coefficient",
+                ),
+                "max_transfer_power": _positive(
+                    f.get("max_transfer_power", 1e6),
+                    f"flows[{f['from']}->{f['to']}].max_transfer_power",
+                ),
+            }
+        )
+
     return {
         "number_of_deferrable_loads": num_loads,
         "nominal_power_of_deferrable_loads": nominal_power,
@@ -1143,6 +1240,7 @@ def compile_heat_topology(topology: dict) -> dict:
         "end_timesteps_of_each_deferrable_load": [0] * num_loads,
         "def_load_config": def_load_config,
         "shared_thermal_tanks": shared_tanks,
+        "tank_transfers": tank_transfers,
         "deferrable_load_groups": def_groups,
         "cost_forecast_per_deferrable_load": cost_per_load,
         "is_electric_load": is_electric_load,
@@ -1297,6 +1395,9 @@ def _extend_optim_conf_with_compiled_topology(
     optim_conf["deferrable_load_groups"] = (
         list(optim_conf.get("deferrable_load_groups") or []) + shifted_groups
     )
+    # Tank->tank transfers are compiler output only (no user-facing setting), so any
+    # existing value is a previous compile's: replace it rather than append.
+    optim_conf["tank_transfers"] = list(compiled.get("tank_transfers") or [])
 
     optim_conf["number_of_deferrable_loads"] = offset + num_compiled
     logger.info(
@@ -3121,6 +3222,7 @@ async def treat_runtimeparams(
                         "number_of_deferrable_loads",
                         "def_load_config",
                         "shared_thermal_tanks",
+                        "tank_transfers",
                         "deferrable_load_groups",
                         "nominal_power_of_deferrable_loads",
                         "minimum_power_of_deferrable_loads",
