@@ -265,7 +265,7 @@ For radiator-based heating systems, the buffer / storage temperature must stay a
 
 Set `min_temperature_curve` to make the floor track outdoor temperature via the same linear law as `heating_curve`:
 
-* **min_temperature_curve**: Dict describing the weather-compensated minimum: `T_min = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, the per-slot effective minimum is `max(static_min_temperatures[t], curve_min[t])` so any static absolute floor still wins if it's higher. For a storage in `shared_thermal_tanks` or `heat_topology`, a `null` entry in `min_temperatures` means "no static floor for this slot": the curve floor alone applies there.
+* **min_temperature_curve**: Dict describing the weather-compensated minimum: `T_min = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, the per-slot effective minimum is `max(static_min_temperatures[t], curve_min[t])` so any static absolute floor still wins if it's higher. For a storage in `shared_thermal_tanks` or `heat_topology`, a `null` entry in `min_temperatures` means "no static floor for this slot": the curve floor alone applies there. A standalone `thermal_battery` load does not read `min_temperature_curve`; use a heat topology storage for a weather-compensated floor.
     * `slope`, `offset`: same form as the source's heating curve.
     * `min_supply`: Absolute floor in °C, never below this regardless of mild weather. Choose this as the buffer T below which your radiators cannot deliver useful heat (typically 28-30 °C).
     * `max_supply`: Upper bound on the dynamic floor (not the tank max - that's still `max_temperatures`).

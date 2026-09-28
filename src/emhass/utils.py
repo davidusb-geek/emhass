@@ -2640,11 +2640,24 @@ async def treat_runtimeparams(
             # The default publish ids were built from the load count before the
             # steps above could change it (a heat_topology compile, a runtime
             # def_load_config). Pad each per-load id list with the defaults for
-            # the extra loads, or publish-data indexes past its end.
+            # the extra loads, or publish-data indexes past its end. A list the
+            # caller passed is padded too (it would otherwise fail the same way),
+            # but that is logged: those loads publish under their default names.
             passed_data = params.get("passed_data") or {}
+            user_keys = set(runtimeparams or {})
             for ids_key in _LOAD_PUBLISH_ID_KEYS:
                 ids = passed_data.get(ids_key)
                 if isinstance(ids, list) and len(ids) < final_num_def_loads:
+                    if ids_key in user_keys:
+                        logger.warning(
+                            "%s has %d entries for %d deferrable loads; loads %d..%d "
+                            "publish under their default entity names",
+                            ids_key,
+                            len(ids),
+                            final_num_def_loads,
+                            len(ids),
+                            final_num_def_loads - 1,
+                        )
                     passed_data[ids_key] = list(ids) + [
                         _default_load_publish_ids(k)[ids_key]
                         for k in range(len(ids), final_num_def_loads)
@@ -3577,9 +3590,8 @@ async def build_params(
     # If not, set defaults it fill in gaps
     if params["optim_conf"].get("number_of_deferrable_loads", None) is not None:
         num_def_loads = params["optim_conf"]["number_of_deferrable_loads"]
-        # Looped over DEF_LOAD_ARRAY_PARAMS (name -> default) instead of 9
-        # repeated calls (#1040) - same order, same defaults, same call
-        # signature per entry, so behaviour is unchanged.
+        # Looped over DEF_LOAD_ARRAY_PARAMS (name -> default) instead of one
+        # call per array (#1040) - same defaults and call signature per entry.
         for def_array_name, def_array_default in DEF_LOAD_ARRAY_PARAMS.items():
             params["optim_conf"][def_array_name] = check_def_loads(
                 num_def_loads,
