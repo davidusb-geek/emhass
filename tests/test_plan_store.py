@@ -121,7 +121,7 @@ class TestRecordOptimSnapshotWritesPlan(unittest.TestCase):
         """A failed/infeasible run is recorded by last_run but must NOT publish a
         plan: /api/v1/plan would otherwise report status='ok' for the same run
         that /api/v1/last-run reports as 'infeasible'. The plan is published iff
-        the run is Optimal (i.e. iff last_run's status is 'ok')."""
+        last_run's status is 'ok' (OK_OPTIM_STATUSES)."""
         import logging
 
         from emhass import command_line

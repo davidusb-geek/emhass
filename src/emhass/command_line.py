@@ -71,7 +71,7 @@ def _record_optim_snapshot(
             duration_total_seconds=_time.monotonic() - t0_monotonic,
             schema_version=EMHASS_SCHEMA_VERSION,
         )
-        # Publish the structured plan ONLY for a successful (Optimal) run, reusing
+        # Publish the structured plan ONLY for a successful run (OK_OPTIM_STATUSES), reusing
         # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
         # /api/v1/last-run for that run. Only the timestamp is shared, not the
         # verdict: a failed/infeasible run is still recorded by last_run (status
@@ -3558,21 +3558,23 @@ async def _publish_from_saved_entities(
         logger.warning(f"No saved entity json files in path: {entity_path}")
         logger.warning("Falling back to opt_res_latest")
         return None
-    entity_path_contents = os.listdir(entity_path)
+    # Skip the metadata file and any in-flight atomic-write temp file
+    # ("<name>.json.<pid>.<uuid>.tmp") left by retrieve_hass.post_data -
+    # publishing one derives a bogus entity_id and KeyErrors on the metadata
+    # lookup, aborting the whole publish.
+    entity_path_contents = [
+        entity
+        for entity in os.listdir(entity_path)
+        if entity != default_metadata_json and not entity.endswith(".tmp")
+    ]
     matches_prefix = any(publish_prefix in entity for entity in entity_path_contents)
-    if not (matches_prefix or publish_prefix == "all"):
+    if not entity_path_contents or not (matches_prefix or publish_prefix == "all"):
         logger.warning(f"No saved entity json files that match prefix: {publish_prefix}")
         logger.warning("Falling back to opt_res_latest")
         return None
     opt_res_list = []
     opt_res_list_names = []
     for entity in entity_path_contents:
-        # Skip the metadata file and any in-flight atomic-write temp file
-        # ("<name>.json.<pid>.<uuid>.tmp") left by retrieve_hass.post_data -
-        # publishing one derives a bogus entity_id and KeyErrors on the
-        # metadata lookup, aborting the whole publish.
-        if entity == default_metadata_json or entity.endswith(".tmp"):
-            continue
         if publish_prefix == "all" or publish_prefix in entity:
             entity_data = await publish_json(entity, input_data_dict, entity_path, logger)
             if isinstance(entity_data, bool):
