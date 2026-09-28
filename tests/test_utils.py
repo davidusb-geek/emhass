@@ -4288,6 +4288,24 @@ class TestCompileHeatTopology(unittest.TestCase):
         """Empty dict must return {} without raising."""
         self.assertEqual(utils.compile_heat_topology({}), {})
 
+    def test_integer_id_zero_is_a_valid_id(self):
+        """An id of 0 is a valid id, not a missing one."""
+        topo = {
+            "sources": [{"id": 0, "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": 0, "to": "dhw"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        self.assertEqual(compiled["number_of_deferrable_loads"], 1)
+
     def test_missing_id_raises_value_error_with_field_path(self):
         """A source/storage entry without an `id` must raise the documented
         ValueError naming the offending field, not an internal KeyError: the
