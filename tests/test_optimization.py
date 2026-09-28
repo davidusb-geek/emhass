@@ -16490,8 +16490,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after the DP COP refinement", logs.output[0])
 
     def test_per_load_prior_heat_seeds_the_dead_zone(self):
-        """The same dead-zone defect exists on the per-load thermal path (which
-        ships upstream), so it takes the same initial condition - expressed in the
+        """The same dead-zone defect exists on the per-load thermal path (which is
+        already on master), so it takes the same initial condition - expressed in the
         input power (W) that path already speaks."""
 
         def run(prior_heat=None):
@@ -16566,7 +16566,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(seeded[2], base[2] + 0.5, "the second dead-zone step must be seeded too")
 
-    def _run_shared_tank_lag(self, prior_heat=None):
+    def test_shared_tank_prior_heat_without_lag_is_logged(self):
+        """With no thermal_inertia there is no dead zone to seed, so prior_heat
+        has no effect; that must be logged rather than silently dropped."""
+        with self.assertLogs(logger, level="INFO") as logs:
+            self._run_shared_tank_lag(prior_heat=[8.0, 8.0], thermal_inertia=0.0)
+        self.assertTrue(any("prior_heat ignored" in line for line in logs.output), logs.output)
+
+    def _run_shared_tank_lag(self, prior_heat=None, thermal_inertia=1.0):
         """Solve a lagged zone tank with a wide comfort band (nothing forces
         heating), so the dead-zone trajectory is pure physics: loss only, plus
         whatever prior_heat seeds. Returns the predicted temperature array."""
@@ -16578,7 +16585,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "load_ids": [0],
             "thermal_mass": 8.0,  # kWh/K -> conversion 0.125 K/kWh
             "loss_coefficient": 0.3,
-            "thermal_inertia": 1.0,  # L=2 at 30-min steps
+            "thermal_inertia": thermal_inertia,  # 1.0 h: L=2 at 30-min steps
             "start_temperature": 20.5,
             "min_temperatures": [15.0] * 48,
             "max_temperatures": [25.0] * 48,

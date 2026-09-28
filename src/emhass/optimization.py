@@ -3636,8 +3636,8 @@ class Optimization:
         # horizon still can: prior_heat is that in-flight input power (W, oldest
         # first), converted by the same heat_factor as p_deferrable. Zero when absent,
         # so a plain day-ahead solve keeps its cold-start assumption.
+        prior_heat = self._resolve_prior_heat(hc.get("prior_heat"), L, f"Load {k}")
         if L > 0:
-            prior_heat = self._resolve_prior_heat(hc.get("prior_heat"), L, f"Load {k}")
             constraints.append(
                 predicted_temp[1 : 1 + L]
                 == predicted_temp[:L]
@@ -3741,11 +3741,17 @@ class Optimization:
         `raw` is that in-flight heat, oldest first, in the unit the caller's model
         speaks (thermal kWh per step for shared tanks, input W for the per-load
         path). A short list is right-aligned - it is the MOST RECENT steps that are
-        still in flight - and a long one keeps its last `lag_steps` entries. None or
-        empty yields zeros, i.e. exactly the previous behaviour.
+        still in flight - and a long one keeps its last `lag_steps` entries; either
+        is logged. None or empty yields zeros, i.e. exactly the previous behaviour.
+        With no lag the value is ignored, which is logged too.
         """
         prior = np.zeros(max(int(lag_steps), 0))
-        if raw is None or prior.size == 0:
+        if raw is None:
+            return prior
+        if prior.size == 0:
+            self.logger.info(
+                "%s: prior_heat ignored, there is no thermal_inertia lag to seed", label
+            )
             return prior
         if isinstance(raw, str) or not isinstance(raw, list | tuple | np.ndarray):
             raise ValueError(
@@ -4915,6 +4921,7 @@ class Optimization:
         # sense_coeff flips the SOURCE term so a cool-sense tank's sources remove heat
         # (a reversible heat pump in cooling mode lowers the tank temperature); the
         # tank->tank transfers, demand and losses keep their physical signs.
+        prior_heat = self._resolve_prior_heat(tank.get("prior_heat"), L, f"Shared tank {tank_id}")
         if L <= 0:
             constraints.append(
                 predicted_temp[1:]
@@ -4928,9 +4935,6 @@ class Optimization:
             # lag). They do receive heat committed BEFORE the horizon that is still in
             # flight: prior_heat (thermal kWh per step, oldest first). Zero when absent,
             # which reproduces the previous cold-start behaviour exactly.
-            prior_heat = self._resolve_prior_heat(
-                tank.get("prior_heat"), L, f"Shared tank {tank_id}"
-            )
             constraints.append(
                 predicted_temp[1 : 1 + L]
                 == predicted_temp[:L]
