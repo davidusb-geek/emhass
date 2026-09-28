@@ -6498,8 +6498,13 @@ class Optimization:
 
         Args:
             constraints: List of CVXPY constraints to append to.
-            relaxed: If True, only add shared power budget constraints (skip mutual
-                exclusion, which requires binary variables not available in the relaxed LP).
+            relaxed: If True, this is the relaxed-LP fallback rebuild. The shared
+                power budget and mutual exclusion are BOTH still added - mutual
+                exclusion is a physical constraint (one actuator cannot drive two
+                targets at once), so it must survive the fallback exactly like the
+                max_supply_temperature gate. Only the soft per-load binaries
+                (semi-continuous, single-constant) are dropped by the caller; the
+                mutual-exclusion binaries are re-created here on the spot.
         """
         groups = self.optim_conf.get("deferrable_load_groups", [])
         if not groups:
@@ -6519,15 +6524,20 @@ class Optimization:
                 group_power_sum = sum(p_deferrable[i] for i in indices)
                 constraints.append(group_power_sum <= max_power)
 
-            # Mutual exclusion: at most one load active per timestep.
-            # Reuses p_def_bin2[i] for semi-continuous members; for non-semi-cont
-            # members an anonymous binary plus linking constraint is added on the spot.
-            # Skipped in relaxed mode (no binary variables in the LP relaxation).
-            if mutual_exclusion and not relaxed:
+            # Mutual exclusion: at most one load active per timestep. This is a
+            # PHYSICAL limit (one heat source cannot serve two targets at once), so
+            # it is kept in the relaxed-LP fallback too - otherwise an infeasible or
+            # timed-out MILP silently drops it and schedules both loads at once,
+            # which reads as "mutual_exclusion not honoured". In the relaxed rebuild
+            # the soft per-load binaries are disabled (semi_cont forced False), so
+            # every member takes the anonymous-binary branch below; the resulting
+            # fallback is a small MILP rather than a pure LP, which is the correct
+            # trade for not publishing a plan the hardware cannot execute.
+            if mutual_exclusion:
                 semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"]
                 activity_bins = []
                 for i in indices:
-                    if semi_cont[i]:
+                    if semi_cont[i] and not relaxed:
                         activity_bins.append(self.vars["p_def_bin2"][i])
                     else:
                         bin_var = cp.Variable(
