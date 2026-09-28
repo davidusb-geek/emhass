@@ -567,7 +567,7 @@ def compile_heat_topology(topology: dict) -> dict:
     # documented contract: an invalid topology raises ValueError).
     for kind, entries in (("sources", sources), ("storage", storage)):
         for i, entry in enumerate(entries):
-            if not isinstance(entry, dict) or not entry.get("id"):
+            if not isinstance(entry, dict) or entry.get("id") in (None, ""):
                 raise ValueError(f"heat_topology.{kind}[{i}] is missing the required 'id' field")
 
     src_by_id = {s["id"]: s for s in sources}
@@ -698,17 +698,14 @@ def compile_heat_topology(topology: dict) -> dict:
 
     # Aggregate consumer demand onto storage
     storage_demand: dict[str, dict] = {}
-    for c in consumers:
+    for ci, c in enumerate(consumers):
         target = c["target"]
         if target not in storage_demand:
             storage_demand[target] = {"profile": None, "building": None, "pool": None}
         ctype = (c.get("type") or "").lower()
         if ctype == "profile":
             if c.get("profile") is None:
-                raise ValueError(
-                    f"heat_topology.consumers[{c.get('id', target)}] (type=profile) "
-                    "requires 'profile'"
-                )
+                raise ValueError(f"heat_topology.consumers[{ci}] (type=profile) requires 'profile'")
             prof = list(c["profile"])
             existing = storage_demand[target]["profile"]
             if existing is None:
