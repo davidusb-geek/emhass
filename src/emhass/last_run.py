@@ -31,7 +31,9 @@ ACTION_NAIVE_MPC_OPTIM = "naive-mpc-optim"
 # "Optimal_Inaccurate" is cvxpy's optimal_inaccurate, title-cased by the
 # optimizer; CPLEX returns it (e.g. at a time limit with a feasible solution).
 # HiGHS, the default, and Gurobi report a time-out as user_limit instead.
-OK_OPTIM_STATUSES = frozenset({"Optimal", "Optimal_Inaccurate"})
+OK_OPTIM_STATUSES = frozenset(
+    {"Optimal", "Optimal_Inaccurate", "Optimal (Relaxed)", "Optimal (Incumbent)"}
+)
 
 
 def _path(data_path: Path) -> Path:
@@ -78,9 +80,10 @@ def record(
     a lock. File write failure is logged-and-swallowed so a disk error never
     breaks the caller's return path.
 
-    Status mapping: optim_status "Optimal" or "Optimal_Inaccurate" (CVXPY's
-    optimal_inaccurate, whose plan the optimizer publishes like an optimal
-    one) -> "ok", "Infeasible" (or
+    Status mapping: every status whose plan the optimizer publishes -> "ok":
+    "Optimal", "Optimal_Inaccurate" (CVXPY's optimal_inaccurate), "Optimal
+    (Relaxed)" (the relaxed-LP fallback) and "Optimal (Incumbent)" (a
+    time-limited solve's feasible incumbent). "Infeasible" (or
     infeasible=True) -> "infeasible", anything else -> "error". This errs
     on the side of caution: an unrecognised solver status is surfaced as
     "error" rather than silently classified as healthy.
