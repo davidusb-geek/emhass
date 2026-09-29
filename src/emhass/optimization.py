@@ -27,6 +27,7 @@ THERMAL_CONFIG_KNOWN_KEYS = frozenset(
         "overshoot_temperature",
         "penalty_factor",
         "sense",
+        "thermal_inertia",
     }
 )
 # Common singular typo -> (correct list key, what that key controls). The role
@@ -1126,6 +1127,10 @@ class Optimization:
         nominal_powers = self.optim_conf.get("nominal_power_of_deferrable_loads", [])
         semi_cont_flags = self.optim_conf.get("treat_deferrable_load_as_semi_cont", [])
         single_const_flags = self.optim_conf.get("set_deferrable_load_single_constant", [])
+        # Shared-tank members carry `thermal_source`, not `thermal_config` /
+        # `thermal_battery`, so they never land in param_thermal: count them as
+        # thermal here too, exactly like the param_load_active check does.
+        shared_tank_membership = self._load_shared_tank_membership()
 
         for k in range(num_def_loads):
             val = dcp_conf[k] if k < n_conf else 0
@@ -1137,7 +1142,7 @@ class Optimization:
             is_semi_cont = semi_cont_flags[k] if k < len(semi_cont_flags) else False
             is_single_const = single_const_flags[k] if k < len(single_const_flags) else False
             is_sequence_load = k < len(nominal_powers) and isinstance(nominal_powers[k], list)
-            is_thermal = k in self.param_thermal
+            is_thermal = k in self.param_thermal or k in shared_tank_membership
 
             # A load is AFFECTED by def_current_power only when injecting its t=0
             # power/on-state is meaningful and safe. Excluded entirely:
@@ -3367,7 +3372,10 @@ class Optimization:
 
         # Thermal Inertia Logic
         thermal_inertia = hc.get("thermal_inertia", 0.0)
-        L = int(thermal_inertia / self.time_step)
+        # Clamp to the horizon: a lag of required_len - 1 already puts every step
+        # after t=0 in the dead zone below, and anything longer would build
+        # mismatched slices that cvxpy rejects before any solve.
+        L = max(0, min(int(thermal_inertia / self.time_step), required_len - 1))
 
         # Define Temperature State Variable
         predicted_temp = cp.Variable(required_len, name=f"temp_load_{k}")
@@ -3379,12 +3387,16 @@ class Optimization:
 
         # Main Dynamics (Delayed Power)
         # T[t+1] depends on T[t] and P[t-L]
-        constraints.append(
-            predicted_temp[1 + L :]
-            == predicted_temp[L:-1]
-            + (p_deferrable[: -1 - L] * sense_coeff * heat_factor)
-            - (cool_factor * (predicted_temp[L:-1] - outdoor_temp[L:-1]))
-        )
+        # At the top of the clamp (L == required_len - 1) this block spans zero rows:
+        # the dead zone below already pins every remaining step, and building it
+        # anyway is a cvxpy dimension error.
+        if 1 + L < required_len:
+            constraints.append(
+                predicted_temp[1 + L :]
+                == predicted_temp[L:-1]
+                + (p_deferrable[: -1 - L] * sense_coeff * heat_factor)
+                - (cool_factor * (predicted_temp[L:-1] - outdoor_temp[L:-1]))
+            )
 
         # Startup "Dead Zone" Dynamics
         if L > 0:
@@ -3588,6 +3600,23 @@ class Optimization:
             context=f"Load {k} thermal_battery",
         )
         sense_coeff = 1 if sense == "heat" else -1
+
+        # With none of the three demand models configured the code below reaches the
+        # degree-day call and dies on a bare KeyError('specific_heating_demand');
+        # name the options instead. Unlike a shared tank, a single thermal_battery
+        # with no demand model at all is never intentional, so this raises.
+        physics_keys = ("u_value", "envelope_area", "ventilation_rate", "heated_volume")
+        if not (
+            len(hc.get("draw_off_demand") or []) > 0
+            or all(key in hc for key in physics_keys)
+            or ("specific_heating_demand" in hc and "area" in hc)
+        ):
+            raise ValueError(
+                f"Load {k}: thermal_battery requires a demand model - 'draw_off_demand' "
+                "(hot-water profile), the physics keys 'u_value' + 'envelope_area' + "
+                "'ventilation_rate' + 'heated_volume', or 'specific_heating_demand' + "
+                "'area' (degree-day model); none is configured completely"
+            )
 
         # Use parameterized values if available (enables warm-start on cache hit)
         if k in self.param_thermal:
@@ -4077,6 +4106,23 @@ class Optimization:
                     "indoor_target_temperature",
                     min_temperatures_list[0] if min_temperatures_list else 20.0,
                 )
+                # Window solar and internal gains belong INSIDE the physics demand
+                # model, exactly as the per-load thermal_battery path passes them.
+                # The heat_topology compiler folds window_area / shgc /
+                # internal_gains_factor from a building_demand consumer onto the
+                # tank; dropping them here left the demand at the raw envelope
+                # loss (U*A*dT + ventilation).
+                window_area = tank.get("window_area", None)
+                # An explicit JSON null means "use the default", as elsewhere.
+                shgc = float(tank.get("shgc") if tank.get("shgc") is not None else 0.6)
+                internal_gains_factor = float(tank.get("internal_gains_factor") or 0.0)
+                solar_irradiance = None
+                if "ghi" in data_opt.columns and window_area is not None:
+                    vals = np.asarray(data_opt["ghi"].values, dtype=float)
+                    if len(vals) < required_len:
+                        vals = np.concatenate((vals, np.zeros(required_len - len(vals))))
+                    solar_irradiance = vals[:required_len]
+                internal_gains_forecast = p_load if internal_gains_factor > 0 else None
                 demand = utils.calculate_heating_demand_physics(
                     u_value=tank["u_value"],
                     envelope_area=tank["envelope_area"],
@@ -4085,6 +4131,11 @@ class Optimization:
                     indoor_target_temperature=indoor_target_temp,
                     outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                     optimization_time_step=int(self.freq.total_seconds() / 60),
+                    solar_irradiance_forecast=solar_irradiance,
+                    window_area=window_area,
+                    shgc=shgc,
+                    internal_gains_forecast=internal_gains_forecast,
+                    internal_gains_factor=internal_gains_factor,
                     sense=tank.get("sense") or "heat",
                 )
             elif "specific_heating_demand" in tank and "area" in tank:
@@ -4765,6 +4816,7 @@ class Optimization:
                 and not is_single_const
                 and not is_sequence_load
                 and k not in self.param_thermal
+                and k not in shared_tank_membership
                 and k < len(self.param_def_current_power)
                 and k < len(self.param_def_current_power_active)
             ):
