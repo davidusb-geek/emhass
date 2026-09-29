@@ -6,6 +6,7 @@ import asyncio
 import logging
 import pathlib
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,8 @@ try:
 except Exception:  # pragma: no cover - only hit on the base branch
     fc = None
 
-from emhass import utils
+from emhass import command_line, utils
+from emhass.retrieve_hass import RetrieveHass
 
 logger = logging.getLogger("test_calibration")
 FREQ = pd.Timedelta("30min")
@@ -218,6 +220,139 @@ class TestForecastCalibration(unittest.TestCase):
         self.assertEqual(len(res["plot"]), custom_val_days * STEPS_PER_DAY)
         start, end = res["val_window"]
         self.assertEqual((pd.Timestamp(end) - pd.Timestamp(start)).days, custom_val_days - 1)
+
+
+VAR_LOAD = "sensor.power_load_no_var_loads"
+
+
+class _StubHistoryRetrieveHass(RetrieveHass):
+    """A real RetrieveHass whose backend retrieval returns a fixed raw frame, so the
+    genuine prepare_data() runs without any HA / InfluxDB / VictoriaMetrics access."""
+
+    def __init__(self, raw: pd.DataFrame):
+        super().__init__("http://stub", "token", FREQ, "Australia/Perth", None, EMHASS_CONF, logger)
+        self._raw = raw
+
+    async def get_data(self, days_list, var_list, *args, **kwargs):
+        self.df_final = self._raw.copy()
+        self.var_list = var_list
+        return True
+
+
+def build_raw_history(days, leading_missing_days=0, first_value=None, gap=None):
+    """Raw backend-shaped history (UTC, one column) as a time series DB returns it:
+    NaN for every bucket before the sensor's first sample, optional internal gap."""
+    load = build_load(days=days, tz="UTC")
+    load.iloc[: leading_missing_days * STEPS_PER_DAY] = np.nan
+    if first_value is not None:
+        load.iloc[leading_missing_days * STEPS_PER_DAY] = first_value
+    if gap is not None:
+        load.iloc[gap] = np.nan
+    return load.to_frame(VAR_LOAD)
+
+
+def run_calibration_action(raw: pd.DataFrame):
+    """Run the /action/forecast-calibration entry point on ``raw`` and capture the
+    load series actually handed to the calibration report."""
+    input_data_dict = {
+        "params": {"passed_data": {}},
+        "retrieve_hass_conf": {
+            "sensor_power_load_no_var_loads": VAR_LOAD,
+            "load_negative": False,
+            "set_zero_min": True,
+            "sensor_replace_zero": [],
+            "sensor_linear_interp": [VAR_LOAD],
+        },
+        "rh": _StubHistoryRetrieveHass(raw),
+        "emhass_conf": EMHASS_CONF,
+    }
+    with mock.patch.object(
+        command_line,
+        "compute_forecast_calibration",
+        wraps=command_line.compute_forecast_calibration,
+    ) as spy:
+        result = run(command_line.forecast_calibration(input_data_dict, logger))
+    return result, spy.call_args.args[0]
+
+
+class TestCalibrationObservationBoundary(unittest.TestCase):
+    """#1109: history before the first genuine observation is not realised 0 W load."""
+
+    LEADING_DAYS = 15
+
+    def test_leading_prehistory_excluded_and_genuine_zero_kept(self):
+        raw = build_raw_history(90, self.LEADING_DAYS, first_value=0.0)
+        first_obs = raw.index[self.LEADING_DAYS * STEPS_PER_DAY]
+        result, load = run_calibration_action(raw)
+        self.assertIsNotNone(result)
+        # Calibration history starts exactly at the first observation, a genuine 0 W.
+        self.assertEqual(load.index[0], first_obs)
+        self.assertEqual(load.iloc[0], 0.0)
+        self.assertEqual(str(load.index.tz), "Australia/Perth")
+        n_days = len({ts.normalize() for ts in load.index})
+        self.assertLessEqual(n_days, 90 - self.LEADING_DAYS + 1)
+
+    def test_report_matches_backend_starting_at_first_observation(self):
+        """Leading no-observation days must not change any train/test/val count or
+        metric: the report equals the one from a backend that begins at the first
+        sample (e.g. VictoriaMetrics, which omits leading buckets)."""
+        raw = build_raw_history(90, self.LEADING_DAYS, first_value=0.0)
+        trimmed = raw.iloc[self.LEADING_DAYS * STEPS_PER_DAY :]
+        with_prehistory, _ = run_calibration_action(raw)
+        without_prehistory, _ = run_calibration_action(trimmed)
+        pd.testing.assert_frame_equal(with_prehistory["table"], without_prehistory["table"])
+        self.assertEqual(with_prehistory["val_window"], without_prehistory["val_window"])
+
+    def test_insufficient_eligible_history_after_trim(self):
+        # 70 requested days >= CALIBRATION_MIN_DAYS, but only 55 observed.
+        raw = build_raw_history(70, self.LEADING_DAYS)
+        self.assertGreaterEqual(70, fc.CALIBRATION_MIN_DAYS)
+        self.assertLess(70 - self.LEADING_DAYS, fc.CALIBRATION_MIN_DAYS)
+        result, _ = run_calibration_action(raw)
+        self.assertIsNone(result)
+
+    def test_no_observation_at_all_fails_cleanly(self):
+        raw = build_raw_history(90, leading_missing_days=90)
+        input_data_dict = {
+            "params": {"passed_data": {}},
+            "retrieve_hass_conf": {
+                "sensor_power_load_no_var_loads": VAR_LOAD,
+                "sensor_linear_interp": [VAR_LOAD],
+            },
+            "rh": _StubHistoryRetrieveHass(raw),
+            "emhass_conf": EMHASS_CONF,
+        }
+        with mock.patch.object(command_line, "compute_forecast_calibration") as spy:
+            result = run(command_line.forecast_calibration(input_data_dict, logger))
+        self.assertIsNone(result)
+        # The all-missing window must never reach the report as synthetic 0 W history.
+        spy.assert_not_called()
+
+    def test_internal_gap_still_uses_configured_interpolation(self):
+        start = self.LEADING_DAYS * STEPS_PER_DAY
+        gap = slice(start + 40 * STEPS_PER_DAY, start + 40 * STEPS_PER_DAY + 4)
+        raw = build_raw_history(90, self.LEADING_DAYS, gap=gap)
+        _, load = run_calibration_action(raw)
+        before, after = raw.index[gap.start - 1], raw.index[gap.stop]
+        expected = np.linspace(raw.loc[before, VAR_LOAD], raw.loc[after, VAR_LOAD], 6)[1:-1]
+        np.testing.assert_allclose(load.loc[raw.index[gap]].to_numpy(), expected)
+
+    def test_complete_history_unchanged(self):
+        raw = build_raw_history(90)
+        _, load = run_calibration_action(raw)
+        self.assertEqual(len(load), len(raw))
+        self.assertEqual(load.index[0], raw.index[0])
+
+    def test_helper_boundary_uses_missingness_not_value(self):
+        raw = build_raw_history(5, leading_missing_days=2, first_value=0.0)
+        trimmed = fc.trim_to_first_observation(raw, VAR_LOAD)
+        self.assertEqual(trimmed.index[0], raw.index[2 * STEPS_PER_DAY])
+        self.assertEqual(trimmed[VAR_LOAD].iloc[0], 0.0)
+        self.assertEqual(trimmed.index.freq, raw.index.freq)
+        complete = build_raw_history(5)
+        pd.testing.assert_frame_equal(fc.trim_to_first_observation(complete, VAR_LOAD), complete)
+        self.assertIsNone(fc.trim_to_first_observation(raw.iloc[:10], VAR_LOAD))
+        self.assertIsNone(fc.trim_to_first_observation(raw, "sensor.absent"))
 
 
 if __name__ == "__main__":

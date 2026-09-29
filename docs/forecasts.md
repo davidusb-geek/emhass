@@ -310,6 +310,7 @@ A few things to keep in mind when reading the report:
 - The skill score is `1 - method_MAE / naive_MAE`, computed over the days a method and `naive` both cover so the comparison is fair even when a method covers fewer days. `naive` is the baseline at `0` and a positive value means the method beats naive persistence.
 - `mlforecaster` is fitted fresh in memory on the `train` window for this report using a fast LinearRegression baseline; it never reads a model you previously trained with `forecast-model-fit`, so the report works even if you have never run a fit (and it will not stall on a slow configured estimator).
 - `typical` here is derived from the retrieved history window rather than the long-term typical profile used in production, and it needs prior same-month, same-weekday history, so on a short window it may cover fewer days than the other methods (compare the `n` columns).
+- The report only uses realised history from the load sensor's first recorded value onwards. If the retrieval window starts before the sensor had any data (for example a sensor added recently), that earlier stretch is left out rather than scored as 0 W, so the report may cover fewer days than requested or return the "not enough history" message. A measured 0 W reading still counts. This only affects the calibration report, not the history preparation used by the optimizations.
 
 ## Load cost forecast
 

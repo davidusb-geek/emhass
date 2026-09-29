@@ -50,6 +50,26 @@ def _steps_per_day(freq: pd.Timedelta) -> int:
     return int(round(pd.Timedelta("24h") / freq))
 
 
+def trim_to_first_observation(history: pd.DataFrame, column: str) -> pd.DataFrame | None:
+    """Drop the rows that precede the first genuine observation of ``column``.
+
+    Must run on the raw retrieved history, before ``RetrieveHass.prepare_data``:
+    its interpolate/fillna repair turns a leading "no observation yet" interval
+    (e.g. an InfluxDB ``FILL(previous)`` window before the sensor existed) into
+    0 W that calibration would score as realised load (#1109). The boundary is
+    the first non-missing value, so a genuine 0 W reading starts the history.
+
+    :return: The history from the first observation onwards, or None when
+        ``column`` has no observation at all.
+    """
+    if column not in history.columns:
+        return None
+    observed = history[column].notna().to_numpy()
+    if not observed.any():
+        return None
+    return history.iloc[int(observed.argmax()) :]
+
+
 def _split_days(day_list: list, test_days: int, val_days: int) -> dict:
     """Split an ordered list of calendar days into train/test/val blocks.
 
