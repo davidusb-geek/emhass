@@ -321,6 +321,118 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
         self.assert_valid_optimization_result(self.opt_res)
 
+    def _perfect_forecast_two_day_scenario(self, shared_tank):
+        """Two perfectly-forecast days that differ only in outdoor temperature.
+
+        One continuous deferrable load, day 1 (2024-01-01) freezing at 0 C and day 2
+        (2024-01-02) mild at 35 C. With ``shared_tank`` the load is a Carnot heat pump
+        feeding a shared thermal tank, otherwise it is an ordinary electrical load.
+        """
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        if shared_tank:
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 40.0, "carnot_efficiency": 0.45}},
+            ]
+            self.optim_conf["shared_thermal_tanks"] = [
+                {
+                    "id": "buffer",
+                    "load_ids": [0],
+                    # ~3 kWh/K of water; constant 0.2 kW standing loss
+                    "volume": 2.58,
+                    "thermal_loss": 0.2,
+                    "start_temperature": 35.0,
+                    "min_temperatures": [30.0] * 48,
+                    "max_temperatures": [60.0] * 48,
+                    "draw_off_demand": [2.0] * 48,
+                }
+            ]
+        else:
+            self.optim_conf["def_load_config"] = [{}]
+            self.optim_conf.pop("shared_thermal_tanks", None)
+
+        time_zone = self.retrieve_hass_conf["time_zone"]
+        freq = self.retrieve_hass_conf["optimization_time_step"]
+        var_pv = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        var_load_new = self.retrieve_hass_conf["sensor_power_load_no_var_loads"] + "_positive"
+
+        day_range = pd.date_range(start="2024-01-01", periods=96, freq=freq, tz=time_zone)
+        df_input_data = pd.DataFrame(index=day_range)
+        df_input_data[var_pv] = 0.0
+        df_input_data[var_load_new] = 200.0
+        df_input_data["unit_load_cost"] = 0.20
+        df_input_data["unit_prod_price"] = 0.02
+        # First 48 rows = day 1 (freezing), next 48 rows = day 2 (mild).
+        df_input_data["outdoor_temperature_forecast"] = [0.0] * 48 + [35.0] * 48
+
+        # perform_perfect_forecast_optim drops the last entry ("today"), so exactly
+        # 2024-01-01 and 2024-01-02 are solved.
+        days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz=time_zone)
+        return df_input_data, days_list
+
+    def _run_perfect_forecast_capturing_prob_ids(self, df_input_data, days_list):
+        """Run a perfect-forecast optimization, recording id(opt.prob) once per day."""
+        opt = self.create_optimization(
+            var_load_cost="unit_load_cost", var_prod_price="unit_prod_price"
+        )
+        prob_ids = []
+        orig = type(opt).perform_optimization
+
+        def _capture(self, *args, **kwargs):
+            result = orig(self, *args, **kwargs)
+            prob_ids.append(id(self.prob))
+            return result
+
+        opt.perform_optimization = _capture.__get__(opt, type(opt))
+        res = opt.perform_perfect_forecast_optim(df_input_data, days_list)
+        return res, prob_ids
+
+    def test_perfect_forecast_rebuilds_problem_per_day_with_shared_tank(self):
+        """A shared tank bakes its physics (COP, losses, temperatures) in as constants
+        when the problem is first built, so re-using the problem across the days of a
+        perfect-forecast run silently re-solves day 2 against day 1's weather (#970)."""
+        df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=True)
+        res, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+
+        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
+        day1 = res.loc["2024-01-01"]
+        day2 = res.loc["2024-01-02"]
+        self.assertIn(day1["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
+        self.assertIn(day2["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
+        self.assertNotEqual(
+            prob_ids[0],
+            prob_ids[1],
+            "The problem must be rebuilt for day 2 so the shared tank sees day 2's weather",
+        )
+        p_def_day1 = day1["P_deferrable0"].to_numpy()
+        p_def_day2 = day2["P_deferrable0"].to_numpy()
+        self.assertFalse(
+            np.allclose(p_def_day1, p_def_day2, atol=50.0),
+            "The heat pump schedule must react to the 0 C -> 35 C outdoor swing, got "
+            f"{p_def_day1[:6]} and {p_def_day2[:6]}",
+        )
+
+    def test_perfect_forecast_reuses_problem_per_day_without_shared_tank(self):
+        """Without shared thermal tanks the warm-start problem re-use must survive:
+        the per-day rebuild guard is only for shared tanks."""
+        df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=False)
+        _, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+
+        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
+        self.assertEqual(
+            prob_ids[0],
+            prob_ids[1],
+            "An ordinary deferrable load must keep re-using the built problem",
+        )
+
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
         self.df_input_data_dayahead = self.prepare_forecast_data()
@@ -11619,6 +11731,265 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             places=2,
             msg="predicted_temp_heater0[0] is pinned to start_temperature by "
             "construction regardless of outdoor forecast",
+        )
+
+    def test_shared_tank_fresh_build_honors_start_temperature(self):
+        """Each fresh shared-tank build pins the tank to its own
+        start_temperature (the first predicted temperature equals it). This is
+        the property the #970 cache bypass relies on: because the warm-start
+        cache is skipped for shared tanks, every MPC tick rebuilds and the live
+        tank temperature is honored instead of the first tick's stale value."""
+        for start in (55.0, 50.0):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+            self.optim_conf["number_of_deferrable_loads"] = 1
+            self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+            self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+            self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+            self.optim_conf["set_deferrable_load_single_constant"] = [False]
+            self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+            self.optim_conf["set_deferrable_max_startups"] = [0]
+            self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 60.0, "carnot_efficiency": 0.45}}
+            ]
+            self.optim_conf["shared_thermal_tanks"] = [
+                {
+                    "id": "dhw",
+                    "load_ids": [0],
+                    "volume": 0.3,
+                    "start_temperature": start,
+                    "min_temperatures": [45.0] * 48,
+                    "max_temperatures": [60.0] * 48,
+                    "draw_off_demand": [0.2] * 48,
+                }
+            ]
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+            self.assertEqual(opt.optim_status, "Optimal")
+            first_temp = res["predicted_temp_heater0"].reset_index(drop=True).iloc[0]
+            self.assertAlmostEqual(
+                first_temp,
+                start,
+                places=1,
+                msg=f"Fresh build must start the tank at its configured {start} C, got {first_temp}",
+            )
+
+    def test_shared_tank_member_publishes_comfort_columns(self):
+        """A load that is a member of a shared thermal tank must publish the same
+        comfort columns as a standalone thermal_config/thermal_battery load: the
+        desired/min/max bounds live on the owning tank, not on the member's own
+        def_load_config entry (which carries thermal_source), so they were silently
+        never emitted. A scalar desired_temperatures is broadcast over the horizon."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.2,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.05,
+                "desired_temperatures": 50.0,  # bare scalar, not a list
+                "min_temperatures": [35.0] * 48,
+                "max_temperatures": [55.0] * 48,
+                "overshoot_temperature": 52.0,
+            },
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertIn("target_temp_heater0", res.columns)
+        self.assertIn("min_temp_heater0", res.columns)
+        self.assertIn("max_temp_heater0", res.columns)
+        # The scalar desired_temperatures is broadcast across the whole horizon.
+        self.assertTrue((res["target_temp_heater0"] == 50.0).all())
+        self.assertTrue((res["min_temp_heater0"] == 35.0).all())
+        self.assertTrue((res["max_temp_heater0"] == 55.0).all())
+        # Already-working columns must stay unaffected.
+        self.assertIn("predicted_temp_heater0", res.columns)
+        self.assertIn("heating_demand_heater0", res.columns)
+
+    def test_shared_tank_member_publishes_curve_floor(self):
+        """min_temp_heater{k} of a shared-tank member must be the floor the solver
+        enforced: the element-wise max of the static min_temperatures and the
+        weather-compensated min_temperature_curve, not the static list alone."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = -5.0
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "buffer",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 45.0,
+                "thermal_loss": 0.05,
+                "min_temperatures": [30.0] * 48,
+                # -5 C outdoor -> 35 + 1.0 * 5 = 40 C, above the static 30 C.
+                "min_temperature_curve": {
+                    "slope": 1.0,
+                    "offset": 35,
+                    "min_supply": 30,
+                    "max_supply": 55,
+                },
+                "max_temperatures": [55.0] * 48,
+            },
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue((res["min_temp_heater0"] == 40.0).all())
+
+    def _setup_single_hp(self, supply_temperature=40.0, nominal=3000):
+        """optim_conf for one heat-pump (Carnot) deferrable load feeding a tank."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [nominal]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": supply_temperature,
+                    "carnot_efficiency": 0.45,
+                }
+            },
+        ]
+
+    def test_thermal_config_overshoot_cuts_continuous_load(self):
+        """overshoot_temperature must switch a CONTINUOUS thermal_config load off
+        while the store sits beyond it, exactly as it does on the thermal_battery
+        and shared-tank paths. The per-load path tied the overshoot indicator only
+        to p_def_bin2, and a continuous load (no semi-cont, no min power, no startup
+        penalty) never links p_def_bin2 to its power - so the cutoff constrained a
+        free boolean and the load heated straight through the threshold at Optimal."""
+        self.optim_conf["treat_deferrable_load_as_semi_cont"][0] = False
+        self.optim_conf["set_deferrable_load_single_constant"][0] = False
+        self.optim_conf["minimum_power_of_deferrable_loads"][0] = 0.0
+        self.optim_conf["set_deferrable_startup_penalty"][0] = 0.0
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 5,
+                            "overshoot_temperature": 21,
+                            "desired_temperatures": [25] * 10,
+                            "min_temperatures": [0] * 10,
+                            "max_temperatures": [30] * 10,
+                            "sense": "heat",
+                        }
+                    }
+                ]
+            }
+        )
+        self.run_thermal_forecast(prices=[0.0] * 10)
+        temps = self.opt_res_dayahead["predicted_temp_heater0"].to_numpy()
+        # A continuous load can modulate, so it heats up to the threshold and not
+        # past it; without the cutoff it runs on to the 25 C comfort target.
+        self.assertLessEqual(
+            temps.max(),
+            21 + 0.01,
+            f"continuous load heated past overshoot_temperature: {temps}",
+        )
+
+    def test_thermal_config_overshoot_allows_heating_from_above_threshold(self):
+        """A start above overshoot_temperature must not forbid the heat the floor
+        needs at the next step: the cutoff looks at the temperature the heat
+        produces (t+1), not the one it starts from. Gating on the start made this
+        run infeasible for a continuous load, and made the relaxed rescue of a
+        semi-continuous one infeasible too."""
+        for semi_cont in (False, True):
+            with self.subTest(semi_cont=semi_cont):
+                self.setUp()
+                self.optim_conf["treat_deferrable_load_as_semi_cont"][0] = semi_cont
+                self.optim_conf["set_deferrable_load_single_constant"][0] = False
+                self.optim_conf["minimum_power_of_deferrable_loads"][0] = 0.0
+                self.optim_conf["set_deferrable_startup_penalty"][0] = 0.0
+                self.optim_conf["def_load_config"] = [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 21.2,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 5,
+                            "overshoot_temperature": 21,
+                            "desired_temperatures": [21] * 10,
+                            "min_temperatures": [20.5] * 10,
+                            "max_temperatures": [30] * 10,
+                            "sense": "heat",
+                        }
+                    }
+                ]
+                if not semi_cont:
+                    self.run_thermal_forecast(outdoor_temp=5, prices=[1.0] * 10)  # asserts Optimal
+                    continue
+                # An on/off load at full power would cross the threshold in one
+                # step, so only the relaxed rescue (continuous) can plan this; the
+                # helper insists on 'Optimal', so check the rescue's status here.
+                try:
+                    self.run_thermal_forecast(outdoor_temp=5, prices=[1.0] * 10)
+                except AssertionError:
+                    pass
+                self.assertEqual(self.opt.optim_status, "Optimal (Relaxed)")
+
+    def _solve_default_inputs(self, opt):
+        return opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+
+    def test_solver_exception_does_not_republish_previous_plan(self):
+        """cvxpy leaves a problem's status and value untouched when solve() raises,
+        so on an instance that already solved once, an exception on the next run
+        left status 'optimal' from the PREVIOUS run in place: the rescue was skipped
+        and the old plan was published again as Optimal. An exception must be
+        treated as a failed solve and go through the rescue."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt = self.create_optimization()
+        self._solve_default_inputs(opt)
+        self.assertEqual(opt.optim_status, "Optimal")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated solver crash")
+
+        opt.prob.solve = boom
+        self._solve_default_inputs(opt)
+        self.assertNotEqual(
+            opt.optim_status,
+            "Optimal",
+            "a crashed solve must not publish the previous run's status",
         )
 
 

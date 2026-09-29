@@ -750,6 +750,10 @@ class Optimization:
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
+        # Effective per-step floor of each shared tank (static list and
+        # min_temperature_curve combined), keyed by tank index; filled when the
+        # tank is built and published as min_temp_heater{k} for its members.
+        self._shared_tank_min_floors = {}
         def_load_config = self.optim_conf.get("def_load_config", []) or []
         for k in range(num_def_loads):
             if k < len(def_load_config) and def_load_config[k]:
@@ -3476,7 +3480,17 @@ class Optimization:
                     predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
                 )
 
-            constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            # Suppress heating past the overshoot threshold: no heat at step t when
+            # the temperature at t+1 is beyond it. p_def_bin2 only tracks power for
+            # semi-continuous loads; a continuous load's p_def_bin2 is never linked
+            # to its power, so bound the power itself, with the same timing. (Gating
+            # on the temperature at t instead would forbid heating at t=0 whenever
+            # the measured start is above the threshold, even when the floor at t+1
+            # needs heat.)
+            if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            else:
+                constraints.append(p_deferrable[:-1] <= nominal_power * (1 - is_overshoot[1:]))
 
             # Penalty Calculation
             # Filter for valid indices (not None, within bounds, skip index 0)
@@ -4081,6 +4095,7 @@ class Optimization:
                 f"Shared tank {tank_id}: requires non-empty min_temperatures "
                 "or min_temperature_curve"
             )
+        self._shared_tank_min_floors[tank_idx] = list(min_temperatures_list)
 
         # Heating demand resolution: same options as single-source thermal_battery
         # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
@@ -5062,6 +5077,9 @@ class Optimization:
         opt_tp["optim_status"] = self.optim_status
 
         # Thermal Details
+        # Shared-tank members carry `thermal_source`, not `thermal_config` /
+        # `thermal_battery`, so their comfort bounds live on the owning tank.
+        shared_tank_membership = self._load_shared_tank_membership()
         for k, pred_temp_var in predicted_temps.items():
             temp_values = get_val(pred_temp_var)
             opt_tp[f"predicted_temp_heater{k}"] = np.round(temp_values, 2)
@@ -5070,6 +5088,17 @@ class Optimization:
                 # Robustly get config (support both thermal_config and thermal_battery)
                 load_conf = self.optim_conf["def_load_config"][k]
                 conf = load_conf.get("thermal_config") or load_conf.get("thermal_battery") or {}
+                if not conf and k in shared_tank_membership:
+                    tank = self._get_shared_thermal_tanks()[shared_tank_membership[k]]
+                    desired_raw = tank.get("desired_temperatures")
+                    if isinstance(desired_raw, int | float):
+                        desired_raw = [float(desired_raw)] * self.num_timesteps
+                    conf = {**tank, "desired_temperatures": desired_raw}
+                    # Publish the floor the solver enforced (static list and
+                    # min_temperature_curve combined), not the raw static list.
+                    floor = self._shared_tank_min_floors.get(shared_tank_membership[k])
+                    if floor:
+                        conf["min_temperatures"] = floor
 
                 # Store Target/Desired Temperatures (Legacy behavior)
                 # Only look for 'desired_temperatures'.
@@ -6194,6 +6223,10 @@ class Optimization:
             self.logger.warning(
                 f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
             )
+            # cvxpy leaves status and value from the PREVIOUS solve in place when
+            # solve() raises, so a reused problem would republish the old plan as
+            # Optimal. Mark the attempt as failed so the rescue path runs.
+            self.prob._status = None
 
         # The problem whose status/value the extraction below reads. Stays
         # self.prob on a clean solve; points at the relaxed problem after a
@@ -6409,6 +6442,14 @@ class Optimization:
         results_list = []
 
         for day in self.days_list_tz:
+            # Shared thermal tanks bake their forecast-dependent physics (COP,
+            # thermal losses, min/max and start temperatures) in as constants when
+            # the problem is built, and there is no refresh path for them. Re-using
+            # the problem here would re-solve every day against the FIRST day's
+            # weather, so force a rebuild - same cache bypass command_line.py
+            # already applies for issue #970.
+            if self.optim_conf.get("shared_thermal_tanks"):
+                self.prob = None
             self.logger.info(
                 "Solving for day: " + str(day.day) + "-" + str(day.month) + "-" + str(day.year)
             )

@@ -2319,11 +2319,33 @@ async def set_input_data_dict(
         else:
             # Try to get cached Optimization object for warm-starting
             _num_ts = len(fcst.forecast_dates)
-            opt = OptimizationCache.get(
-                optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+            # Shared thermal tanks bake ALL forecast-dependent state
+            # (start_temperature, heating demand, COP arrays, thermal losses,
+            # min/max temperatures) into the problem as plain constants in
+            # _add_shared_thermal_tank_constraints. The warm-start cache reuses a
+            # built problem (self.prob) and the cache-hit refresh path only
+            # updates thermal_config / thermal_battery CVXPY Parameters, never
+            # shared tanks. Reusing it would therefore re-solve every MPC tick
+            # against the FIRST tick's tank temperature and forecast, silently
+            # discarding the MPC feedback signal (issue #970). Build fresh each
+            # run when shared tanks are present so the live tank state and
+            # forecast are honored. (A future optimization could parameterize
+            # these like thermal_battery to restore warm-starting.)
+            use_optim_cache = not optim_conf.get("shared_thermal_tanks")
+            opt = (
+                OptimizationCache.get(
+                    optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                )
+                if use_optim_cache
+                else None
             )
             if opt is None:
-                # Cache miss - create new Optimization object
+                # Cache miss (or cache bypassed) - create new Optimization object
+                if not use_optim_cache:
+                    logger.debug(
+                        "OptimizationCache bypassed: shared_thermal_tanks present; "
+                        "rebuilding so MPC tank-temperature feedback is honored (#970)"
+                    )
                 opt = Optimization(
                     retrieve_hass_conf,
                     optim_conf,
@@ -2335,10 +2357,11 @@ async def set_input_data_dict(
                     logger,
                     num_timesteps=_num_ts,
                 )
-                # Store in cache for future warm-starts
-                OptimizationCache.put(
-                    opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
-                )
+                # Store in cache for future warm-starts (not for shared tanks)
+                if use_optim_cache:
+                    OptimizationCache.put(
+                        opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                    )
             else:
                 # Cache hit - update references that may have changed
                 # (logger, var names from forecast, and runtime-configurable optim_conf values)
