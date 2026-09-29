@@ -3197,6 +3197,61 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Available timeframe is shorter than the specified number of hours to operate", joined
         )
 
+    def test_thermal_inertia_not_flagged_unknown(self):
+        """Issue #943 linter: thermal_inertia is read from the per-load
+        thermal_config dict (hc.get("thermal_inertia")), so warning that it is
+        "ignored" is wrong."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 0.25,
+                    "cooling_constant": 0.01,
+                    "start_temperature": 22.0,
+                    "min_temperatures": [20.0] * 48,
+                    "max_temperatures": [24.0] * 48,
+                    "thermal_inertia": 1.5,
+                }
+            }
+        ]
+        with self.assertLogs(logger, level="WARNING") as logs:
+            # Sentinel so the capture never fails for lack of any record; the
+            # assertions below are on absence of the unknown-key warnings.
+            logger.warning("sentinel record for log capture")
+            self.create_optimization()
+        joined = "\n".join(logs.output)
+        self.assertNotIn("unknown key 'thermal_inertia'", joined)
+
+    def test_thermal_battery_no_demand_model_raises(self):
+        """A thermal_battery load that configures NONE of the three demand models
+        (draw_off_demand, the four physics keys, or specific_heating_demand+area)
+        must fail with a ValueError naming all three options, not a bare
+        KeyError('specific_heating_demand') from deep inside the demand call."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        with self.assertRaises(ValueError) as ctx:
+            self.run_optimization_with_config(
+                [
+                    {
+                        "thermal_battery": {
+                            "start_temperature": 20.0,
+                            "supply_temperature": 55.0,
+                            "carnot_efficiency": 0.40,
+                            "volume": 50.0,
+                            # no draw_off_demand, no physics keys, no
+                            # specific_heating_demand/area pair
+                            "min_temperatures": [18.0] * 48,
+                            "max_temperatures": [22.0] * 48,
+                        }
+                    },
+                ]
+            )
+        msg = str(ctx.exception)
+        self.assertIn("draw_off_demand", msg)
+        self.assertIn("u_value", msg)
+        self.assertIn("specific_heating_demand", msg)
+
     def test_thermal_config_unknown_key_warns(self):
         """Issue #943: a thermal_config with an unrecognized key (e.g. the
         singular min_temperature instead of the list min_temperatures, or a
@@ -3531,6 +3586,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             temp.iloc[2],
             msg="T[3] should rise (or stop dropping) as heating kicks in",
         )
+
+    def test_thermal_inertia_at_or_beyond_horizon_builds(self):
+        """A thermal_inertia at (or past) the end of the horizon must not crash the
+        build. At 23.5 h on a 0.5 h step the lag is required_len - 1, so the lagged
+        dynamics block spans zero rows; at 30 h the lag is longer than the horizon
+        and the dead-zone slices no longer line up. Both used to raise a cvxpy
+        dimension ValueError before any solve; the lag is now clamped to the
+        horizon, where the dead zone alone governs every step."""
+        for inertia in (23.5, 30.0):
+            with self.subTest(thermal_inertia=inertia):
+                self.df_input_data_dayahead = self.prepare_forecast_data()
+                self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+                self.optim_conf["def_load_config"] = [
+                    {},
+                    {
+                        "thermal_config": {
+                            "heating_rate": 10.0,
+                            "cooling_constant": 0.1,
+                            "start_temperature": 20.0,
+                            "thermal_inertia": inertia,
+                            "sense": "heat",
+                            "min_temperatures": [0.0] * 48,
+                            "max_temperatures": [30.0] * 48,
+                        }
+                    },
+                ]
+                self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+                opt = self.create_optimization()
+                res = opt.perform_optimization(
+                    self.df_input_data_dayahead,
+                    self.p_pv_forecast.values.ravel(),
+                    self.p_load_forecast.values.ravel(),
+                    self.df_input_data_dayahead[opt.var_load_cost].values,
+                    self.df_input_data_dayahead[opt.var_prod_price].values,
+                )
+                self.assertEqual(opt.optim_status, "Optimal")
+                # Every step is in the dead zone: pure cooling, no heat arrives.
+                temp = res["predicted_temp_heater1"].to_numpy()
+                self.assertTrue(np.all(np.diff(temp) <= 1e-6))
 
     def test_thermal_inertia_no_regression(self):
         """
@@ -5256,12 +5350,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.40}},
             {"thermal_source": {"efficiency": 0.92}},
         ]
-        # Declare the shared tank
+        # Declare the shared tank. Volume must give the semi-continuous sources
+        # room to fire: one full-power 30-min HP slot injects ~5 kWh thermal,
+        # which on a 0.2 m3 tank is a ~22 K jump - impossible inside the
+        # 45-62 C band, making the MILP infeasible (it then silently "passed"
+        # via the relaxed-LP fallback). At 0.5 m3 the same slot is ~8.8 K,
+        # which fits, so the MILP solves to a true Optimal.
         self.optim_conf["shared_thermal_tanks"] = [
             {
                 "id": "dhw",
                 "load_ids": [0, 1],
-                "volume": 0.20,
+                "volume": 0.50,
                 "density": 1000,
                 "heat_capacity": 4.186,
                 "start_temperature": 50.0,
@@ -5283,6 +5382,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             unit_prod_price,
         )
 
+        # The MILP itself must solve - "Optimal (Relaxed)" means the binary
+        # problem was infeasible and the relaxed fallback masked it.
+        self.assertEqual(opt.optim_status, "Optimal")
         # Both load columns present
         self.assertIn("P_deferrable0", res.columns)
         self.assertIn("P_deferrable1", res.columns)
@@ -5294,6 +5396,82 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # At least one source fires to meet the morning + evening draws
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Expected some dispatch to satisfy draw_off demand")
+
+    def test_shared_tank_building_demand_honours_window_and_internal_gains(self):
+        """A building_demand shared tank (u_value / envelope_area / ventilation_rate /
+        heated_volume) must account for window solar gain and internal gains INSIDE
+        its demand model, exactly as the per-load thermal_battery path does. An
+        explicit null shgc / internal_gains_factor means the default, not a crash.
+
+        Before this fix the shared-tank physics call dropped every gain argument, so
+        its demand came out as the raw envelope loss - U*A*dT plus ventilation - no
+        matter what window_area / shgc / internal_gains_factor said. Reported on
+        #539 with 6.1 kWh/day of internal gains silently dropped against a
+        59.2 kWh/day gross demand, inflating planned heating to 1.8-2.2x measured."""
+
+        def heating_energy(with_gains, null_gains=False):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+            ghi = np.zeros(48)
+            ghi[18:30] = 500.0  # strong midday sun
+            self.df_input_data_dayahead["ghi"] = ghi
+            self.optim_conf["number_of_deferrable_loads"] = 1
+            self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+            self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+            self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+            self.optim_conf["set_deferrable_load_single_constant"] = [False]
+            self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+            self.optim_conf["set_deferrable_max_startups"] = [0]
+            self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 40.0, "carnot_efficiency": 0.45}}
+            ]
+            tank = {
+                "id": "house",
+                "load_ids": [0],
+                "volume": 7.0,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "u_value": 0.3,
+                "envelope_area": 300.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 350.0,
+                "indoor_target_temperature": 20.0,
+                "start_temperature": 20.0,
+                "min_temperatures": [19.0] * 48,
+                "max_temperatures": [24.0] * 48,
+                "desired_temperatures": [20.0] * 48,
+                "penalty_factor": 5,
+            }
+            if with_gains:
+                tank["window_area"] = 25.0
+                tank["shgc"] = 0.6
+                tank["internal_gains_factor"] = 0.8
+            if null_gains:
+                tank["shgc"] = None
+                tank["internal_gains_factor"] = None
+            self.optim_conf["shared_thermal_tanks"] = [tank]
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                np.full(48, 0.40),  # heating is costly -> the optimiser leans on free gains
+                np.full(48, 0.02),
+            )
+            self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+            return res["P_deferrable0"].sum()
+
+        self.assertLess(
+            heating_energy(True),
+            heating_energy(False),
+            "window solar + internal gains must reduce a building_demand tank's heating",
+        )
+        self.assertAlmostEqual(
+            heating_energy(False, null_gains=True), heating_energy(False), places=3
+        )
 
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
@@ -5546,6 +5724,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # require bit-exact match (different constraint construction paths),
         # but both should be Optimal and the totals should be in the same
         # order of magnitude.
+        self.assertEqual(
+            opt.optim_status,
+            "Optimal",
+            "Shared-tank run must solve the MILP itself, not the relaxed fallback",
+        )
         leg_total = res_legacy["P_deferrable0"].sum()
         sh_total = res_shared["P_deferrable0"].sum()
         self.assertGreaterEqual(leg_total, 0)
@@ -10419,6 +10602,116 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             res_base["P_deferrable0"].values,
             atol=1e-6,
             err_msg="def_current_power changed a single_const load (must be ignored)",
+        )
+
+    def test_current_power_shared_tank_member_not_pinned(self):
+        """A continuous heat pump feeding a SHARED thermal tank is a thermal load,
+        so def_current_power must not pin its t=0 power.
+
+        "Is this load thermal" was tested as ``k in self.param_thermal``, which is
+        only populated for loads whose def_load_config carries ``thermal_config`` or
+        ``thermal_battery``. A member of a shared tank carries ``thermal_source``
+        instead and is built by ``_add_shared_thermal_tank_constraints``, so it never
+        lands in param_thermal and was misclassified as an ordinary continuous load.
+        With the tank sitting just under its ceiling, hard-pinning the reported
+        3000 W at t=0 forces the tank past max_temperatures: the MILP is Infeasible
+        and the relaxed-LP rescue rebuilds the same pin, so it cannot recover either.
+        """
+        n = 10
+        prices = [0.9] + [0.05] * (n - 1)
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        def shared_tank_overrides(**extra):
+            """One continuous heat pump (thermal_source) feeding one shared tank.
+
+            The tank starts at 54.9 C against a 55.0 C ceiling: one 30-min step at
+            3000 W electric is ~5.5 kWh thermal on a 0.2 m3 store (~20 K), so any
+            t=0 injection necessarily breaches max_temperatures.
+            """
+            oc = {
+                "costfun": "cost",
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [3000.0],
+                "minimum_power_of_deferrable_loads": [0.0],
+                "operating_hours_of_each_deferrable_load": [0.0],
+                "treat_deferrable_load_as_semi_cont": [False],
+                "set_deferrable_load_single_constant": [False],
+                "set_deferrable_startup_penalty": [0.0],
+                "set_deferrable_max_startups": [0],
+                "start_timesteps_of_each_deferrable_load": [0],
+                "end_timesteps_of_each_deferrable_load": [0],
+                "def_load_config": [
+                    {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.45}}
+                ],
+                "shared_thermal_tanks": [
+                    {
+                        "id": "dhw",
+                        "load_ids": [0],
+                        "volume": 0.20,
+                        "density": 1000,
+                        "heat_capacity": 4.186,
+                        "start_temperature": 54.9,
+                        "thermal_loss": 0.0,
+                        "draw_off_demand": [0.0] * n,
+                        "min_temperatures": [40.0] * n,
+                        "max_temperatures": [55.0] * n,
+                    }
+                ],
+                "deferrable_load_groups": [],
+                "set_use_battery": False,
+            }
+            oc.update(extra)
+            return oc
+
+        # --- Control: no def_current_power. The tank is full, so the HP stays off. ---
+        opt_base, res_base = self._run_min_on_optim(shared_tank_overrides(), df, n)
+        self.assertEqual(
+            opt_base.optim_status,
+            "Optimal",
+            f"Control solve (no def_current_power) must be cleanly Optimal, "
+            f"got {opt_base.optim_status!r}",
+        )
+        p0_base = res_base["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p0_base,
+            0.0,
+            delta=1.0,
+            msg=f"Control FAILED: a full tank must leave the HP off at t=0, got {p0_base} W",
+        )
+
+        # --- With def_current_power=[3000]: the shared-tank member is thermal, so
+        # the reported power must be ignored and the plan must be unchanged. ---
+        opt_dcp, res_dcp = self._run_min_on_optim(
+            shared_tank_overrides(def_current_power=[3000.0]), df, n
+        )
+        self.assertEqual(
+            opt_dcp.optim_status,
+            opt_base.optim_status,
+            f"def_current_power broke the solve for a shared-tank member: "
+            f"{opt_dcp.optim_status!r} vs control {opt_base.optim_status!r} "
+            "(base code pins 3000 W at t=0 and the tank ceiling makes it Infeasible)",
+        )
+        p0_dcp = res_dcp["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p0_dcp,
+            p0_base,
+            delta=1.0,
+            msg=(
+                f"def_current_power changed a shared-tank member's t=0 power: "
+                f"{p0_dcp} W vs control {p0_base} W (must be ignored, the tank "
+                "dynamics govern)"
+            ),
+        )
+
+        # --- Parameter level: the member must never be armed for the pin. ---
+        self.assertFalse(
+            opt_dcp._def_current_power_affected[0],
+            "A shared-tank member must not be marked affected by def_current_power",
+        )
+        self.assertEqual(
+            opt_dcp.param_def_current_power_active[0].value,
+            0.0,
+            "The t=0 power pin must stay disarmed for a shared-tank member",
         )
 
     # ---------------------------------------------------------------------------

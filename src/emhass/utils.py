@@ -385,7 +385,10 @@ def resolve_min_temperatures(
         static_arr = None
 
     if curve_temps is not None and static_arr is not None:
-        effective = np.maximum(static_arr, curve_temps)
+        # fmax, not maximum: a null static entry (nan after the float cast) means
+        # "no static floor at this step - defer to the curve". np.maximum would
+        # propagate the nan and silently discard the curve floor for that slot.
+        effective = np.fmax(static_arr, curve_temps)
     elif curve_temps is not None:
         effective = curve_temps
     else:
@@ -598,8 +601,18 @@ def compile_heat_topology(topology: dict) -> dict:
 
     for i, f in enumerate(flows):
         src = src_by_id[f["from"]]
-        nominal_power.append(float(src.get("nominal_power", 0)))
-        min_power.append(float(src.get("min_power", 0)))
+        src_nominal_power = float(src.get("nominal_power", 0))
+        src_min_power = float(src.get("min_power", 0))
+        # p >= min_power and p <= nominal_power cannot both hold, so this bound is
+        # unsatisfiable; reject it here rather than let it surface as a generic
+        # Infeasible. Equality is legal (off, or pinned at the nominal power).
+        if src_min_power > src_nominal_power:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].min_power must be <= nominal_power, "
+                f"got min_power={src_min_power}, nominal_power={src_nominal_power}"
+            )
+        nominal_power.append(src_nominal_power)
+        min_power.append(src_min_power)
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
         # Source-side fields - shape expected by resolve_thermal_battery_cop
@@ -1356,6 +1369,45 @@ def _validate_and_align_external_pv_pair(
     )
 
 
+_LOAD_PUBLISH_ID_KEYS = (
+    "custom_deferrable_forecast_id",
+    "custom_deferrable_state_id",
+    "custom_predicted_temperature_id",
+    "custom_heating_demand_id",
+)
+
+
+def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str, dict]:
+    """Default Home Assistant entities for deferrable load ``k``, keyed by the
+    passed_data id list each belongs to."""
+    return {
+        "custom_deferrable_forecast_id": {
+            "entity_id": f"sensor.p_deferrable{k}",
+            "device_class": "power",
+            "unit_of_measurement": "W",
+            "friendly_name": f"Deferrable Load {k}",
+        },
+        "custom_deferrable_state_id": {
+            "entity_id": f"sensor.p_deferrable{k}_state",
+            "device_class": "enum",
+            "unit_of_measurement": "",
+            "friendly_name": f"Deferrable Load {k} Command",
+        },
+        "custom_predicted_temperature_id": {
+            "entity_id": f"sensor.temp_predicted{k}",
+            "device_class": "temperature",
+            "unit_of_measurement": temperature_unit,
+            "friendly_name": f"Predicted temperature {k}",
+        },
+        "custom_heating_demand_id": {
+            "entity_id": f"sensor.heating_demand{k}",
+            "device_class": "energy",
+            "unit_of_measurement": "kWh",
+            "friendly_name": f"Heating demand {k}",
+        },
+    }
+
+
 async def treat_runtimeparams(
     runtimeparams: str,
     params: dict[str, dict],
@@ -1406,43 +1458,14 @@ async def treat_runtimeparams(
     default_temperature_unit = "°C"
 
     # Some default data needed
-    custom_deferrable_forecast_id = []
-    custom_deferrable_state_id = []
-    custom_predicted_temperature_id = []
-    custom_heating_demand_id = []
-    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
-        custom_deferrable_forecast_id.append(
-            {
-                "entity_id": f"sensor.p_deferrable{k}",
-                "device_class": "power",
-                "unit_of_measurement": "W",
-                "friendly_name": f"Deferrable Load {k}",
-            }
-        )
-        custom_deferrable_state_id.append(
-            {
-                "entity_id": f"sensor.p_deferrable{k}_state",
-                "device_class": "enum",
-                "unit_of_measurement": "",
-                "friendly_name": f"Deferrable Load {k} Command",
-            }
-        )
-        custom_predicted_temperature_id.append(
-            {
-                "entity_id": f"sensor.temp_predicted{k}",
-                "device_class": "temperature",
-                "unit_of_measurement": default_temperature_unit,
-                "friendly_name": f"Predicted temperature {k}",
-            }
-        )
-        custom_heating_demand_id.append(
-            {
-                "entity_id": f"sensor.heating_demand{k}",
-                "device_class": "energy",
-                "unit_of_measurement": "kWh",
-                "friendly_name": f"Heating demand {k}",
-            }
-        )
+    load_ids = [
+        _default_load_publish_ids(k, default_temperature_unit)
+        for k in range(params["optim_conf"]["number_of_deferrable_loads"])
+    ]
+    custom_deferrable_forecast_id = [ids["custom_deferrable_forecast_id"] for ids in load_ids]
+    custom_deferrable_state_id = [ids["custom_deferrable_state_id"] for ids in load_ids]
+    custom_predicted_temperature_id = [ids["custom_predicted_temperature_id"] for ids in load_ids]
+    custom_heating_demand_id = [ids["custom_heating_demand_id"] for ids in load_ids]
     default_passed_dict = {
         "custom_pv_forecast_id": {
             "entity_id": "sensor.p_pv_forecast",
@@ -2614,6 +2637,31 @@ async def treat_runtimeparams(
                     logger,
                 )
             params["optim_conf"] = optim_conf
+            # The default publish ids were built from the load count before the
+            # steps above could change it (a heat_topology compile, a runtime
+            # def_load_config). Pad each per-load id list with the defaults for
+            # the extra loads, or publish-data indexes past its end. A list the
+            # caller passed is padded too (it would otherwise fail the same way),
+            # but that is logged: those loads publish under their default names.
+            passed_data = params.get("passed_data") or {}
+            user_keys = set(runtimeparams or {})
+            for ids_key in _LOAD_PUBLISH_ID_KEYS:
+                ids = passed_data.get(ids_key)
+                if isinstance(ids, list) and len(ids) < final_num_def_loads:
+                    if ids_key in user_keys:
+                        logger.warning(
+                            "%s has %d entries for %d deferrable loads; loads %d..%d "
+                            "publish under their default entity names",
+                            ids_key,
+                            len(ids),
+                            final_num_def_loads,
+                            len(ids),
+                            final_num_def_loads - 1,
+                        )
+                    passed_data[ids_key] = list(ids) + [
+                        _default_load_publish_ids(k)[ids_key]
+                        for k in range(len(ids), final_num_def_loads)
+                    ]
 
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
@@ -3542,9 +3590,8 @@ async def build_params(
     # If not, set defaults it fill in gaps
     if params["optim_conf"].get("number_of_deferrable_loads", None) is not None:
         num_def_loads = params["optim_conf"]["number_of_deferrable_loads"]
-        # Looped over DEF_LOAD_ARRAY_PARAMS (name -> default) instead of 9
-        # repeated calls (#1040) - same order, same defaults, same call
-        # signature per entry, so behaviour is unchanged.
+        # Looped over DEF_LOAD_ARRAY_PARAMS (name -> default) instead of one
+        # call per array (#1040) - same defaults and call signature per entry.
         for def_array_name, def_array_default in DEF_LOAD_ARRAY_PARAMS.items():
             params["optim_conf"][def_array_name] = check_def_loads(
                 num_def_loads,
@@ -3742,8 +3789,10 @@ DEF_LOAD_ARRAY_PARAMS: dict[str, bool | int | float] = {
     "set_deferrable_max_startups": 0,
     "operating_hours_of_each_deferrable_load": 0,
     "nominal_power_of_deferrable_loads": 0,
+    "def_minimum_on_time": 0,
+    "def_minimum_off_time": 0,
 }
-# Legacy (pre-#342) names for the same 9 arrays, from
+# Legacy (pre-#342) names for the same arrays, from
 # src/emhass/data/associations.csv column 2. The association loop accepts
 # either the modern name (column 3) or this legacy one, so the
 # runtime-provided check in treat_runtimeparams has to match both.

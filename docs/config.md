@@ -123,7 +123,7 @@ Example:
 	- False
 	- False
 - `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time.
-- `def_minimum_on_time`: Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (short-cycle / min-up-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to stay on for at least 3 consecutive timesteps once started; load 1 has no constraint.
+- `def_minimum_on_time`: Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (short-cycle / min-up-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to stay on for at least 3 consecutive timesteps once started; load 1 has no constraint. A list shorter than `number_of_deferrable_loads` is padded with `0`, and a `null` entry counts as `0`, like the other per-load lists.
 
   Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
 
@@ -136,7 +136,7 @@ Example:
   **Composes with `set_deferrable_max_startups`:** the two constraints are independent (count vs window) and coexist cleanly. A pathological combination of low max-startups, long min-on, and a short operating window can over-constrain a load; if you use both, ensure `max_startups x min_on_time <= available_timesteps`.
 
   **Initial-condition remainder:** to carry the remaining on-time across MPC ticks when the load is already running, also pass `def_current_on_timesteps` at runtime (see Passing data at runtime).
-- `def_minimum_off_time`: Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (short-cycle / min-down-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to remain off for at least 3 consecutive timesteps after stopping; load 1 has no constraint.
+- `def_minimum_off_time`: Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (short-cycle / min-down-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to remain off for at least 3 consecutive timesteps after stopping; load 1 has no constraint. A list shorter than `number_of_deferrable_loads` is padded with `0`, and a `null` entry counts as `0`, like the other per-load lists.
 
   Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
 

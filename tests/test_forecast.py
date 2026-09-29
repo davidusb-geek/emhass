@@ -715,6 +715,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -768,6 +769,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using Solcast-multiroofs with mock get request data
     async def test_get_weather_forecast_solcast_multiroofs_method_mock(self):
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -826,6 +828,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         exercises the overlap resampling with a real payload shape instead of
         a fully zero-filled result.
         """
+        self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         original_freq = self.fcst.freq
         original_forecast_dates = self.fcst.forecast_dates
         self.fcst.freq = pd.Timedelta("15min")
@@ -1548,6 +1551,31 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["yhat"].iloc[0], 1)
         self.assertEqual(data["yhat"].iloc[-1], 48)
 
+    async def test_get_weather_forecast_list_keeps_ghi_for_heat_topology(self):
+        """A heat_topology-compiled load carries a `thermal_source` block (not
+        thermal_config/thermal_battery) and its heating-curve COP + solar-gain
+        physics need ghi/temp_air just the same - without the augmentation the
+        optimizer silently falls back to a constant 15 C outdoor temperature."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=False)
+        fcst.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "heating_curve": {"slope": 0.7, "offset": 38.0},
+                    "carnot_efficiency": 0.46,
+                }
+            }
+        ]
+        fake = self._fake_open_meteo_frame(fcst)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(return_value=fake),
+        ) as m:
+            data = await fcst.get_weather_forecast(method="list")
+        m.assert_awaited_once()
+        self.assertIn("ghi", data.columns)
+        self.assertIn("temp_air", data.columns)
+
     async def test_get_weather_forecast_list_open_meteo_failure_is_soft(self):
         """#997 fail-soft: an open-meteo error leaves the plain list frame and warns."""
         fcst = await self._build_list_fcst_pinned(with_thermal=True)
@@ -1573,6 +1601,28 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 data = await fcst.get_weather_forecast(method="list")
         self.assertEqual(list(data.columns), ["yhat"])
         self.assertIn("no data", "\n".join(cm.output))
+
+    async def test_get_weather_forecast_list_cold_start_fetch_failure_is_soft(self):
+        """#997 fail-soft, one level down: on a cold start (no JSON cache yet) a
+        failed Open-Meteo request makes get_cached_open_meteo_forecast_json return
+        None. That used to surface as a TypeError ('NoneType' object is not
+        subscriptable), which the fail-soft guard does not catch, so an offline
+        list-method setup with a thermal load crashed instead of keeping its plain
+        list frame."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=True)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            unittest.mock.patch.dict(fcst.emhass_conf, {"data_path": pathlib.Path(tmp)}),
+        ):
+            with unittest.mock.patch.object(
+                fcst,
+                "get_cached_open_meteo_forecast_json",
+                new=unittest.mock.AsyncMock(return_value=None),
+            ):
+                with self.assertLogs(logger, level="WARNING") as cm:
+                    data = await fcst.get_weather_forecast(method="list")
+        self.assertEqual(list(data.columns), ["yhat"])
+        self.assertIn("issue #997", "\n".join(cm.output))
 
     async def test_get_cached_forecast_data_list_method_refetches_stale(self):
         """#997: under the open-meteo weather augmentation (method='list'), a cache

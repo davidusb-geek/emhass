@@ -1619,6 +1619,100 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result_config["costfun"], "profit")
         self.assertTrue(result_config["set_use_battery"])
 
+    async def test_publish_ids_cover_loads_added_by_heat_topology(self):
+        """The default per-load publish ids are built from the configured load
+        count, before a heat_topology compile can raise it. They must be padded to
+        the final count, or publish-data indexes past the end of the list."""
+        params = await TestUtils.get_test_params()
+        self.assertEqual(params["optim_conf"]["number_of_deferrable_loads"], 2)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        topology = {
+            "sources": [
+                {"id": f"e{i}", "type": "electric", "nominal_power": 2000, "efficiency": 1.0}
+                for i in range(3)
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [65] * 48,
+                }
+            ],
+            "flows": [{"from": f"e{i}", "to": "dhw"} for i in range(3)],
+        }
+        runtimeparams_json = orjson.dumps({"heat_topology": topology}).decode("utf-8")
+        out_params, _, out_optim, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out_optim["number_of_deferrable_loads"], 3)
+        passed = orjson.loads(out_params)["passed_data"]
+        for key in (
+            "custom_deferrable_forecast_id",
+            "custom_deferrable_state_id",
+            "custom_predicted_temperature_id",
+            "custom_heating_demand_id",
+        ):
+            self.assertEqual(len(passed[key]), 3, key)
+        self.assertEqual(
+            passed["custom_deferrable_forecast_id"][2]["entity_id"], "sensor.p_deferrable2"
+        )
+
+    async def test_short_user_publish_id_list_is_padded_with_a_warning(self):
+        """A publish id list the caller passes that is shorter than the load count
+        is padded with the default names (publish-data would otherwise index past
+        its end), and the padding is logged rather than silent."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams = {
+            "custom_predicted_temperature_id": [
+                {
+                    "entity_id": "sensor.my_t0",
+                    "unit_of_measurement": "°C",
+                    "friendly_name": "T0",
+                }
+            ]
+        }
+        with self.assertLogs(logger, level="WARNING") as logs:
+            out_params, _, _, _ = await treat_runtimeparams(
+                orjson.dumps(runtimeparams).decode("utf-8"),
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+        ids = orjson.loads(out_params)["passed_data"]["custom_predicted_temperature_id"]
+        self.assertEqual([i["entity_id"] for i in ids], ["sensor.my_t0", "sensor.temp_predicted1"])
+        self.assertTrue(
+            any("custom_predicted_temperature_id has 1 entries" in m for m in logs.output)
+        )
+
+    async def test_build_params_pads_def_minimum_on_off_time(self):
+        """def_minimum_on_time / def_minimum_off_time must be padded to
+        number_of_deferrable_loads like every sibling per-load array, so every
+        load has an explicit entry (padded with 0, i.e. no minimum) instead of
+        relying on optimization.py's silent out-of-range fallback."""
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config["number_of_deferrable_loads"] = 3
+        config["def_minimum_on_time"] = [3, 0]
+        config["def_minimum_off_time"] = [2, 0]
+        params = await utils.build_params(emhass_conf, {}, config, logger)
+        self.assertEqual(params["optim_conf"]["def_minimum_on_time"], [3, 0, 0])
+        self.assertEqual(params["optim_conf"]["def_minimum_off_time"], [2, 0, 0])
+
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
         default_val = 5
@@ -3227,6 +3321,28 @@ class TestResolveMinTemperatures(unittest.TestCase):
         out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
         self.assertEqual(out, [40.0, 35.0, 40.0, 50.0, 60.0])
 
+    def test_null_static_entry_defers_to_curve(self):
+        """A None static entry means "no static floor at this step" - the curve
+        floor must survive there, not be poisoned to None by a NaN-propagating
+        max. Regression: np.maximum(nan, curve) is nan, which the nan->None
+        mapping then turned into "no floor at all" for exactly the slots the
+        user marked curve-only."""
+        cfg = {
+            "min_temperatures": [20.0, None, 20.0, None, 60.0],
+            "min_temperature_curve": {
+                "slope": 1.0,
+                "offset": 35.0,
+                "min_supply": 30.0,
+                "max_supply": 55.0,
+            },
+        }
+        # curve at outdoor = -5,0,5,15,25 -> [40, 35, 30, 30, 30]
+        # static                          -> [20, None, 20, None, 60]
+        # expected: None defers to curve  -> [40, 35, 30, 30, 60]
+        outdoor = np.array([-5.0, 0.0, 5.0, 15.0, 25.0])
+        out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
+        self.assertEqual(out, [40.0, 35.0, 30.0, 30.0, 60.0])
+
     def test_floor_of_30_via_curve_min_supply(self):
         """User-friendly pattern: curve with min_supply=30 keeps buffer at 30 even in summer."""
         cfg = {
@@ -4094,6 +4210,51 @@ class TestCompileHeatTopology(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             utils.compile_heat_topology(topo)
         self.assertIn("missing", str(ctx.exception))
+
+    def test_min_power_above_nominal_power_rejected(self):
+        """A source whose min_power exceeds its nominal_power is structurally
+        unsatisfiable (a semi-continuous load cannot honour both p >= min_power
+        and p <= nominal_power), so it is rejected at compile time instead of
+        handing the optimizer an infeasible per-load bound. The boundary case
+        min_power == nominal_power (always off or pinned at nominal) stays valid.
+        """
+
+        def topo(min_power):
+            return {
+                "sources": [
+                    {
+                        "id": "hp",
+                        "type": "heatpump",
+                        "supply_temperature": 55,
+                        "carnot_efficiency": 0.40,
+                        "nominal_power": 3000,
+                        "min_power": min_power,
+                    }
+                ],
+                "storage": [
+                    {
+                        "id": "buf",
+                        "volume": 0.05,
+                        "start_temperature": 35,
+                        "min_temperature": [25] * 48,
+                        "max_temperature": [50] * 48,
+                        "thermal_loss": 0.06,
+                    }
+                ],
+                "flows": [{"from": "hp", "to": "buf"}],
+            }
+
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo(4000))
+        msg = str(ctx.exception)
+        self.assertIn("hp", msg)
+        self.assertIn("min_power", msg)
+        self.assertIn("nominal_power", msg)
+
+        # Boundary: min_power == nominal_power is a legitimate configuration.
+        out = utils.compile_heat_topology(topo(3000))
+        self.assertEqual(out["minimum_power_of_deferrable_loads"], [3000.0])
+        self.assertEqual(out["nominal_power_of_deferrable_loads"], [3000.0])
 
     def test_compile_heat_topology_rejects_non_dict(self):
         """Non-dict inputs (string "null", None, "") must return {} without raising."""
