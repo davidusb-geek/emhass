@@ -238,6 +238,11 @@ class _StubHistoryRetrieveHass(RetrieveHass):
         self.var_list = var_list
         return True
 
+    def prepare_data(self, *args, **kwargs):
+        # Record exactly what generic preparation is handed (pre-trim or trimmed).
+        self.prepare_input = self.df_final.copy()
+        return super().prepare_data(*args, **kwargs)
+
 
 def build_raw_history(days, leading_missing_days=0, first_value=None, gap=None):
     """Raw backend-shaped history (UTC, one column) as a time series DB returns it:
@@ -251,19 +256,25 @@ def build_raw_history(days, leading_missing_days=0, first_value=None, gap=None):
     return load.to_frame(VAR_LOAD)
 
 
-def run_calibration_action(raw: pd.DataFrame):
+def calibration_conf(**overrides):
+    conf = {
+        "sensor_power_load_no_var_loads": VAR_LOAD,
+        "load_negative": False,
+        "set_zero_min": True,
+        "sensor_replace_zero": [],
+        "sensor_linear_interp": [VAR_LOAD],
+    }
+    conf.update(overrides)
+    return conf
+
+
+def run_calibration_action(raw: pd.DataFrame, rh=None, **conf_overrides):
     """Run the /action/forecast-calibration entry point on ``raw`` and capture the
     load series actually handed to the calibration report."""
     input_data_dict = {
         "params": {"passed_data": {}},
-        "retrieve_hass_conf": {
-            "sensor_power_load_no_var_loads": VAR_LOAD,
-            "load_negative": False,
-            "set_zero_min": True,
-            "sensor_replace_zero": [],
-            "sensor_linear_interp": [VAR_LOAD],
-        },
-        "rh": _StubHistoryRetrieveHass(raw),
+        "retrieve_hass_conf": calibration_conf(**conf_overrides),
+        "rh": rh or _StubHistoryRetrieveHass(raw),
         "emhass_conf": EMHASS_CONF,
     }
     with mock.patch.object(
@@ -280,15 +291,18 @@ class TestCalibrationObservationBoundary(unittest.TestCase):
 
     LEADING_DAYS = 15
 
-    def test_leading_prehistory_excluded_and_genuine_zero_kept(self):
+    def test_leading_prehistory_excluded_zero_first_observation_sets_boundary(self):
         raw = build_raw_history(90, self.LEADING_DAYS, first_value=0.0)
         first_obs = raw.index[self.LEADING_DAYS * STEPS_PER_DAY]
         result, load = run_calibration_action(raw)
         self.assertIsNotNone(result)
-        # Calibration history starts exactly at the first observation, a genuine 0 W.
+        # A recorded 0 W is an observation: calibration history starts exactly there.
         self.assertEqual(load.index[0], first_obs)
+        # Its value then follows the configured repair (set_zero_min NaNs it, the
+        # sensor_linear_interp fill restores 0.0), not a calibration-specific rule.
         self.assertEqual(load.iloc[0], 0.0)
         self.assertEqual(str(load.index.tz), "Australia/Perth")
+        self.assertEqual(load.index.freq, FREQ)
         n_days = len({ts.normalize() for ts in load.index})
         self.assertLessEqual(n_days, 90 - self.LEADING_DAYS + 1)
 
@@ -328,6 +342,36 @@ class TestCalibrationObservationBoundary(unittest.TestCase):
         # The all-missing window must never reach the report as synthetic 0 W history.
         spy.assert_not_called()
 
+    def test_zero_boundary_then_configured_set_zero_min_without_repair(self):
+        """A recorded 0 W sets the boundary, and afterwards set_zero_min keeps its
+        meaning when the load is in neither repair list. Guards against both finding
+        the boundary with ``value != 0`` and overriding set_zero_min for calibration."""
+        raw = build_raw_history(90, self.LEADING_DAYS, first_value=0.0)
+        boundary = self.LEADING_DAYS * STEPS_PER_DAY
+        conf = {"set_zero_min": True, "sensor_replace_zero": [], "sensor_linear_interp": []}
+        rh = _StubHistoryRetrieveHass(raw)
+        _, load = run_calibration_action(raw, rh=rh, **conf)
+        # A. The raw 0.0 is the first row generic preparation ever sees.
+        self.assertEqual(rh.prepare_input.index[0], raw.index[boundary])
+        self.assertEqual(rh.prepare_input[VAR_LOAD].iloc[0], 0.0)
+        self.assertEqual(len(rh.prepare_input), len(raw) - boundary)
+        self.assertEqual(load.index[0], raw.index[boundary])
+        # B. Afterwards the load is exactly what prepare_data() yields for that
+        # configuration on the eligible history, so the zero becomes missing as usual.
+        reference = _StubHistoryRetrieveHass(raw)
+        reference.df_final = raw.iloc[boundary:].copy()
+        reference.var_list = [VAR_LOAD]
+        reference.prepare_data(
+            VAR_LOAD,
+            load_negative=False,
+            var_replace_zero=[],
+            var_interp=[],
+            set_zero_min=True,
+            skip_renaming=True,
+        )
+        pd.testing.assert_series_equal(load, reference.df_final[VAR_LOAD])
+        self.assertTrue(np.isnan(load.iloc[0]))
+
     def test_internal_gap_still_uses_configured_interpolation(self):
         start = self.LEADING_DAYS * STEPS_PER_DAY
         gap = slice(start + 40 * STEPS_PER_DAY, start + 40 * STEPS_PER_DAY + 4)
@@ -349,6 +393,9 @@ class TestCalibrationObservationBoundary(unittest.TestCase):
         self.assertEqual(trimmed.index[0], raw.index[2 * STEPS_PER_DAY])
         self.assertEqual(trimmed[VAR_LOAD].iloc[0], 0.0)
         self.assertEqual(trimmed.index.freq, raw.index.freq)
+        self.assertEqual(trimmed.index.tz, raw.index.tz)
+        # An owned frame, since prepare_data() then modifies df_final in place.
+        self.assertFalse(np.shares_memory(trimmed[VAR_LOAD].to_numpy(), raw[VAR_LOAD].to_numpy()))
         complete = build_raw_history(5)
         pd.testing.assert_frame_equal(fc.trim_to_first_observation(complete, VAR_LOAD), complete)
         self.assertIsNone(fc.trim_to_first_observation(raw.iloc[:10], VAR_LOAD))

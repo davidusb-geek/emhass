@@ -57,17 +57,20 @@ def trim_to_first_observation(history: pd.DataFrame, column: str) -> pd.DataFram
     its interpolate/fillna repair turns a leading "no observation yet" interval
     (e.g. an InfluxDB ``FILL(previous)`` window before the sensor existed) into
     0 W that calibration would score as realised load (#1109). The boundary is
-    the first non-missing value, so a genuine 0 W reading starts the history.
+    the first non-missing value, so a recorded 0 W reading can establish it;
+    from there on the configured ``prepare_data`` treatment (``set_zero_min``,
+    ``sensor_replace_zero``, ``sensor_linear_interp``) still applies.
 
-    :return: The history from the first observation onwards, or None when
-        ``column`` has no observation at all.
+    :return: An owned copy of the history from the first observation onwards
+        (``prepare_data`` modifies it in place), or None when ``column`` has no
+        observation at all.
     """
     if column not in history.columns:
         return None
     observed = history[column].notna().to_numpy()
     if not observed.any():
         return None
-    return history.iloc[int(observed.argmax()) :]
+    return history.iloc[int(observed.argmax()) :].copy()
 
 
 def _split_days(day_list: list, test_days: int, val_days: int) -> dict:
