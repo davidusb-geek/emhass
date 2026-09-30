@@ -423,6 +423,111 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(p_pv_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(p_pv_forecast))
 
+    def _two_plant_conf(self):
+        """Two PV plants with every sibling list at the matching length."""
+        self.plant_conf["pv_module_model"] = [
+            self.plant_conf["pv_module_model"][0],
+            self.plant_conf["pv_module_model"][0],
+        ]
+        self.plant_conf["pv_inverter_model"] = [
+            self.plant_conf["pv_inverter_model"][0],
+            self.plant_conf["pv_inverter_model"][0],
+        ]
+        self.plant_conf["surface_tilt"] = [30, 45]
+        self.plant_conf["surface_azimuth"] = [270, 90]
+        self.plant_conf["modules_per_string"] = [8, 8]
+        self.plant_conf["strings_per_inverter"] = [1, 1]
+
+    @staticmethod
+    def _synthetic_weather(index):
+        """Minimal irradiance frame so the pvlib path can run without a network fetch."""
+        return pd.DataFrame(
+            {
+                "ghi": 400.0,
+                "dni": 300.0,
+                "dhi": 100.0,
+                "temp_air": 20.0,
+                "wind_speed": 1.0,
+            },
+            index=index,
+        )
+
+    def test_pvlib_short_pv_plant_list_raises_named_error(self):
+        """A sibling list shorter than pv_module_model is a ValueError naming the parameter,
+        not the bare IndexError the plant loop used to throw at the second plant."""
+        self._two_plant_conf()
+        self.plant_conf["surface_tilt"] = [30]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("surface_tilt", str(ctx.exception))
+        self.assertIn("pv_module_model has 2", str(ctx.exception))
+
+    def test_pvlib_scalar_pv_plant_sibling_raises_named_error(self):
+        """A sibling given as one value next to a list of plants is rejected instead of being
+        indexed character by character (the "5000" -> "5" trap)."""
+        self._two_plant_conf()
+        self.plant_conf["pv_inverter_model"] = "5000"
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_inverter_model", str(ctx.exception))
+        self.assertIn("must be a list", str(ctx.exception))
+
+    def test_pvlib_long_pv_plant_list_warns_and_runs(self):
+        """A sibling list longer than pv_module_model still runs (the extra entries were always
+        ignored) but is now logged."""
+        self._two_plant_conf()
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        self.assertTrue(
+            any(
+                "surface_azimuth has 3 entries but pv_module_model has 2" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+
+    def test_pvlib_matching_pv_plant_lists_no_warning(self):
+        """Equal-length lists produce no length warning (the common, correct config)."""
+        self._two_plant_conf()
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertNoLogs(logger, level="WARNING"):
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_single_plant_scalars_unchanged(self):
+        """A non-list pv_module_model takes the single-plant path exactly as before."""
+        self.plant_conf["pv_module_model"] = self.plant_conf["pv_module_model"][0]
+        self.plant_conf["pv_inverter_model"] = self.plant_conf["pv_inverter_model"][0]
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 270
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    async def test_solar_forecast_short_pv_plant_list_raises_before_fetch(self):
+        """The solar.forecast path checks the tilt and azimuth lists before opening a session,
+        so a short list fails with the named error instead of after a live request."""
+        from unittest.mock import patch
+
+        self._two_plant_conf()
+        self.plant_conf["surface_azimuth"] = [270]
+        self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+        with (
+            patch.object(self.fcst, "_get_cached_forecast_or_none", return_value=None),
+            patch("emhass.forecast.aiohttp.ClientSession") as session_cls,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await self.fcst._get_weather_solar_forecast("unused-cache-path")
+        self.assertIn("surface_azimuth", str(ctx.exception))
+        session_cls.assert_not_called()
+
     async def test_get_weather_covariates(self):
         """get_weather_covariates returns the requested + derived columns aligned to the index."""
         from unittest.mock import patch
