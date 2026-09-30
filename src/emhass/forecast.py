@@ -808,6 +808,7 @@ class Forecast:
             )
         headers = {"Accept": header_accept}
         data = pd.DataFrame()
+        self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_SOLAR_FORECAST)
 
         async with aiohttp.ClientSession() as session:
             for i in range(len(self.plant_conf["pv_module_model"])):
@@ -1370,10 +1371,58 @@ class Forecast:
             self.logger.error(f"Invalid type for {device_type} model: {type(model_spec)}")
             return None
 
+    # The plant_conf lists each forecast path reads per PV plant (indexed by the
+    # position of the plant in pv_module_model) when pv_module_model is a list.
+    _PV_PLANT_LIST_KEYS_PVLIB = (
+        "pv_inverter_model",
+        "surface_tilt",
+        "surface_azimuth",
+        "modules_per_string",
+        "strings_per_inverter",
+    )
+    _PV_PLANT_LIST_KEYS_SOLAR_FORECAST = ("surface_tilt", "surface_azimuth")
+
+    def _check_pv_plant_lists(self, keys: tuple[str, ...]) -> None:
+        """
+        Check the sibling PV plant lists against ``pv_module_model``.
+
+        Each entry of ``pv_module_model`` is one PV plant and every key in ``keys`` is read
+        per plant by position, so each of them has to be a list with at least one entry per
+        plant. A shorter list, or a single value where a list is expected, raises a
+        ValueError naming the parameter and the expected count. A longer list is accepted
+        with a warning, since only the first entries are read. Nothing is checked when
+        ``pv_module_model`` is not a list.
+
+        :param keys: The plant_conf keys the calling forecast path reads per plant
+        :type keys: tuple[str, ...]
+        """
+        models = self.plant_conf.get("pv_module_model")
+        if not isinstance(models, list):
+            return
+        n_plants = len(models)
+        for key in keys:
+            value = self.plant_conf.get(key)
+            if not isinstance(value, list):
+                raise ValueError(
+                    f"{key} must be a list with one entry per PV plant when pv_module_model "
+                    f"is a list ({n_plants} plants), got {type(value).__name__}"
+                )
+            if len(value) < n_plants:
+                raise ValueError(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
+                    "each PV plant needs its own value"
+                )
+            if len(value) > n_plants:
+                self.logger.warning(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}; "
+                    "the extra entries are ignored"
+                )
+
     def _calculate_pvlib_power(self, df_weather: pd.DataFrame) -> pd.Series:
         """
         Helper to simulate PV power generation using PVLib when no direct forecast is available.
         """
+        self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_PVLIB)
         # Setting the main parameters of the PV plant
         location = Location(latitude=self.lat, longitude=self.lon)
         temp_params = TEMPERATURE_MODEL_PARAMETERS["sapm"]["close_mount_glass_glass"]
