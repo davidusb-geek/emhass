@@ -2754,14 +2754,27 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
     # Figure 1: Battery SOC (Optional)
+    # One trace per SOC column: the bare "SOC_opt" with one battery, or "SOC_opt_<k>" per
+    # battery when number_of_batteries > 1 (#610), where no bare "SOC_opt" exists.
     image_path_1 = None
-    if "SOC_opt" in df.columns.to_list():
+    cols_soc = [
+        i
+        for i in df.columns.to_list()
+        if i == "SOC_opt" or (i.startswith("SOC_opt_") and i[len("SOC_opt_") :].isdigit())
+    ]
+    if cols_soc:
+        # Size the palette to the SOC traces, not the power columns above: with one
+        # battery this is the same first colour as before, with several it spreads them.
+        n_colors = len(cols_soc)
+        colors_soc = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
         fig_1 = px.line(
-            df["SOC_opt"],
+            df[cols_soc],
             title="Battery state of charge schedule after optimization results",
             template="presentation",
             line_shape="hv",
-            color_discrete_sequence=colors,
+            color_discrete_sequence=colors_soc,
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
