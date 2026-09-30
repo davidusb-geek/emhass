@@ -139,7 +139,7 @@ Coarser source data is therefore held constant, finer data is averaged, and ther
 
 #### Load sign convention and optimizer-facing load
 
-- `load_power_forecast` is canonical household consumption in positive watts. EMHASS never inverts it.
+- `load_power_forecast` is canonical non-negative household consumption in watts. EMHASS never inverts it.
 - `load_negative` describes the sign convention of the load sensor retrieved from Home Assistant (`sensor_power_load_no_var_loads`). It is applied when that history is prepared and does not apply to a supplied `load_power_forecast`.
 - `set_zero_min` is also a preparation control for retrieved history. It is not applied to supplied forecasts.
 - The load that reaches the optimizer is checked once for every load forecast method (`typical`, `naive`, `mlforecaster`, `csv` and runtime `list`), after the optional mix with the current measured load. A finite negative value is outside the physical domain of household consumption, so it is clipped to 0 W and one summarized warning reports the count, the minimum and the first affected timestamp. A non-finite or non-numeric value cannot be repaired, so the action fails with an error. A raw ML model prediction is not changed by this check, see [the ML forecaster documentation](mlforecaster.md).

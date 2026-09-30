@@ -1368,13 +1368,14 @@ def _validate_and_align_external_pv_pair(
             )
         numeric_inputs = [list(p50_input.values()), list(p10_input.values())]
 
-    # #1135: bool subclasses int, so the float coercion below would silently
-    # read True/False as 1.0/0.0.
+    # #1135: validate the original values before NumPy/pandas can coerce
+    # booleans or numeric-looking strings into floats. This is the same
+    # finite-real contract used by the ordinary runtime forecast path.
     for key, source in (("pv_power_forecast", p50_input), ("pv_power_forecast_p10", p10_input)):
         items = source.items() if both_mappings else enumerate(source)
-        boolean = next(((loc, v) for loc, v in items if isinstance(v, bool | np.bool_)), None)
-        if boolean is not None:
-            return None, None, describe_invalid_forecast_value(key, [boolean])
+        invalid = describe_invalid_forecast_value(key, items)
+        if invalid is not None:
+            return None, None, invalid
 
     try:
         numeric = np.asarray(numeric_inputs, dtype=float)
@@ -1388,21 +1389,27 @@ def _validate_and_align_external_pv_pair(
     if both_lists:
         horizon = len(forecast_dates)
         return p50_input[:horizon], p10_input[:horizon], None
-    return (
-        _align_runtime_forecast_mapping(
-            dict(zip(p50_input, numeric[0])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        _align_runtime_forecast_mapping(
-            dict(zip(p10_input, numeric[1])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        None,
+
+    aligned_p50 = _align_runtime_forecast_mapping(
+        dict(zip(p50_input, numeric[0])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
     )
+    aligned_p10 = _align_runtime_forecast_mapping(
+        dict(zip(p10_input, numeric[1])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
+    )
+    for key, values in (
+        ("pv_power_forecast", aligned_p50),
+        ("pv_power_forecast_p10", aligned_p10),
+    ):
+        invalid = describe_invalid_forecast_value(key, enumerate(values))
+        if invalid is not None:
+            return None, None, f"{invalid} after timestamp alignment"
+    return aligned_p50, aligned_p10, None
 
 
 _LOAD_PUBLISH_ID_KEYS = (
