@@ -2104,6 +2104,10 @@ async def treat_runtimeparams(
             "outdoor_temperature_forecast_method",
         ]
         paired_external_pv = "pv_power_forecast_p10" in runtimeparams
+        # Internal provenance marker used only to distinguish an omitted
+        # outdoor-temperature runtime forecast from one supplied and rejected
+        # by the #1135 numerical-validity contract.
+        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = False
 
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
@@ -2114,6 +2118,19 @@ async def treat_runtimeparams(
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
                 invalid = None
+
+                # Preserve the existing legacy stringified-list compatibility,
+                # but normalize it before length/value validation so the parsed
+                # values are subject to the same #1135 finite-real contract.
+                if isinstance(forecast_input, str):
+                    try:
+                        parsed_forecast = ast.literal_eval(forecast_input)
+                    except (SyntaxError, ValueError):
+                        parsed_forecast = None
+                    if isinstance(parsed_forecast, list):
+                        forecast_input = parsed_forecast
+                        runtimeparams[forecast_key] = parsed_forecast
+
                 if isinstance(forecast_input, dict):
                     # Check the supplied values before pandas aggregation can
                     # coerce (bool -> 1.0) or fail on them, so the diagnostic
@@ -2151,12 +2168,8 @@ async def treat_runtimeparams(
                     logger.error("ERROR: %s", invalid)
                     params["passed_data"][forecast_key] = None
                     params["optim_conf"][forecast_methods[method]] = "list"
-                # Check if string contains list, if so extract
-                if isinstance(forecast_input, str) and isinstance(
-                    ast.literal_eval(forecast_input), list
-                ):
-                    forecast_input = ast.literal_eval(forecast_input)
-                    runtimeparams[forecast_key] = forecast_input
+                    if forecast_key == "outdoor_temperature_forecast":
+                        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = True
             else:
                 params["passed_data"][forecast_key] = None
 
