@@ -2641,11 +2641,8 @@ def prepare_forecast_and_weather_data(
     # Absence and rejection are different contracts. A genuinely omitted
     # runtime temperature may use the existing weather-temperature fallback;
     # a supplied value rejected by #1135 must fail closed.
-    if (
-        passed_outdoor_temp is None
-        and input_data_dict["params"]["passed_data"].get(
-            "_outdoor_temperature_forecast_rejected", False
-        )
+    if passed_outdoor_temp is None and input_data_dict["params"]["passed_data"].get(
+        "_outdoor_temperature_forecast_rejected", False
     ):
         logger.error(
             "outdoor_temperature_forecast was supplied but rejected; "
