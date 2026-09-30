@@ -594,7 +594,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(runtimeparams["load_cost_forecast"], list)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], list)
         treated = orjson.loads(params)
-        self.assertEqual(treated["passed_data"]["pv_power_forecast"], runtimeparams["pv_power_forecast"])
+        self.assertEqual(
+            treated["passed_data"]["pv_power_forecast"], runtimeparams["pv_power_forecast"]
+        )
         self.assertEqual(
             treated["passed_data"]["load_power_forecast"], runtimeparams["load_power_forecast"]
         )
