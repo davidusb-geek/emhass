@@ -148,6 +148,30 @@ class TestRuntimeNumericalValidity(_PinnedNow):
                 self.assertEqual(params["passed_data"][key], runtimeparams[key])
                 self.assertEqual(optim_conf[method], "list")
 
+    async def test_legacy_stringified_list_is_normalized_before_validation(self):
+        n = self.horizon
+        values = [float(i) for i in range(n)]
+        encoded = repr(values)
+
+        params, optim_conf = await _treat({"load_power_forecast": encoded})
+
+        self.assertEqual(params["passed_data"]["load_power_forecast"], values)
+        self.assertEqual(optim_conf["load_forecast_method"], "list")
+
+    async def test_stringified_list_with_string_member_is_rejected(self):
+        n = self.horizon
+        values = [10.0] * n
+        values[5] = "2.5"
+
+        with self.assertLogs(logger, level="ERROR") as captured:
+            params, optim_conf = await _treat({"load_power_forecast": repr(values)})
+
+        self.assertIsNone(params["passed_data"]["load_power_forecast"])
+        self.assertEqual(optim_conf["load_forecast_method"], "list")
+        errors = _errors_mentioning(captured, "load_power_forecast")
+        self.assertEqual(len(errors), 1, [r.getMessage() for r in errors])
+        self.assertIn("non-numeric value '2.5' at position 5", errors[0].getMessage())
+
     async def test_long_list_is_accepted_and_short_list_keeps_existing_invalid_behavior(self):
         n = self.horizon
         params, optim_conf = await _treat({"load_power_forecast": [100.0] * (n + 10)})
