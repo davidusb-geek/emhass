@@ -261,7 +261,7 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
                     "pv_power_forecast": [1.0] * 96,
                     "pv_power_forecast_p10": [0.5] * 95 + [None],
                 },
-                "non-finite",
+                "non-numeric",
             ),
         ]
         for payload, expected in cases:
