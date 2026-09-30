@@ -575,6 +575,10 @@ async def _handle_action_dispatch(
         action_str = f" >> Performing {action_name}..."
         logger.info(action_str)
         opt_res = await optim_actions[action_name](input_data_dict, logger)
+        # False: the action stopped before the solver, e.g. on a rejected
+        # runtime forecast (#1135); there is no plan to render.
+        if isinstance(opt_res, bool) and not opt_res:
+            return await grab_log(action_str), 400
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return f"EMHASS >> Action {action_name} executed... \n", 200

@@ -57,11 +57,15 @@ The possible dictionary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
+- `outdoor_temperature_forecast` for the outdoor temperature forecast in °C, used by thermal loads. When it is omitted, EMHASS uses the weather-forecast air temperature if available.
+
+Every value in these forecasts must follow the [Forecast input contract](#forecast-input-contract) below.
+
 #### Passing a forecast as timestamped values
 
 Instead of a plain list, any of these forecast keys can be passed as an object that maps ISO 8601 timestamps to values. EMHASS aggregates the points to the optimization time step and then holds each value until the next provided point (step interpolation), so you only need to supply a point where the value changes. A point whose timestamp falls before the start of the optimization window is used to anchor the first values of the horizon.
 
-For an external PV percentile pair, supply both `pv_power_forecast` and `pv_power_forecast_p10` as timestamped mappings with the same timestamps. The P10 companion reuses this exact alignment path. A list/mapping type mismatch, list-length mismatch, timestamp mismatch, missing P50, or non-finite P50/P10 value is rejected explicitly rather than independently shifting or silently dropping the companion. Once the source timelines match, the normal timestamp-mapping hold-last semantics apply through the requested horizon, including the existing backfill of leading horizon steps when the first supplied mapping point is later than the window start.
+For an external PV percentile pair, supply both `pv_power_forecast` and `pv_power_forecast_p10` as timestamped mappings with the same timestamps. The P10 companion reuses this exact alignment path. A list/mapping type mismatch, list-length mismatch, timestamp mismatch, missing P50, or non-numeric, boolean or non-finite P50/P10 value is rejected explicitly rather than independently shifting or silently dropping the companion. Once the source timelines match, the normal timestamp-mapping hold-last semantics apply through the requested horizon, including the existing backfill of leading horizon steps when the first supplied mapping point is later than the window start.
 
 ```json
 {
@@ -91,12 +95,65 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
 }
 ```
 
+### Forecast input contract
+
+This section is the reference for externally supplied forecast values. Other pages link here instead of repeating it. It has three separate layers: the numerical validity of the values you send, how their representation is aligned to the optimization grid, and the physical domain the optimizer finally receives.
+
+| Forecast key | Unit | External numerical contract | Optimizer-facing physical domain |
+|---|---|---|---|
+| `pv_power_forecast` | W | finite real numbers | `>= 0 W`: negative values are set to 0 W by the existing PV correction |
+| `pv_power_forecast_p10` | W | finite real numbers; same representation and timeline as `pv_power_forecast` | blended with P50 by `weather_forecast_pv_quantile_bias`, then the same PV correction |
+| `load_power_forecast` | W | finite real numbers | `>= 0 W`: finite negative values are clipped to 0 W with a warning |
+| `load_cost_forecast` | currency/kWh | finite real numbers | signed: negative prices are valid |
+| `prod_price_forecast` | currency/kWh | finite real numbers | signed: negative prices are valid |
+| `outdoor_temperature_forecast` | °C | finite real numbers | signed: sub-zero temperatures are valid |
+
+#### Numerical validity
+
+Every supplied value must be a finite real number. The following are invalid for every forecast key:
+
+- `NaN`, `Infinity` and `-Infinity`;
+- `null` and other non-numeric values such as strings (`"unavailable"`, `"12.5"`);
+- booleans (`true`/`false`), even though some languages treat them as 1/0.
+
+Invalid input fails the optimization cycle. EMHASS logs one error that names the forecast key, the reason, and the first offending value with its list position or source timestamp, and the action stops before the optimizer runs. It does not silently fall back to the configured forecast method, to the weather-forecast temperature, or to zero. The sign of a value is not part of this check: negative prices and temperatures are valid.
+
+#### Plain lists
+
+A plain list is already expressed in optimization timesteps. The first value is the current timestep and each following value is one `optimization_time_step` later. EMHASS does not resample a list.
+
+- A list must contain at least as many values as the forecast horizon. A shorter list is rejected with an error and ignored, so the action uses the configured forecast method instead. It is never padded.
+- A longer list is accepted, and EMHASS uses its first horizon-length values.
+
+#### Timestamped mappings
+
+A mapping of ISO 8601 timestamps to values is aligned onto the optimization grid:
+
+1. The supplied values are checked against the numerical contract before any aggregation, so an error reports the source timestamp.
+2. Timestamps are normalized by instant. Always include a UTC offset: a timestamp without an offset is read as UTC, not as local time.
+3. Points are converted to the configured `time_zone` and aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value.
+4. The aggregated points are matched to the forecast grid by UTC instant, so DST transitions do not shift values.
+5. Each value holds until the next supplied point (step, hold-last semantics). A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
+
+Coarser source data is therefore held constant, finer data is averaged, and there is no interpolation between points.
+
+#### Load sign convention and optimizer-facing load
+
+- `load_power_forecast` is canonical household consumption in positive watts. EMHASS never inverts it.
+- `load_negative` describes the sign convention of the load sensor retrieved from Home Assistant (`sensor_power_load_no_var_loads`). It is applied when that history is prepared and does not apply to a supplied `load_power_forecast`.
+- `set_zero_min` is also a preparation control for retrieved history. It is not applied to supplied forecasts.
+- The load that reaches the optimizer is checked once for every load forecast method (`typical`, `naive`, `mlforecaster`, `csv` and runtime `list`), after the optional mix with the current measured load. A finite negative value is outside the physical domain of household consumption, so it is clipped to 0 W and one summarized warning reports the count, the minimum and the first affected timestamp. A non-finite or non-numeric value cannot be repaired, so the action fails with an error. A raw ML model prediction is not changed by this check, see [the ML forecaster documentation](mlforecaster.md).
+
+#### Choosing a fallback
+
+When a forecast source is unavailable, don't substitute `0` by default. A zero household load or a zero import price is a valid number that produces a mathematically valid but wrong plan. Use a fallback only when it is trustworthy for that quantity, for example 0 W of PV at night or a known fixed tariff. Otherwise skip that optimization cycle, either by not calling the action or by letting EMHASS reject the invalid payload, and run again when fresh data is available.
+
 ### Passing other data at runtime
 
 It is possible to also pass other data during runtime to automate energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`operating_hours_of_each_deferrable_load`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
 
 A machine-readable schema of the runtime-only optimization parameters is committed at
-`src/emhass/static/data/runtime_params.json` (consumed by the generated OpenAPI spec and tooling).
+`src/emhass/static/data/runtime_params.json`. The test suite checks it against the configuration surfaces. It is not currently used to generate the OpenAPI spec, whose `/action/{action_name}` request body is a generic JSON object, and it does not describe the forecast keys above.
 
 Here is the list of the other additional dictionary keys that can be passed at runtime:
 

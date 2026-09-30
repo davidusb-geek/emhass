@@ -3,7 +3,7 @@ name: emhass-agents
 description: Vendor-neutral rules for AI coding agents working on EMHASS source.
 ---
 
-<!-- Last verified against upstream/master @ 6537c47, 2026-04-30 -->
+<!-- Last verified against upstream/master @ 237d0fe, 2026-09-30 -->
 
 Rules for AI coders (Claude Code, Cursor, Aider, Copilot, Codex) on EMHASS source. Complements `docs/develop.md` (human canon); no duplication. Where `develop.md` covers topic, this links + adds AI-specific constraints.
 
@@ -113,7 +113,14 @@ AI finds code + candidates. Domain experts decide bug vs design. 2026-04-26 audi
 
 **Change default value (existing param):** `src/emhass/static/data/param_definitions.json` first — source of truth. Align `src/emhass/data/config_defaults.json` to match. See `docs/develop.md` § Changing default values.
 
-**External forecast feed alignment.** `runtimeparams` handlers for `pv_power_forecast`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast` tolerate length/frequency/timezone differences — day-ahead feeds publish 24h not 48h, padded gracefully. Tolerant ≠ silent: log clearly when alignment happens. Silent shifts → wrong-but-valid-looking plans (`optim_status: Optimal`, every timestep offset by N).
+**External forecast feeds.** Canonical contract: [`docs/passing_data.md` § Forecast input contract](docs/passing_data.md#forecast-input-contract). Follow it; don't restate it. Keys: `pv_power_forecast`, `pv_power_forecast_p10`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast`, `outdoor_temperature_forecast`.
+
+- Plain list ≠ timestamp mapping. List = already optimization timesteps; shorter than horizon → rejected + ignored (configured method runs), never padded; longer → first horizon values used. Mapping → mean-aggregated to `optimization_time_step` in local tz, matched by UTC instant, hold-last + leading backfill (`utils._align_runtime_forecast_mapping`). P10 = same representation + timeline as P50 (`utils._validate_and_align_external_pv_pair`).
+- Every value = finite real number. NaN, ±Inf, null, str, bool invalid (`bool` subclasses `int`: check explicitly; reuse `utils.describe_invalid_forecast_value`). Invalid → one error, cycle fails before solver. No silent fallback to config method or 0.
+- Load + PV = physical power, `>= 0 W` at optimizer: load clipped once after mix in `Forecast.get_load_forecast`, PV in `get_power_from_weather`. Prices signed. Outdoor temperature signed. Never apply a generic `>= 0`.
+- `load_negative`, `set_zero_min` = retrieved-history preparation only. External load = canonical positive consumption; never invert.
+- Raw ML prediction (`forecast-model-predict`) stays raw; clip only at the optimizer-facing boundary.
+- Timestamp shifts never silent. Naive timestamps are read as UTC. Silent shift → wrong-but-valid-looking plan (`optim_status: Optimal`, every timestep offset by N).
 
 **Common AI hallucinations:**
 
