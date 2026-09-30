@@ -272,6 +272,65 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(params["passed_data"]["pv_power_forecast_p10"], [])
                 self.assertTrue(any(expected in line for line in captured.output))
 
+    async def test_boolean_values_are_rejected_in_p50_and_p10(self):
+        # #1135: bool subclasses int, so numeric coercion alone would read
+        # True/False as 1.0/0.0. Booleans are not forecast numbers.
+        stamps = [
+            (pd.Timestamp("2026-09-16T00:00:00+00:00") + pd.Timedelta(minutes=30 * i)).isoformat()
+            for i in range(3)
+        ]
+        cases = [
+            (
+                {
+                    "pv_power_forecast": [1.0] * 95 + [True],
+                    "pv_power_forecast_p10": [0.5] * 96,
+                },
+                "pv_power_forecast contains boolean value True at position 95",
+            ),
+            (
+                {
+                    "pv_power_forecast": [1.0] * 96,
+                    "pv_power_forecast_p10": [False] + [0.5] * 95,
+                },
+                "pv_power_forecast_p10 contains boolean value False at position 0",
+            ),
+            (
+                {
+                    "pv_power_forecast": dict(zip(stamps, [1.0, 2.0, 3.0], strict=True)),
+                    "pv_power_forecast_p10": dict(zip(stamps, [0.5, True, 1.5], strict=True)),
+                },
+                f"pv_power_forecast_p10 contains boolean value True at {stamps[1]}",
+            ),
+        ]
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertLogs(logger, level="ERROR") as captured:
+                    params, _, _, _ = await _treat_runtime(payload)
+                self.assertIsNone(params["passed_data"]["pv_power_forecast"])
+                self.assertEqual(params["passed_data"]["pv_power_forecast_p10"], [])
+                self.assertTrue(any(expected in line for line in captured.output), captured.output)
+
+    def test_direct_pair_validation_rejects_numpy_bool_and_non_finite(self):
+        dates = [
+            (pd.Timestamp("2026-09-16T00:00:00+00:00") + pd.Timedelta(minutes=30 * i)).isoformat()
+            for i in range(2)
+        ]
+        cases = [
+            ([1.0, np.bool_(True)], [0.5, 0.5], "boolean"),
+            ([1.0, 2.0], [np.bool_(False), 0.5], "boolean"),
+            ([1.0, float("inf")], [0.5, 0.5], "non-finite"),
+            ([1.0, 2.0], [0.5, float("-inf")], "non-finite"),
+            ([1.0, 2.0], [0.5, float("nan")], "non-finite"),
+        ]
+        for p50, p10, expected in cases:
+            with self.subTest(p50=p50, p10=p10):
+                p50_out, p10_out, error = utils._validate_and_align_external_pv_pair(
+                    p50, p10, dates, 30, "UTC"
+                )
+                self.assertIsNone(p50_out)
+                self.assertIsNone(p10_out)
+                self.assertIn(expected, error)
+
     async def test_missing_p50_and_representation_mismatch_are_explicit(self):
         cases = [
             (
