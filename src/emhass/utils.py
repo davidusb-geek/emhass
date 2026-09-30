@@ -1236,6 +1236,34 @@ def update_params_with_ha_config(
     return params
 
 
+def describe_invalid_forecast_value(forecast_key: str, items) -> str | None:
+    """Describe the first forecast value that is not a finite real number (#1135).
+
+    :param forecast_key: Name used in the diagnostic, e.g. ``load_power_forecast``.
+    :param items: ``(location, value)`` pairs: ``enumerate(values)`` for a list \
+        (reported as a position) or ``mapping.items()``/``series.items()`` \
+        (reported as the timestamp).
+    :return: One diagnostic for the first invalid value, or None if all are valid. \
+        NaN, +/-Inf, booleans (``bool`` subclasses ``int``) and non-numeric \
+        values are invalid; the sign of a value is not checked here.
+    """
+    for location, value in items:
+        if isinstance(value, bool | np.bool_):
+            reason = "boolean value"
+        elif not isinstance(value, int | float | np.integer | np.floating):
+            reason = "non-numeric value"
+        elif isinstance(value, float | np.floating) and not math.isfinite(value):
+            reason = "non-finite value"
+        else:
+            continue
+        where = f"position {location}" if isinstance(location, int) else location
+        return (
+            f"{forecast_key} contains {reason} {value!r} at {where}; "
+            "forecast values must be finite real numbers"
+        )
+    return None
+
+
 def _align_runtime_forecast_mapping(
     forecast_input: dict,
     forecast_dates: list[str],
@@ -1340,6 +1368,15 @@ def _validate_and_align_external_pv_pair(
             )
         numeric_inputs = [list(p50_input.values()), list(p10_input.values())]
 
+    # #1135: validate the original values before NumPy/pandas can coerce
+    # booleans or numeric-looking strings into floats. This is the same
+    # finite-real contract used by the ordinary runtime forecast path.
+    for key, source in (("pv_power_forecast", p50_input), ("pv_power_forecast_p10", p10_input)):
+        items = source.items() if both_mappings else enumerate(source)
+        invalid = describe_invalid_forecast_value(key, items)
+        if invalid is not None:
+            return None, None, invalid
+
     try:
         numeric = np.asarray(numeric_inputs, dtype=float)
     except (TypeError, ValueError):
@@ -1352,21 +1389,27 @@ def _validate_and_align_external_pv_pair(
     if both_lists:
         horizon = len(forecast_dates)
         return p50_input[:horizon], p10_input[:horizon], None
-    return (
-        _align_runtime_forecast_mapping(
-            dict(zip(p50_input, numeric[0])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        _align_runtime_forecast_mapping(
-            dict(zip(p10_input, numeric[1])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        None,
+
+    aligned_p50 = _align_runtime_forecast_mapping(
+        dict(zip(p50_input, numeric[0])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
     )
+    aligned_p10 = _align_runtime_forecast_mapping(
+        dict(zip(p10_input, numeric[1])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
+    )
+    for key, values in (
+        ("pv_power_forecast", aligned_p50),
+        ("pv_power_forecast_p10", aligned_p10),
+    ):
+        invalid = describe_invalid_forecast_value(key, enumerate(values))
+        if invalid is not None:
+            return None, None, f"{invalid} after timestamp alignment"
+    return aligned_p50, aligned_p10, None
 
 
 _LOAD_PUBLISH_ID_KEYS = (
@@ -2061,6 +2104,10 @@ async def treat_runtimeparams(
             "outdoor_temperature_forecast_method",
         ]
         paired_external_pv = "pv_power_forecast_p10" in runtimeparams
+        # Internal provenance marker used only to distinguish an omitted
+        # outdoor-temperature runtime forecast from one supplied and rejected
+        # by the #1135 numerical-validity contract.
+        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = False
 
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
@@ -2070,40 +2117,59 @@ async def treat_runtimeparams(
                 continue
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
+                invalid = None
+
+                # Preserve the existing legacy stringified-list compatibility,
+                # but normalize it before length/value validation so the parsed
+                # values are subject to the same #1135 finite-real contract.
+                if isinstance(forecast_input, str):
+                    try:
+                        parsed_forecast = ast.literal_eval(forecast_input)
+                    except (SyntaxError, ValueError):
+                        parsed_forecast = None
+                    if isinstance(parsed_forecast, list):
+                        forecast_input = parsed_forecast
+                        runtimeparams[forecast_key] = parsed_forecast
+
                 if isinstance(forecast_input, dict):
-                    forecast_input = _align_runtime_forecast_mapping(
-                        forecast_input,
-                        forecast_dates,
-                        optimization_time_step,
-                        time_zone,
+                    # Check the supplied values before pandas aggregation can
+                    # coerce (bool -> 1.0) or fail on them, so the diagnostic
+                    # names the source timestamp and value (#1135).
+                    invalid = describe_invalid_forecast_value(forecast_key, forecast_input.items())
+                    if invalid is None:
+                        forecast_input = _align_runtime_forecast_mapping(
+                            forecast_input,
+                            forecast_dates,
+                            optimization_time_step,
+                            time_zone,
+                        )
+                if (
+                    invalid is None
+                    and isinstance(forecast_input, list)
+                    and len(forecast_input) >= len(forecast_dates)
+                ):
+                    invalid = describe_invalid_forecast_value(
+                        forecast_key, enumerate(forecast_input)
                     )
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = forecast_input
-                    params["optim_conf"][forecast_methods[method]] = "list"
-                else:
+                    if invalid is None:
+                        params["passed_data"][forecast_key] = forecast_input
+                        params["optim_conf"][forecast_methods[method]] = "list"
+                elif invalid is None:
                     logger.error(
                         f"ERROR: The passed data is either the wrong type or the length is not correct, length should be {str(len(forecast_dates))}"
                     )
                     logger.error(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
-                # Check if string contains list, if so extract
-                if isinstance(forecast_input, str) and isinstance(
-                    ast.literal_eval(forecast_input), list
-                ):
-                    forecast_input = ast.literal_eval(forecast_input)
-                    runtimeparams[forecast_key] = forecast_input
-                list_non_digits = [
-                    x for x in forecast_input if not (isinstance(x, int) or isinstance(x, float))
-                ]
-                if len(list_non_digits) > 0:
-                    logger.warning(
-                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
-                    )
-                    for x in list_non_digits:
-                        logger.warning(
-                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
-                        )
+                if invalid is not None:
+                    # Fail closed (#1135): select the list method without data
+                    # so the forecast/optimization cycle stops instead of
+                    # falling back to the configured forecast method.
+                    logger.error("ERROR: %s", invalid)
+                    params["passed_data"][forecast_key] = None
+                    params["optim_conf"][forecast_methods[method]] = "list"
+                    if forecast_key == "outdoor_temperature_forecast":
+                        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = True
             else:
                 params["passed_data"][forecast_key] = None
 
