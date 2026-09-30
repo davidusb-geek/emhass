@@ -118,6 +118,10 @@ Every supplied value must be a finite real number. The following are invalid for
 
 Invalid input fails the optimization cycle. EMHASS logs one error that names the forecast key, the reason, and the first offending value with its list position or source timestamp, and the action stops before the optimizer runs. It does not silently fall back to the configured forecast method, to the weather-forecast temperature, or to zero. The sign of a value is not part of this check: negative prices and temperatures are valid.
 
+Absence is different from rejection: when `outdoor_temperature_forecast` is omitted, the existing weather-forecast air-temperature fallback remains available. If the key is supplied but one of its values violates the numerical contract, that cycle fails instead of using the weather fallback.
+
+For compatibility with existing runtime callers, a forecast value that is a string containing a list literal (for example `"[1, 2, 3]"`) is normalized to a list **before** length and numerical validation. This compatibility does not make strings valid forecast values: a parsed list such as `[1, "2.5", 3]` is rejected because `"2.5"` is still a string member.
+
 #### Plain lists
 
 A plain list is already expressed in optimization timesteps. The first value is the current timestep and each following value is one `optimization_time_step` later. EMHASS does not resample a list.
