@@ -95,6 +95,21 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
 
 
+def _coordinated_plan(opt, *args, **kwargs):
+    """Plan with the coordinator `optimization_backend` names, from the optional
+    home-energy-optimizer package (pip install emhass[federated]). Returns the
+    opt_res, or None when the package is missing or cannot plan this config."""
+    try:
+        from home_energy_optimizer.integrations.emhass import optimize
+    except ImportError:
+        opt.logger.warning(
+            "optimization_backend needs the optional extra (pip install emhass[federated]); "
+            "using the default solver"
+        )
+        return None
+    return optimize(opt, *args, **kwargs)
+
+
 class Optimization:
     r"""
     Optimize the deferrable load and battery energy dispatch problem using \
@@ -5151,6 +5166,13 @@ class Optimization:
         this signature already accepts the list shape today.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        # Opt-in coordinator backend (optional extra): the devices are planned as separate
+        # participants. None means it cannot plan this configuration, so cvxpy runs below.
+        if self.optim_conf.get("optimization_backend", "cvxpy") not in (None, "cvxpy"):
+            inputs = {k: v for k, v in locals().items() if k not in ("self", "_build_start_perf")}
+            res = _coordinated_plan(self, **inputs)
+            if res is not None:
+                return res
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)

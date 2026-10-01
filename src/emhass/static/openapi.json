@@ -219,6 +219,22 @@
             "title": "Cost function",
             "description": "Define the type of cost function."
           },
+          "optimization_backend": {
+            "type": "string",
+            "enum": [
+              "cvxpy",
+              "dantzig_wolfe",
+              "admm"
+            ],
+            "default": "cvxpy",
+            "title": "Optimization backend",
+            "description": "cvxpy (default): one MILP over every device, as before. dantzig_wolfe: each device is planned as its own subproblem, by EMHASS's own model unless participants says otherwise, and a coordinator makes the plans agree at the meter. Needs the optional extra: pip install emhass[federated]. admm is reserved for a later release. Anything the coordinator cannot plan yet runs on cvxpy, with a log line."
+          },
+          "participants": {
+            "type": "object",
+            "title": "Participants",
+            "description": "Optional, with a coordinator backend: groups of devices, each solved together by one solver. Example: [{\"devices\": [\"battery\"], \"solver\": \"home_energy_optimizer\"}, {\"devices\": [\"deferrable0\", \"deferrable1\"], \"solver\": \"emhass\"}]. Devices are battery and deferrable0, deferrable1, ...; solvers are emhass (EMHASS's own model) and home_energy_optimizer. Left empty, every device is its own participant, solved by EMHASS."
+          },
           "sensor_power_photovoltaics": {
             "type": "string",
             "default": "sensor.power_photovoltaics",

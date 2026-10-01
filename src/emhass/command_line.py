@@ -192,6 +192,8 @@ class OptimizationCacheKey:
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
     costfun: str
+    optimization_backend: str  # cvxpy, or a coordinator over separate participants
+    participants: str  # stable JSON of the participant groups
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
@@ -407,6 +409,10 @@ class OptimizationCache:
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
+            optimization_backend=str(optim_conf.get("optimization_backend") or "cvxpy"),
+            participants=orjson.dumps(
+                optim_conf.get("participants") or [], option=orjson.OPT_SORT_KEYS
+            ).decode(),
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )

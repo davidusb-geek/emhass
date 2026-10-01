@@ -63,6 +63,8 @@ test = [
     "aiohttp<3.13",
 ]
 dev = ["ruff"]
+# Opt-in coordinated backend (optimization_backend = dantzig_wolfe).
+federated = ["home-energy-optimizer>=0.1.0"]
 
 [build-system]
 requires = ["hatchling"]
