@@ -47,6 +47,10 @@ emhass --action 'dayahead-optim' --config ~/emhass/config.json --runtimeparams '
 
 The possible dictionary keys to pass data are:
 
+- `shared_thermal_tanks` a list of shared thermal storage objects (several sources feeding one storage), the manual flat alternative to `heat_topology`. Each tank carries `id`, `load_ids` (the deferrable-load indices of its sources), `volume` (m3), `start_temperature`, per-step `min_temperatures` / `max_temperatures`, and optionally `thermal_loss` (kW), `draw_off_demand` (kWh per step), `desired_temperatures`, `overshoot_temperature` and `sense` (`heat` or `cool`). Each load in `load_ids` needs a `def_load_config[k]` entry of the form `{"thermal_source": {...}}` with its conversion: `efficiency` (a fixed factor), or `supply_temperature` or `heating_curve` plus `carnot_efficiency` (a heat pump). This is the schema the `heat_topology` compiler produces; writing a `heat_topology` is usually simpler. When `heat_topology` is also set, the compiled topology replaces this list (with `extend_deferrable_loads: true` the runtime tanks are kept and the topology's tanks appended).
+
+- `shared_tank_start_temperatures` a per-storage start-temperature override keyed by storage id, e.g. `{"dhw": 48.5}`. It is applied after the `heat_topology` compile, so it patches manual and compiled tanks alike: the per-run equivalent of `soc_init` or `heater_start_temperatures` for an MPC loop that reads a live tank temperature sensor. Unknown ids and non-numeric values are ignored with a warning.
+
 - `pv_power_forecast` for the central (P50) PV power production forecast.
 
 - `pv_power_forecast_p10` as an optional conservative P10 companion to `pv_power_forecast`. It must use the same representation (list or timestamped mapping) and the same source timeline as P50. When present, the pair is validated/aligned together and `weather_forecast_pv_quantile_bias` applies `bias * P10 + (1 - bias) * P50`. Omitting the companion leaves the existing P50-only behavior unchanged.
