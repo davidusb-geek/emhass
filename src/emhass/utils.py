@@ -2317,6 +2317,9 @@ async def treat_runtimeparams(
             entity_save = runtimeparams["entity_save"]
         params["passed_data"]["entity_save"] = entity_save
 
+        # Plan without touching the live plan: return the plan, write nothing (opt-in)
+        params["passed_data"]["dry_run"] = bool(runtimeparams.get("dry_run", False))
+
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
             publish_prefix = ""

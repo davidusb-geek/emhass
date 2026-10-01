@@ -196,3 +196,45 @@ def test_unsupported_option_falls_back_to_cvxpy():
         _, res = _plan(*site, optimization_backend="dantzig_wolfe")
     pd.testing.assert_frame_equal(res, milp)
     assert any("set_nocharge_from_grid" in str(c) for c in warning.call_args_list)
+
+
+@needs_package
+def test_a_participant_answers_the_same_query_the_same_way():
+    """A heat pump with thermal inertia answers the same prices with the same
+    plan, whatever it was asked in between: each query starts from the same
+    state, not from the heat input of the previous solve."""
+    from home_energy_optimizer.integrations.emhass import EmhassParticipant
+    from home_energy_optimizer.interface import Query
+
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    n = len(data)
+    h = np.arange(n) * rh["optimization_time_step"].seconds / 3600
+    data["outdoor_temperature_forecast"] = 8 + 5 * np.sin((h - 9) / 24 * 2 * np.pi)
+    heat_pump = {
+        "supply_temperature": 35.0,
+        "volume": 20.0,
+        "start_temperature": 20.2,  # just above the minimum: it must heat at once
+        "min_temperatures": [20.0] * n,
+        "max_temperatures": [26.0] * n,
+        "carnot_efficiency": 0.45,
+        "u_value": 0.35,
+        "envelope_area": 280.0,
+        "ventilation_rate": 0.4,
+        "heated_volume": 320.0,
+        "thermal_inertia_time_constant": 2.0,
+    }
+    oc.update(
+        nominal_power_of_deferrable_loads=[3000.0, 3000.0],
+        operating_hours_of_each_deferrable_load=[4, 0],
+        treat_deferrable_load_as_semi_cont=[True, False],
+        def_load_config=[{}, {"thermal_battery": heat_pump}],
+    )
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    hp = EmhassParticipant(opt, "deferrable1", False, [1], data, None, None, {}, buy)
+    first = hp.respond(Query("price_response", buy, buy))
+    cheap_first = np.where(np.arange(n) < 8, 0.01, 0.5)  # heats hard at the start
+    hp.respond(Query("price_response", cheap_first, cheap_first))
+    again = hp.respond(Query("price_response", buy, buy))
+    np.testing.assert_allclose(again.plan_kw, first.plan_kw, atol=1e-6)

@@ -64,7 +64,7 @@ test = [
 ]
 dev = ["ruff"]
 # Opt-in coordinated backend (optimization_backend = dantzig_wolfe).
-federated = ["home-energy-optimizer>=0.1.1"]
+federated = ["home-energy-optimizer>=0.2.0"]
 
 [build-system]
 requires = ["hatchling"]

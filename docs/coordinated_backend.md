@@ -59,8 +59,34 @@ The usual `opt_res` columns, plus:
 | `fed_meter_price` | the coordinator's price at the meter, per timestep (currency/kWh) |
 | `fed_lower_bound` | a lower bound on the plan's cost |
 | `fed_gap` | the plan's cost minus that bound |
+| `fed_share_<player>` | that player's share of the saving over the horizon (currency), the same in every row; one column for `solar` and one per participant |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
+
+## Sharing the saving
+
+Each participant is first reimbursed its change in private cost (comfort, stored energy, a missed goal) against its plan without coordination. The rest of the saving is split between solar and the participants by averaging two orders of arrival, solar first and participants first (an Owen value), and among the participants by pricing each kWh a participant shifts at the average tariff the house meets as they all move together (Aumann-Shapley). This needs one more plan, the same devices with no PV, so it roughly doubles the backend's solve time. If the split cannot be computed, the plan is still published, with a warning.
+
+## Dry run
+
+Any optimisation action accepts the runtime parameter `dry_run`. With it set, EMHASS solves as usual, returns the plan in the HTTP response (the same records `/api/v1/plan` serves), and writes nothing: no `opt_res_latest.csv`, no plan store, no last-run record, no publish. A coordinator outside EMHASS can then ask EMHASS for its plan at trial prices without replacing the live plan. It works with either backend.
+
+```bash
+curl -X POST http://localhost:5000/action/naive-mpc-optim -H 'Content-Type: application/json' \
+  -d '{"load_cost_forecast": [...], "prod_price_forecast": [...], "dry_run": true}'
+```
+
+```json
+{"dry_run": true, "plan": [{"timestamp": "...", "P_grid": 512.0, "P_batt": -300.0, ...}, ...]}
+```
+
+## Checking it against the default solver
+
+`scripts/federated_benchmark.py` solves EMHASS's study cases and a set of synthetic days with both backends and prints each cost (EMHASS's own objective) side by side. The default MILP is solved exactly unless `--mip-gap` is given.
+
+```bash
+python scripts/federated_benchmark.py
+```
 
 ## How it works
 
