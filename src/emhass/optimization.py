@@ -96,9 +96,21 @@ SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
 
 
 def _coordinated_plan(opt, *args, **kwargs):
-    """Plan with the coordinator `optimization_backend` names, from the optional
-    home-energy-optimizer package (pip install emhass[federated]). Returns the
-    opt_res, or None when the package is missing or cannot plan this config."""
+    """Plan with the coordinator `optimization_backend` names.
+
+    The coordinator comes from the optional home-energy-optimizer package
+    (pip install emhass[federated]).
+
+    Args:
+        opt: The calling Optimization (its configuration, logger and time step).
+        *args, **kwargs: perform_optimization's own arguments, passed through.
+
+    Returns:
+        pandas.DataFrame | None: The plan, with the columns perform_optimization
+        returns plus fed_meter_price, fed_lower_bound and fed_gap; or None when
+        the package is missing or cannot plan this configuration, so the
+        caller runs the default cvxpy solver.
+    """
     try:
         from home_energy_optimizer.integrations.emhass import optimize
     except ImportError:

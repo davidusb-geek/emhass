@@ -44,6 +44,12 @@ needs_package = pytest.mark.skipif(
 
 
 def _confs():
+    """EMHASS's default configuration, built as at startup.
+
+    Returns:
+        tuple: (retrieve_hass_conf, optim_conf, plant_conf) dicts.
+    """
+
     async def build():
         config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
@@ -55,7 +61,13 @@ def _confs():
 
 def _site():
     """A day at 30-minute steps: a 10 kWh battery, a 3 kW load for 4 h and a
-    0.75 kW load for 2 h (both on/off), 5 kW of PV, a time-of-use tariff."""
+    0.75 kW load for 2 h (both on/off), 5 kW of PV, a time-of-use tariff.
+
+    Returns:
+        tuple: (retrieve_hass_conf, optim_conf, plant_conf, data, pv, load, buy,
+        sell), where data is the input DataFrame, pv and load are W per step,
+        and buy and sell are currency/kWh per step.
+    """
     rh, oc, pc = _confs()
     oc.update(set_use_battery=True, set_use_pv=True, operating_hours_of_each_deferrable_load=[4, 2])
     pc.update(
@@ -77,6 +89,15 @@ def _site():
 
 
 def _plan(rh, oc, pc, data, pv, load, buy, sell, **options):
+    """Run perform_optimization on a copy of the site, the battery from 50% to 50%.
+
+    Args:
+        rh, oc, pc, data, pv, load, buy, sell: The site, as _site returns it.
+        **options: optim_conf overrides (e.g. optimization_backend).
+
+    Returns:
+        tuple: (Optimization, the opt_res DataFrame).
+    """
     oc = copy.deepcopy(oc)
     oc.update(options)
     opt = Optimization(
@@ -93,16 +114,20 @@ def _plan(rh, oc, pc, data, pv, load, buy, sell, **options):
 
 
 def _bill(res):
+    """The plan's energy bill (currency; negative is a net profit)."""
     return -float(res["cost_profit"].sum())
 
 
 def _balance_holds(res, loads):
+    """Whether supply (PV + battery + grid) equals use (house + the first
+    `loads` deferrable loads) in every step, within 1 mW."""
     supplied = res["P_PV"] + res["P_batt"] + res["P_grid"]
     used = res["P_Load"] + sum(res[f"P_deferrable{k}"] for k in range(loads))
     return np.allclose(supplied, used, atol=1e-3)
 
 
 def test_default_backend_is_cvxpy_and_never_dispatches():
+    """By default the backend is cvxpy and the coordinator is never called."""
     rh, oc, pc = _confs()
     assert oc["optimization_backend"] == "cvxpy"
     assert not oc.get("participants")
@@ -112,6 +137,7 @@ def test_default_backend_is_cvxpy_and_never_dispatches():
 
 
 def test_missing_package_falls_back_to_cvxpy():
+    """dantzig_wolfe without the optional package returns exactly the default plan."""
     site = _site()
     _, milp = _plan(*site)
     with mock.patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": None}):
@@ -121,6 +147,9 @@ def test_missing_package_falls_back_to_cvxpy():
 
 @needs_package
 def test_dantzig_wolfe_matches_the_milp_on_a_battery_and_two_loads():
+    """dantzig_wolfe returns every default column plus fed_*, a balanced plan
+    that runs each load its hours and ends the battery at 50%, with a bill
+    within a cent of the default MILP's."""
     site = _site()
     _, milp = _plan(*site)
     opt, res = _plan(*site, optimization_backend="dantzig_wolfe")
@@ -136,6 +165,9 @@ def test_dantzig_wolfe_matches_the_milp_on_a_battery_and_two_loads():
 
 @needs_package
 def test_grouped_participants_and_a_battery_planned_by_the_package():
+    """With both loads grouped as one EMHASS participant and the battery
+    planned by home-energy-optimizer, the plan balances and runs each load
+    its hours."""
     site = _site()
     opt, res = _plan(
         *site,
@@ -154,6 +186,8 @@ def test_grouped_participants_and_a_battery_planned_by_the_package():
 
 @needs_package
 def test_unsupported_option_falls_back_to_cvxpy():
+    """An option that cannot be split per device (set_nocharge_from_grid)
+    returns exactly the default plan and logs the option's name."""
     rh, oc, pc, *rest = _site()
     oc["set_nocharge_from_grid"] = True  # ties the battery to PV: not split per device
     site = (rh, oc, pc, *rest)
