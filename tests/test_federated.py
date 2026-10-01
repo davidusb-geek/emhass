@@ -51,6 +51,7 @@ def _confs():
     """
 
     async def build():
+        """Build config, secrets and params from the defaults; returns the parsed confs."""
         config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
         params = await build_params(emhass_conf, secrets, config, logger)

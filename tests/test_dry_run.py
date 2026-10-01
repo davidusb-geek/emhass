@@ -49,6 +49,8 @@ def test_a_dry_run_writes_nothing():
     folder exactly as it was."""
 
     async def run(data_path):
+        """Run the day-ahead action as a dry run on the data in `data_path`;
+        returns the plan (opt_res DataFrame)."""
         ec = _conf(data_path)
         _, secrets = await build_secrets(ec, logger, no_response=True)
         params = await build_params(

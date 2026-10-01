@@ -72,13 +72,16 @@ class _Capture:
     run, without PV, only splits the saving)."""
 
     def __init__(self):
+        """Start empty; keep the real DWCoordinator.run to call through to."""
         self.result = None
         self._run = DWCoordinator.run
 
     def __enter__(self):
+        """Patch DWCoordinator.run to record its first result; returns self."""
         capture = self
 
         def run(coordinator, **kwargs):
+            """DWCoordinator.run, recording the first result it returns."""
             r = capture._run(coordinator, **kwargs)
             if capture.result is None:
                 capture.result = r
@@ -89,6 +92,7 @@ class _Capture:
         return self
 
     def __exit__(self, *exc):
+        """Restore DWCoordinator.run; exceptions propagate."""
         self._patch.stop()
 
 
@@ -312,7 +316,15 @@ def synthetic_day(step_min: int, tariff: str, nodischarge: bool, heat_pump: bool
 
 
 def solve_day(inputs, backend: str):
-    """Solve one synthetic day with `backend`; returns (cost, seconds)."""
+    """Solve one synthetic day through Optimization.perform_optimization.
+
+    Args:
+        inputs: The day, as synthetic_day returns it.
+        backend: "cvxpy" or "dantzig_wolfe".
+
+    Returns:
+        tuple: (cost, seconds).
+    """
     rh, oc, pc, data, pv, load, buy, sell = inputs
     oc = {**copy.deepcopy(oc), "optimization_backend": backend}
     opt = Optimization(
@@ -334,6 +346,17 @@ def solve_day(inputs, backend: str):
 
 # ------------------------------------------------------------------ main
 def _row(name, milp, coord):
+    """Print one run's costs and times, and return them for the summary.
+
+    Args:
+        name: The run's label.
+        milp: (cost, seconds) from the default MILP.
+        coord: (cost, seconds) from the coordinated backend.
+
+    Returns:
+        tuple: (|cost difference| in % of the MILP's cost, coordinated seconds,
+        MILP seconds).
+    """
     diff = abs(coord[0] - milp[0]) / max(abs(milp[0]), 1e-9) * 100
     print(
         f"  {name:42s} {milp[0]:11.6f} {coord[0]:11.6f} {diff:9.4f}%   {coord[1]:5.2f} / {milp[1]:5.2f} s"
@@ -342,6 +365,12 @@ def _row(name, milp, coord):
 
 
 def _summary(label, rows):
+    """Print the mean and largest cost difference and the time ranges.
+
+    Args:
+        label: The set of runs.
+        rows: What _row returned for each run.
+    """
     diffs, tc, tm = zip(*rows, strict=True)
     print(
         f"{label}: {len(rows)} runs, cost difference mean {statistics.mean(diffs):.4f}% / largest "
@@ -350,6 +379,8 @@ def _summary(label, rows):
 
 
 def main():
+    """Parse --mip-gap, run the study cases and the synthetic days with both
+    backends, and print each run and a summary per set."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--mip-gap", type=float, default=0.0, help="the MILP's lp_solver_mip_rel_gap (default 0)"
