@@ -1167,12 +1167,17 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
         df = rh.df_final
         self.assertEqual(list(df.columns), var_list)
-        self.assertEqual(len(df), 2)
+        # The grid is held (FILL previous) from the first sample through the last bucket
+        # strictly before end_time (2023-04-02T00:00:00Z), i.e. 10:00 .. 23:30 at 30min.
+        self.assertEqual(len(df), 28)
         self.assertEqual(df.index.freq, pd.Timedelta("30min"))
         self.assertEqual(str(df.index.tz), "UTC")
         # Buckets are labelled by their start, like InfluxDB GROUP BY time()
         self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[0]], 1500.0)
         self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][var_list[1]], 450.0)
+        # The terminal state (last known sample) is held through the last eligible bucket
+        self.assertAlmostEqual(df.loc["2023-04-01 23:30:00+00:00"][var_list[0]], 1800.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 23:30:00+00:00"][var_list[1]], 450.0)
         self.assertEqual(rh.var_list, var_list)
         # One query_range call per sensor, on a step-aligned grid at the optimization step
         self.assertEqual(len(calls), 2)
@@ -1201,8 +1206,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         with patch.object(rh, "_vm_query_range", side_effect=side_effect):
             self.assertTrue(await rh.get_data(days_list, ["sensor.price"]))
         df = rh.df_final
-        self.assertEqual(len(df), 4)
-        self.assertEqual(df["sensor.price"].tolist(), [0.2, 0.2, 0.2, 0.3])
+        # Internal gap (10:00 -> 11:30) uses the previous value; the terminal state (0.3)
+        # is then held through the last bucket strictly before end_time (23:30).
+        self.assertEqual(len(df), 28)
+        self.assertEqual(df["sensor.price"].tolist()[:4], [0.2, 0.2, 0.2, 0.3])
+        self.assertEqual(df["sensor.price"].tolist()[4:], [0.3] * 24)
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 23:30:00+00:00"))
 
     async def test_get_data_victoriametrics_multiple_metrics(self):
         """When a sensor changed unit the metric with the most samples is kept."""
@@ -1224,7 +1233,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertLogs(logger, level="WARNING") as logs,
         ):
             self.assertTrue(await rh.get_data(days_list, ["sensor.power_a"]))
-        self.assertEqual(rh.df_final["sensor.power_a"].tolist(), [1000.0, 1200.0])
+        values = rh.df_final["sensor.power_a"].tolist()
+        self.assertEqual(values[:2], [1000.0, 1200.0])
+        self.assertEqual(values[2:], [1200.0] * 26)
         self.assertTrue(any("several VictoriaMetrics metrics" in line for line in logs.output))
 
     async def test_get_data_victoriametrics_metric_name_dropped(self):
@@ -1252,8 +1263,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertLogs(logger, level="WARNING") as logs,
         ):
             self.assertTrue(await rh.get_data(days_list, ["sensor.power_a"]))
-        self.assertEqual(len(rh.df_final), 2)
-        self.assertEqual(rh.df_final["sensor.power_a"].tolist(), [1.0, 1200.0])
+        values = rh.df_final["sensor.power_a"].tolist()
+        self.assertEqual(len(rh.df_final), 28)
+        self.assertEqual(values[:2], [1.0, 1200.0])
+        self.assertEqual(values[2:], [1200.0] * 26)
         self.assertTrue(any("duplicate timestamps" in line for line in logs.output))
         self.assertFalse(any("several VictoriaMetrics metrics" in line for line in logs.output))
 
@@ -1352,6 +1365,190 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(s_next, e_prev + step)
         self.assertEqual(calls[0][1], int(start.tz_localize("UTC").timestamp()) + step)
         self.assertEqual(calls[-1][2], int(end.tz_localize("UTC").timestamp()))
+
+    # Regression coverage for the VictoriaMetrics terminal FILL(previous) tail defect:
+    # the reindex used to stop at the last SAMPLE timestamp instead of the last ELIGIBLE
+    # bucket before end_time, silently dropping trailing held-state buckets as NaN.
+
+    async def test_vm_fill_previous_no_backward_fill_before_first_sample(self):
+        """Leading buckets before the first known state stay NaN (no backward fill)."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {"sensor_a": [("W_value", [("2023-04-01T02:00:00Z", 10.0)])]}
+        )
+        start = pd.Timestamp("2023-04-01T00:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.sensor_a", start, end)
+        # No buckets at all before the first sample (00:00, 00:30, 01:00, 01:30 absent)
+        self.assertEqual(df.index.min(), pd.Timestamp("2023-04-01 02:00:00+00:00"))
+        self.assertNotIn(pd.Timestamp("2023-04-01 00:00:00+00:00"), df.index)
+        self.assertNotIn(pd.Timestamp("2023-04-01 01:30:00+00:00"), df.index)
+
+    async def test_vm_fill_previous_terminal_state_extends_to_query_end(self):
+        """A sparse state last written before end_time is held through every eligible
+        bucket strictly before end_time (half-open interval [start_time, end_time))."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {"sensor_a": [("W_value", [("2023-04-01T02:00:00Z", 10.0)])]}
+        )
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.sensor_a", start, end)
+        # Last eligible bucket is end_time - step = 03:30; no bucket at or beyond end_time
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
+        self.assertNotIn(pd.Timestamp("2023-04-01 04:00:00+00:00"), df.index)
+        self.assertEqual(df["sensor.sensor_a"].tolist(), [10.0] * len(df))
+
+    async def test_vm_fill_previous_terminal_constrained_positive_state_held(self):
+        """A terminal bounded/limited positive state (e.g. a ceiling register) remains at
+        its held value through end_time, not just at the sample timestamp."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "limit_register": [
+                    (
+                        "W_value",
+                        [
+                            ("2023-04-01T02:00:00Z", 0.0),
+                            ("2023-04-01T02:30:00Z", 4000.0),  # becomes constrained/binding
+                        ],
+                    )
+                ]
+            }
+        )
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.limit_register", start, end)
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
+        # The binding positive value is held through every trailing bucket, not lost to NaN
+        self.assertEqual(
+            df["sensor.limit_register"].tolist(), [0.0, 4000.0, 4000.0, 4000.0]
+        )
+        self.assertFalse(df["sensor.limit_register"].isna().any())
+
+    async def test_vm_fill_previous_terminal_zero_state_held(self):
+        """A terminal non-binding zero state is correctly held at zero through end_time
+        (not merely coincidentally zero because of a NaN->fillna(0.0) downstream bug)."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "limit_register": [
+                    (
+                        "W_value",
+                        [
+                            ("2023-04-01T02:00:00Z", 4000.0),
+                            ("2023-04-01T02:30:00Z", 0.0),  # constraint released
+                        ],
+                    )
+                ]
+            }
+        )
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.limit_register", start, end)
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
+        self.assertEqual(df["sensor.limit_register"].tolist(), [4000.0, 0.0, 0.0, 0.0])
+        self.assertFalse(df["sensor.limit_register"].isna().any())
+
+    async def test_vm_fill_previous_transition_at_end_time_excluded(self):
+        """A state transition occurring exactly at end_time must not create a bucket at or
+        beyond end_time, and must not leak backward into earlier buckets."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "sensor_a": [
+                    (
+                        "W_value",
+                        [
+                            ("2023-04-01T02:00:00Z", 10.0),
+                            ("2023-04-01T04:00:00Z", 99.0),  # exactly at end_time
+                        ],
+                    )
+                ]
+            }
+        )
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.sensor_a", start, end)
+        self.assertNotIn(pd.Timestamp("2023-04-01 04:00:00+00:00"), df.index)
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
+        # The later (end_time) value never leaks backward into earlier held buckets
+        self.assertTrue((df["sensor.sensor_a"] == 10.0).all())
+
+    async def test_vm_fill_previous_terminal_fill_across_chunk_boundary(self):
+        """The terminal fill is correct even when the window spans several VM query
+        chunks (the last sample lands in an earlier chunk than the final bucket)."""
+        rh = self._make_vm_rh()
+        rh.freq = pd.Timedelta("15min")
+        from emhass.retrieve_hass import VM_MAX_POINTS_PER_REQUEST
+
+        step = 900
+        chunk_span_steps = VM_MAX_POINTS_PER_REQUEST
+        # Last sample lands in the first chunk; the window extends ~1.5 chunks further so
+        # the terminal fill must be carried through a chunk boundary with no new data.
+        start = pd.Timestamp("2025-01-01T00:00:00Z")
+        last_sample = start + pd.Timedelta(minutes=15)
+        end = start + pd.Timedelta(seconds=int(chunk_span_steps * step * 1.5))
+        calls = []
+        side_effect = self._vm_query_side_effect(
+            {"sensor_a": [("W_value", [(last_sample.isoformat(), 7.0)])]}, calls
+        )
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.sensor_a", start, end)
+        self.assertGreaterEqual(len(calls), 2)  # confirms chunking actually occurred
+        expected_last_bucket = end - rh.freq
+        self.assertEqual(df.index.max(), expected_last_bucket)
+        self.assertTrue((df["sensor.sensor_a"] == 7.0).all())
+        self.assertFalse(df["sensor.sensor_a"].isna().any())
+
+    async def test_vm_fill_previous_dense_sensor_unchanged(self):
+        """A dense sensor (a sample at every bucket already) is value-for-value unchanged
+        by the terminal-fill fix: the reindex extension is a no-op when there is no gap."""
+        rh = self._make_vm_rh()
+        points = [
+            (f"2023-04-01T{hour:02d}:{minute:02d}:00Z", float(hour * 2 + minute / 30))
+            for hour in range(2, 4)
+            for minute in (0, 30)
+        ]
+        side_effect = self._vm_query_side_effect({"dense_sensor": [("W_value", points)]})
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:00:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.dense_sensor", start, end)
+        expected = [float(h * 2 + m / 30) for h, m in [(2, 0), (2, 30), (3, 0), (3, 30)]]
+        self.assertEqual(df["sensor.dense_sensor"].tolist(), expected)
+        self.assertFalse(df["sensor.dense_sensor"].isna().any())
+
+    async def test_get_data_victoriametrics_expression_terminal_fill(self):
+        """End-to-end: an arithmetic expression built over VM-retrieved entities receives
+        the corrected terminal-filled series, not a truncated-then-NaN tail."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {
+                "power_a": [("W_value", [("2023-04-01T10:00:00Z", 1500.0)])],
+                "power_b": [("kW_value", [("2023-04-01T10:00:00Z", 0.5)])],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        expression = "{{'sensor.power_a' - 'sensor.power_b' * 1000}}"
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(await rh.get_data(days_list, [expression]))
+        df = rh.df_final
+        # Held through the last bucket of the day (23:30), not just at the 10:00 sample
+        self.assertFalse(df[expression].isna().any())
+        self.assertAlmostEqual(df.loc["2023-04-01 23:30:00+00:00"][expression], 1000.0)
 
     # Test publish data
     async def test_publish_data(self):
