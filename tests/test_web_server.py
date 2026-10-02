@@ -155,6 +155,48 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         mock_optim.assert_called_once()
 
+    async def _optim_with_continual_publish(self, dry_run: bool) -> tuple:
+        """POST naive-mpc-optim with continual_publish on, as a dry run or
+        not; returns (status, whether the continual-publish thread started)."""
+        plan = pd.DataFrame(
+            {"P_grid": [1.0]}, index=pd.date_range("2026-10-01", periods=1, freq="30min", tz="UTC")
+        )
+        idd = {
+            "retrieve_hass_conf": {"continual_publish": True},
+            "params": {"passed_data": {"dry_run": dry_run}},
+        }
+        saved = list(web_server.continual_publish_thread)
+        web_server.continual_publish_thread.clear()
+        try:
+            with (
+                patch.object(
+                    web_server,
+                    "_load_params_and_runtime",
+                    AsyncMock(return_value=({"optim_conf": {}}, "profit", "{}")),
+                ),
+                patch.object(web_server, "set_input_data_dict", AsyncMock(return_value=idd)),
+                patch.object(web_server, "naive_mpc_optim", AsyncMock(return_value=plan)),
+                patch.object(web_server, "get_injection_dict", MagicMock(return_value={})),
+                patch.object(web_server, "_save_injection_dict", AsyncMock()),
+                patch.object(web_server, "check_file_log", AsyncMock(return_value=False)),
+                patch.object(web_server.app, "add_background_task", MagicMock()) as start,
+            ):
+                response = await self.client.post("/action/naive-mpc-optim", json={})
+            return response.status_code, start.called
+        finally:
+            web_server.continual_publish_thread[:] = saved
+
+    async def test_a_dry_run_never_starts_continual_publish(self):
+        """The continual-publish thread keeps the inputs it starts with for the
+        life of the process. A dry run as the first request would bind it to
+        the dry run's; it must not start it. (A live run does - the control.)"""
+        status, started = await self._optim_with_continual_publish(dry_run=True)
+        self.assertEqual(status, 200)
+        self.assertFalse(started)
+        status, started = await self._optim_with_continual_publish(dry_run=False)
+        self.assertEqual(status, 200)
+        self.assertTrue(started)
+
     @patch("emhass.web_server.export_influxdb_to_csv")
     @patch("emhass.web_server._load_params_and_runtime")
     async def test_action_export_csv(self, mock_load, mock_export):

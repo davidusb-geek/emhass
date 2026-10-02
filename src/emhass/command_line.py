@@ -44,6 +44,27 @@ test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
 
 
+async def _treat_runtimeparams_or_refuse(*args, **kwargs):
+    """utils.treat_runtimeparams, refusing a request whose runtime parameters
+    cannot be read safely (utils.RuntimeParamError): logged, and (None, None,
+    None, None) returned, so the action answers 400 instead of failing with a
+    500. Every other error behaves as before.
+
+    Args:
+        *args, **kwargs: treat_runtimeparams' own arguments.
+
+    Returns:
+        tuple: treat_runtimeparams' (params, retrieve_hass_conf, optim_conf,
+        plant_conf), or four Nones when the request is refused.
+    """
+    logger = args[6] if len(args) > 6 else kwargs.get("logger")
+    try:
+        return await utils.treat_runtimeparams(*args, **kwargs)
+    except utils.RuntimeParamError as exc:
+        logger.error(f"Refusing the request: {exc}")
+        return None, None, None, None
+
+
 def is_dry_run(input_data_dict: dict) -> bool:
     """Whether this run is a dry run (runtime ``dry_run``).
 
@@ -60,7 +81,10 @@ def is_dry_run(input_data_dict: dict) -> bool:
     params = input_data_dict.get("params") or {}
     if not isinstance(params, dict):
         params = orjson.loads(params)
-    return bool((params.get("passed_data") or {}).get("dry_run", False))
+    # Only an actual True: the flag was parsed strictly on the way in
+    # (utils.parse_dry_run), and a stray truthy value must never turn a live
+    # run into one that writes nothing.
+    return (params.get("passed_data") or {}).get("dry_run", False) is True
 
 
 def _record_optim_snapshot(
@@ -2272,7 +2296,7 @@ async def set_input_data_dict(
         retrieve_hass_conf,
         optim_conf,
         plant_conf,
-    ) = await utils.treat_runtimeparams(
+    ) = await _treat_runtimeparams_or_refuse(
         runtimeparams,
         params,
         retrieve_hass_conf,
@@ -2282,6 +2306,8 @@ async def set_input_data_dict(
         logger,
         emhass_conf,
     )
+    if params is None:
+        return False
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
         params = dict(orjson.loads(params))

@@ -824,8 +824,12 @@ async def action_call(action_name: str):
 
     # Handle Continual Publish Threading
     rh_handed_to_thread = False
-    if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
-        "continual_publish", False
+    # A dry run never starts it: the thread keeps the inputs it is started
+    # with for the life of the process, and those must be a live run's.
+    if (
+        len(continual_publish_thread) == 0
+        and not is_dry_run(input_data_dict)
+        and input_data_dict["retrieve_hass_conf"].get("continual_publish", False)
     ):
         rh_handed_to_thread = True
         continual_loop = app.add_background_task(

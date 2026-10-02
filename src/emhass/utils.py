@@ -1408,6 +1408,49 @@ def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str
     }
 
 
+class RuntimeParamError(ValueError):
+    """A runtime parameter whose value cannot be read safely; the action is
+    refused rather than guessed at."""
+
+
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off", "")
+
+
+def parse_dry_run(value: object) -> bool:
+    """The runtime ``dry_run`` flag, read strictly.
+
+    ``bool()`` would read the string ``"false"`` - which is what a templated
+    request often sends - as True, and quietly turn a live run into a dry run
+    that publishes nothing. Booleans, 0/1, and the strings true/false, 1/0,
+    yes/no, on/off (any case) are accepted; anything else raises.
+
+    Args:
+        value: The value passed as ``dry_run``.
+
+    Returns:
+        bool: Whether the run is a dry run.
+
+    Raises:
+        RuntimeParamError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUE:
+            return True
+        if v in _FALSE:
+            return False
+    raise RuntimeParamError(
+        f"dry_run must be true or false, got {value!r} ({type(value).__name__})"
+    )
+
+
 async def treat_runtimeparams(
     runtimeparams: str,
     params: dict[str, dict],
@@ -2318,7 +2361,7 @@ async def treat_runtimeparams(
         params["passed_data"]["entity_save"] = entity_save
 
         # Plan without touching the live plan: return the plan, write nothing (opt-in)
-        params["passed_data"]["dry_run"] = bool(runtimeparams.get("dry_run", False))
+        params["passed_data"]["dry_run"] = parse_dry_run(runtimeparams.get("dry_run", False))
 
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():

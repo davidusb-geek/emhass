@@ -1,8 +1,10 @@
 import bz2
 import copy
 import logging
+import math
 import os
 import pickle
+import re
 import time
 from math import ceil, isfinite
 
@@ -111,6 +113,10 @@ def _coordinated_plan(opt, *args, **kwargs):
         the package is missing or cannot plan this configuration, so the
         caller runs the default cvxpy solver.
     """
+    reason = _coordinated_config_problem(opt.optim_conf)
+    if reason:
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None
     try:
         from home_energy_optimizer.integrations.emhass import optimize
     except ImportError:
@@ -119,7 +125,77 @@ def _coordinated_plan(opt, *args, **kwargs):
             "using the default solver"
         )
         return None
-    return optimize(opt, *args, **kwargs)
+    # Whatever happens in the coordinator, a plan is published: any failure
+    # is logged and the default solver plans instead, live run or dry run.
+    try:
+        return optimize(opt, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - the fallback is the point
+        opt.logger.error(
+            f"optimization_backend: the coordinator raised {type(exc).__name__}: {exc}; "
+            "using the default solver"
+        )
+        return None
+
+
+_BACKENDS = ("cvxpy", "dantzig_wolfe")
+_SOLVERS = ("emhass", "home_energy_optimizer")
+_DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
+
+
+def _coordinated_config_problem(optim_conf: dict) -> str | None:
+    """Why `optimization_backend` and `participants` cannot be used as given,
+    or None if they can.
+
+    Both may come from a request as well as from the configuration, so they
+    are checked for shape and type before anything reads them: a known
+    backend; a list of participant groups, each with a non-empty list of
+    known device names, a known solver, and a `config` of plain scalars
+    (numbers, booleans, short strings) under string keys.
+
+    Args:
+        optim_conf: The optimisation configuration.
+
+    Returns:
+        str | None: The problem, for the log; None when it can be used.
+    """
+    backend = optim_conf.get("optimization_backend")
+    if backend not in _BACKENDS:
+        return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
+    spec = optim_conf.get("participants")
+    if spec is None:
+        return None
+    if not isinstance(spec, list) or len(spec) > 64:
+        return "participants must be a list of at most 64 groups"
+    seen: set[str] = set()
+    for i, group in enumerate(spec):
+        if not isinstance(group, dict) or set(group) - {"devices", "solver", "config"}:
+            return f"participants[{i}] must be an object with devices, solver and config only"
+        devices = group.get("devices")
+        if (
+            not isinstance(devices, list)
+            or not devices
+            or not all(isinstance(d, str) and _DEVICE.match(d) for d in devices)
+        ):
+            return f"participants[{i}].devices must be a non-empty list of device names"
+        if seen & set(devices):
+            return f"participants[{i}] names a device another group already has"
+        seen |= set(devices)
+        if group.get("solver", "emhass") not in _SOLVERS:
+            return f"participants[{i}].solver must be one of {', '.join(_SOLVERS)}"
+        config = group.get("config", {})
+        if not isinstance(config, dict) or len(config) > 64:
+            return f"participants[{i}].config must be an object"
+        for key, value in config.items():
+            scalar = isinstance(value, (bool, int, float)) or (
+                isinstance(value, str) and len(value) <= 64
+            )
+            if (
+                not isinstance(key, str)
+                or not scalar
+                or (isinstance(value, float) and not math.isfinite(value))
+            ):
+                return f"participants[{i}].config[{key!r}] must be a finite number, a boolean or a short string"
+    return None
 
 
 class Optimization:
