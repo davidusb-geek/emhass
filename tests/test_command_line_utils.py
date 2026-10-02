@@ -1369,6 +1369,41 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             # Cleanup - unlink_missing_ok handles non-existent files safely
             model_path.unlink(missing_ok=True)
 
+    async def test_adjust_pv_forecast_unexpected_model_load_error_falls_back(self):
+        """Unexpected cached-model load errors preserve the unadjusted forecast."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = pathlib.Path(tmpdir)
+            model_path = data_path / "adjust_pv_regressor.pkl"
+            async with aiofiles.open(model_path, "wb") as f:
+                await f.write(pickle.dumps({"model_type": "test"}))
+
+            fcst = MagicMock(spec=Forecast)
+            p_pv_forecast = pd.Series([100, 200, 300], name="P_PV")
+            test_optim_conf = {
+                "adjusted_pv_model_max_age": 24,
+                "adjusted_pv_regression_model": "LassoRegression",
+            }
+
+            with patch(
+                "emhass.command_line.pickle.loads",
+                side_effect=RuntimeError("unexpected model-load failure"),
+            ):
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast,
+                    True,
+                    {},
+                    test_optim_conf,
+                    MagicMock(),
+                    {"data_path": data_path},
+                    pd.DataFrame(),
+                )
+
+            self.assertIsInstance(result, pd.Series)
+            pd.testing.assert_series_equal(result, p_pv_forecast)
+            fcst.adjust_pv_forecast_predict.assert_not_called()
+
     async def test_adjust_pv_forecast_stale_feature_model_refit(self):
         """A saved model trained on an older feature set fails on predict:
         adjust_pv_forecast must re-fit once and retry instead of erroring."""
