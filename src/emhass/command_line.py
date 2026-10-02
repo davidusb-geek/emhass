@@ -2341,6 +2341,25 @@ async def set_input_data_dict(
         if set_type in actions_skip_optim_cache:
             opt = None
             logger.debug(f"Skipping OptimizationCache for action: {set_type}")
+        elif (params.get("passed_data") or {}).get("dry_run", False):
+            # A dry run must leave the live problem exactly as it was, so it
+            # builds its own and never touches the cache. Reading it would hand
+            # the dry run the live object to reconfigure and solve - the next
+            # live solve would then warm-start from, and carry thermal state
+            # from, the dry run - and storing would evict the live problem.
+            # The price is a cold start for the dry run, nothing else.
+            opt = Optimization(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                fcst.var_load_cost,
+                fcst.var_prod_price,
+                costfun,
+                emhass_conf,
+                logger,
+                num_timesteps=len(fcst.forecast_dates),
+            )
+            logger.debug("Dry run: built a private Optimization; OptimizationCache untouched")
         else:
             # Try to get cached Optimization object for warm-starting
             _num_ts = len(fcst.forecast_dates)

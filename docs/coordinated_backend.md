@@ -69,7 +69,12 @@ Each participant is first reimbursed its change in private cost (comfort, stored
 
 ## Dry run
 
-Any optimisation action accepts the runtime parameter `dry_run`. With it set, EMHASS solves as usual, returns the plan in the HTTP response (the same records `/api/v1/plan` serves), and writes nothing: no `opt_res_latest.csv`, no plan store, no last-run record, no publish. A coordinator outside EMHASS can then ask EMHASS for its plan at trial prices without replacing the live plan. It works with either backend.
+Any optimisation action accepts the runtime parameter `dry_run`. With it set, EMHASS solves as usual, returns the plan in the HTTP response (the same records `/api/v1/plan` serves), and changes nothing the next live run sees:
+
+- no files: no results CSV (`opt_res_latest.csv` or the dated one), no entity files for continual publish, no plan store, no last-run record, no web-page plot, no publish;
+- no in-memory state: a dry run builds its own problem and never reads or writes the optimisation cache, so the next live solve warm-starts from the last live solution, with the live configuration, as if the dry run had not happened.
+
+The only cost is that a dry run itself starts cold. EMHASS's action log still records it. A coordinator outside EMHASS can then ask EMHASS for its plan at trial prices without replacing or disturbing the live plan. It works with either backend.
 
 ```bash
 curl -X POST http://localhost:5000/action/naive-mpc-optim -H 'Content-Type: application/json' \
