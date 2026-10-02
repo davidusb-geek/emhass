@@ -822,8 +822,8 @@ async def adjust_pv_forecast(
     :type emhass_conf: dict
     :param test_df_literal: DataFrame containing test data for debugging purposes.
     :type test_df_literal: pd.DataFrame
-    :return: The adjusted PV forecast as a pandas Series. If model training or loading
-        cannot be completed, the original unadjusted PV forecast is returned.
+    :return: The adjusted PV forecast as a pandas Series. On handled model training
+        or loading failures, the original unadjusted PV forecast is returned.
     :rtype: pd.Series
     """
     # Normalize data_path to Path object for safety (handles both str and Path types)
