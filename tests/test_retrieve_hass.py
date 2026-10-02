@@ -1427,9 +1427,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 df = await rh._fetch_sensor_data_vm(session, "sensor.limit_register", start, end)
         self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
         # The binding positive value is held through every trailing bucket, not lost to NaN
-        self.assertEqual(
-            df["sensor.limit_register"].tolist(), [0.0, 4000.0, 4000.0, 4000.0]
-        )
+        self.assertEqual(df["sensor.limit_register"].tolist(), [0.0, 4000.0, 4000.0, 4000.0])
         self.assertFalse(df["sensor.limit_register"].isna().any())
 
     async def test_vm_fill_previous_terminal_zero_state_held(self):
