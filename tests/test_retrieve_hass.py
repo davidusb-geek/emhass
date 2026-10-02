@@ -1403,6 +1403,25 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(pd.Timestamp("2023-04-01 04:00:00+00:00"), df.index)
         self.assertEqual(df["sensor.sensor_a"].tolist(), [10.0] * len(df))
 
+    async def test_vm_fill_previous_non_aligned_end_time_uses_last_complete_bucket(self):
+        """An off-grid end_time includes only complete buckets wholly inside [start, end)."""
+        rh = self._make_vm_rh()
+        side_effect = self._vm_query_side_effect(
+            {"sensor_a": [("W_value", [("2023-04-01T02:00:00Z", 10.0)])]}
+        )
+        start = pd.Timestamp("2023-04-01T02:00:00Z")
+        end = pd.Timestamp("2023-04-01T04:10:00Z")
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            async with aiohttp.ClientSession() as session:
+                df = await rh._fetch_sensor_data_vm(session, "sensor.sensor_a", start, end)
+
+        # With 30-minute buckets, 03:30 labels the final complete bucket (03:30, 04:00].
+        # The next bucket would end at 04:30 and therefore lies outside [start, 04:10).
+        self.assertEqual(df.index.max(), pd.Timestamp("2023-04-01 03:30:00+00:00"))
+        self.assertNotIn(pd.Timestamp("2023-04-01 04:00:00+00:00"), df.index)
+        self.assertTrue((df.index < end).all())
+        self.assertEqual(df["sensor.sensor_a"].tolist(), [10.0] * len(df))
+
     async def test_vm_fill_previous_terminal_constrained_positive_state_held(self):
         """A terminal bounded/limited positive state (e.g. a ceiling register) remains at
         its held value through end_time, not just at the sample timestamp."""
