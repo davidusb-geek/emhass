@@ -1866,18 +1866,18 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         """A timestep-count MPC horizon must not be silently shortened by a
         shorter DST local-calendar day.
 
-        Production shape from 2026-10-03 in Australia/Sydney: at a 5-minute
-        optimization step, the next local calendar day crosses spring-forward
-        and contains 276 real timesteps (23 h). A requested prediction_horizon
-        of 287 therefore does not fit even though the old fixed 288-steps/day
-        proxy said that it did.
+        Retained production shape from 2026-10-03 23:05 in Australia/Sydney: at a
+        5-minute optimization step, the next local calendar day crosses
+        spring-forward and contains 276 real timesteps (23 h). The retained
+        request used prediction_horizon=287, which therefore does not fit even
+        though the old fixed 288-steps/day proxy said that it did.
         """
         params = await TestUtils.get_test_params()
         params_json = orjson.dumps(params).decode("utf-8")
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         time_zone = pytz.timezone("Australia/Sydney")
         retrieve_hass_conf["time_zone"] = time_zone
-        start = time_zone.localize(datetime(2026, 10, 3, 20, 15))
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
         mock_now.return_value = start.astimezone(UTC)
 
         one_day_grid = utils.get_forecast_dates(5, 1, time_zone)
