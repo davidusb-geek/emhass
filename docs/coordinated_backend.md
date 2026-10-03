@@ -16,11 +16,11 @@ pip install emhass[federated]
 "optimization_backend": "dantzig_wolfe"
 ```
 
-Every device (`battery`, `deferrable0`, `deferrable1`, ...) is then its own participant, solved by EMHASS. `admm` is reserved for a later release.
+Every device (`battery`, `deferrable0`, `deferrable1`, ...) is then its own participant, solved by EMHASS.
 
 ## Participants
 
-A participant is one device, or a group of devices solved together by one solver. `participants` sets the groups; a device it leaves out stays its own participant, solved by EMHASS.
+A participant is one device, or a group of devices solved together by one solver. `participants` sets the groups, as a list of objects (its JSON schema is in `openapi.json`, under `Config`); a device it leaves out stays its own participant, solved by EMHASS.
 
 ```json
 "participants": [
@@ -48,7 +48,7 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 
 `set_nodischarge_to_grid` is supported: the coordinator caps export at the PV surplus, as EMHASS does.
 
-If the coordinator fails, or the package is not installed, EMHASS also falls back to the default MILP, so a plan is always published.
+If the coordinator fails, or the package is not installed, EMHASS also falls back to the default MILP, so a plan is always published. The plan then says so: see `backend_used` below.
 
 ## Outputs
 
@@ -59,9 +59,20 @@ The usual `opt_res` columns, plus:
 | `fed_meter_price` | the coordinator's price at the meter, per timestep (currency/kWh) |
 | `fed_lower_bound` | a lower bound on the plan's cost |
 | `fed_gap` | the plan's cost minus that bound |
+| `fed_stop_reason`, `fed_iterations` | why the coordinator stopped (`converged`, `stalled`, `no new proposals`, `iteration cap`) and after how many rounds |
 | `fed_share_<player>` | that player's share of the saving over the horizon (currency), the same in every row; one column for `solar` and one per participant |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
+
+`optim_status` is `Optimal` only when the plan is proven within 0.1% of that bound; otherwise it is `Optimal_Inaccurate`: a runnable plan, published as usual, without the proof.
+
+With a coordinator backend set, every plan, coordinated or not, also says which backend made it (a default configuration's plan has none of these columns):
+
+| column | meaning |
+| --- | --- |
+| `backend_requested` | `optimization_backend` as configured |
+| `backend_used` | the backend that made this plan: the one requested, or `cvxpy` after a fallback |
+| `backend_fallback_reason` | why it fell back (the option, the error, or the missing package); empty when it did not |
 
 ## Sharing the saving
 

@@ -23,6 +23,7 @@ from emhass.utils import (
     build_config,
     build_params,
     build_secrets,
+    get_injection_dict,
     get_logger,
     get_root,
     get_yaml_parse,
@@ -127,23 +128,49 @@ def _balance_holds(res, loads):
     return np.allclose(supplied, used, atol=1e-3)
 
 
+PROVENANCE = ["backend_requested", "backend_used", "backend_fallback_reason"]
+
+
+def _fell_back(res, milp, reason: str) -> None:
+    """`res` is exactly the default plan `milp`, marked as made by cvxpy
+    instead of dantzig_wolfe, for `reason`."""
+    pd.testing.assert_frame_equal(res.drop(columns=PROVENANCE), milp)
+    assert (res["backend_requested"] == "dantzig_wolfe").all()
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains(reason, regex=False).all()
+
+
 def test_default_backend_is_cvxpy_and_never_dispatches():
-    """By default the backend is cvxpy and the coordinator is never called."""
+    """By default the backend is cvxpy and the coordinator is never called,
+    and the plan has exactly its usual columns: no provenance columns."""
     rh, oc, pc = _confs()
     assert oc["optimization_backend"] == "cvxpy"
     assert not oc.get("participants")
     with mock.patch.object(optimization, "_coordinated_plan") as coordinated:
-        _plan(*_site())
+        _, res = _plan(*_site())
     coordinated.assert_not_called()
+    assert not set(PROVENANCE) & set(res.columns)
 
 
 def test_missing_package_falls_back_to_cvxpy():
-    """dantzig_wolfe without the optional package returns exactly the default plan."""
+    """dantzig_wolfe without the optional package returns exactly the default
+    plan, and says that cvxpy made it, and why."""
     site = _site()
     _, milp = _plan(*site)
     with mock.patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": None}):
         opt, res = _plan(*site, optimization_backend="dantzig_wolfe")
-    pd.testing.assert_frame_equal(res, milp)
+    _fell_back(res, milp, "the optional extra is not installed")
+
+
+def test_the_web_page_shows_which_backend_made_the_plan():
+    """The web page's tables and plots take a plan with text columns: the
+    backend that made it, and why, go in the summary table, not the plots."""
+    with mock.patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": None}):
+        _, res = _plan(*_site(), optimization_backend="dantzig_wolfe")
+    page = get_injection_dict(res.copy())
+    assert "backend_used" in page["table2"] and "cvxpy" in page["table2"]
+    assert "the optional extra is not installed" in page["table2"]
+    assert "backend_used" not in page["table1"]
 
 
 @needs_package
@@ -157,6 +184,8 @@ def test_dantzig_wolfe_matches_the_milp_on_a_battery_and_two_loads():
     assert opt.optim_status == "Optimal"
     assert set(milp.columns) <= set(res.columns)
     assert {"fed_meter_price", "fed_lower_bound", "fed_gap"} <= set(res.columns)
+    assert (res["backend_used"] == "dantzig_wolfe").all()
+    assert (res["backend_fallback_reason"] == "").all()
     assert _balance_holds(res, loads=2)
     for k, (watts, hours) in enumerate(((3000.0, 4), (750.0, 2))):
         assert res[f"P_deferrable{k}"].sum() * 0.5 == pytest.approx(watts * hours, rel=1e-6)
@@ -195,7 +224,7 @@ def test_unsupported_option_falls_back_to_cvxpy():
     _, milp = _plan(*site)
     with mock.patch.object(logger, "warning") as warning:
         _, res = _plan(*site, optimization_backend="dantzig_wolfe")
-    pd.testing.assert_frame_equal(res, milp)
+    _fell_back(res, milp, "set_nocharge_from_grid")
     assert any("set_nocharge_from_grid" in str(c) for c in warning.call_args_list)
 
 

@@ -6,6 +6,7 @@ same cached problem, configuration and warm-start point as if the dry run
 had never happened."""
 
 import asyncio
+import json
 import pathlib
 import shutil
 import sys
@@ -17,7 +18,7 @@ import orjson
 import pandas as pd
 import pytest
 
-from emhass import web_server
+from emhass import last_run, web_server
 from emhass.command_line import (
     OptimizationCache,
     dayahead_forecast_optim,
@@ -26,7 +27,7 @@ from emhass.command_line import (
     perfect_forecast_optim,
     set_input_data_dict,
 )
-from emhass.optimization import _coordinated_config_problem
+from emhass.optimization import _BACKENDS, _DEVICE, _SOLVERS, _coordinated_config_problem
 from emhass.utils import (
     RuntimeParamError,
     build_config,
@@ -196,6 +197,60 @@ def test_a_dry_run_leaves_the_live_optimisation_untouched():
         assert isinstance(other, pd.DataFrame)
         assert _same(before, _cache_state())
     OptimizationCache.clear()
+
+
+def _endpoints(data_path: pathlib.Path) -> tuple:
+    """What GET /api/v1/plan and GET /api/v1/last-run serve for `data_path`."""
+
+    async def get():
+        """Ask the web app, as a client would."""
+        saved = web_server.emhass_conf
+        web_server.emhass_conf = {**saved, "data_path": data_path}
+        try:
+            client = web_server.app.test_client()
+            plan = await client.get("/api/v1/plan")
+            run = await client.get("/api/v1/last-run")
+            return plan.status_code, await plan.get_json(), run.status_code, await run.get_json()
+        finally:
+            web_server.emhass_conf = saved
+
+    return asyncio.run(get())
+
+
+def test_a_dry_run_leaves_the_plan_and_last_run_endpoints_unchanged():
+    """After a live run, /api/v1/plan and /api/v1/last-run serve that run.
+    A dry run after it, at other prices, changes neither response."""
+    OptimizationCache.clear()
+    with tempfile.TemporaryDirectory() as tmp:
+        data_path = pathlib.Path(tmp) / "data"
+        shutil.copytree(root / "data", data_path)
+        live = _optimise(data_path, "profit", {})
+        before = _endpoints(data_path)
+        plan_status, plan, run_status, run = before
+        assert plan_status == 200 and plan["status"] == "ok" and len(plan["plan"]) == len(live)
+        assert run_status == 200 and run["action"] == "dayahead-optim"
+
+        prices = [0.5 if i % 2 else 0.01 for i in range(len(live))]
+        trial = _optimise(data_path, "profit", {"dry_run": True, "load_cost_forecast": prices})
+        assert isinstance(trial, pd.DataFrame) and not trial["P_grid"].equals(live["P_grid"])
+        last_run._cache = None  # read from disk too, not only the in-memory copy
+        assert _endpoints(data_path) == before
+    OptimizationCache.clear()
+
+
+def test_a_dry_run_plans_exactly_as_a_live_run():
+    """The same inputs, each from a cold cache, give the same plan live and
+    dry: a dry run changes what is written, never what is solved."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_path = pathlib.Path(tmp) / "data"
+        shutil.copytree(root / "data", data_path)
+        OptimizationCache.clear()
+        live = _optimise(data_path, "profit", {})
+        OptimizationCache.clear()
+        dry = _optimise(data_path, "profit", {"dry_run": True})
+    OptimizationCache.clear()
+    assert isinstance(live, pd.DataFrame) and len(live) > 0
+    pd.testing.assert_frame_equal(dry, live)
 
 
 # --------------------------------------------------------------------------
@@ -422,6 +477,9 @@ def test_a_failing_coordinator_falls_back_to_the_default_solver(dry, caplog):
     assert isinstance(res, pd.DataFrame) and len(res) > 0
     assert (res["optim_status"] == "Optimal").all()
     assert "coordinator raised RuntimeError" in caplog.text
+    # ...and the plan says which solver made it, and why
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("coordinator exploded").all()
     OptimizationCache.clear()
 
 
@@ -500,6 +558,21 @@ def test_a_known_backend_and_a_valid_spec_pass():
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
 
 
+def test_the_published_schema_is_the_check():
+    """openapi.json describes participants as the check reads it - a list of
+    objects with these device names and solvers - and offers only the
+    backends EMHASS runs."""
+    spec = json.loads((root / "src/emhass/static/openapi.json").read_text())
+    props = spec["components"]["schemas"]["Config"]["properties"]
+    assert props["optimization_backend"]["enum"] == list(_BACKENDS)
+    group = props["participants"]["items"]
+    assert props["participants"]["type"] == ["array", "null"]
+    assert set(group["properties"]) == {"devices", "solver", "config"}
+    assert group["additionalProperties"] is False
+    assert group["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
+    assert group["properties"]["solver"]["enum"] == list(_SOLVERS)
+
+
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
 def test_a_malformed_spec_in_a_request_still_plans(dry, caplog):
     """The request that crashed with KeyError 'devices' before: now the
@@ -510,6 +583,7 @@ def test_a_malformed_spec_in_a_request_still_plans(dry, caplog):
         shutil.copytree(root / "data", data_path)
         res = _coordinated(data_path, {"dry_run": dry}, participants=[{"nodevices": 1}])
     assert isinstance(res, pd.DataFrame) and (res["optim_status"] == "Optimal").all()
+    assert (res["backend_used"] == "cvxpy").all()
     # refused by the check, by name - the coordinator never saw it
     assert "participants[0] must be an object with devices, solver and config only" in caplog.text
     assert "coordinator raised" not in caplog.text

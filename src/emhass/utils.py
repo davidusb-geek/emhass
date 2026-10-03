@@ -2779,6 +2779,18 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     else:
         optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
+    # Other text columns (with a coordinator backend: backend_used,
+    # backend_fallback_reason, fed_stop_reason) hold one value for the whole
+    # plan, so they go in the summary table instead of the plots.
+    text_cols = [
+        c
+        for c in df.columns
+        if not pd.api.types.is_numeric_dtype(df[c])
+        and (pd.to_numeric(df[c], errors="coerce").isna() & df[c].notna()).any()
+    ]
+    summary_text = {c: df[c].iloc[0] for c in text_cols}
+    df = df.drop(columns=text_cols)
+    cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
     df[cols_p] = df[cols_p].astype(int)
@@ -2859,6 +2871,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
     table2["optim_status"] = optim_status
+    for col, value in summary_text.items():
+        table2[col] = value
     table2 = (
         table2.to_frame(name="Value")
         .reset_index(names="Variable")
