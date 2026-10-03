@@ -171,6 +171,8 @@ def _coordinated_config_problem(optim_conf: dict) -> str | None:
         str | None: The problem, for the log; None when it can be used.
     """
     backend = optim_conf.get("optimization_backend")
+    if backend == "admm":
+        return "admm is planned for a later release, not available yet"
     if backend not in _BACKENDS:
         return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
     spec = optim_conf.get("participants")

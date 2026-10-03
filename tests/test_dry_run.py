@@ -556,6 +556,8 @@ def test_a_known_backend_and_a_valid_spec_pass():
         is None
     )
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
+    # documented as future work, not offered: it says so and the default solver plans
+    assert "later release" in _coordinated_config_problem({"optimization_backend": "admm"})
 
 
 def test_the_published_schema_is_the_check():
