@@ -1862,9 +1862,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch("emhass.utils._get_now")
-    async def test_naive_mpc_horizon_extends_across_sydney_spring_forward(
-        self, mock_now
-    ):
+    async def test_naive_mpc_horizon_extends_across_sydney_spring_forward(self, mock_now):
         """A timestep-count MPC horizon must not be silently shortened by a
         shorter DST local-calendar day.
 
@@ -1876,9 +1874,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         """
         params = await TestUtils.get_test_params()
         params_json = orjson.dumps(params).decode("utf-8")
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         time_zone = pytz.timezone("Australia/Sydney")
         retrieve_hass_conf["time_zone"] = time_zone
         start = time_zone.localize(datetime(2026, 10, 3, 20, 15))
