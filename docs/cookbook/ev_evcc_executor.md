@@ -193,9 +193,12 @@ and the optimizer schedules around it instead of stopping it.
   `now` mapping enforces it at the charger's configured rate. If you want evcc to follow PV surplus
   inside a slot, use the `pv`/`minpv` variant in Step 4 and accept it may under-deliver versus the
   plan.
-- **Deadline maths assumes no DST.** The Step 2 `timedelta(days=1)` is exactly 24 hours, so on a
-  timezone that observes daylight saving the 05:00 deadline can land an hour off on the switch days.
-  Adjust the template if that applies to you.
+- **The Step 2 deadline maths is separate from EMHASS forecast-window DST handling.** EMHASS
+  `delta_forecast_daily` uses local calendar-day semantics, while the example deadline is evaluated
+  by Home Assistant/Jinja and then converted into EMHASS timestep indices. If 05:00 must remain the
+  same local wall-clock deadline across a daylight-saving transition, validate or construct that
+  next local 05:00 using Home Assistant's configured timezone; do not assume EMHASS forecast-window
+  handling changes the template's datetime arithmetic.
 - **A missed deadline rolls into the next day.** Once 05:00 passes, the Step 2 template sets the
   deadline to the next 05:00, so if the car did not reach target overnight (it under-delivered on a
   low-sun `pv`/`minpv` night, or it was unplugged) the leftover energy carries a next-day deadline.
