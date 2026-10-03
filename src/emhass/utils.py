@@ -1408,6 +1408,49 @@ def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str
     }
 
 
+class RuntimeParamError(ValueError):
+    """A runtime parameter whose value cannot be read safely; the action is
+    refused rather than guessed at."""
+
+
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off", "")
+
+
+def parse_dry_run(value: object) -> bool:
+    """The runtime ``dry_run`` flag, read strictly.
+
+    ``bool()`` would read the string ``"false"`` - which is what a templated
+    request often sends - as True, and quietly turn a live run into a dry run
+    that publishes nothing. Booleans, 0/1, and the strings true/false, 1/0,
+    yes/no, on/off (any case) are accepted; anything else raises.
+
+    Args:
+        value: The value passed as ``dry_run``.
+
+    Returns:
+        bool: Whether the run is a dry run.
+
+    Raises:
+        RuntimeParamError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUE:
+            return True
+        if v in _FALSE:
+            return False
+    raise RuntimeParamError(
+        f"dry_run must be true or false, got {value!r} ({type(value).__name__})"
+    )
+
+
 async def treat_runtimeparams(
     runtimeparams: str,
     params: dict[str, dict],
@@ -2317,6 +2360,9 @@ async def treat_runtimeparams(
             entity_save = runtimeparams["entity_save"]
         params["passed_data"]["entity_save"] = entity_save
 
+        # Plan without touching the live plan: return the plan, write nothing (opt-in)
+        params["passed_data"]["dry_run"] = parse_dry_run(runtimeparams.get("dry_run", False))
+
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
             publish_prefix = ""
@@ -2733,6 +2779,18 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     else:
         optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
+    # Other text columns (with a coordinator backend: backend_used,
+    # backend_fallback_reason, fed_stop_reason) hold one value for the whole
+    # plan, so they go in the summary table instead of the plots.
+    text_cols = [
+        c
+        for c in df.columns
+        if not pd.api.types.is_numeric_dtype(df[c])
+        and (pd.to_numeric(df[c], errors="coerce").isna() & df[c].notna()).any()
+    ]
+    summary_text = {c: df[c].iloc[0] for c in text_cols}
+    df = df.drop(columns=text_cols)
+    cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
     df[cols_p] = df[cols_p].astype(int)
@@ -2813,6 +2871,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
     table2["optim_status"] = optim_status
+    for col, value in summary_text.items():
+        table2[col] = value
     table2 = (
         table2.to_frame(name="Value")
         .reset_index(names="Variable")

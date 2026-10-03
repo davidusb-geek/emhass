@@ -53,14 +53,19 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
     so it is placed on items.default; scalars get `default` directly. title/description/
     x-unit annotate the outermost property.
     """
-    parts = input_str.split(".")
-    leaf = _base_schema(parts[-1], param)
-    dv = param.get("default_value", None)
-    if dv is not None:
-        leaf["default"] = dv
-    schema = leaf
-    for _ in parts[:-1]:  # one wrap per leading "array"
-        schema = {"type": "array", "items": schema}
+    if "schema" in param:
+        # The param's own JSON schema, when `input` (which drives the web UI's
+        # widget) is too coarse to describe it, e.g. a list of objects.
+        schema = json.loads(json.dumps(param["schema"]))
+    else:
+        parts = input_str.split(".")
+        leaf = _base_schema(parts[-1], param)
+        dv = param.get("default_value", None)
+        if dv is not None:
+            leaf["default"] = dv
+        schema = leaf
+        for _ in parts[:-1]:  # one wrap per leading "array"
+            schema = {"type": "array", "items": schema}
     if param.get("friendly_name"):
         schema["title"] = param["friendly_name"]
     desc = (param.get("Description") or "").strip()

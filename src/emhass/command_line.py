@@ -44,6 +44,49 @@ test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
 
 
+async def _treat_runtimeparams_or_refuse(*args, **kwargs):
+    """utils.treat_runtimeparams, refusing a request whose runtime parameters
+    cannot be read safely (utils.RuntimeParamError): logged, and (None, None,
+    None, None) returned, so the action answers 400 instead of failing with a
+    500. Every other error behaves as before.
+
+    Args:
+        *args, **kwargs: treat_runtimeparams' own arguments.
+
+    Returns:
+        tuple: treat_runtimeparams' (params, retrieve_hass_conf, optim_conf,
+        plant_conf), or four Nones when the request is refused.
+    """
+    logger = args[6] if len(args) > 6 else kwargs.get("logger")
+    try:
+        return await utils.treat_runtimeparams(*args, **kwargs)
+    except utils.RuntimeParamError as exc:
+        logger.error(f"Refusing the request: {exc}")
+        return None, None, None, None
+
+
+def is_dry_run(input_data_dict: dict) -> bool:
+    """Whether this run is a dry run (runtime ``dry_run``).
+
+    A dry run solves as usual but writes nothing: no results CSV, no plan
+    store, no last-run record, no publish. The caller returns the plan.
+
+    Args:
+        input_data_dict: The action's input data, with ``params`` as a dict or
+            JSON string.
+
+    Returns:
+        bool: True for a dry run.
+    """
+    params = input_data_dict.get("params") or {}
+    if not isinstance(params, dict):
+        params = orjson.loads(params)
+    # Only an actual True: the flag was parsed strictly on the way in
+    # (utils.parse_dry_run), and a stray truthy value must never turn a live
+    # run into one that writes nothing.
+    return (params.get("passed_data") or {}).get("dry_run", False) is True
+
+
 def _record_optim_snapshot(
     input_data_dict: dict,
     action: str,
@@ -192,6 +235,8 @@ class OptimizationCacheKey:
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
     costfun: str
+    optimization_backend: str  # cvxpy, or a coordinator over separate participants
+    participants: str  # stable JSON of the participant groups
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
@@ -407,6 +452,10 @@ class OptimizationCache:
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
+            optimization_backend=str(optim_conf.get("optimization_backend") or "cvxpy"),
+            participants=orjson.dumps(
+                optim_conf.get("participants") or [], option=orjson.OPT_SORT_KEYS
+            ).decode(),
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
@@ -2247,7 +2296,7 @@ async def set_input_data_dict(
         retrieve_hass_conf,
         optim_conf,
         plant_conf,
-    ) = await utils.treat_runtimeparams(
+    ) = await _treat_runtimeparams_or_refuse(
         runtimeparams,
         params,
         retrieve_hass_conf,
@@ -2257,6 +2306,8 @@ async def set_input_data_dict(
         logger,
         emhass_conf,
     )
+    if params is None:
+        return False
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
         params = dict(orjson.loads(params))
@@ -2316,6 +2367,25 @@ async def set_input_data_dict(
         if set_type in actions_skip_optim_cache:
             opt = None
             logger.debug(f"Skipping OptimizationCache for action: {set_type}")
+        elif (params.get("passed_data") or {}).get("dry_run", False):
+            # A dry run must leave the live problem exactly as it was, so it
+            # builds its own and never touches the cache. Reading it would hand
+            # the dry run the live object to reconfigure and solve - the next
+            # live solve would then warm-start from, and carry thermal state
+            # from, the dry run - and storing would evict the live problem.
+            # The price is a cold start for the dry run, nothing else.
+            opt = Optimization(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                fcst.var_load_cost,
+                fcst.var_prod_price,
+                costfun,
+                emhass_conf,
+                logger,
+                num_timesteps=len(fcst.forecast_dates),
+            )
+            logger.debug("Dry run: built a private Optimization; OptimizationCache untouched")
         else:
             # Try to get cached Optimization object for warm-starting
             _num_ts = len(fcst.forecast_dates)
@@ -2573,7 +2643,7 @@ async def perfect_forecast_optim(
         filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
     else:  # Just save the latest optimization results
         filename = default_csv_filename
-    if not debug:
+    if not debug and not is_dry_run(input_data_dict):
         opt_res.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
             index_label="timestamp",
@@ -2584,15 +2654,17 @@ async def perfect_forecast_optim(
         params = input_data_dict["params"]
 
     # if continual_publish, save perfect results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
-        "passed_data"
-    ].get("entity_save", False):
+    if not is_dry_run(input_data_dict) and (
+        input_data_dict["retrieve_hass_conf"].get("continual_publish", False)
+        or params["passed_data"].get("entity_save", False)
+    ):
         with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-    _record_optim_snapshot(input_data_dict, last_run.ACTION_PERFECT_OPTIM, opt_res, _t0, logger)
+    if not is_dry_run(input_data_dict):
+        _record_optim_snapshot(input_data_dict, last_run.ACTION_PERFECT_OPTIM, opt_res, _t0, logger)
 
     return opt_res
 
@@ -2789,7 +2861,7 @@ async def dayahead_forecast_optim(
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
         filename = default_csv_filename
-    if not debug:
+    if not debug and not is_dry_run(input_data_dict):
         opt_res_dayahead.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
             index_label="timestamp",
@@ -2801,17 +2873,19 @@ async def dayahead_forecast_optim(
         params = input_data_dict["params"]
 
     # if continual_publish, save day_ahead results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
-        "passed_data"
-    ].get("entity_save", False):
+    if not is_dry_run(input_data_dict) and (
+        input_data_dict["retrieve_hass_conf"].get("continual_publish", False)
+        or params["passed_data"].get("entity_save", False)
+    ):
         with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-    _record_optim_snapshot(
-        input_data_dict, last_run.ACTION_DAYAHEAD_OPTIM, opt_res_dayahead, _t0, logger
-    )
+    if not is_dry_run(input_data_dict):
+        _record_optim_snapshot(
+            input_data_dict, last_run.ACTION_DAYAHEAD_OPTIM, opt_res_dayahead, _t0, logger
+        )
 
     return opt_res_dayahead
 
@@ -2903,7 +2977,7 @@ async def naive_mpc_optim(
         filename = "opt_res_naive_mpc_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
         filename = default_csv_filename
-    if not debug:
+    if not debug and not is_dry_run(input_data_dict):
         opt_res_naive_mpc.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
             index_label="timestamp",
@@ -2915,17 +2989,19 @@ async def naive_mpc_optim(
         params = input_data_dict["params"]
 
     # if continual_publish, save mpc results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
-        "passed_data"
-    ].get("entity_save", False):
+    if not is_dry_run(input_data_dict) and (
+        input_data_dict["retrieve_hass_conf"].get("continual_publish", False)
+        or params["passed_data"].get("entity_save", False)
+    ):
         with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-    _record_optim_snapshot(
-        input_data_dict, last_run.ACTION_NAIVE_MPC_OPTIM, opt_res_naive_mpc, _t0, logger
-    )
+    if not is_dry_run(input_data_dict):
+        _record_optim_snapshot(
+            input_data_dict, last_run.ACTION_NAIVE_MPC_OPTIM, opt_res_naive_mpc, _t0, logger
+        )
 
     return opt_res_naive_mpc
 

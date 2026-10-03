@@ -1,6 +1,8 @@
 {
   "logging_level": "INFO",
   "costfun": "profit",
+  "optimization_backend": "cvxpy",
+  "participants": null,
   "optimization_time_step": 30,
   "historic_days_to_retrieve": 2,
   "method_ts_round": "nearest",
