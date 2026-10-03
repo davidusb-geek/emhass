@@ -425,7 +425,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         action = "naive-mpc-optim"
         horizon = 287
         time_zone = pytz.timezone("Australia/Sydney")
-        start = time_zone.localize(datetime(2026, 10, 3, 20, 15))
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
         mock_now.return_value = start.astimezone(UTC)
 
         runtimeparams = {
