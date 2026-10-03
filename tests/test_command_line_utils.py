@@ -15,6 +15,7 @@ import aiofiles
 import numpy as np
 import orjson
 import pandas as pd
+import pytz
 
 from emhass import utils
 from emhass.command_line import (
