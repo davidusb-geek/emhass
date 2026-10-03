@@ -1669,6 +1669,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_logger = Mock()
         mock_fcst = Mock()
         mock_rh = Mock()
+        p_pv_forecast = pd.Series([1, 2])
         # 1. Force is_model_outdated to False so it attempts to load
         # 2. Mock aiofiles to return bytes
         # 3. Mock pickle.loads to raise a generic Exception (not one of the specific caught ones)
@@ -1685,7 +1686,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             result = await adjust_pv_forecast(
                 logger=mock_logger,
                 fcst=mock_fcst,
-                p_pv_forecast=pd.Series([1, 2]),
+                p_pv_forecast=p_pv_forecast,
                 get_data_from_file=False,
                 retrieve_hass_conf={},
                 optim_conf={"adjusted_pv_model_max_age": 1},
@@ -1694,13 +1695,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 test_df_literal=pd.DataFrame(),
             )
             # Assertions
-            self.assertFalse(result, "Should return False on generic exception")
-            # Verify we hit the specific exception block
-            # logger.error(f"Unexpected error loading adjusted PV model: ...")
-            # logger.error("Cannot recover from this error")
+            pd.testing.assert_series_equal(result, p_pv_forecast)
+            mock_fcst.adjust_pv_forecast_predict.assert_not_called()
+
             error_logs = [str(call) for call in mock_logger.error.mock_calls]
+            warning_logs = [str(call) for call in mock_logger.warning.mock_calls]
             self.assertTrue(any("Unexpected error loading" in log for log in error_logs))
-            self.assertTrue(any("Cannot recover" in log for log in error_logs))
+            self.assertTrue(
+                any("Falling back to unadjusted PV forecast" in log for log in warning_logs)
+            )
 
     async def test_publish_thermal_loads(self):
         """
