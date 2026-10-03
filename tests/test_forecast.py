@@ -1718,8 +1718,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Override forecast window to a fixed start date (naive ISO string).
 
         Rebuilds ``forecast_dates`` and ``forecast_dates_tz`` using the same
-        ``DateOffset`` logic as ``Forecast.__init__`` so that DST transitions
-        within the window are handled correctly.
+        local-calendar-day helper as ``Forecast.__init__`` so DST transitions,
+        including nonexistent/ambiguous endpoint wall times, use one contract.
         """
         delta_days = fcst.optim_conf["delta_forecast_daily"].days
         start_ts = (
@@ -1727,7 +1727,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             .tz_localize(fcst.time_zone, nonexistent="shift_forward")
             .floor(fcst.freq)
         )
-        end_ts = (start_ts + pd.DateOffset(days=delta_days)).replace(microsecond=0)
+        end_ts = utils.add_local_calendar_days(start_ts, delta_days, fcst.time_zone).replace(
+            microsecond=0
+        )
         dates = (
             pd.date_range(
                 start=start_ts,
@@ -1831,6 +1833,54 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48 + 2)
         self._pin_forecast_to_date(fcst, "2025-10-24 00:00:00")
         await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48 + 2)
+
+    async def test_forecast_constructor_resolves_sydney_nonexistent_endpoint(self):
+        """Forecast.__init__ uses the shared DST-safe calendar endpoint contract."""
+        import pytz
+
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        tz = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = tz
+        retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(minutes=5)
+        retrieve_hass_conf["method_ts_round"] = "first"
+        optim_conf["delta_forecast_daily"] = pd.Timedelta(days=1)
+        start = tz.localize(pd.Timestamp("2026-10-03 02:05:00").to_pydatetime())
+
+        with unittest.mock.patch.object(pd.Timestamp, "now", return_value=pd.Timestamp(start)):
+            fcst = Forecast(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                params_json,
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+
+        expected_end = tz.localize(pd.Timestamp("2026-10-04 03:05:00").to_pydatetime())
+        self.assertEqual(fcst.start_forecast, pd.Timestamp(start))
+        self.assertEqual(fcst.end_forecast, pd.Timestamp(expected_end))
+        self.assertEqual(len(fcst.forecast_dates), 288)
+        self.assertEqual(
+            fcst.forecast_dates[-1],
+            pd.Timestamp("2026-10-04 03:00:00", tz=tz),
+        )
+
+        csv_dates = fcst.get_forecast_days_csv(timedelta_days=0)
+        self.assertEqual(len(csv_dates), 288)
+        self.assertEqual(csv_dates[0], fcst.forecast_dates[0])
+        self.assertEqual(csv_dates[-1], fcst.forecast_dates[-1])
+
+        # Extending by one additional calendar day is resolved from the
+        # original start, not from the already gap-shifted one-day endpoint.
+        extended = fcst.get_forecast_days_csv(timedelta_days=1)
+        self.assertEqual(len(extended), 564)
+        self.assertEqual(
+            extended[-1],
+            pd.Timestamp("2026-10-05 02:00:00", tz=tz),
+        )
 
     # Guard regression: _get_weather_list / _get_load_forecast_list must not crash on None input
     async def test_get_weather_list_none_does_not_crash(self):

@@ -238,7 +238,7 @@
     },
     "delta_forecast_daily": {
       "friendly_name": "Number of forecasted days",
-      "Description": "The number of days for forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. For naive-mpc, the forecast window is now extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs.",
+      "Description": "The number of local calendar days covered by forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. This is not a fixed 24-hour duration: the timestep count follows the configured timezone (normally 24 hours, 23 across spring-forward and 25 across fall-back). If a nominal calendar-day endpoint falls in a skipped or repeated wall-clock interval, EMHASS resolves it deterministically using the timezone transition. For naive-mpc, the forecast window is extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs.",
       "input": "int",
       "default_value": 1,
       "unit": "days"

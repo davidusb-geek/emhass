@@ -4,11 +4,11 @@ EMHASS will need 4 forecasts to work properly:
 
 - PV power production forecast (internally based on the weather forecast and the characteristics of your PV plant). This is given in Watts.
 
-- Load power forecast: how much power your house will demand in the next 24 hours. This is given in Watts.
+- Load power forecast: how much power your house will demand over the configured forecast horizon. This is given in Watts.
 
-- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in currency/kWh.
+- Load cost forecast: the price of the energy from the grid over the configured forecast horizon. This is given in currency/kWh.
 
-- PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in currency/kWh.
+- PV production selling price forecast: the price at which you will sell your excess PV production over the configured forecast horizon. This is given in currency/kWh.
 
 Some methods are generalized to the 4 forecasts needed. For all the forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods, it is then possible to use data from external forecast providers.
     
@@ -260,7 +260,12 @@ New in EMHASS v0.12.0: the default method for load power forecast is the `typica
 
 The default method for load forecast is the `typical` method, which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month. This provides a typical daily load power characteristic with a 30 minute resolution. The load power is scaled using the parameter `maximum_power_from_grid`. This method uses the default data with 1-year of load power consumption in file `data/data_train_load_clustering.pkl`. You can customize this data to your own household consumption by erasing the previous file and running the script `scripts/load_clustering.py` (this will try to fetch 365 days of data from your load power sensor). However, if you have a working configuration without any problems with data retrieve from Home Assistant, then it is adviced to use the more advanced method `mlforecaster`.
 
-A second method is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily` and the default value for this is 24h.
+A second method is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using `delta_forecast_daily`, whose default is **1 local calendar day** rather than a fixed 24-hour duration.
+
+
+```{note}
+Forecast windows follow the configured local timezone. A one-day window therefore normally contains 24 hours, but a valid window crossing daylight saving time can contain 23 hours on spring-forward or 25 hours on fall-back. If the nominal calendar-day endpoint itself is in a skipped/repeated wall-clock interval, EMHASS moves a nonexistent endpoint forward by the timezone's actual DST gap and chooses the post-transition occurrence for an ambiguous endpoint. The generated optimization timestep count follows the resolved real timeline; callers supplying external forecast lists must provide enough rows for that resolved window or an explicit shorter `prediction_horizon`.
+```
 
 This is presented graphically here:
 
