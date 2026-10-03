@@ -228,6 +228,71 @@ def test_unsupported_option_falls_back_to_cvxpy():
     assert any("set_nocharge_from_grid" in str(c) for c in warning.call_args_list)
 
 
+def _hybrid_ready() -> bool:
+    """home-energy-optimizer plans a hybrid inverter from 0.2.5."""
+    try:
+        from home_energy_optimizer import __version__
+    except ImportError:
+        return False
+    return tuple(int(x) for x in __version__.split(".")[:3]) >= (0, 2, 5)
+
+
+@pytest.mark.skipif(not _hybrid_ready(), reason="needs home-energy-optimizer >= 0.2.5")
+@pytest.mark.parametrize("rating_w", [5000, 3000, 2000])
+def test_a_hybrid_inverter_plans_as_the_milp_does(rating_w):
+    """The PV and the battery on a hybrid inverter's DC bus, 8 kW of PV into
+    a smaller inverter: the coordinator holds the inverter as a sub-meter,
+    and its plan matches the default MILP's - the bill, the inverter's AC
+    power within its rating, and the first step an MPC loop applies
+    (P_grid, P_batt, P_hybrid_inverter, SOC_opt)."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = dict(
+        oc, set_nodischarge_to_grid=False
+    )  # with a hybrid inverter that ties the battery to the meter
+    pc = dict(
+        pc,
+        inverter_is_hybrid=True,
+        inverter_ac_output_max=rating_w,
+        inverter_ac_input_max=rating_w,
+        inverter_efficiency_dc_ac=0.97,
+        inverter_efficiency_ac_dc=0.97,
+        compute_curtailment=True,
+    )
+    site = (rh, oc, pc, data, pv * 1.6, load, buy, sell)
+    _, milp = _plan(*site)
+    opt, res = _plan(
+        *site,
+        optimization_backend="dantzig_wolfe",
+        participants=[
+            {"devices": ["battery"], "solver": "emhass"},
+            {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
+        ],
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert _bill(res) == pytest.approx(_bill(milp), abs=0.01)
+    assert res["P_hybrid_inverter"].max() <= rating_w + 1e-3
+    assert res["P_hybrid_inverter"].min() >= -rating_w - 1e-3
+    for col in ("P_grid", "P_batt", "P_hybrid_inverter", "SOC_opt"):
+        assert res[col].iloc[0] == pytest.approx(milp[col].iloc[0], abs=1.0), col
+    # the AC bus balances: the inverter and the grid supply the load and the loads
+    supplied = res["P_hybrid_inverter"] + res["P_grid"]
+    used = res["P_Load"] + res["P_deferrable0"] + res["P_deferrable1"]
+    assert np.allclose(supplied, used, atol=1e-3)
+
+
+def test_a_hybrid_inverter_tied_to_the_meter_falls_back():
+    """set_nodischarge_to_grid with a hybrid inverter (EMHASS: no discharge
+    while exporting) is not split per device: the default MILP plans, and the
+    plan says why."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    pc = dict(pc, inverter_is_hybrid=True, inverter_ac_output_max=5000)
+    site = (rh, dict(oc, set_nodischarge_to_grid=True), pc, data, pv, load, buy, sell)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "cvxpy").all()
+    if _hybrid_ready():
+        assert res["backend_fallback_reason"].str.contains("set_nodischarge_to_grid").all()
+
+
 @needs_package
 def test_a_participant_answers_the_same_query_the_same_way():
     """A heat pump with thermal inertia answers the same prices with the same

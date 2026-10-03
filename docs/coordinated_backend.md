@@ -41,12 +41,15 @@ A battery planned by `home_energy_optimizer` values the energy it leaves at the 
 Some options tie a device to PV or to another device, so they cannot be split per device yet. With any of them, EMHASS runs its default MILP and logs one line naming the option:
 
 - `costfun: self-consumption`, `set_total_pv_sell`
-- `set_nocharge_from_grid`, `set_battery_first_priority`, a hybrid inverter, more than one battery
+- `set_nocharge_from_grid`, `set_battery_first_priority`, more than one battery
+- a hybrid inverter with `set_nodischarge_to_grid`, `inverter_stress_cost`, an inverter rated only by `pv_inverter_model` name, or the battery in a participant group with other devices
 - `heat_topology`, shared thermal tanks, `deferrable_load_groups`
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
 
-`set_nodischarge_to_grid` is supported: the coordinator caps export at the PV surplus, as EMHASS does.
+`set_nodischarge_to_grid` is supported (without a hybrid inverter): the coordinator caps export at the PV surplus, as EMHASS does.
+
+A hybrid inverter (`inverter_is_hybrid`) is supported: the coordinator holds the inverter itself, with the PV and the battery on its DC bus, its AC ratings (`inverter_ac_output_max`, `inverter_ac_input_max`) and its efficiencies each way. The battery is then priced at the DC bus's own price, which falls to zero while PV is being clipped at the rating, so the battery stores PV the inverter cannot pass. The plan carries `P_hybrid_inverter` (+ DC to AC), as EMHASS's does. Needs home-energy-optimizer 0.2.5 or later.
 
 If the coordinator fails, or the package is not installed, EMHASS also falls back to the default MILP, so a plan is always published. The plan then says so: see `backend_used` below.
 
