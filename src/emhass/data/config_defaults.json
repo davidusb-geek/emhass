@@ -97,6 +97,7 @@
   "def_minimum_on_time": [0, 0],
   "def_minimum_off_time": [0, 0],
   "deferrable_load_groups": [],
+  "tariff_schedule_time_zone": "",
   "load_peak_hours_cost": 0.1907,
   "load_offpeak_hours_cost": 0.1419,
   "production_price_forecast_method": "constant",

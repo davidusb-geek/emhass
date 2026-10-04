@@ -620,6 +620,12 @@
             "title": "List peak hour periods",
             "description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours."
           },
+          "tariff_schedule_time_zone": {
+            "type": "string",
+            "default": "",
+            "title": "Tariff schedule time zone",
+            "description": "Optional time zone identifier (for example Etc/GMT-10 for a fixed UTC+10 clock) in which the peak hour periods are written, when the tariff's clock differs from the site time zone. Leave empty to use the site time zone."
+          },
           "load_peak_hours_cost": {
             "type": "number",
             "default": 0.1907,
