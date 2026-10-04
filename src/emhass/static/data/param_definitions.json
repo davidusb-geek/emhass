@@ -407,6 +407,16 @@
         "load_cost_forecast_method": "hp_hc_periods"
       }
     },
+    "tariff_schedule_time_zone": {
+      "friendly_name": "Tariff schedule time zone",
+      "Description": "Optional time zone identifier (for example Etc/GMT-10 for a fixed UTC+10 clock) in which the peak hour periods are written, when the tariff's clock differs from the site time zone. Leave empty to use the site time zone.",
+      "input": "string",
+      "default_value": "",
+      "unit": "none",
+      "requires": {
+        "load_cost_forecast_method": "hp_hc_periods"
+      }
+    },
     "load_peak_hours_cost": {
       "friendly_name": "Peak hours electrical energy cost",
       "Description": "The cost of the electrical energy during peak hours",

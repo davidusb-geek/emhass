@@ -54,6 +54,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import pytz
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -71,6 +72,9 @@ from emhass.utils import add_date_features, get_days_list, set_df_index_freq
 header_accept = "application/json"
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
 error_msg_method_not_valid = "Passed method is not valid"
+error_msg_tariff_schedule_time_zone = (
+    "tariff_schedule_time_zone is not a valid time zone identifier: %r"
+)
 
 # Per-request timeout (seconds) for the Open-Meteo HTTP fetch. Without an
 # explicit timeout aiohttp's default is long, so a slow/hanging Open-Meteo
@@ -2439,18 +2443,24 @@ class Forecast:
             df_final.index = df_final.index.astype("datetime64[ns, " + str(self.time_zone) + "]")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
+            # The peak periods are wall-clock times on the tariff schedule clock:
+            # the site time zone unless tariff_schedule_time_zone says otherwise.
+            schedule_tz_name = str(self.optim_conf.get("tariff_schedule_time_zone") or "").strip()
+            try:
+                schedule_tz = pytz.timezone(schedule_tz_name) if schedule_tz_name else None
+            except pytz.UnknownTimeZoneError:
+                self.logger.error(error_msg_tariff_schedule_time_zone, schedule_tz_name)
+                return False
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
-            list_df_hp = []
+            # Same instants re-expressed on the schedule clock. This is only a view
+            # for the wall-clock membership test; df_final keeps its site-time index.
+            schedule_index = df_final.index.tz_convert(schedule_tz or self.time_zone)
+            is_peak = np.zeros(len(df_final), dtype=bool)
             for _key, period_hp in self.optim_conf["load_peak_hour_periods"].items():
-                list_df_hp.append(
-                    df_final[self.var_load_cost].between_time(
-                        period_hp[0]["start"], period_hp[1]["end"]
-                    )
-                )
-            for df_hp in list_df_hp:
-                df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
-                    "load_peak_hours_cost"
-                ]
+                is_peak[
+                    schedule_index.indexer_between_time(period_hp[0]["start"], period_hp[1]["end"])
+                ] = True
+            df_final.loc[is_peak, self.var_load_cost] = self.optim_conf["load_peak_hours_cost"]
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(
