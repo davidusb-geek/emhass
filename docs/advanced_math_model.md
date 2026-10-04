@@ -169,6 +169,50 @@ $$
 \sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i} = \frac{E_{nom}}{\Delta_t}(SOC_{init}-SOC_{final})
 $$
 
+### Hybrid inverter conversion
+
+With `inverter_is_hybrid` set to true, PV and all batteries sit on one DC bus behind a single hybrid inverter, and the power balance above is written on the AC side with the inverter power $P_{hybrid}$ in place of the PV and battery terms:
+
+$$
+P_{hybrid_i}-P_{defSum_i}-P_{load_i}+P_{gridNeg_i}+P_{gridPos_i}=0
+$$
+
+$P_{hybrid}$ is positive when the inverter delivers AC power and negative when it draws AC power to charge the batteries. It is tied to the DC bus through two non-negative inverter flows, $P_{dcac}$ (DC bus to AC) and $P_{acdc}$ (AC to DC bus). With $P_{stoPos}$ and $P_{stoNeg}$ summed over all batteries and $P_{curt}$ the optional PV curtailment, the DC bus balance is
+
+$$
+P_{PV_i}-P_{curt_i}+P_{stoPos_i}+P_{stoNeg_i}=P_{dcac_i}-P_{acdc_i}
+$$
+
+and a direction binary $\delta_i$ (1 when the DC bus feeds AC) keeps the two flows from being active together:
+
+$$
+P_{dcac_i}\le \delta_i\,\bar P_{dcac}\qquad P_{acdc_i}\le (1-\delta_i)\,\bar P_{acdc}
+$$
+
+**Legacy conversion (default).** Each direction has a scalar efficiency, `inverter_efficiency_dc_ac` $=\eta_{dcac}$ and `inverter_efficiency_ac_dc` $=\eta_{acdc}$:
+
+$$
+P_{hybrid_i}=\eta_{dcac}\,P_{dcac_i}-\frac{P_{acdc_i}}{\eta_{acdc}}
+$$
+
+**Optional piecewise-linear conversion.** When `inverter_power_curve_dc_ac` and/or `inverter_power_curve_ac_dc` is set, the scalar term of that direction is replaced by an exact piecewise-linear transfer function of its DC-side flow:
+
+$$
+P_{hybrid_i}=f_{dcac}(P_{dcac_i})-g_{acdc}(P_{acdc_i})
+$$
+
+where $f_{dcac}$ is the user's `[dc_input_power_w, ac_output_power_w]` curve and $g_{acdc}$ the `[dc_output_power_w, ac_input_power_w]` curve, each through $(0,0)$. A direction without a curve keeps its scalar term, so the two directions can be mixed. For a curve with breakpoints $(d_0,a_0)=(0,0),\dots,(d_K,a_K)$, segment $k$ has width $w_k=d_k-d_{k-1}$ and slope $s_k=(a_k-a_{k-1})/w_k$. With one fill fraction $u_k\in[0,1]$ per segment and $K-1$ binaries $b_k$,
+
+$$
+P_{dc}=\sum_{k=1}^{K} w_k u_k \qquad P_{ac}=\sum_{k=1}^{K} s_k w_k u_k \qquad u_{k+1}\le b_k\le u_k \qquad u_1\le\delta
+$$
+
+(for the AC-to-DC curve, $u_1\le 1-\delta$). The ordering constraints force segments to fill in sequence, so $P_{ac}$ is exactly $f(P_{dc})$ at every time step whether or not the curve is convex, and no separate on/off binary is needed because the existing direction binary $\delta$ gates the first segment. The last breakpoint $d_K$ is the supported power limit. $\bar P_{dcac}$ and $\bar P_{acdc}$ above are replaced, for a curved direction, by the AC-side limits `inverter_ac_output_max` and `inverter_ac_input_max` applied to $P_{ac}$.
+
+The relation is an equality on purpose. A one-sided form such as $P_{ac}\ge g(P_{dc})$ (a convex-hull "epigraph" relaxation) would let the optimizer draw more AC power than the DC power it delivers; when the import price is negative that surplus is paid for, so the solver would import AC power for money and dissipate it. The equality leaves no such freedom: every watt drawn from AC either reaches the DC bus or is not drawn.
+
+The curves describe only the inverter stage between the DC bus and AC. The battery state of charge equations above are unchanged: they still use $\eta_{dis}$ and $\eta_{ch}$ (`battery_discharge_efficiency` and `battery_charge_efficiency`), which are the batteries' own efficiencies and are never replaced by an inverter curve. Likewise `battery_charge_power_derating` still bounds $P_{stoNeg}$ as a power ceiling. Standby consumption is not part of either curve ($f(0)=g(0)=0$), and with several batteries the single inverter acts on their combined DC power.
+
 ### Inverter Stress Cost (Smooth Operation)
 
 There is the ability to apply a "Stress Cost" to your Hybrid Inverter. This feature adds a virtual cost to high-power operation, encouraging the system to run "low and slow" rather than jumping between 0% and 100% power for marginal gains.

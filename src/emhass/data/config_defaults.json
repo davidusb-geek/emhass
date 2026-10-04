@@ -126,6 +126,8 @@
   "inverter_ac_input_max": 5000,
   "inverter_efficiency_dc_ac": 1.0,
   "inverter_efficiency_ac_dc": 1.0,
+  "inverter_power_curve_dc_ac": [],
+  "inverter_power_curve_ac_dc": [],
   "inverter_stress_cost": 0.0,
   "inverter_stress_segments": 10,
   "compute_curtailment": false,

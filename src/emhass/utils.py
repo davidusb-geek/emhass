@@ -1771,6 +1771,7 @@ async def treat_runtimeparams(
         check_batt_charge_derating(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
+        check_inverter_power_curves(params["plant_conf"], logger)
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -3828,6 +3829,7 @@ async def build_params(
     check_batt_charge_derating(
         num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
     )
+    check_inverter_power_curves(params["plant_conf"], logger)
 
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
@@ -4479,6 +4481,134 @@ def _charge_derating_fault(table: list[list[float]]) -> str | None:
             )
         previous_soc, previous_max = soc_threshold, power_max
     return None
+
+
+def validate_inverter_power_curve(
+    curve: list, parameter_name: str, direction: str
+) -> list[tuple[float, float]]:
+    """
+    Validate one inverter power-transfer curve and return it as (dc_w, ac_w) tuples (#746).
+
+    The curve is a list of [dc_power_w, ac_power_w] points, DC side first, both in watts:
+
+    - ``direction="dc_ac"``: [dc_input_power_w, ac_output_power_w] (discharge/PV export side)
+    - ``direction="ac_dc"``: [dc_output_power_w, ac_input_power_w] (grid charging side)
+
+    Rules (each fault names the parameter, the row and the value): at least two
+    points; each point a pair of finite numbers; first point [0, 0] (standby is not
+    part of the curve); DC strictly increasing; AC strictly increasing; no energy
+    gain (``dc_ac``: ac <= dc, ``ac_dc``: ac >= dc).
+
+    :param curve: the configured curve
+    :type curve: list
+    :param parameter_name: name used in error messages
+    :type parameter_name: str
+    :param direction: "dc_ac" or "ac_dc"
+    :type direction: str
+    :raises ValueError: when the curve is unusable
+    :return: validated points as (dc_w, ac_w) tuples
+    :rtype: list[tuple[float, float]]
+    """
+    labels = {
+        "dc_ac": ("dc_input_power_w", "ac_output_power_w"),
+        "ac_dc": ("dc_output_power_w", "ac_input_power_w"),
+    }
+    dc_name, ac_name = labels[direction]
+    pair = f"[{dc_name}, {ac_name}]"
+    if not isinstance(curve, list | tuple) or len(curve) < 2:
+        raise ValueError(
+            f"{parameter_name}: must be a list of at least 2 {pair} points, got {curve!r}"
+        )
+    points: list[tuple[float, float]] = []
+    for position, row in enumerate(curve, start=1):
+        if not isinstance(row, list | tuple) or len(row) != 2:
+            raise ValueError(
+                f"{parameter_name}: point {position} is {row!r}, expected a {pair} pair"
+            )
+        for name, value in zip((dc_name, ac_name), row, strict=True):
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise ValueError(
+                    f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
+                )
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"{parameter_name}: point {position} has {name}={value!r}, "
+                    f"expected a finite number"
+                )
+            if value < 0:
+                raise ValueError(
+                    f"{parameter_name}: point {position} has {name}={value}, "
+                    f"expected a non-negative power in watts"
+                )
+        points.append((float(row[0]), float(row[1])))
+    if points[0] != (0.0, 0.0):
+        raise ValueError(
+            f"{parameter_name}: the first point must be [0, 0] (zero power in, zero power "
+            f"out; standby consumption is not part of the curve), got {list(points[0])}"
+        )
+    for position in range(2, len(points) + 1):
+        (dc_prev, ac_prev), (dc_now, ac_now) = points[position - 2], points[position - 1]
+        if dc_now <= dc_prev:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {dc_name}={dc_now}, which does not "
+                f"exceed the {dc_prev} before it: points must ascend strictly by {dc_name}"
+            )
+        if ac_now <= ac_prev:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={ac_now}, which does not "
+                f"exceed the {ac_prev} before it: {ac_name} must rise strictly with {dc_name}"
+            )
+        if direction == "dc_ac" and ac_now > dc_now:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={ac_now} above "
+                f"{dc_name}={dc_now}: the inverter cannot output more AC power than the DC "
+                f"power it receives"
+            )
+        if direction == "ac_dc" and ac_now < dc_now:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={ac_now} below "
+                f"{dc_name}={dc_now}: the inverter cannot deliver more DC power than the "
+                f"AC power it absorbs"
+            )
+    return points
+
+
+def check_inverter_power_curves(plant_conf: dict, logger: logging.Logger) -> None:
+    """
+    Validate the optional inverter power-transfer curves of a plant_conf (#746).
+
+    Absent or empty curves are the default and leave the scalar
+    ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
+    A configured curve is validated (see :func:`validate_inverter_power_curve`) and
+    requires ``inverter_is_hybrid``; any fault raises ValueError rather than being
+    ignored, because silently falling back to the scalar would change the physics.
+
+    :param plant_conf: the plant_conf dict
+    :type plant_conf: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :raises ValueError: when a configured curve is unusable
+    """
+    for parameter_name, direction, limit_name in (
+        ("inverter_power_curve_dc_ac", "dc_ac", "inverter_ac_output_max"),
+        ("inverter_power_curve_ac_dc", "ac_dc", "inverter_ac_input_max"),
+    ):
+        curve = plant_conf.get(parameter_name)
+        if not curve:
+            continue
+        if not plant_conf.get("inverter_is_hybrid", False):
+            raise ValueError(
+                f"{parameter_name}: requires inverter_is_hybrid=true; the curves model the "
+                f"hybrid inverter's DC bus <-> AC conversion"
+            )
+        points = validate_inverter_power_curve(curve, parameter_name, direction)
+        limit = plant_conf.get(limit_name)
+        if isinstance(limit, int | float) and points[-1][1] < limit:
+            logger.warning(
+                f"{parameter_name}: the curve ends at {points[-1][1]} W on the AC side, below "
+                f"{limit_name}={limit} W. The curve's last point is the supported power "
+                f"domain, so the optimizer will not plan beyond it."
+            )
 
 
 def check_batt_charge_derating(

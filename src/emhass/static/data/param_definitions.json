@@ -364,6 +364,20 @@
       "default_value": 1.0,
       "unit": "fraction"
     },
+    "inverter_power_curve_dc_ac": {
+      "friendly_name": "Hybrid inverter DC to AC power curve",
+      "Description": "Optional exact piecewise-linear DC-to-AC power-transfer curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [dc_input_power_w, ac_output_power_w] points in watts: DC bus power into the inverter (PV plus battery discharge) and the AC power it delivers. The first point must be [0, 0], both coordinates must rise strictly, and AC output cannot exceed DC input. Between points the curve is linear; the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Requires inverter_is_hybrid. Empty (the default) keeps the scalar efficiency. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected with an error.",
+      "input": "array.array.float",
+      "default_value": [],
+      "unit": "W"
+    },
+    "inverter_power_curve_ac_dc": {
+      "friendly_name": "Hybrid inverter AC to DC power curve",
+      "Description": "Optional exact piecewise-linear AC-to-DC power-transfer curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [dc_output_power_w, ac_input_power_w] points in watts: DC bus power delivered by the inverter (grid charging) and the AC power it absorbs. The first point must be [0, 0], both coordinates must rise strictly, and AC input cannot be below DC output. Between points the curve is linear; the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Requires inverter_is_hybrid. Empty (the default) keeps the scalar efficiency. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected with an error.",
+      "input": "array.array.float",
+      "default_value": [],
+      "unit": "W"
+    },
     "inverter_stress_cost": {
       "friendly_name": "Hybrid Inverter Stress Cost",
       "Description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
