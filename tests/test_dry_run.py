@@ -27,7 +27,13 @@ from emhass.command_line import (
     perfect_forecast_optim,
     set_input_data_dict,
 )
-from emhass.optimization import _BACKENDS, _DEVICE, _SOLVERS, _coordinated_config_problem
+from emhass.optimization import (
+    _BACKENDS,
+    _DEVICE,
+    _LIMIT_NAME,
+    _SOLVERS,
+    _coordinated_config_problem,
+)
 from emhass.utils import (
     RuntimeParamError,
     build_config,
@@ -573,6 +579,94 @@ def test_the_published_schema_is_the_check():
     assert group["additionalProperties"] is False
     assert group["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
     assert group["properties"]["solver"]["enum"] == list(_SOLVERS)
+    limit = props["group_limits"]["items"]
+    assert set(limit["properties"]) == {"name", "devices", "max_power", "min_power"}
+    assert limit["additionalProperties"] is False
+    assert limit["properties"]["name"]["pattern"] == _LIMIT_NAME.pattern
+    assert limit["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
+    assert limit["properties"]["min_power"]["maximum"] == 0
+
+
+@pytest.mark.parametrize(
+    "limits, problem",
+    [
+        ({"name": "garage"}, "must be a list"),
+        (
+            [{"name": "garage", "devices": ["hvac"], "max_power": 1, "rogue": 1}],
+            "name, devices, max_power and min_power only",
+        ),
+        ([{"name": "Garage!", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
+        ([{"name": "inverter", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
+        ([{"name": "__import__('os')", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
+        (
+            [{"name": "g", "devices": ["hvac; rm -rf /"], "max_power": 1}],
+            "non-empty list of device names",
+        ),
+        ([{"name": "g", "devices": []}], "non-empty list of device names"),
+        ([{"name": "g", "devices": ["hvac"]}], "needs max_power, min_power or both"),
+        (
+            [{"name": "g", "devices": ["hvac"], "max_power": "3000"}],
+            "max_power must be a finite number",
+        ),
+        (
+            [{"name": "g", "devices": ["hvac"], "max_power": float("inf")}],
+            "max_power must be a finite number",
+        ),
+        (
+            [{"name": "g", "devices": ["hvac"], "max_power": True}],
+            "max_power must be a finite number",
+        ),
+        (
+            [{"name": "g", "devices": ["hvac"], "min_power": 500}],
+            "min_power must be a finite number of W, <= 0",
+        ),
+        (
+            [
+                {"name": "a", "devices": ["hvac"], "max_power": 1},
+                {"name": "b", "devices": ["hvac"], "max_power": 1},
+            ],
+            "another limit already has",
+        ),
+        (
+            [
+                {"name": "a", "devices": ["hvac"], "max_power": 1},
+                {"name": "a", "devices": ["battery"], "max_power": 1},
+            ],
+            "lower-case name",
+        ),
+        (
+            [{"name": f"g{i}", "devices": [f"deferrable{i}"], "max_power": 1} for i in range(65)],
+            "at most 64 limits",
+        ),
+    ],
+)
+def test_group_limits_are_checked_before_anything_reads_them(limits, problem):
+    """`group_limits` can arrive with a request too: refused by shape and type,
+    by name, before the coordinator sees it."""
+    reason = _coordinated_config_problem(
+        {"optimization_backend": "dantzig_wolfe", "group_limits": limits}
+    )
+    assert reason and problem in reason
+
+
+def test_valid_group_limits_pass():
+    assert (
+        _coordinated_config_problem(
+            {
+                "optimization_backend": "dantzig_wolfe",
+                "group_limits": [
+                    {
+                        "name": "garage",
+                        "devices": ["water_heater", "hvac"],
+                        "max_power": 3000,
+                        "min_power": 0,
+                    },
+                    {"name": "ev_panel", "devices": ["deferrable1"], "max_power": 7400},
+                ],
+            }
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])

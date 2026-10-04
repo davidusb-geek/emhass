@@ -282,6 +282,61 @@
             "title": "Participants",
             "description": "Optional, with a coordinator backend: groups of devices, each solved together by one solver. Example: [{\"devices\": [\"battery\"], \"solver\": \"home_energy_optimizer\"}, {\"devices\": [\"deferrable0\", \"deferrable1\"], \"solver\": \"emhass\"}]. Devices are battery and deferrable0, deferrable1, ...; solvers are emhass (EMHASS's own model) and home_energy_optimizer. Left empty, every device is its own participant, solved by EMHASS."
           },
+          "group_limits": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "devices"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                  "not": {
+                    "const": "inverter"
+                  }
+                },
+                "devices": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(battery|water_heater|hvac|deferrable[0-9]{1,3})$"
+                  }
+                },
+                "max_power": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "min_power": {
+                  "type": "number",
+                  "maximum": 0
+                }
+              },
+              "anyOf": [
+                {
+                  "required": [
+                    "max_power"
+                  ]
+                },
+                {
+                  "required": [
+                    "min_power"
+                  ]
+                }
+              ]
+            },
+            "title": "Group limits",
+            "description": "Optional, with a coordinator backend: limits on what several devices draw together, as a shared breaker or sub-panel does. Example: [{\"name\": \"garage\", \"devices\": [\"water_heater\", \"hvac\"], \"max_power\": 3000}]. max_power (W) caps their total draw; min_power (W, at most 0) caps what they may push back to the house (0: none). Devices are those of participants; an EMHASS participant group must be wholly inside a limit or wholly outside it. The coordinator prices each limit (fed_local_price_<name>); the default solver does not hold it - for deferrable loads alone, use deferrable_load_groups, which it does."
+          },
           "sensor_power_photovoltaics": {
             "type": "string",
             "default": "sensor.power_photovoltaics",

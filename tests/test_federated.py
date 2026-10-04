@@ -228,13 +228,18 @@ def test_unsupported_option_falls_back_to_cvxpy():
     assert any("set_nocharge_from_grid" in str(c) for c in warning.call_args_list)
 
 
-def _hybrid_ready() -> bool:
-    """home-energy-optimizer plans a hybrid inverter from 0.2.5."""
+def _hep_at_least(*version: int) -> bool:
+    """Whether home-energy-optimizer is installed, at `version` or later."""
     try:
         from home_energy_optimizer import __version__
     except ImportError:
         return False
-    return tuple(int(x) for x in __version__.split(".")[:3]) >= (0, 2, 5)
+    return tuple(int(x) for x in __version__.split(".")[:3]) >= version
+
+
+def _hybrid_ready() -> bool:
+    """home-energy-optimizer plans a hybrid inverter from 0.2.5."""
+    return _hep_at_least(0, 2, 5)
 
 
 @pytest.mark.skipif(not _hybrid_ready(), reason="needs home-energy-optimizer >= 0.2.5")
@@ -277,6 +282,146 @@ def test_a_hybrid_inverter_plans_as_the_milp_does(rating_w):
     # the AC bus balances: the inverter and the grid supply the load and the loads
     supplied = res["P_hybrid_inverter"] + res["P_grid"]
     used = res["P_Load"] + res["P_deferrable0"] + res["P_deferrable1"]
+    assert np.allclose(supplied, used, atol=1e-3)
+
+
+LOAD_GROUP = [{"names": ["deferrable0", "deferrable1"], "max_power": 3000}]
+
+
+@pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
+def test_a_load_group_inside_one_participant_plans_as_the_milp_does():
+    """deferrable_load_groups with both loads in one participant group: that
+    participant's own EMHASS model holds the 3 kW budget, and the plan is the
+    default MILP's."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    site = (rh, dict(oc, deferrable_load_groups=LOAD_GROUP), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    opt, res = _plan(
+        *site,
+        optimization_backend="dantzig_wolfe",
+        participants=[{"devices": ["deferrable0", "deferrable1"], "solver": "emhass"}],
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3000 + 1e-3
+    assert _bill(res) == pytest.approx(_bill(milp), abs=0.01)
+
+
+@pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
+def test_a_load_group_across_participants_is_held_and_priced():
+    """The same budget with each load its own participant: the coordinator
+    holds it as a group limit, the loads still run their hours within 3 kW,
+    the plan is within a few cents of the MILP's, and the group's own price
+    is a column."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    site = (rh, dict(oc, deferrable_load_groups=LOAD_GROUP), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    opt, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3000 + 1e-3
+    for k, (watts, hours) in enumerate(((3000.0, 4), (750.0, 2))):
+        assert res[f"P_deferrable{k}"].sum() * 0.5 == pytest.approx(watts * hours, rel=1e-6)
+    assert _bill(res) <= _bill(milp) + 0.05
+    assert "fed_local_price_deferrable0+deferrable1" in res.columns
+
+
+@pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
+def test_group_limits_hold_and_are_priced():
+    """group_limits over the two loads (each its own participant): their total
+    stays within 3.5 kW, the limit's price is fed_local_price_<name>, and a
+    limit that splits a participant group falls back, saying so."""
+    site = _site()
+    opt, res = _plan(
+        *site,
+        optimization_backend="dantzig_wolfe",
+        group_limits=[
+            {"name": "loads", "devices": ["deferrable0", "deferrable1"], "max_power": 3500}
+        ],
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3500 + 1e-3
+    assert "fed_local_price_loads" in res.columns
+    with mock.patch.object(logger, "warning") as warning:
+        _, res = _plan(
+            *site,
+            optimization_backend="dantzig_wolfe",
+            participants=[{"devices": ["deferrable0", "deferrable1"], "solver": "emhass"}],
+            group_limits=[{"name": "half", "devices": ["deferrable0"], "max_power": 1000}],
+        )
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("splits the participant").all()
+    # ...and says the default solver does not hold group_limits
+    assert any("not held by the default solver" in str(c) for c in warning.call_args_list)
+
+
+@pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
+def test_four_ders_behind_an_inverter_and_a_shared_breaker():
+    """The README's four-DER house: the battery (EMHASS's model) and the PV
+    behind a 4 kW hybrid inverter, the two loads in one EMHASS participant
+    with a 3 kW budget its own model holds, and a tank and a heat pump
+    (home-energy-optimizer's models) on a shared 3.5 kW breaker. Every limit
+    holds, each sub-meter's price is a column, and every player has a share."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    n = len(data)
+    h = np.arange(n) * rh["optimization_time_step"].seconds / 3600
+    data = data.copy()
+    data["outdoor_temperature_forecast"] = 10 + 5 * np.sin((h - 9) / 24 * 2 * np.pi)
+    oc = dict(
+        oc,
+        set_nodischarge_to_grid=False,
+        deferrable_load_groups=[{"names": ["deferrable0", "deferrable1"], "max_power": 3000}],
+    )
+    pc = dict(
+        pc,
+        inverter_is_hybrid=True,
+        inverter_ac_output_max=4000,
+        inverter_ac_input_max=4000,
+        inverter_efficiency_dc_ac=0.97,
+        inverter_efficiency_ac_dc=0.97,
+        compute_curtailment=True,
+    )
+    site = (rh, oc, pc, data, pv * 1.6, load, buy, sell)
+    opt, res = _plan(
+        *site,
+        optimization_backend="dantzig_wolfe",
+        participants=[
+            {"devices": ["battery"], "solver": "emhass"},
+            {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
+            {
+                "devices": ["water_heater"],
+                "solver": "home_energy_optimizer",
+                "config": {"power_kw": 3.0, "liters": 180.0, "t_comfort": 55.0, "n_duty_levels": 2},
+            },
+            {
+                "devices": ["hvac"],
+                "solver": "home_energy_optimizer",
+                "config": {
+                    "power_kw": 1.5,
+                    "cop": 3.5,
+                    "t_comfort_low": 21.0,
+                    "t_comfort_high": 25.0,
+                },
+            },
+        ],
+        group_limits=[{"name": "garage", "devices": ["water_heater", "hvac"], "max_power": 3500}],
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert res["P_hybrid_inverter"].max() <= 4000 + 1e-3
+    assert (res["P_water_heater"] + res["P_hvac"]).max() <= 3500 + 1e-3
+    assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3000 + 1e-3
+    assert {"fed_local_price_inverter", "fed_local_price_garage"} <= set(res.columns)
+    assert {
+        f"fed_share_{p}"
+        for p in ("solar", "battery", "water_heater", "hvac", "deferrable0+deferrable1")
+    } <= set(res.columns)
+    # the AC bus balances: the inverter and the grid supply everything on it
+    supplied = res["P_hybrid_inverter"] + res["P_grid"]
+    used = (
+        res["P_Load"]
+        + res["P_deferrable0"]
+        + res["P_deferrable1"]
+        + res["P_water_heater"]
+        + res["P_hvac"]
+    )
     assert np.allclose(supplied, used, atol=1e-3)
 
 

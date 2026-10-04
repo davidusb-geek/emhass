@@ -36,6 +36,23 @@ A participant is one device, or a group of devices solved together by one solver
 
 A battery planned by `home_energy_optimizer` values the energy it leaves at the end at the average import price, instead of being held to `soc_final`.
 
+## Shared limits
+
+Devices that share a breaker or a sub-panel can be held to a limit on their total draw. There are two ways to say it:
+
+- **`deferrable_load_groups`**, EMHASS's own key, for deferrable loads (`max_power` and `mutual_exclusion`, as without the coordinator). When all of a group's loads are in one participant group solved by EMHASS, that participant's own model holds it, exactly as the default solver would. Otherwise the coordinator holds its `max_power`; `mutual_exclusion` across participants falls back.
+- **`group_limits`**, for any devices, including those EMHASS does not model (`water_heater`, `hvac`):
+
+```json
+"group_limits": [
+  {"name": "garage", "devices": ["water_heater", "hvac"], "max_power": 3500, "min_power": 0}
+]
+```
+
+`max_power` (W) caps the devices' total draw; `min_power` (W, at most 0) caps what they may push back to the house, so 0 means no backfeed. Each needs a `name` (lower case, digits and `_`), and a device is under one limit at most. The coordinator sees a participant group only as a whole, so an EMHASS participant group must be wholly inside a limit or wholly outside it. The default solver does not hold `group_limits`; when the coordinator falls back, the log says so. For deferrable loads alone, `deferrable_load_groups` is held either way. Shared limits need home-energy-optimizer 0.2.6 or later.
+
+The coordinator holds each limit as a balance of its own, so the devices behind it are priced at the limit's own price (`fed_local_price_<name>`): the meter's price while the limit has headroom, more while it binds. A hybrid inverter is the same kind of limit, with losses and the PV on its bus (`fed_local_price_inverter`).
+
 ## What falls back
 
 Some options tie a device to PV or to another device, so they cannot be split per device yet. With any of them, EMHASS runs its default MILP and logs one line naming the option:
@@ -43,7 +60,8 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 - `costfun: self-consumption`, `set_total_pv_sell`
 - `set_nocharge_from_grid`, `set_battery_first_priority`, more than one battery
 - a hybrid inverter with `set_nodischarge_to_grid`, `inverter_stress_cost`, an inverter rated only by `pv_inverter_model` name, or the battery in a participant group with other devices
-- `heat_topology`, shared thermal tanks, `deferrable_load_groups`
+- `heat_topology`, shared thermal tanks
+- `deferrable_load_groups` with `mutual_exclusion` across participants, and a limit that splits an EMHASS participant group
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
 
@@ -64,6 +82,7 @@ The usual `opt_res` columns, plus:
 | `fed_gap` | the plan's cost minus that bound |
 | `fed_stop_reason`, `fed_iterations` | why the coordinator stopped (`converged`, `stalled`, `no new proposals`, `iteration cap`) and after how many rounds |
 | `fed_share_<player>` | that player's share of the saving over the horizon (currency), the same in every row; one column for `solar` and one per participant |
+| `fed_local_price_<name>` | the price of one more kWh behind a limit the coordinator holds, per timestep (currency/kWh): `inverter` for a hybrid inverter, a `group_limits` name, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
 

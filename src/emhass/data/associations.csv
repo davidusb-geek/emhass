@@ -46,6 +46,7 @@ params_secrets,victoriametrics_password,victoriametrics_password
 optim_conf,costfun,costfun
 optim_conf,optimization_backend,optimization_backend
 optim_conf,participants,participants
+optim_conf,group_limits,group_limits
 optim_conf,logging_level,logging_level
 optim_conf,set_use_pv,set_use_pv
 optim_conf,set_use_adjusted_pv,set_use_adjusted_pv
