@@ -2852,6 +2852,53 @@ class Optimization:
         # -p_grid_neg <= max_to_grid[t] * (1 - D[t])
         constraints.append(-p_grid_neg <= cp.multiply(max_power_to_grid_arr, (1 - D)))
 
+    def _inverter_power_curve(self, parameter_name: str, direction: str):
+        """Return the validated (dc_points, ac_points) of one inverter curve, or None.
+
+        None (empty/absent parameter) means the scalar efficiency of that direction
+        applies. A malformed curve raises ValueError naming the parameter: it is a
+        physical model, so silently falling back to the scalar would hide the error.
+        """
+        raw = self.plant_conf.get(parameter_name)
+        if not raw:
+            return None
+        points = utils.validate_inverter_power_curve(raw, parameter_name, direction)
+        return [p[0] for p in points], [p[1] for p in points]
+
+    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
+        """Exact piecewise-linear transfer ac = f(dc) by the incremental method.
+
+        Segment k (k = 0..K-1) has width w_k = dc_{k+1} - dc_k and slope
+        s_k = (ac_{k+1} - ac_k) / w_k. With fill fractions u_k in [0, 1]:
+
+            dc = sum_k w_k u_k          ac = sum_k s_k w_k u_k
+
+        and K-1 binaries b_k force the segments to fill in order
+        (u_{k+1} <= b_k <= u_k), so ac is exactly f(dc) on every timestep, convex
+        or not. ``gate`` (the existing is_dc_sourcing direction binary, or its
+        complement) bounds the first segment, so no extra on/off binary is needed
+        and the direction cannot be active together with the opposite one. The
+        curve's last DC point is the supported power domain: no extrapolation.
+        Returns the AC-side power expression.
+        """
+        dc_pts, ac_pts = curve
+        n = self.num_timesteps
+        n_seg = len(dc_pts) - 1
+        widths = [dc_pts[k + 1] - dc_pts[k] for k in range(n_seg)]
+        slopes = [(ac_pts[k + 1] - ac_pts[k]) / widths[k] for k in range(n_seg)]
+        u = [cp.Variable(n, nonneg=True, name=f"{name}_u{k}") for k in range(n_seg)]
+        b = [cp.Variable(n, boolean=True, name=f"{name}_b{k}") for k in range(n_seg - 1)]
+        for u_k in u:
+            constraints.append(u_k <= 1)
+        constraints.append(dc_var == sum(w * u_k for w, u_k in zip(widths, u, strict=True)))
+        constraints.append(u[0] <= gate)
+        for k in range(n_seg - 1):
+            constraints.append(u[k + 1] <= b[k])
+            constraints.append(b[k] <= u[k])
+        self.vars[f"{name}_u"] = u
+        self.vars[f"{name}_b"] = b
+        return sum((s * w) * u_k for s, w, u_k in zip(slopes, widths, u, strict=True))
+
     def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
         """Add constraints specific to hybrid inverters (Vectorized)."""
         if not self.plant_conf["inverter_is_hybrid"]:
@@ -2935,15 +2982,43 @@ class Optimization:
 
         constraints.append(e_dc_balance == 0)
 
+        # Optional exact piecewise-linear AC<->DC transfer curves (issue #746).
+        # An empty/absent curve keeps the scalar efficiency of that direction, so
+        # with both curves absent the expressions and constraints below are exactly
+        # the legacy ones. A curve is an EQUALITY between the DC-side variable
+        # (p_dc_ac / p_ac_dc) and the AC-side power: never an inequality, which
+        # would let the solver import extra AC for free at negative prices.
+        curve_dc_ac = self._inverter_power_curve("inverter_power_curve_dc_ac", "dc_ac")
+        curve_ac_dc = self._inverter_power_curve("inverter_power_curve_ac_dc", "ac_dc")
+        if curve_dc_ac is None:
+            ac_out = p_dc_ac * eff_dc_ac
+        else:
+            ac_out = self._add_inverter_pwl_transfer(
+                constraints, "inv_curve_dc_ac", p_dc_ac, curve_dc_ac, is_dc_sourcing
+            )
+        if curve_ac_dc is None:
+            ac_in = p_ac_dc * (1.0 / eff_ac_dc)
+        else:
+            ac_in = self._add_inverter_pwl_transfer(
+                constraints, "inv_curve_ac_dc", p_ac_dc, curve_ac_dc, 1 - is_dc_sourcing
+            )
+
         # AC Bus Balance
         # p_hybrid == converted_DC_to_AC - converted_AC_to_DC
-        constraints.append(
-            p_hybrid_inverter == (p_dc_ac * eff_dc_ac) - (p_ac_dc * (1.0 / eff_ac_dc))
-        )
+        constraints.append(p_hybrid_inverter == ac_out - ac_in)
 
-        # Enforce Binary Logic (Cannot source and sink DC simultaneously)
-        constraints.append(p_ac_dc <= (1 - is_dc_sourcing) * p_ac_dc_max)
-        constraints.append(p_dc_ac <= is_dc_sourcing * p_dc_ac_max)
+        # Enforce Binary Logic (Cannot source and sink DC simultaneously).
+        # A curved direction is limited on its AC side (the curve's own DC range
+        # is enforced by the transfer segments); a scalar direction keeps the
+        # legacy DC-side bound.
+        if curve_ac_dc is None:
+            constraints.append(p_ac_dc <= (1 - is_dc_sourcing) * p_ac_dc_max)
+        else:
+            constraints.append(ac_in <= (1 - is_dc_sourcing) * p_nom_inverter_input)
+        if curve_dc_ac is None:
+            constraints.append(p_dc_ac <= is_dc_sourcing * p_dc_ac_max)
+        else:
+            constraints.append(ac_out <= is_dc_sourcing * p_nom_inverter_output)
 
         # Stress Cost
         if inv_stress_conf and inv_stress_conf["active"]:
@@ -6259,7 +6334,15 @@ class Optimization:
             # state must keep pointing at the cached problem's objects, or later
             # cache-hit runs would read variables the solver no longer touches
             # (issue #1048).
-            hybrid_var_keys = ("p_dc_ac", "p_ac_dc", "is_dc_sourcing")
+            hybrid_var_keys = (
+                "p_dc_ac",
+                "p_ac_dc",
+                "is_dc_sourcing",
+                "inv_curve_dc_ac_u",
+                "inv_curve_dc_ac_b",
+                "inv_curve_ac_dc_u",
+                "inv_curve_ac_dc_b",
+            )
             original_hybrid_vars = {
                 key: self.vars[key] for key in hybrid_var_keys if key in self.vars
             }
