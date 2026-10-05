@@ -47,7 +47,7 @@ ac_dc = [[0, 0]] + [[w, round(w / eta, 1)] for w, eta in charge]  # AC in = DC /
 
 Expected: `dc_ac` is `[[0, 0], [100, 60.0], [250, 187.5], [800, 680.0], [2500, 2250.0], [5000, 4650.0]]` and `ac_dc` is `[[0, 0], [100, 181.8], [250, 347.2], [800, 952.4], [2500, 2777.8], [4000, 4347.8]]`.
 
-Prefer measured data at the powers you actually use, and few points. Every segment of a curved direction after the first adds one binary variable per time step to the optimization, so three to five segments per direction are usually plenty.
+Prefer measured data at the powers you actually use, and few points. Every segment of a curved direction after the first adds one binary variable per time step to the optimization (a 10-point curve, 9 segments, adds 8 per step: 384 over 48 steps, 2304 over 288), so three to five segments per direction are usually plenty.
 
 ## Step 4: Configure and validate
 
@@ -63,7 +63,7 @@ plant_conf:
   inverter_power_curve_ac_dc: [[0, 0], [100, 181.8], [250, 347.2], [800, 952.4], [2500, 2777.8], [4000, 4347.8]]
 ```
 
-A curve is validated when the configuration is built, and an invalid one stops the run with an error naming the parameter instead of silently reverting to the scalar. Common faults and what they mean:
+A curve is validated whenever it is saved or passed at runtime, and an invalid one is rejected with an error naming the parameter: saving in the configuration page fails with the reason shown and keeps the previous configuration, and a runtime request fails. Only a curve that is already stored in a bad state (for example in a hand-edited `config.json`) is cleared at startup, with an error in the log, so the page stays reachable and the scalar efficiency applies until you fix it. Common faults and what they mean:
 
 | Message contains | Cause |
 |---|---|
@@ -74,7 +74,7 @@ A curve is validated when the configuration is built, and an invalid one stops t
 | `rise strictly` | `ac_power_w` repeats or falls while DC power rises |
 | `more AC power than the DC` | a `dc_ac` point delivers more AC than the DC it receives (a gain) |
 | `more DC power than the AC` | an `ac_dc` point delivers more DC than the AC it absorbs |
-| `requires inverter_is_hybrid` | the curves model the hybrid inverter only |
+| `requires inverter_is_hybrid` | a runtime request passed a curve while `inverter_is_hybrid` is false; a stored curve is kept but ignored in that case |
 
 Expected: EMHASS starts with no error. A warning that the curve ends below `inverter_ac_output_max` or `inverter_ac_input_max` means the last point is a lower power limit than your inverter rating (see the caveat on range below).
 
