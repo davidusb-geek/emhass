@@ -6,11 +6,13 @@ In EMHASS we have 4 forecasts to deal with:
 
 - PV power production forecast (internally based on the weather forecast and the characteristics of your PV plant). This is given in Watts.
 
-- Load power forecast: how much power your house will demand in the next 24 hours. This is given in Watts.
+- Load power forecast: how much power your house will demand over the configured forecast horizon. This is given in Watts.
 
-- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in EUR/kWh.
+- Load cost forecast: the price of the energy from the grid over the configured forecast horizon. This is given in EUR/kWh.
 
-- PV production selling price forecast: at what price are you selling your excess PV production in the next 24 hours. This is given in EUR/kWh.
+- PV production selling price forecast: at what price are you selling your excess PV production over the configured forecast horizon. This is given in EUR/kWh.
+
+The forecast horizon is `delta_forecast_daily` local calendar days (one by default), so across a daylight saving transition it spans 23 or 25 hours rather than a fixed 24. See the [`delta_forecast_daily` configuration entry](config.md) for the full contract.
 
 The sensor containing the load data should be specified in the parameter `sensor_power_load_no_var_loads` in the configuration file. As we want to optimize household energy, we need to forecast the load power consumption. The default method for this is a naive approach using 1-day persistence. The load data variable should not contain the data from the deferrable loads themselves. For example, let's say that you set your deferrable load to be the washing machine. The variables that you should enter in EMHASS will be: `sensor_power_load_no_var_loads: 'sensor.power_load_no_var_loads'` and `sensor.power_load_no_var_loads = sensor.power_load - sensor.power_washing_machine`. This is supposing that the overall load of your house is contained in the variable: `sensor.power_load`. The sensor `sensor.power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
 
