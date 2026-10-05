@@ -1,8 +1,10 @@
 import bz2
 import copy
 import logging
+import math
 import os
 import pickle
+import re
 import time
 from math import ceil, isfinite
 
@@ -93,6 +95,144 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 # whenever that is possible, while a contradictory target relaxes to the closest
 # reachable SoC instead of returning infeasible.
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+
+
+def _coordinated_plan(opt, *args, **kwargs):
+    """Plan with the coordinator `optimization_backend` names.
+
+    The coordinator comes from the optional home-energy-optimizer package
+    (pip install emhass[federated]).
+
+    Args:
+        opt: The calling Optimization (its configuration, logger and time step).
+        *args, **kwargs: perform_optimization's own arguments, passed through.
+
+    Returns:
+        tuple[pandas.DataFrame | None, str | None]: The plan, with the columns
+        perform_optimization returns plus the coordinator's own (fed_*), and
+        None; or None and why not, when the package is missing or cannot plan
+        this configuration, so the caller runs the default cvxpy solver.
+    """
+    reason = _coordinated_config_problem(opt.optim_conf)
+    if reason:
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    try:
+        from home_energy_optimizer.integrations.emhass import optimize
+    except ImportError:
+        reason = "the optional extra is not installed (pip install emhass[federated])"
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    # Whatever happens in the coordinator, a plan is published: any failure
+    # is logged and the default solver plans instead, live run or dry run.
+    opt.fed_fallback_reason = None
+    try:
+        res = optimize(opt, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - the fallback is the point
+        reason = f"the coordinator raised {type(exc).__name__}: {exc}"
+        opt.logger.error(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    if res is None:
+        # The package logged why; it also says so here (home-energy-optimizer >= 0.2.4).
+        reason = getattr(opt, "fed_fallback_reason", None)
+        return None, str(reason) if reason else "the coordinator cannot plan this configuration"
+    return res, None
+
+
+def _warn_unheld_limits(opt) -> None:
+    """On a fallback, say what of `electrical_topology` the default solver
+    does not hold: every node and constraint but the hybrid inverter EMHASS's
+    own keys describe (utils.electrical_topology_inverter). For deferrable
+    loads alone, deferrable_load_groups it does hold."""
+    topology = opt.optim_conf.get("electrical_topology")
+    if not isinstance(topology, dict):
+        return
+    nodes = topology.get("nodes") or []
+    held = utils.electrical_topology_inverter(topology)
+    if topology.get("constraints") or len(nodes) > (1 if held else 0):
+        opt.logger.warning(
+            "optimization_backend: the default solver does not hold electrical_topology's limits "
+            "(beyond a hybrid inverter EMHASS's own model can hold); "
+            "for deferrable loads alone, deferrable_load_groups is"
+        )
+
+
+def _with_backend(res, requested: str, fallback_reason: str | None):
+    """Mark which backend made the plan in `res`: the one requested, or cvxpy
+    and why. Only with a coordinator backend requested, so a default
+    configuration's results keep exactly their columns."""
+    res["backend_requested"] = requested
+    res["backend_used"] = "cvxpy" if fallback_reason else requested
+    res["backend_fallback_reason"] = fallback_reason or ""
+    return res
+
+
+_BACKENDS = ("cvxpy", "dantzig_wolfe")
+_SOLVERS = ("emhass", "home_energy_optimizer")
+_DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
+
+
+def _coordinated_config_problem(optim_conf: dict) -> str | None:
+    """Why `optimization_backend` and `participants` cannot be used as given,
+    or None if they can.
+
+    Both may come from a request as well as from the configuration, so they
+    are checked for shape and type before anything reads them: a known
+    backend; a list of participant groups, each with a non-empty list of
+    known device names, a known solver, and a `config` of plain scalars
+    (numbers, booleans, short strings) under string keys. `electrical_topology`,
+    if given, likewise (utils.electrical_topology_problem).
+
+    Args:
+        optim_conf: The optimisation configuration.
+
+    Returns:
+        str | None: The problem, for the log; None when it can be used.
+    """
+    backend = optim_conf.get("optimization_backend")
+    if backend == "admm":
+        return "admm is planned for a later release, not available yet"
+    if backend not in _BACKENDS:
+        return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
+    if optim_conf.get("electrical_topology") is not None:
+        problem = utils.electrical_topology_problem(optim_conf["electrical_topology"])
+        if problem:
+            return problem
+    spec = optim_conf.get("participants")
+    if spec is None:
+        return None
+    if not isinstance(spec, list) or len(spec) > 64:
+        return "participants must be a list of at most 64 groups"
+    seen: set[str] = set()
+    for i, group in enumerate(spec):
+        if not isinstance(group, dict) or set(group) - {"devices", "solver", "config"}:
+            return f"participants[{i}] must be an object with devices, solver and config only"
+        devices = group.get("devices")
+        if (
+            not isinstance(devices, list)
+            or not devices
+            or not all(isinstance(d, str) and _DEVICE.match(d) for d in devices)
+        ):
+            return f"participants[{i}].devices must be a non-empty list of device names"
+        if seen & set(devices):
+            return f"participants[{i}] names a device another group already has"
+        seen |= set(devices)
+        if group.get("solver", "emhass") not in _SOLVERS:
+            return f"participants[{i}].solver must be one of {', '.join(_SOLVERS)}"
+        config = group.get("config", {})
+        if not isinstance(config, dict) or len(config) > 64:
+            return f"participants[{i}].config must be an object"
+        for key, value in config.items():
+            scalar = isinstance(value, (bool, int, float)) or (
+                isinstance(value, str) and len(value) <= 64
+            )
+            if (
+                not isinstance(key, str)
+                or not scalar
+                or (isinstance(value, float) and not math.isfinite(value))
+            ):
+                return f"participants[{i}].config[{key!r}] must be a finite number, a boolean or a short string"
+    return None
 
 
 class Optimization:
@@ -5151,6 +5291,20 @@ class Optimization:
         this signature already accepts the list shape today.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        # Opt-in coordinator backend (optional extra): the devices are planned as separate
+        # participants. None means it cannot plan this configuration, so cvxpy runs below.
+        backend = self.optim_conf.get("optimization_backend", "cvxpy")
+        fallback_reason = None
+        if backend not in (None, "cvxpy"):
+            inputs = {
+                k: v
+                for k, v in locals().items()
+                if k not in ("self", "_build_start_perf", "backend", "fallback_reason")
+            }
+            res, fallback_reason = _coordinated_plan(self, **inputs)
+            if res is not None:
+                return _with_backend(res, backend, None)
+            _warn_unheld_limits(self)
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
@@ -6348,6 +6502,8 @@ class Optimization:
             # explicitely set the status column so downstream functions (like get_injection_dict)
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
+            if fallback_reason:
+                _with_backend(opt_tp, backend, fallback_reason)
 
             if stage_times is not None:
                 stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -6378,6 +6534,8 @@ class Optimization:
             debug,
             q_inputs=q_inputs,
         )
+        if fallback_reason:
+            _with_backend(results_df, backend, fallback_reason)
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
         return results_df

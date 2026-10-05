@@ -30,6 +30,7 @@ from emhass.command_line import (
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
+    is_dry_run,
     naive_mpc_optim,
     perfect_forecast_optim,
     publish_data,
@@ -575,6 +576,12 @@ async def _handle_action_dispatch(
         action_str = f" >> Performing {action_name}..."
         logger.info(action_str)
         opt_res = await optim_actions[action_name](input_data_dict, logger)
+        if is_dry_run(input_data_dict):
+            # Nothing was written; the plan goes back in the response, as the
+            # same records /api/v1/plan serves.
+            if opt_res is None or isinstance(opt_res, bool):  # the wrappers return False on failure
+                return f"EMHASS >> Action {action_name} (dry run) failed... \n", 400
+            return {"dry_run": True, "plan": plan_store.serialize(opt_res)}, 200
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return f"EMHASS >> Action {action_name} executed... \n", 200
@@ -817,8 +824,12 @@ async def action_call(action_name: str):
 
     # Handle Continual Publish Threading
     rh_handed_to_thread = False
-    if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
-        "continual_publish", False
+    # A dry run never starts it: the thread keeps the inputs it is started
+    # with for the life of the process, and those must be a live run's.
+    if (
+        len(continual_publish_thread) == 0
+        and not is_dry_run(input_data_dict)
+        and input_data_dict["retrieve_hass_conf"].get("continual_publish", False)
     ):
         rh_handed_to_thread = True
         continual_loop = app.add_background_task(

@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import pathlib
+import re
 import shutil
 import time
 from collections.abc import Sequence
@@ -522,6 +523,198 @@ def calculate_surface_solar_gain(
     dt_hours = optimization_time_step_minutes / 60.0
     # W/m² * m² * factor / 1000 (kW per W) * hours = kWh
     return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
+
+
+_TOPOLOGY_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_TOPOLOGY_DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
+_TOPOLOGY_NODE_KEYS = {
+    "id",
+    "parent",
+    "type",
+    "max_import",
+    "max_export",
+    "efficiency_from_parent",
+    "efficiency_to_parent",
+}
+_TOPOLOGY_TYPES = ("hybrid_inverter", "inverter", "converter", "panel", "breaker", "meter")
+_TOPOLOGY_ROOT = "grid"
+
+
+def _finite_number(value) -> bool:
+    """A real number (not a boolean), finite."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def electrical_topology_problem(topology) -> str | None:
+    """Why `electrical_topology` cannot be used as given, or None.
+
+    It may arrive with a request as well as from the configuration, so its
+    shape and types are checked before anything reads it:
+
+    - `nodes`: at most 64 objects with `id` (lower case, digits and `_`, at
+      most 32; not `grid`, the main meter), `parent` (`grid` or another
+      node's id; default `grid`), `type` (one of hybrid_inverter, inverter,
+      converter, panel, breaker, meter), `max_import` / `max_export` (W, >= 0)
+      and `efficiency_from_parent` / `efficiency_to_parent` (in (0, 1]). The
+      parents must form a tree.
+    - `devices`: device name (battery, water_heater, hvac, deferrableN) or
+      `pv` -> `grid` or a node's id.
+    - `constraints`: at most 64 objects with `name`, `devices` (a non-empty
+      list of device names) and `max_import` and/or `max_export` (W, >= 0).
+
+    Args:
+        topology: The `electrical_topology` value.
+
+    Returns:
+        str | None: The problem, for the log; None when it can be used.
+    """
+    if not isinstance(topology, dict) or set(topology) - {"nodes", "devices", "constraints"}:
+        return "electrical_topology must be an object with nodes, devices and constraints only"
+    nodes = topology.get("nodes") or []
+    if not isinstance(nodes, list) or len(nodes) > 64:
+        return "electrical_topology.nodes must be a list of at most 64 nodes"
+    ids: list[str] = []
+    for i, node in enumerate(nodes):
+        where = f"electrical_topology.nodes[{i}]"
+        if not isinstance(node, dict) or set(node) - _TOPOLOGY_NODE_KEYS or "id" not in node:
+            return f"{where} must be an object with id and only {', '.join(sorted(_TOPOLOGY_NODE_KEYS - {'id'}))}"
+        nid = node["id"]
+        if (
+            not isinstance(nid, str)
+            or not _TOPOLOGY_ID.match(nid)
+            or nid == _TOPOLOGY_ROOT
+            or nid in ids
+        ):
+            return f"{where}.id must be a new, short lower-case name (letters, digits, _), not {_TOPOLOGY_ROOT!r}"
+        ids.append(nid)
+        if node.get("type") is not None and node["type"] not in _TOPOLOGY_TYPES:
+            return f"{where}.type must be one of {', '.join(_TOPOLOGY_TYPES)}"
+        for key in ("max_import", "max_export"):
+            v = node.get(key)
+            if v is not None and not (_finite_number(v) and v >= 0):
+                return f"{where}.{key} must be a finite number of W, >= 0"
+        for key in ("efficiency_from_parent", "efficiency_to_parent"):
+            v = node.get(key)
+            if v is not None and not (_finite_number(v) and 0 < v <= 1):
+                return f"{where}.{key} must be in (0, 1]"
+    parent = {}
+    for i, node in enumerate(nodes):
+        up = node.get("parent", _TOPOLOGY_ROOT)
+        if up != _TOPOLOGY_ROOT and up not in ids:
+            return (
+                f"electrical_topology.nodes[{i}].parent must be {_TOPOLOGY_ROOT!r} or a node's id"
+            )
+        parent[node["id"]] = up
+    for nid in ids:
+        seen, at = set(), nid
+        while at != _TOPOLOGY_ROOT:
+            if at in seen:
+                return f"electrical_topology: the parents of {nid!r} form a loop"
+            seen.add(at)
+            at = parent[at]
+    devices = topology.get("devices") or {}
+    if not isinstance(devices, dict) or len(devices) > 64:
+        return "electrical_topology.devices must be an object of at most 64 devices"
+    for dev, node in devices.items():
+        if not isinstance(dev, str) or not (dev == "pv" or _TOPOLOGY_DEVICE.match(dev)):
+            return f"electrical_topology.devices: {dev!r} is not a device name"
+        if node != _TOPOLOGY_ROOT and node not in ids:
+            return f"electrical_topology.devices[{dev!r}] must be {_TOPOLOGY_ROOT!r} or a node's id"
+    constraints = topology.get("constraints") or []
+    if not isinstance(constraints, list) or len(constraints) > 64:
+        return "electrical_topology.constraints must be a list of at most 64 constraints"
+    names: set[str] = set()
+    for i, c in enumerate(constraints):
+        where = f"electrical_topology.constraints[{i}]"
+        if not isinstance(c, dict) or set(c) - {"name", "devices", "max_import", "max_export"}:
+            return f"{where} must be an object with name, devices, max_import and max_export only"
+        name = c.get("name")
+        if (
+            not isinstance(name, str)
+            or not _TOPOLOGY_ID.match(name)
+            or name in names
+            or name in ids
+        ):
+            return f"{where}.name must be a new, short lower-case name (letters, digits, _)"
+        names.add(name)
+        devs = c.get("devices")
+        if (
+            not isinstance(devs, list)
+            or not devs
+            or not all(isinstance(d, str) and _TOPOLOGY_DEVICE.match(d) for d in devs)
+        ):
+            return f"{where}.devices must be a non-empty list of device names"
+        if c.get("max_import") is None and c.get("max_export") is None:
+            return f"{where} needs max_import, max_export or both (W)"
+        for key in ("max_import", "max_export"):
+            v = c.get(key)
+            if v is not None and not (_finite_number(v) and v >= 0):
+                return f"{where}.{key} must be a finite number of W, >= 0"
+    return None
+
+
+def electrical_topology_inverter(topology: dict) -> dict | None:
+    """The hybrid inverter in `topology` that EMHASS's own model can hold, as
+    the plant_conf keys that describe it, or None.
+
+    EMHASS's model has one hybrid inverter, on the main meter, with the PV and
+    the battery on its DC side: a node of type hybrid_inverter whose parent is
+    the main meter, with no nodes under it, holding the PV and nothing but
+    the PV and the battery. A topology whose inverters are otherwise (a
+    second one, one behind a panel) is the coordinator's only.
+    """
+    nodes = topology.get("nodes") or []
+    devices = topology.get("devices") or {}
+    parents = {n.get("parent", _TOPOLOGY_ROOT) for n in nodes}
+    fits = [
+        n
+        for n in nodes
+        if n.get("type") == "hybrid_inverter"
+        and n.get("parent", _TOPOLOGY_ROOT) == _TOPOLOGY_ROOT
+        and n["id"] not in parents
+        and devices.get("pv") == n["id"]
+        and {d for d, at in devices.items() if at == n["id"]} <= {"pv", "battery"}
+    ]
+    if len(fits) != 1:
+        return None
+    n = fits[0]
+    keys = {"inverter_is_hybrid": True}
+    if n.get("max_export") is not None:
+        keys["inverter_ac_output_max"] = n["max_export"]
+    if n.get("max_import") is not None:
+        keys["inverter_ac_input_max"] = n["max_import"]
+    keys["inverter_efficiency_dc_ac"] = n.get("efficiency_to_parent", 1.0)
+    keys["inverter_efficiency_ac_dc"] = n.get("efficiency_from_parent", 1.0)
+    return keys
+
+
+def compile_electrical_topology(topology: dict, plant_conf: dict, logger: logging.Logger) -> bool:
+    """Fill EMHASS's inverter keys in `plant_conf` from `topology`'s hybrid
+    inverter, when EMHASS's own model can hold it
+    (`electrical_topology_inverter`), so the default solver - on a fallback,
+    or as the backend - plans the same inverter. The topology wins where the
+    keys disagree, with a warning. Returns whether the keys were filled.
+    """
+    keys = electrical_topology_inverter(topology)
+    if keys is None:
+        if any(n.get("type") == "hybrid_inverter" for n in topology.get("nodes") or []):
+            logger.warning(
+                "electrical_topology: its hybrid inverter(s) are the coordinator's only; "
+                "EMHASS's own model holds one inverter, on the main meter, with just the PV and the battery"
+            )
+        return False
+    changed = [
+        k
+        for k, v in keys.items()
+        if k in plant_conf and plant_conf[k] not in (None, v) and k != "inverter_is_hybrid"
+    ]
+    if changed:
+        logger.warning(
+            "electrical_topology: its hybrid inverter replaces %s",
+            ", ".join(f"{k}={plant_conf[k]}" for k in changed),
+        )
+    plant_conf.update(keys)
+    return True
 
 
 def compile_heat_topology(topology: dict) -> dict:
@@ -1406,6 +1599,49 @@ def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str
             "friendly_name": f"Heating demand {k}",
         },
     }
+
+
+class RuntimeParamError(ValueError):
+    """A runtime parameter whose value cannot be read safely; the action is
+    refused rather than guessed at."""
+
+
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off", "")
+
+
+def parse_dry_run(value: object) -> bool:
+    """The runtime ``dry_run`` flag, read strictly.
+
+    ``bool()`` would read the string ``"false"`` - which is what a templated
+    request often sends - as True, and quietly turn a live run into a dry run
+    that publishes nothing. Booleans, 0/1, and the strings true/false, 1/0,
+    yes/no, on/off (any case) are accepted; anything else raises.
+
+    Args:
+        value: The value passed as ``dry_run``.
+
+    Returns:
+        bool: Whether the run is a dry run.
+
+    Raises:
+        RuntimeParamError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUE:
+            return True
+        if v in _FALSE:
+            return False
+    raise RuntimeParamError(
+        f"dry_run must be true or false, got {value!r} ({type(value).__name__})"
+    )
 
 
 async def treat_runtimeparams(
@@ -2317,6 +2553,9 @@ async def treat_runtimeparams(
             entity_save = runtimeparams["entity_save"]
         params["passed_data"]["entity_save"] = entity_save
 
+        # Plan without touching the live plan: return the plan, write nothing (opt-in)
+        params["passed_data"]["dry_run"] = parse_dry_run(runtimeparams.get("dry_run", False))
+
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
             publish_prefix = ""
@@ -2565,6 +2804,17 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
+    # electrical_topology: the coordinator's (optimization_backend), but its
+    # hybrid inverter is EMHASS's own too - fill the inverter keys from it, so
+    # the default solver plans the same inverter.
+    electrical_topology = optim_conf.get("electrical_topology")
+    if electrical_topology:
+        problem = electrical_topology_problem(electrical_topology)
+        if problem:
+            logger.error("electrical_topology: %s; not used", problem)
+        else:
+            compile_electrical_topology(electrical_topology, plant_conf, logger)
+
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the
     # association loop above, the def_load_config handling, and the
@@ -2733,6 +2983,18 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     else:
         optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
+    # Other text columns (with a coordinator backend: backend_used,
+    # backend_fallback_reason, fed_stop_reason) hold one value for the whole
+    # plan, so they go in the summary table instead of the plots.
+    text_cols = [
+        c
+        for c in df.columns
+        if not pd.api.types.is_numeric_dtype(df[c])
+        and (pd.to_numeric(df[c], errors="coerce").isna() & df[c].notna()).any()
+    ]
+    summary_text = {c: df[c].iloc[0] for c in text_cols}
+    df = df.drop(columns=text_cols)
+    cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
     df[cols_p] = df[cols_p].astype(int)
@@ -2813,6 +3075,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
     table2["optim_status"] = optim_status
+    for col, value in summary_text.items():
+        table2[col] = value
     table2 = (
         table2.to_frame(name="Value")
         .reset_index(names="Variable")
