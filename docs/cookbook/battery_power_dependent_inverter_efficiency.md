@@ -47,7 +47,7 @@ ac_dc = [[0, 0]] + [[w, round(w / eta, 1)] for w, eta in charge]  # AC in = DC /
 
 Expected: `dc_ac` is `[[0, 0], [100, 60.0], [250, 187.5], [800, 680.0], [2500, 2250.0], [5000, 4650.0]]` and `ac_dc` is `[[0, 0], [100, 181.8], [250, 347.2], [800, 952.4], [2500, 2777.8], [4000, 4347.8]]`.
 
-Prefer measured data at the powers you actually use, and few points. Every segment of a curved direction adds one binary variable per time step to the optimization, so three to five segments per direction are usually plenty.
+Prefer measured data at the powers you actually use, and few points. Every segment of a curved direction after the first adds one binary variable per time step to the optimization, so three to five segments per direction are usually plenty.
 
 ## Step 4: Configure and validate
 
