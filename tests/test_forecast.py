@@ -4182,6 +4182,195 @@ class TestMlforecasterLastWindowSizing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fcst._mlf_required_history_days(mlf, 5), 5)
 
 
+class TestNaiveLoadForecast(unittest.IsolatedAsyncioTestCase):
+    """The naive load forecast is a time-of-day (same time yesterday) persistence.
+
+    It used to copy the last ``len(forecast_dates)`` observations onto the
+    forecast, so the shift equalled the horizon: right for a one-day horizon
+    starting just after the history, but shifted by hours for any other MPC
+    ``prediction_horizon`` (e.g. 56 or 151 steps at 15 min).
+    """
+
+    @staticmethod
+    def _daily_profile(index):
+        """A load that depends only on the local wall-clock time of day."""
+        wall = index.tz_localize(None)
+        return np.asarray(100.0 * wall.hour + wall.minute, dtype=float)
+
+    def _history(self, tz, start, end, freq):
+        index = pd.date_range(start=start, end=end, freq=freq, tz=tz)
+        return pd.Series(self._daily_profile(index), index=index)
+
+    def test_one_day_horizon_after_history_is_unchanged(self):
+        # Dayahead with forecast_dates starting right after the history: the new
+        # rule must give exactly what the old "last N values" rule gave.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        rng = np.random.default_rng(1)
+        for step in ("15min", "30min"):
+            freq = pd.Timedelta(step)
+            index = pd.date_range("2026-09-01", "2026-09-04 13:45", freq=freq, tz=tz)
+            history = pd.Series(rng.uniform(200, 3000, len(index)), index=index)
+            horizon = int(pd.Timedelta(days=1) / freq)
+            forecast_dates = pd.date_range(index[-1] + freq, periods=horizon, freq=freq)
+            yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+            np.testing.assert_array_equal(yhat.to_numpy(), history.iloc[-horizon:].to_numpy())
+            self.assertTrue(yhat.index.equals(forecast_dates))
+
+    def test_any_horizon_keeps_time_of_day(self):
+        # MPC horizons shorter and longer than one day, at 15 min and at the
+        # default 30 min: a load that repeats every day is forecast exactly. One
+        # day of history is enough, even for horizons longer than a day.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        for step, horizons in (("15min", (56, 96, 137, 151)), ("30min", (10, 28, 48, 75))):
+            freq = pd.Timedelta(step)
+            history = self._history(tz, "2026-09-03 14:00", "2026-09-04 13:45", freq)
+            for horizon in horizons:
+                forecast_dates = pd.date_range(history.index[-1] + freq, periods=horizon, freq=freq)
+                with self.assertNoLogs(logger, level="WARNING"):
+                    yhat = Forecast.get_naive_load_forecast(
+                        history, forecast_dates, freq / 2, logger=logger
+                    )
+                np.testing.assert_array_equal(yhat.to_numpy(), self._daily_profile(forecast_dates))
+
+    def test_forecast_starting_on_last_sample(self):
+        # method_ts_round "first"/"nearest" can start the forecast on the last
+        # (still running) history interval; that step comes from yesterday too.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        history = self._history(tz, "2026-09-02", "2026-09-04 13:45", freq)
+        forecast_dates = pd.date_range(history.index[-1], periods=60, freq=freq)
+        yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+        np.testing.assert_array_equal(yhat.to_numpy(), self._daily_profile(forecast_dates))
+
+    def test_gaps_use_previous_day(self):
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        history = self._history(tz, "2026-09-01", "2026-09-04 13:45", freq)
+        # Tag each day so the test can tell which day a value was taken from.
+        history = history + 10000.0 * history.index.day.to_numpy()
+        forecast_dates = pd.date_range(history.index[-1] + freq, periods=96, freq=freq)
+        yesterday = forecast_dates - pd.Timedelta(days=1)
+        # One slot is missing from the index, another one is NaN.
+        history = history.drop(yesterday[3])
+        history.loc[yesterday[50]] = np.nan
+        yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+        self.assertFalse(yhat.isna().any())
+        source_day = np.array(yesterday.day)
+        source_day[[3, 50]] = (forecast_dates - pd.Timedelta(days=2)).day[[3, 50]]
+        np.testing.assert_array_equal(
+            yhat.to_numpy(), 10000.0 * source_day + self._daily_profile(forecast_dates)
+        )
+
+    def test_short_history_falls_back_to_nearest_with_warning(self):
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        history = self._history(tz, "2026-09-04 08:00", "2026-09-04 13:45", freq)
+        forecast_dates = pd.date_range(history.index[-1] + freq, periods=96, freq=freq)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            yhat = Forecast.get_naive_load_forecast(
+                history, forecast_dates, freq / 2, logger=logger
+            )
+        self.assertIn("no same-time-of-day history", captured.output[0])
+        self.assertFalse(yhat.isna().any())
+        # 08:00-13:45 tomorrow are observed today, the rest uses the nearest sample.
+        tomorrow_morning = (forecast_dates.hour >= 8) & (forecast_dates.hour < 14)
+        np.testing.assert_array_equal(
+            yhat[tomorrow_morning].to_numpy(),
+            self._daily_profile(forecast_dates[tomorrow_morning]),
+        )
+        self.assertTrue((yhat[~tomorrow_morning] == history.iloc[0]).all())
+
+    def test_dst_fall_back_keeps_wall_clock(self):
+        # Europe/Tallinn leaves summer time on 2026-10-25 at 04:00 -> 03:00.
+        # Calendar days are used: 07:00 is forecast from 07:00 on either side.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        for last in ("2026-10-24 11:45", "2026-10-25 11:45", "2026-10-25 23:45"):
+            history = self._history(tz, "2026-10-21", last, freq)
+            forecast_dates = pd.date_range(history.index[-1] + freq, periods=151, freq=freq)
+            yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+            np.testing.assert_array_equal(yhat.to_numpy(), self._daily_profile(forecast_dates))
+        # 03:00-03:45 happened twice on 2026-10-25, so on 2026-10-26 those slots
+        # come from 2026-10-24 (both are tagged here with their day).
+        history = self._history(tz, "2026-10-21", "2026-10-25 23:45", freq)
+        history = history + 10000.0 * history.index.day.to_numpy()
+        forecast_dates = pd.date_range(history.index[-1] + freq, periods=96, freq=freq)
+        yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+        at_three = forecast_dates.hour == 3
+        self.assertEqual(at_three.sum(), 4)
+        np.testing.assert_array_equal(
+            yhat[at_three].to_numpy(), 10000.0 * 24 + self._daily_profile(forecast_dates[at_three])
+        )
+        np.testing.assert_array_equal(
+            yhat[~at_three].to_numpy(),
+            10000.0 * 25 + self._daily_profile(forecast_dates[~at_three]),
+        )
+
+    def test_dst_spring_forward_keeps_wall_clock(self):
+        # Europe/Tallinn enters summer time on 2026-03-29 at 03:00 -> 04:00, so
+        # 03:00-03:45 does not exist that day and comes from 2026-03-28.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        history = self._history(tz, "2026-03-26", "2026-03-29 23:45", freq)
+        history = history + 10000.0 * history.index.day.to_numpy()
+        forecast_dates = pd.date_range(history.index[-1] + freq, periods=96, freq=freq)
+        yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+        at_three = forecast_dates.hour == 3
+        np.testing.assert_array_equal(
+            yhat[at_three].to_numpy(), 10000.0 * 28 + self._daily_profile(forecast_dates[at_three])
+        )
+        np.testing.assert_array_equal(
+            yhat[~at_three].to_numpy(),
+            10000.0 * 29 + self._daily_profile(forecast_dates[~at_three]),
+        )
+
+    async def test_get_load_forecast_naive_alignment(self):
+        # End to end through get_load_forecast with the test history file.
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        fcst = Forecast(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+        history = (await fcst._prepare_hass_load_data(1, "naive")).iloc[:, 0]
+        freq = fcst.freq
+        steps_per_day = int(pd.Timedelta(days=1) / freq)
+        # Dayahead, forecast right after the history: same as the old rule.
+        fcst.forecast_dates = pd.date_range(
+            history.index[-1] + freq, periods=steps_per_day, freq=freq
+        )
+        p_load = await fcst.get_load_forecast(method="naive")
+        np.testing.assert_array_equal(p_load.to_numpy(), history.iloc[-steps_per_day:].to_numpy())
+        # MPC with a 10-step horizon: same time yesterday, not the last 10 values.
+        fcst.forecast_dates = fcst.forecast_dates[:10]
+        p_load = await fcst.get_load_forecast(method="naive")
+        np.testing.assert_array_equal(
+            p_load.to_numpy(),
+            history.reindex(fcst.forecast_dates - pd.Timedelta(days=1)).to_numpy(),
+        )
+        self.assertTrue(p_load.index.equals(fcst.forecast_dates))
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
