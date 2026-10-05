@@ -1771,7 +1771,12 @@ async def treat_runtimeparams(
         check_batt_charge_derating(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
-        check_inverter_power_curves(params["plant_conf"], logger)
+        # Strict: a curve in the request must be valid and usable (no recovery).
+        check_inverter_power_curves(
+            params["plant_conf"],
+            logger,
+            supplied=[name for name, *_ in _INVERTER_CURVE_PARAMS if name in runtimeparams],
+        )
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -3829,7 +3834,9 @@ async def build_params(
     check_batt_charge_derating(
         num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
     )
-    check_inverter_power_curves(params["plant_conf"], logger)
+    # Persisted configuration recovers (an unusable curve is cleared and logged) so the
+    # service and configuration page stay reachable; /set-config validates strictly first.
+    check_inverter_power_curves(params["plant_conf"], logger, recover=True)
 
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
@@ -4573,35 +4580,107 @@ def validate_inverter_power_curve(
     return points
 
 
-def check_inverter_power_curves(plant_conf: dict, logger: logging.Logger) -> None:
+_INVERTER_CURVE_PARAMS = (
+    ("inverter_power_curve_dc_ac", "dc_ac", "inverter_ac_output_max", "inverter_efficiency_dc_ac"),
+    ("inverter_power_curve_ac_dc", "ac_dc", "inverter_ac_input_max", "inverter_efficiency_ac_dc"),
+)
+
+
+def inverter_power_curve_faults(config: dict) -> list[str]:
+    """
+    Return one message per unusable inverter power curve in an explicit save request (#746).
+
+    Used by ``/set-config`` before anything is written, so a curve the user typed is
+    rejected with its reason instead of being silently dropped. Empty or absent
+    curves are fine; the hybrid flag is not checked, since a valid curve may be kept
+    while ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
+
+    :param config: the submitted flat configuration
+    :type config: dict
+    :return: validation messages (empty when every curve is usable)
+    :rtype: list[str]
+    """
+    faults = []
+    for parameter_name, direction, *_ in _INVERTER_CURVE_PARAMS:
+        curve = config.get(parameter_name)
+        if not curve:
+            continue
+        try:
+            validate_inverter_power_curve(curve, parameter_name, direction)
+        except ValueError as err:
+            faults.append(str(err))
+    return faults
+
+
+def check_inverter_power_curves(
+    plant_conf: dict,
+    logger: logging.Logger,
+    *,
+    recover: bool = False,
+    supplied: tuple[str, ...] | list[str] = (),
+) -> None:
     """
     Validate the optional inverter power-transfer curves of a plant_conf (#746).
 
     Absent or empty curves are the default and leave the scalar
     ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
-    A configured curve is validated (see :func:`validate_inverter_power_curve`) and
-    requires ``inverter_is_hybrid``; any fault raises ValueError rather than being
-    ignored, because silently falling back to the scalar would change the physics.
+    A configured curve is validated (see :func:`validate_inverter_power_curve`).
+
+    Two contracts, chosen by the caller:
+
+    - strict (default, runtime parameters): a fault raises ValueError, because a
+      request that carries a curve expects it to be used and silently falling back
+      to the scalar would change the physics.
+    - ``recover=True`` (persisted configuration in ``build_params``): the unusable
+      curve is cleared and logged at error level, so the scalar efficiency of that
+      direction applies and the configuration page and service stay reachable to
+      repair it. Same trade-off as ``battery_charge_power_derating``.
+
+    A valid curve with ``inverter_is_hybrid`` false is dormant: it is kept, ignored
+    by the optimizer, and warned about, so switching hybrid off in the UI never
+    discards or rejects a stored curve. A curve named in ``supplied`` (set by the
+    current request) with hybrid off raises ValueError instead, as it would be
+    ignored without the requester knowing.
 
     :param plant_conf: the plant_conf dict
     :type plant_conf: dict
     :param logger: The logger object
     :type logger: logging.Logger
-    :raises ValueError: when a configured curve is unusable
+    :param recover: clear and log an unusable curve instead of raising
+    :type recover: bool
+    :param supplied: curve parameter names provided by the current request
+    :type supplied: tuple[str, ...] | list[str]
+    :raises ValueError: when a curve is unusable and ``recover`` is False
     """
-    for parameter_name, direction, limit_name in (
-        ("inverter_power_curve_dc_ac", "dc_ac", "inverter_ac_output_max"),
-        ("inverter_power_curve_ac_dc", "ac_dc", "inverter_ac_input_max"),
-    ):
+    hybrid = plant_conf.get("inverter_is_hybrid", False)
+    for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
         curve = plant_conf.get(parameter_name)
         if not curve:
             continue
-        if not plant_conf.get("inverter_is_hybrid", False):
-            raise ValueError(
-                f"{parameter_name}: requires inverter_is_hybrid=true; the curves model the "
-                f"hybrid inverter's DC bus <-> AC conversion"
+        try:
+            points = validate_inverter_power_curve(curve, parameter_name, direction)
+            if not hybrid and parameter_name in supplied:
+                raise ValueError(
+                    f"{parameter_name}: requires inverter_is_hybrid=true; the curves model the "
+                    f"hybrid inverter's DC bus <-> AC conversion"
+                )
+        except ValueError as err:
+            if not recover:
+                raise
+            # At error level: a dropped curve is otherwise indistinguishable from a
+            # working one, as the scalar efficiency applies either way.
+            logger.error(
+                f"{err}. Ignoring {parameter_name}: the scalar {scalar_name}="
+                f"{plant_conf.get(scalar_name, 1.0)} applies until the curve is corrected."
             )
-        points = validate_inverter_power_curve(curve, parameter_name, direction)
+            plant_conf[parameter_name] = []
+            continue
+        if not hybrid:
+            logger.warning(
+                f"{parameter_name} is set but inverter_is_hybrid is false: the curve is "
+                f"kept and ignored until inverter_is_hybrid is enabled."
+            )
+            continue
         limit = plant_conf.get(limit_name)
         if isinstance(limit, int | float) and points[-1][1] < limit:
             logger.warning(

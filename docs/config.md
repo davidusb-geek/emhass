@@ -336,19 +336,26 @@ plant_conf:
   inverter_power_curve_ac_dc: [[0, 0], [1000, 1500], [4000, 4500]]
 ```
 
-Rules, each checked when the configuration is built (a violation raises an error naming the parameter, the point and the value, instead of being ignored):
+Rules, each naming the parameter, the point and the value when violated:
 
 - at least two points, each a pair of finite, non-negative numbers;
 - the first point is `[0, 0]`: zero power in is zero power out. The curve does not model standby consumption; keep accounting for it where it is accounted for today (for example in the load forecast);
 - the DC coordinate and the AC coordinate both rise strictly from point to point (more power in always means more power out);
 - no energy gain: `ac_power_w <= dc_power_w` for `dc_ac`, `ac_power_w >= dc_power_w` for `ac_dc`;
-- `inverter_is_hybrid` must be true.
+- `inverter_is_hybrid` must be true for the curve to be used.
+
+How a violation is handled depends on where the curve comes from:
+
+- **Saving in the web configuration page** (`/set-config`) rejects an invalid curve with HTTP 400 and the reason shown in the page; nothing is written, so the previous configuration stays in place.
+- **Runtime parameters** passed to an optimization action are strict: an invalid curve, or a curve while `inverter_is_hybrid` is false, raises an error and the action does not run.
+- **An already-saved configuration** (for example an edited `config.json`) never prevents EMHASS or the configuration page from starting: an unusable curve is cleared, an error naming it is logged, and the scalar efficiency of that direction applies until you correct it. Check the log, because that is the only sign that the curve is not in use.
+- **`inverter_is_hybrid` false with a valid curve** keeps the curve stored and ignores it (a warning is logged), so you can switch hybrid off in the page without clearing the curves.
 
 Between points the curve is linear. The last point is the supported power domain and there is no extrapolation: the optimizer never plans more DC power through that direction than the last point's `dc_power_w`, and a warning is logged when the last point's AC power is below `inverter_ac_output_max` / `inverter_ac_input_max`. `inverter_ac_output_max` and `inverter_ac_input_max` still limit the AC side of a curved direction, so the effective limit is whichever is lower. A curve is a *total* transfer relation measured at the inverter boundary (it already contains its own conversion losses), not an increment on top of the scalar efficiency. The curve acts on the whole DC bus, so for `dc_ac` the DC power is PV plus battery discharge.
 
 The curves describe the inverter only. They do not replace `battery_charge_efficiency` and `battery_discharge_efficiency`, which remain the separate battery/state-of-charge-stage efficiencies, and they do not replace `battery_charge_power_derating`, which stays a state-of-charge dependent power ceiling that is applied on top. With `number_of_batteries` greater than 1 nothing changes in how the curves are written: there is one hybrid inverter and one shared DC bus, so one curve per direction acts on the combined power of all batteries and PV; it is not a per-battery list. The curves may also be passed at runtime and a runtime value wins over the configured one. In the web configuration page, enter each curve as a single JSON list, for example `[[0, 0], [1000, 700], [5000, 4500]]`; `[]` keeps the scalar efficiency, and a malformed list is rejected before saving.
 
-Existing configurations need no migration: leaving both parameters empty (their default), or not setting them at all, produces exactly the optimization of earlier releases. Each curved direction adds binary variables to the optimization (one fewer than its number of segments, per time step), so keep curves to the few segments your data justifies.
+Existing configurations need no migration: leaving both parameters empty (their default), or not setting them at all, produces exactly the optimization of earlier releases. Each curved direction adds binary variables to the optimization: one fewer than its number of segments, per time step. A 10-point curve has 9 segments and so adds 8 binaries per time step (384 over 48 steps, 2304 over 288 steps) per curved direction, so keep curves to the few segments your data justifies.
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 

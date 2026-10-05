@@ -110,10 +110,19 @@ def test_absent_and_empty_curves_are_the_legacy_default(caplog):
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
-def test_curve_requires_a_hybrid_inverter():
+def test_curve_with_a_non_hybrid_inverter_is_dormant_not_an_error(caplog):
+    conf = {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == DISCHARGE_CURVE  # preserved, not cleared
+    assert any("inverter_is_hybrid" in r.message for r in caplog.records)
+
+
+def test_runtime_curve_with_a_non_hybrid_inverter_is_rejected():
     with pytest.raises(ValueError, match="inverter_is_hybrid"):
         utils.check_inverter_power_curves(
-            {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}, logger
+            {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}, logger, supplied=(DC_AC,)
         )
 
 
@@ -190,9 +199,28 @@ def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
     assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: CHARGE_CURVE[:2]})
 
 
-def test_invalid_curve_fails_build_params():
-    with pytest.raises(ValueError, match=AC_DC):
-        _build_params({"inverter_is_hybrid": True, AC_DC: [[0, 0], [1000, 900]]})
+def test_invalid_persisted_curve_is_disabled_by_build_params(caplog):
+    """Static configuration recovers: the bad curve is cleared with an error naming it,
+    the other direction and the scalar efficiencies are untouched."""
+    with caplog.at_level(logging.ERROR):
+        params = _build_params(
+            {
+                "inverter_is_hybrid": True,
+                "inverter_efficiency_ac_dc": 0.97,
+                AC_DC: [[0, 0], [1000, 900]],
+                DC_AC: DISCHARGE_CURVE,
+            }
+        )
+    assert params["plant_conf"][AC_DC] == []
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
+    assert params["plant_conf"]["inverter_efficiency_ac_dc"] == 0.97
+    errors = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any(AC_DC in m and "inverter_efficiency_ac_dc" in m for m in errors)
+
+
+def test_non_hybrid_build_params_keeps_a_valid_curve_dormant():
+    params = _build_params({"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE})
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
 
 
 def test_runtime_curve_is_validated_on_the_runtime_path():
@@ -216,6 +244,127 @@ def test_runtime_curve_is_validated_on_the_runtime_path():
     assert treated_plant[AC_DC] == CHARGE_CURVE
     with pytest.raises(ValueError, match=AC_DC):
         asyncio.run(_treat({AC_DC: [[0, 0], [1000, 900]]}))
+    # Strict also when the persisted config had no curve and hybrid is off.
+    off = _build_params({"inverter_is_hybrid": False})
+    off_json = orjson.dumps(off).decode("utf-8")
+    off_rh, off_optim, off_plant = utils.get_yaml_parse(off_json, logger)
+    with pytest.raises(ValueError, match="inverter_is_hybrid"):
+        asyncio.run(
+            utils.treat_runtimeparams(
+                orjson.dumps({AC_DC: CHARGE_CURVE}).decode("utf-8"),
+                off_json,
+                off_rh,
+                off_optim,
+                off_plant,
+                "dayahead-optim",
+                logger,
+                EMHASS_CONF,
+            )
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Web configuration recovery vs strictness
+# --------------------------------------------------------------------------- #
+
+INVALID_CURVE = [[0, 0], [1000, 1100]]  # AC output above DC input: physically impossible
+
+
+@pytest.fixture
+def web(tmp_path, monkeypatch):
+    """The real web_server app on scratch paths (real defaults, associations, build_params)."""
+    from emhass import web_server
+
+    conf = {
+        "data_path": tmp_path,
+        "config_path": tmp_path / "config.json",
+        "defaults_path": EMHASS_CONF["defaults_path"],
+        "associations_path": EMHASS_CONF["associations_path"],
+        "legacy_config_path": tmp_path / "legacy_missing.yaml",
+        "root_path": EMHASS_CONF["root_path"],
+    }
+    _, secrets = asyncio.run(utils.build_secrets(conf, logger, no_response=True))
+    monkeypatch.setattr(web_server, "emhass_conf", conf)
+    monkeypatch.setattr(web_server, "params_secrets", secrets)
+    client = web_server.app.test_client()
+
+    def post(body):
+        async def go():
+            r = await client.post("/set-config", json=body)
+            return r.status_code, await r.get_json()
+
+        return asyncio.run(go())
+
+    def get_config():
+        async def go():
+            r = await client.get("/get-config")
+            return r.status_code, await r.get_json()
+
+        return asyncio.run(go())
+
+    return type(
+        "Web",
+        (),
+        {
+            "conf": conf,
+            "post": staticmethod(post),
+            "get": staticmethod(get_config),
+            "ws": web_server,
+        },
+    )
+
+
+def test_set_config_rejects_an_invalid_active_curve_without_touching_saved_files(web):
+    good = {"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE}
+    assert web.post(good)[0] == 200
+    config_before = web.conf["config_path"].read_bytes()
+    params_before = (web.conf["data_path"] / "params.pkl").read_bytes()
+    status, body = web.post({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE})
+    assert status == 400
+    assert DC_AC in " ".join(body)
+    assert "exceed" in " ".join(body) or "above" in " ".join(body)
+    assert web.conf["config_path"].read_bytes() == config_before
+    assert (web.conf["data_path"] / "params.pkl").read_bytes() == params_before
+
+
+def test_set_config_rejects_an_invalid_curve_even_while_hybrid_is_off(web):
+    status, body = web.post({"inverter_is_hybrid": False, AC_DC: [[0, 0], [1000, 900]]})
+    assert status == 400
+    assert AC_DC in " ".join(body)
+
+
+def test_set_config_with_hybrid_off_keeps_a_valid_curve_dormant(web):
+    """Turning hybrid off in the UI still submits the greyed-out curve: not an error."""
+    assert (
+        web.post({"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE})[0]
+        == 200
+    )
+    status, _ = web.post({"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE})
+    assert status == 200
+    saved = json.loads(web.conf["config_path"].read_text())
+    assert saved["inverter_is_hybrid"] is False
+    assert saved[DC_AC] == DISCHARGE_CURVE and saved[AC_DC] == CHARGE_CURVE
+
+
+def test_get_config_still_serves_a_config_whose_persisted_curve_is_invalid(web):
+    web.conf["config_path"].write_text(
+        json.dumps({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE, AC_DC: CHARGE_CURVE})
+    )
+    status, body = web.get()
+    assert status == 200
+    assert body[DC_AC] == []  # disabled so the page can load and be repaired
+    assert body[AC_DC] == CHARGE_CURVE
+    assert web.post({"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE})[0] == 200
+
+
+def test_startup_params_survive_an_invalid_persisted_curve(web):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    config.update({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE})
+    params = asyncio.run(
+        web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"])
+    )
+    assert params["plant_conf"][DC_AC] == []
+    assert (web.conf["data_path"] / "params.pkl").exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -359,6 +508,20 @@ def _assert_curve_equality(res, charge_curve=None, discharge_curve=None, atol=2.
             hybrid[discharging], interp(discharge_curve, batt[discharging]), atol=atol
         )
     return charging.sum(), discharging.sum()
+
+
+def test_curve_adds_points_minus_two_binaries_per_timestep():
+    """Documented scale: a P-point curve has P-1 segments and P-2 ordering binaries per step
+    (the direction binary is the existing one), e.g. 10 points -> 8 per step."""
+    points = 10
+    curve = [[100 * k, 100 * k * (0.9 + 0.01 * k)] for k in range(points)]
+    curve = [[0, 0]] + [[dc, ac] for dc, ac in curve[1:]]
+    opt, _ = _solve({DC_AC: curve})
+    binaries = opt.vars["inv_curve_dc_ac_b"]
+    assert len(binaries) == points - 2
+    assert all(var.attributes["boolean"] and var.size == opt.num_timesteps for var in binaries)
+    assert all(not var.attributes["boolean"] for var in opt.vars["inv_curve_dc_ac_u"])
+    assert "inv_curve_ac_dc_b" not in opt.vars  # the scalar direction adds none
 
 
 def test_flat_curves_equal_the_scalar_efficiencies():
