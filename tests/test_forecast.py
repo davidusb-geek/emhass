@@ -4338,6 +4338,28 @@ class TestNaiveLoadForecast(unittest.IsolatedAsyncioTestCase):
             10000.0 * 29 + self._daily_profile(forecast_dates[~at_three]),
         )
 
+    def test_dst_short_history_searches_every_calendar_day(self):
+        # Less than 24 h of absolute time but more than 24 h of wall-clock time
+        # across the 2026-03-29 spring-forward. 03:30-03:45 on 2026-03-30 have no
+        # source on 2026-03-29 (skipped hour) and must come from 2026-03-28,
+        # not from the nearest-sample fallback.
+        import pytz
+
+        tz = pytz.timezone("Europe/Tallinn")
+        freq = pd.Timedelta("15min")
+        history = self._history(tz, "2026-03-28 03:30", "2026-03-29 04:00", freq)
+        self.assertLess(history.index[-1] - history.index[0], pd.Timedelta(days=1))
+        history = history + 10000.0 * history.index.day.to_numpy()
+        forecast_dates = pd.date_range(history.index[-1] + freq, periods=96, freq=freq)
+        yhat = Forecast.get_naive_load_forecast(history, forecast_dates, freq / 2)
+        wall = forecast_dates.tz_localize(None)
+        wanted = (wall >= pd.Timestamp("2026-03-30 03:30")) & (
+            wall <= pd.Timestamp("2026-03-30 03:45")
+        )
+        np.testing.assert_array_equal(
+            yhat[wanted].to_numpy(), 10000.0 * 28 + self._daily_profile(forecast_dates[wanted])
+        )
+
     async def test_get_load_forecast_naive_alignment(self):
         # End to end through get_load_forecast with the test history file.
         params = await TestForecast.get_test_params()

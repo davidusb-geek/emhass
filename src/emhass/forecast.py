@@ -2020,7 +2020,9 @@ class Forecast:
         wall_clock = forecast_dates.tz_localize(None)
         last_wall_clock = history.index[-1].tz_convert(tz).tz_localize(None)
         days_back = np.maximum(1, np.ceil((wall_clock - last_wall_clock) / one_day))
-        history_days = int((history.index[-1] - history.index[0]) / one_day)
+        first_wall_clock = history.index[0].tz_convert(tz).tz_localize(None)
+        # Calendar days covered, not 24 h spans: a spring-forward day lasts 23 h.
+        history_days = (last_wall_clock.normalize() - first_wall_clock.normalize()).days + 1
         yhat = np.full(len(forecast_dates), np.nan)
         for extra_days in range(history_days + 1):
             source = (wall_clock - pd.to_timedelta(days_back + extra_days, unit="D")).tz_localize(
