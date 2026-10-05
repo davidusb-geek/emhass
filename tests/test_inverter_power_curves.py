@@ -371,6 +371,27 @@ def test_both_directions_enabled():
     assert n_charge > 0 and n_discharge > 0
 
 
+@pytest.mark.parametrize("dc_w", [250, 1000, 2500, 4000])  # interior, breakpoint, interior, end
+def test_pinned_charge_power_lands_on_the_curve(dc_w):
+    """A single step with a fixed SOC change pins the DC power: segment-exact AC input."""
+    soc_final = 0.1 + dc_w * 0.5 / CAP  # one 30-minute step, battery efficiency 1
+    _, res = _solve({AC_DC: CHARGE_CURVE}, frame=_frame([0.2]), soc_init=0.1, soc_final=soc_final)
+    assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(-interp(CHARGE_CURVE, dc_w), abs=1.0)
+
+
+@pytest.mark.parametrize("dc_w", [250, 1000, 3000, 5000])  # interior, breakpoint, interior, end
+def test_pinned_discharge_power_lands_on_the_curve(dc_w):
+    soc_final = 0.9 - dc_w * 0.5 / CAP
+    _, res = _solve(
+        {DC_AC: DISCHARGE_CURVE}, frame=_frame([0.2]), soc_init=0.9, soc_final=soc_final
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(dc_w, abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        interp(DISCHARGE_CURVE, dc_w), abs=1.0
+    )
+
+
 def test_idle_has_zero_power_both_sides():
     """Flat prices: nothing to do, so zero DC <-> zero AC; no standby term exists."""
     _, res = _solve({AC_DC: CHARGE_CURVE, DC_AC: DISCHARGE_CURVE}, frame=_frame([0.2] * 6))
