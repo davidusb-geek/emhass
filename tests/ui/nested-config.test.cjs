@@ -87,3 +87,35 @@ test('existing empty per-load cost input is not rewritten by battery-specific pa
   // Preserve the pre-PR serialization; this is not a fix of the legacy cost editor.
   assert.deepEqual(ctx.sent[other],['']);
 });
+
+// Generic contract for every static nested numeric-table parameter.
+const curveNames = ['inverter_power_curve_dc_ac', 'inverter_power_curve_ac_dc'];
+const curve = [[0, 0], [1000, 700], [5000, 4500]];
+function setupFor(pname, raw) {
+  const ctx = setup(raw);
+  const input = { type: 'text', value: raw };
+  ctx.document.getElementById = id => id === pname ? { tagName: 'DIV', getElementsByClassName: () => [input] } : null;
+  return ctx;
+}
+for (const pname of curveNames) {
+  const def = { ...definition, friendly_name: pname };
+  test(`${pname}: default [] and a curve render as one JSON field and round-trip`, async () => {
+    for (const value of [[], curve]) {
+      const html = setup('').buildParamElement(def, pname, { [pname]: value });
+      assert.equal((html.match(/<input /g) || []).length, 1);
+      const raw = html.match(/value="([^"]*)"/)[1].replace(/&quot;/g, '"');
+      assert.deepEqual(JSON.parse(raw), value);
+      const save = setupFor(pname, raw);
+      await save.saveConfiguration({ System: { [pname]: def } });
+      assert.deepEqual(save.sent[pname], value);
+    }
+  });
+  for (const raw of ['[', '[0,0]', '[[0,"0"],[1000,700]]', '[[0,0],[1000,null]]', '[[true,0],[1000,700]]', '{}', 'null']) {
+    test(`${pname}: invalid ${raw} is rejected with its name`, async () => {
+      const ctx = setupFor(pname, raw);
+      assert.equal(await ctx.saveConfiguration({ System: { [pname]: def } }), 0);
+      assert.equal(ctx.sent, undefined);
+      assert.match(ctx.error, new RegExp(pname));
+    });
+  }
+}

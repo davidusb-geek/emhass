@@ -167,6 +167,29 @@ def test_valid_curves_pass_through_build_params():
     assert params["plant_conf"][AC_DC] == CHARGE_CURVE
 
 
+def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
+    """The curves need no dedicated OptimizationCacheKey field: they are plant_conf
+    keys, so ``plant_conf_hash`` already makes any curve change a cache miss."""
+    from emhass.command_line import OptimizationCache
+
+    rh = {"optimization_time_step": pd.to_timedelta(5, "minutes")}
+
+    def key(**curves):
+        params = _build_params({"inverter_is_hybrid": True, **curves})
+        return OptimizationCache._compute_cache_key(
+            params["optim_conf"], params["plant_conf"], "profit", rh
+        )
+
+    other = [[0, 0], [1000, 800], [5000, 4600]]
+    assert key() == key()  # default (empty) curves: stable
+    assert key(**{DC_AC: DISCHARGE_CURVE}) == key(**{DC_AC: DISCHARGE_CURVE})
+    assert key(**{DC_AC: DISCHARGE_CURVE}) != key()
+    assert key(**{DC_AC: DISCHARGE_CURVE}) != key(**{DC_AC: other})
+    assert key(**{AC_DC: CHARGE_CURVE}) != key()
+    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{DC_AC: DISCHARGE_CURVE})
+    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: CHARGE_CURVE[:2]})
+
+
 def test_invalid_curve_fails_build_params():
     with pytest.raises(ValueError, match=AC_DC):
         _build_params({"inverter_is_hybrid": True, AC_DC: [[0, 0], [1000, 900]]})
@@ -422,10 +445,12 @@ def test_curve_domain_caps_dc_power():
 
 def test_ac_limits_apply_on_the_ac_side_of_a_curved_direction():
     wide = [[0, 0], [8000, 7600]]
+    # A load above the AC limit makes the limit bind (discharge is worth more than it costs).
     _, res = _solve(
-        {DC_AC: wide, "inverter_ac_output_max": 3000, "battery_discharge_power_max": 8000}
+        {DC_AC: wide, "inverter_ac_output_max": 3000, "battery_discharge_power_max": 8000},
+        frame=_frame(CHEAP_THEN_DEAR, load=6000.0),
     )
-    assert res["P_hybrid_inverter"].max() <= 3000.0 + 1.0
+    assert 3000.0 - 1.0 <= res["P_hybrid_inverter"].max() <= 3000.0 + 1.0
     _, res = _solve(
         {
             AC_DC: [[0, 0], [8000, 8400]],
