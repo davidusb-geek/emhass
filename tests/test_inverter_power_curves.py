@@ -203,7 +203,9 @@ CHARGE_MAX = 5000
 CAP = 10000
 
 
-def build_optimization(plant_overrides=None, optim_overrides=None, n_batt=1) -> Optimization:
+def build_optimization(
+    plant_overrides=None, optim_overrides=None, n_batt=1, cls=Optimization
+) -> Optimization:
     """Self-contained hybrid-inverter Optimization builder (no deferrable loads)."""
     build_logger = logging.getLogger("inverter_curve_build")
     build_logger.handlers = []
@@ -281,7 +283,7 @@ def build_optimization(plant_overrides=None, optim_overrides=None, n_batt=1) -> 
             plant_conf[key] = [plant_conf[key]] * n_batt
     if plant_overrides:
         plant_conf.update(plant_overrides)
-    return Optimization(
+    return cls(
         retrieve_hass_conf,
         optim_conf,
         plant_conf,
@@ -306,8 +308,10 @@ def _frame(import_price, export_price=0.02, pv=0.0, load=300.0):
 CHEAP_THEN_DEAR = [0.05] * 4 + [0.60] * 4
 
 
-def _solve(plant=None, optim=None, frame=None, soc_init=0.1, soc_final=0.1, n_batt=1):
-    opt = build_optimization(plant, optim, n_batt)
+def _solve(
+    plant=None, optim=None, frame=None, soc_init=0.1, soc_final=0.1, n_batt=1, cls=Optimization
+):
+    opt = build_optimization(plant, optim, n_batt, cls)
     df_input, p_pv, p_load = frame if frame is not None else _frame(CHEAP_THEN_DEAR)
     if n_batt > 1:
         soc_init, soc_final = [soc_init] * n_batt, [soc_final] * n_batt
@@ -486,9 +490,34 @@ def _negative_price_frame():
     return _frame([-0.20] * 6, export_price=0.0, pv=0.0, load=300.0)
 
 
+# Closed loopholes: with export priced at 0 and a negative import price, cycling the battery
+# (discharge, export for free, re-import and be paid) is legitimately profitable in ANY model,
+# legacy scalar included. The adversarial case therefore forbids discharge and export, leaving
+# one way to earn more: import AC power that no DC power accounts for.
+NEGATIVE_PRICE_PLANT = {
+    AC_DC: CHARGE_CURVE,
+    DC_AC: DISCHARGE_CURVE,
+    "inverter_ac_input_max": 4000,
+    "battery_discharge_power_max": 0,
+    "maximum_power_to_grid": 0,
+}
+
+
+class RelaxedOptimization(Optimization):
+    """Control: the real model with the AC->DC equality weakened to ac_in >= curve(dc)."""
+
+    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
+        exact = super()._add_inverter_pwl_transfer(constraints, name, dc_var, curve, gate)
+        if name != "inv_curve_ac_dc":
+            return exact
+        return exact + cp.Variable(self.num_timesteps, nonneg=True, name="relax_slack")
+
+
 def test_negative_import_price_cannot_exploit_the_curve():
-    plant = {AC_DC: CHARGE_CURVE, DC_AC: DISCHARGE_CURVE, "inverter_ac_input_max": 4000}
-    opt, res = _solve(plant, frame=_negative_price_frame(), soc_init=0.95, soc_final=0.95)
+    """PWL_EQUALITY_EXACT / NEGATIVE_PRICE_EXPLOIT = NONE through the real solver."""
+    opt, res = _solve(
+        NEGATIVE_PRICE_PLANT, frame=_negative_price_frame(), soc_init=0.95, soc_final=0.95
+    )
     # NO_ARTIFICIAL_EXTRA_AC_IMPORT: import equals the load, nothing more.
     assert res["P_grid_pos"].max() <= 300.0 + 2.0
     # NO_ARTIFICIAL_DC_POWER: a full battery cannot absorb DC.
@@ -511,23 +540,22 @@ def test_negative_import_price_charging_pays_the_curve_loss():
 
 
 def test_control_inequality_relaxation_would_be_exploited():
-    """Control: the same price case under a one-sided relaxation earns free energy.
+    """RELAXED_CONTROL_CASE: the same scenario with a one-sided relaxation earns free energy.
 
-    Proves the adversarial scenario above is capable of detecting a relaxation. The
-    battery is full (dc == 0); AC input is only bounded below by the curve.
+    Runs the real EMHASS model with only the AC->DC equality weakened. The relaxed model imports
+    up to the inverter AC input limit that no DC power accounts for, so the exact model's
+    assertions above would detect the defect.
     """
-    ac_in = cp.Variable(nonneg=True)
-    dc = cp.Variable(nonneg=True)
-    price = -0.20
-    cap = 4000.0
-    relaxed = cp.Problem(
-        cp.Maximize(-price * (300.0 + ac_in)),
-        [dc == 0, ac_in >= 1.5 * dc, ac_in <= cap],
+    _, exact = _solve(
+        NEGATIVE_PRICE_PLANT, frame=_negative_price_frame(), soc_init=0.95, soc_final=0.95
     )
-    relaxed.solve()
-    equality = cp.Problem(
-        cp.Maximize(-price * (300.0 + ac_in)), [dc == 0, ac_in == 1.5 * dc, ac_in <= cap]
+    _, relaxed = _solve(
+        NEGATIVE_PRICE_PLANT,
+        frame=_negative_price_frame(),
+        soc_init=0.95,
+        soc_final=0.95,
+        cls=RelaxedOptimization,
     )
-    equality.solve()
-    assert relaxed.value > equality.value + 1.0
-    assert ac_in.value is not None
+    assert exact["P_grid_pos"].max() <= 300.0 + 2.0
+    assert relaxed["P_grid_pos"].max() >= 300.0 + 3000.0
+    assert relaxed["cost_profit"].sum() > exact["cost_profit"].sum() + 0.01
