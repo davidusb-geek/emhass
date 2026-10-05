@@ -393,9 +393,11 @@ def test_pinned_charge_power_lands_on_the_curve(dc_w):
 @pytest.mark.parametrize("dc_w", [250, 1000, 3000, 5000])  # interior, breakpoint, interior, end
 def test_pinned_discharge_power_lands_on_the_curve(dc_w):
     soc_final = 0.9 - dc_w * 0.5 / CAP
+    # The load must absorb the largest AC output (4500 W at the 5000 W DC end of the curve),
+    # otherwise step 0 would discharge only what the load needs and the energy spills later.
     _, res = _solve(
         {DC_AC: DISCHARGE_CURVE, "battery_charge_power_max": 0},
-        frame=_frame([0.8] + [0.1] * 7),
+        frame=_frame([0.8] + [0.1] * 7, load=5000.0),
         soc_init=0.9,
         soc_final=soc_final,
     )
