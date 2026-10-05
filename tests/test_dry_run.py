@@ -18,7 +18,7 @@ import orjson
 import pandas as pd
 import pytest
 
-from emhass import last_run, web_server
+from emhass import last_run, utils, web_server
 from emhass.command_line import (
     OptimizationCache,
     dayahead_forecast_optim,
@@ -30,7 +30,6 @@ from emhass.command_line import (
 from emhass.optimization import (
     _BACKENDS,
     _DEVICE,
-    _LIMIT_NAME,
     _SOLVERS,
     _coordinated_config_problem,
 )
@@ -579,94 +578,171 @@ def test_the_published_schema_is_the_check():
     assert group["additionalProperties"] is False
     assert group["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
     assert group["properties"]["solver"]["enum"] == list(_SOLVERS)
-    limit = props["group_limits"]["items"]
-    assert set(limit["properties"]) == {"name", "devices", "max_power", "min_power"}
-    assert limit["additionalProperties"] is False
-    assert limit["properties"]["name"]["pattern"] == _LIMIT_NAME.pattern
+    topo = props["electrical_topology"]
+    assert set(topo["properties"]) == {"nodes", "devices", "constraints"}
+    node = topo["properties"]["nodes"]["items"]
+    assert set(node["properties"]) == utils._TOPOLOGY_NODE_KEYS
+    assert node["properties"]["id"]["pattern"] == utils._TOPOLOGY_ID.pattern
+    assert node["properties"]["type"]["enum"] == list(utils._TOPOLOGY_TYPES)
+    limit = topo["properties"]["constraints"]["items"]
+    assert set(limit["properties"]) == {"name", "devices", "max_import", "max_export"}
     assert limit["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
-    assert limit["properties"]["min_power"]["maximum"] == 0
+
+
+TOPOLOGY = {
+    "nodes": [
+        {
+            "id": "inverter",
+            "type": "hybrid_inverter",
+            "max_import": 4000,
+            "max_export": 4000,
+            "efficiency_from_parent": 0.97,
+            "efficiency_to_parent": 0.97,
+        },
+        {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+        {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
+    ],
+    "devices": {
+        "pv": "inverter",
+        "battery": "inverter",
+        "water_heater": "heat",
+        "hvac": "heat",
+        "deferrable0": "garage",
+        "deferrable1": "garage",
+    },
+    "constraints": [{"name": "l1", "devices": ["battery", "hvac"], "max_import": 5000}],
+}
+
+
+def _with(**change):
+    """TOPOLOGY with its first node changed."""
+    return {**TOPOLOGY, "nodes": [{**TOPOLOGY["nodes"][0], **change}] + TOPOLOGY["nodes"][1:]}
 
 
 @pytest.mark.parametrize(
-    "limits, problem",
+    "topology, problem",
     [
-        ({"name": "garage"}, "must be a list"),
+        (["nodes"], "an object with nodes, devices and constraints only"),
+        ({**TOPOLOGY, "rogue": 1}, "an object with nodes, devices and constraints only"),
+        ({"nodes": [{"id": "a", "rogue": 1}]}, "must be an object with id and only"),
+        (_with(id="Inverter!"), "new, short lower-case name"),
+        (_with(id="grid"), "new, short lower-case name"),
+        (_with(id="__import__('os')"), "new, short lower-case name"),
+        ({"nodes": [{"id": "a"}, {"id": "a"}]}, "new, short lower-case name"),
+        (_with(type="reactor"), "type must be one of"),
+        (_with(max_import=-1), "max_import must be a finite number of W, >= 0"),
+        (_with(max_export=float("inf")), "max_export must be a finite number of W, >= 0"),
+        (_with(max_export=True), "max_export must be a finite number of W, >= 0"),
+        (_with(efficiency_to_parent=1.2), "efficiency_to_parent must be in (0, 1]"),
+        (_with(efficiency_from_parent=0), "efficiency_from_parent must be in (0, 1]"),
+        ({"nodes": [{"id": "a", "parent": "nowhere"}]}, "parent must be 'grid' or a node's id"),
+        ({"nodes": [{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}]}, "form a loop"),
+        ({"devices": {"hvac; rm -rf /": "grid"}}, "is not a device name"),
+        ({"devices": {"hvac": "nowhere"}}, "must be 'grid' or a node's id"),
+        ({"devices": {f"deferrable{i}": "grid" for i in range(65)}}, "at most 64 devices"),
+        ({"nodes": [{"id": f"n{i}"} for i in range(65)]}, "at most 64 nodes"),
         (
-            [{"name": "garage", "devices": ["hvac"], "max_power": 1, "rogue": 1}],
-            "name, devices, max_power and min_power only",
+            {"constraints": [{"name": "c", "devices": ["hvac"]}]},
+            "needs max_import, max_export or both",
         ),
-        ([{"name": "Garage!", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
-        ([{"name": "inverter", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
-        ([{"name": "__import__('os')", "devices": ["hvac"], "max_power": 1}], "lower-case name"),
         (
-            [{"name": "g", "devices": ["hvac; rm -rf /"], "max_power": 1}],
+            {"constraints": [{"name": "c", "devices": ["pv"], "max_import": 1}]},
             "non-empty list of device names",
         ),
-        ([{"name": "g", "devices": []}], "non-empty list of device names"),
-        ([{"name": "g", "devices": ["hvac"]}], "needs max_power, min_power or both"),
         (
-            [{"name": "g", "devices": ["hvac"], "max_power": "3000"}],
-            "max_power must be a finite number",
+            {"constraints": [{"name": "c", "devices": ["hvac"], "max_import": "1"}]},
+            "max_import must be a finite",
         ),
         (
-            [{"name": "g", "devices": ["hvac"], "max_power": float("inf")}],
-            "max_power must be a finite number",
+            {"constraints": [{"name": "c", "devices": [], "max_import": 1}]},
+            "non-empty list of device names",
         ),
         (
-            [{"name": "g", "devices": ["hvac"], "max_power": True}],
-            "max_power must be a finite number",
-        ),
-        (
-            [{"name": "g", "devices": ["hvac"], "min_power": 500}],
-            "min_power must be a finite number of W, <= 0",
-        ),
-        (
-            [
-                {"name": "a", "devices": ["hvac"], "max_power": 1},
-                {"name": "b", "devices": ["hvac"], "max_power": 1},
-            ],
-            "another limit already has",
-        ),
-        (
-            [
-                {"name": "a", "devices": ["hvac"], "max_power": 1},
-                {"name": "a", "devices": ["battery"], "max_power": 1},
-            ],
-            "lower-case name",
-        ),
-        (
-            [{"name": f"g{i}", "devices": [f"deferrable{i}"], "max_power": 1} for i in range(65)],
-            "at most 64 limits",
+            {
+                "nodes": [{"id": "c"}],
+                "constraints": [{"name": "c", "devices": ["hvac"], "max_import": 1}],
+            },
+            "new, short lower-case name",
         ),
     ],
 )
-def test_group_limits_are_checked_before_anything_reads_them(limits, problem):
-    """`group_limits` can arrive with a request too: refused by shape and type,
-    by name, before the coordinator sees it."""
+def test_the_topology_is_checked_before_anything_reads_it(topology, problem):
+    """`electrical_topology` can arrive with a request too: refused by shape
+    and type, by name, before the coordinator or the inverter keys see it."""
     reason = _coordinated_config_problem(
-        {"optimization_backend": "dantzig_wolfe", "group_limits": limits}
+        {"optimization_backend": "dantzig_wolfe", "electrical_topology": topology}
     )
     assert reason and problem in reason
 
 
-def test_valid_group_limits_pass():
+def test_a_valid_topology_passes():
     assert (
         _coordinated_config_problem(
-            {
-                "optimization_backend": "dantzig_wolfe",
-                "group_limits": [
-                    {
-                        "name": "garage",
-                        "devices": ["water_heater", "hvac"],
-                        "max_power": 3000,
-                        "min_power": 0,
-                    },
-                    {"name": "ev_panel", "devices": ["deferrable1"], "max_power": 7400},
-                ],
-            }
+            {"optimization_backend": "dantzig_wolfe", "electrical_topology": TOPOLOGY}
         )
         is None
     )
+
+
+def test_the_topologys_inverter_sets_emhass_inverter_keys(caplog):
+    """A hybrid_inverter node on the main meter holding the PV and the battery
+    fills EMHASS's own inverter keys - its ratings and efficiencies - so the
+    default solver plans the same inverter; where the keys said otherwise,
+    the topology wins, with a warning."""
+    plant = {"inverter_is_hybrid": False, "inverter_ac_output_max": 5000}
+    with caplog.at_level("WARNING"):
+        assert utils.compile_electrical_topology(TOPOLOGY, plant, logger)
+    assert plant == {
+        "inverter_is_hybrid": True,
+        "inverter_ac_output_max": 4000,
+        "inverter_ac_input_max": 4000,
+        "inverter_efficiency_dc_ac": 0.97,
+        "inverter_efficiency_ac_dc": 0.97,
+    }
+    assert "replaces inverter_ac_output_max=5000" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"parent": "garage"},  # behind a panel
+        {"type": "inverter"},  # not a hybrid one
+    ],
+)
+def test_an_inverter_emhass_cannot_hold_leaves_its_keys(change, caplog):
+    plant = {"inverter_is_hybrid": False}
+    with caplog.at_level("WARNING"):
+        assert not utils.compile_electrical_topology(_with(**change), plant, logger)
+    assert plant == {"inverter_is_hybrid": False}
+
+
+def test_the_input_pipeline_compiles_the_topology():
+    """Set in the configuration (or a request), the topology's inverter
+    reaches the default solver's plant configuration."""
+
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = pathlib.Path(tmp) / "data"
+            shutil.copytree(root / "data", data_path)
+            ec = _conf(data_path)
+            _, secrets = await build_secrets(ec, logger, no_response=True)
+            params = await build_params(
+                ec, secrets, await build_config(ec, logger, ec["defaults_path"]), logger
+            )
+            params["optim_conf"]["electrical_topology"] = TOPOLOGY
+            idd = await set_input_data_dict(
+                ec,
+                "profit",
+                orjson.dumps(params).decode(),
+                orjson.dumps(FORECASTS).decode(),
+                "dayahead-optim",
+                logger,
+                get_data_from_file=True,
+            )
+            return idd["opt"].plant_conf
+
+    plant = asyncio.run(run())
+    assert plant["inverter_is_hybrid"] is True and plant["inverter_ac_output_max"] == 4000
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])

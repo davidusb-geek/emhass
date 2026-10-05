@@ -36,22 +36,40 @@ A participant is one device, or a group of devices solved together by one solver
 
 A battery planned by `home_energy_optimizer` values the energy it leaves at the end at the average import price, instead of being held to `soc_final`.
 
-## Shared limits
+## Electrical topology
 
-Devices that share a breaker or a sub-panel can be held to a limit on their total draw. There are two ways to say it:
-
-- **`deferrable_load_groups`**, EMHASS's own key, for deferrable loads (`max_power` and `mutual_exclusion`, as without the coordinator). When all of a group's loads are in one participant group solved by EMHASS, that participant's own model holds it, exactly as the default solver would. Otherwise the coordinator holds its `max_power`; `mutual_exclusion` across participants falls back.
-- **`group_limits`**, for any devices, including those EMHASS does not model (`water_heater`, `hvac`):
+Devices do not always reach the meter directly: the PV and a battery may sit on a hybrid inverter's DC bus, a heat pump and an EV charger behind one breaker, a sub-panel behind another. `electrical_topology` describes that tree, and the coordinator plans within every limit on it.
 
 ```json
-"group_limits": [
-  {"name": "garage", "devices": ["water_heater", "hvac"], "max_power": 3500, "min_power": 0}
-]
+"electrical_topology": {
+  "nodes": [
+    {"id": "inverter", "type": "hybrid_inverter", "max_import": 4000, "max_export": 4000,
+     "efficiency_from_parent": 0.97, "efficiency_to_parent": 0.97},
+    {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+    {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500}
+  ],
+  "devices": {"pv": "inverter", "battery": "inverter",
+              "deferrable0": "garage", "deferrable1": "garage",
+              "water_heater": "heat", "hvac": "heat"},
+  "constraints": [
+    {"name": "l1", "devices": ["battery", "hvac"], "max_import": 5000}
+  ]
+}
 ```
 
-`max_power` (W) caps the devices' total draw; `min_power` (W, at most 0) caps what they may push back to the house, so 0 means no backfeed. Each needs a `name` (lower case, digits and `_`), and a device is under one limit at most. The coordinator sees a participant group only as a whole, so an EMHASS participant group must be wholly inside a limit or wholly outside it. The default solver does not hold `group_limits`; when the coordinator falls back, the log says so. For deferrable loads alone, `deferrable_load_groups` is held either way. Shared limits need home-energy-optimizer 0.2.6 or later.
+- **`nodes`** are connection points behind the main meter (`grid`): a hybrid inverter, a panel, a breaker, a meter. Each has a `parent` (another node, or `grid`, the default), so they nest to any depth. `max_import` and `max_export` (W) bound its connection to the parent, each way: `max_export: 0` means no backfeed. `efficiency_from_parent` and `efficiency_to_parent` make the connection a converter (1 by default: lossless). `type` names what it is.
+- **`devices`** puts each device (`battery`, `water_heater`, `hvac`, `deferrableN`) and the PV (`pv`) on a node, or on `grid`; anything not listed is on `grid`.
+- **`constraints`** limit what a set of devices draw together, wherever they are in the tree - a phase, a shared cable, a contract: `max_import` and/or `max_export` (W).
 
-The coordinator holds each limit as a balance of its own, so the devices behind it are priced at the limit's own price (`fed_local_price_<name>`): the meter's price while the limit has headroom, more while it binds. A hybrid inverter is the same kind of limit, with losses and the PV on its bus (`fed_local_price_inverter`).
+The coordinator sees an EMHASS participant group only as its total, so a group's devices sit on one node, and a constraint holds all of a group's devices or none of them.
+
+A node of type `hybrid_inverter` on the main meter that holds the PV and the battery (and nothing else) is EMHASS's own inverter too: its ratings and efficiencies fill `inverter_is_hybrid`, `inverter_ac_output_max`, `inverter_ac_input_max` and both `inverter_efficiency_*` keys (the topology wins where they disagree, with a warning), so the default solver plans the same inverter. Every other node and every constraint is the coordinator's: the default solver does not hold them, and when the coordinator falls back the log says so. For deferrable loads alone, `deferrable_load_groups` is held either way.
+
+**`deferrable_load_groups`**, EMHASS's own key for deferrable loads (`max_power`, `mutual_exclusion`), still works: when all of a group's loads are in one participant group solved by EMHASS, that participant's own model holds it, exactly as the default solver would; otherwise the coordinator holds its `max_power` as a constraint (`mutual_exclusion` across participants falls back).
+
+Without `electrical_topology`, EMHASS's inverter keys describe a hybrid inverter as before.
+
+**Prices.** The coordinator holds each node as a balance of its own, so the devices on it are priced at the node's own price (`fed_local_price_<id>`): the parent's price through the connection's efficiency while it has headroom, apart from it while it is at a rating - a hybrid inverter's falls to zero while its PV is being clipped. A constraint adds its own premium while it binds (`fed_limit_price_<name>`). The topology needs home-energy-optimizer 0.2.7 or later.
 
 ## What falls back
 
@@ -59,9 +77,9 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 
 - `costfun: self-consumption`, `set_total_pv_sell`
 - `set_nocharge_from_grid`, `set_battery_first_priority`, more than one battery
-- a hybrid inverter with `set_nodischarge_to_grid`, `inverter_stress_cost`, an inverter rated only by `pv_inverter_model` name, or the battery in a participant group with other devices
+- a hybrid inverter (or the battery and the PV on one node) with `set_nodischarge_to_grid`, `inverter_stress_cost`, an inverter rated only by `pv_inverter_model` name, or the battery in a participant group with other devices
 - `heat_topology`, shared thermal tanks
-- `deferrable_load_groups` with `mutual_exclusion` across participants, and a limit that splits an EMHASS participant group
+- `deferrable_load_groups` with `mutual_exclusion` across participants, and a node or constraint that splits an EMHASS participant group
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
 
@@ -82,7 +100,9 @@ The usual `opt_res` columns, plus:
 | `fed_gap` | the plan's cost minus that bound |
 | `fed_stop_reason`, `fed_iterations` | why the coordinator stopped (`converged`, `stalled`, `no new proposals`, `iteration cap`) and after how many rounds |
 | `fed_share_<player>` | that player's share of the saving over the horizon (currency), the same in every row; one column for `solar` and one per participant |
-| `fed_local_price_<name>` | the price of one more kWh behind a limit the coordinator holds, per timestep (currency/kWh): `inverter` for a hybrid inverter, a `group_limits` name, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
+| `fed_local_price_<id>` | the price of one more kWh on a node of the topology (or the hybrid inverter EMHASS's keys describe, `inverter`), per timestep (currency/kWh) |
+| `fed_node_power_<id>` | that node's power to its parent, per timestep (W, + = up the tree) |
+| `fed_limit_price_<name>` | a constraint's premium while it binds, per timestep (currency/kWh): a topology constraint's name, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
 

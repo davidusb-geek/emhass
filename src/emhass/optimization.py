@@ -140,11 +140,19 @@ def _coordinated_plan(opt, *args, **kwargs):
 
 
 def _warn_unheld_limits(opt) -> None:
-    """On a fallback, say that `group_limits` are the coordinator's: the
-    default solver does not hold them (deferrable_load_groups it does)."""
-    if opt.optim_conf.get("group_limits"):
+    """On a fallback, say what of `electrical_topology` the default solver
+    does not hold: every node and constraint but the hybrid inverter EMHASS's
+    own keys describe (utils.electrical_topology_inverter). For deferrable
+    loads alone, deferrable_load_groups it does hold."""
+    topology = opt.optim_conf.get("electrical_topology")
+    if not isinstance(topology, dict):
+        return
+    nodes = topology.get("nodes") or []
+    held = utils.electrical_topology_inverter(topology)
+    if topology.get("constraints") or len(nodes) > (1 if held else 0):
         opt.logger.warning(
-            "optimization_backend: group_limits are not held by the default solver; "
+            "optimization_backend: the default solver does not hold electrical_topology's limits "
+            "(beyond a hybrid inverter EMHASS's own model can hold); "
             "for deferrable loads alone, deferrable_load_groups is"
         )
 
@@ -162,60 +170,6 @@ def _with_backend(res, requested: str, fallback_reason: str | None):
 _BACKENDS = ("cvxpy", "dantzig_wolfe")
 _SOLVERS = ("emhass", "home_energy_optimizer")
 _DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
-_LIMIT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_LIMIT_KEYS = {"name", "devices", "max_power", "min_power"}
-
-
-def _finite(value) -> bool:
-    """A real number (not a boolean), finite."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _group_limits_problem(spec) -> str | None:
-    """Why `group_limits` cannot be used as given, or None.
-
-    A list of at most 64 limits, each an object with a `name` (lower case,
-    digits and underscores, at most 32; not `inverter`, the hybrid inverter's),
-    `devices` (a non-empty list of device names, each under one limit only),
-    and `max_power` and/or `min_power` in W: finite, `max_power` >= 0,
-    `min_power` <= 0 (the most the devices may push back to the house).
-    """
-    if not isinstance(spec, list) or len(spec) > 64:
-        return "group_limits must be a list of at most 64 limits"
-    names: set[str] = set()
-    seen: set[str] = set()
-    for i, lim in enumerate(spec):
-        if not isinstance(lim, dict) or set(lim) - _LIMIT_KEYS:
-            return f"group_limits[{i}] must be an object with name, devices, max_power and min_power only"
-        name = lim.get("name")
-        if (
-            not isinstance(name, str)
-            or not _LIMIT_NAME.match(name)
-            or name == "inverter"
-            or name in names
-        ):
-            return (
-                f"group_limits[{i}].name must be a new, short lower-case name (letters, digits, _)"
-            )
-        names.add(name)
-        devices = lim.get("devices")
-        if (
-            not isinstance(devices, list)
-            or not devices
-            or not all(isinstance(d, str) and _DEVICE.match(d) for d in devices)
-        ):
-            return f"group_limits[{i}].devices must be a non-empty list of device names"
-        if seen & set(devices):
-            return f"group_limits[{i}] names a device another limit already has"
-        seen |= set(devices)
-        hi, lo = lim.get("max_power"), lim.get("min_power")
-        if hi is None and lo is None:
-            return f"group_limits[{i}] needs max_power, min_power or both (W)"
-        if hi is not None and not (_finite(hi) and hi >= 0):
-            return f"group_limits[{i}].max_power must be a finite number of W, >= 0"
-        if lo is not None and not (_finite(lo) and lo <= 0):
-            return f"group_limits[{i}].min_power must be a finite number of W, <= 0"
-    return None
 
 
 def _coordinated_config_problem(optim_conf: dict) -> str | None:
@@ -226,8 +180,8 @@ def _coordinated_config_problem(optim_conf: dict) -> str | None:
     are checked for shape and type before anything reads them: a known
     backend; a list of participant groups, each with a non-empty list of
     known device names, a known solver, and a `config` of plain scalars
-    (numbers, booleans, short strings) under string keys. `group_limits`, if
-    given, likewise (`_group_limits_problem`).
+    (numbers, booleans, short strings) under string keys. `electrical_topology`,
+    if given, likewise (utils.electrical_topology_problem).
 
     Args:
         optim_conf: The optimisation configuration.
@@ -240,8 +194,8 @@ def _coordinated_config_problem(optim_conf: dict) -> str | None:
         return "admm is planned for a later release, not available yet"
     if backend not in _BACKENDS:
         return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
-    if optim_conf.get("group_limits") is not None:
-        problem = _group_limits_problem(optim_conf["group_limits"])
+    if optim_conf.get("electrical_topology") is not None:
+        problem = utils.electrical_topology_problem(optim_conf["electrical_topology"])
         if problem:
             return problem
     spec = optim_conf.get("participants")

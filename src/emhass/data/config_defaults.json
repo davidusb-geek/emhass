@@ -3,7 +3,7 @@
   "costfun": "profit",
   "optimization_backend": "cvxpy",
   "participants": null,
-  "group_limits": null,
+  "electrical_topology": null,
   "optimization_time_step": 30,
   "historic_days_to_retrieve": 2,
   "method_ts_round": "nearest",
