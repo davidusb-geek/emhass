@@ -123,7 +123,7 @@ def add_local_calendar_days(
     durations. Valid wall times therefore retain the existing 23/24/25-hour
     behavior across DST. If the nominal target wall time does not exist, move
     it forward by the timezone's actual transition gap. If it is ambiguous,
-    select the post-transition (non-DST) occurrence.
+    select the post-transition (chronologically later) occurrence.
 
     EMHASS uses either the configured IANA timezone name or a pytz timezone,
     depending on the calling path. IANA names are normalized with
@@ -162,8 +162,12 @@ def add_local_calendar_days(
         # 30 min on Lord Howe) rather than hard-coding an hour.
         resolved = tz.normalize(tz.localize(nominal_dt, is_dst=False))
     except pytz.AmbiguousTimeError:
-        # is_dst=False selects the post-transition/non-DST occurrence.
-        resolved = tz.localize(nominal_dt, is_dst=False)
+        # The is_dst flag does not encode chronology (zones such as Africa/Casablanca
+        # and Europe/Dublin use negative DST), so pick the later UTC instant instead.
+        resolved = max(
+            tz.localize(nominal_dt, is_dst=True),
+            tz.localize(nominal_dt, is_dst=False),
+        )
     return pd.Timestamp(resolved)
 
 
