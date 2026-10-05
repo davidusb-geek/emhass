@@ -65,16 +65,13 @@ def _split_days(day_list: list, test_days: int, val_days: int) -> dict:
 
 
 def _naive_predict_day(history_before: pd.Series, target_dates: pd.DatetimeIndex) -> pd.Series:
-    """Persistence: carry the block immediately before the target day forward.
+    """Persistence: forecast the target day with the same time of day of the day before.
 
-    Mirrors the production naive rule (``forecast.py`` ``_get_load_forecast_naive``:
-    take the last ``horizon`` observations) applied at a past date.
+    Calls the production naive rule (``Forecast.get_naive_load_forecast``) at a past date.
     """
-    horizon = len(target_dates)
-    if len(history_before) < horizon:
+    if len(history_before) < len(target_dates):
         return pd.Series(np.nan, index=target_dates)
-    values = history_before.iloc[-horizon:].to_numpy()
-    return pd.Series(values, index=target_dates)
+    return Forecast.get_naive_load_forecast(history_before, target_dates)
 
 
 def _typical_predict_day(history_before: pd.Series, target_dates: pd.DatetimeIndex) -> pd.Series:
