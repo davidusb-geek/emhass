@@ -109,7 +109,7 @@ AI finds code + candidates. Domain experts decide bug vs design. 2026-04-26 audi
 - Renaming public API params breaks downstream; needs migration path.
 - New dependencies: issue first.
 
-**Add parameter:** four-step workflow in `docs/develop.md` (`associations.csv` + `config_defaults.json` + `param_definitions.json` + `OptimizationCacheKey`, optional `check_def_loads`). Skip step → breaks something.
+**Add parameter:** four-step workflow in `docs/develop.md` (`associations.csv` + `config_defaults.json` + `param_definitions.json` + cache-key check, optional `check_def_loads`). Structural `plant_conf`/`optim_conf` keys are already covered by `plant_conf_hash`/`optim_conf_structural_hash` (minus the runtime-keys exclusions); add an explicit `OptimizationCacheKey` field only when they are not — test that a value change changes the key. Skip step → breaks something.
 
 **Change default value (existing param):** `src/emhass/static/data/param_definitions.json` first — source of truth. Align `src/emhass/data/config_defaults.json` to match. See `docs/develop.md` § Changing default values.
 
