@@ -871,7 +871,7 @@
       "unit": "fraction",
       "requires": {
         "set_use_battery": true
-      },
+      }
     },
     "capacity_cost_per_kw": {
       "friendly_name": "Capacity (demand) charge cost",

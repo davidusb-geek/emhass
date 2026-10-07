@@ -2715,7 +2715,7 @@ class Optimization:
         if soc_final_under is not None:
             objective_terms.append(
                 -self.param_soc_final_penalty * sum(soc_final_under)
-                +self.param_soc_final_reward * sum(self.vars["soc_final_over"])
+                + self.param_soc_final_reward * sum(self.vars["soc_final_over"])
             )
 
         # Battery-first priority penalty (issue #834/#1002). battery_first_penalty
@@ -5380,9 +5380,7 @@ class Optimization:
         reward_factor = self.optim_conf.get("battery_soc_final_reward_factor", 0.0)
         if reward_factor > 0.0:
             self.param_soc_final_reward.value = (
-                0.001
-                * reward_factor
-                * float(np.asarray(unit_load_cost, dtype=float)[-1])
+                0.001 * reward_factor * float(np.asarray(unit_load_cost, dtype=float)[-1])
             )
         else:
             self.param_soc_final_reward.value = (
