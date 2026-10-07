@@ -20,14 +20,14 @@ Every device (`battery`, `deferrable0`, `deferrable1`, ...) is then planned on i
 
 ## The site
 
-`site` describes the house in one list: the main meter, the nodes behind it, limits on sets of devices, and the devices - where each is wired, which solver plans it, and with which others. Each element is an object with an `id`; its JSON schema is in `openapi.json`, under `Config`.
+`site` describes the house in one list: the main meter, the nodes behind it, limits on sets of devices, and the devices - where each is wired, which solver plans it, and with which others. Each element is an object with an `id`, and every one but the main meter and the limits names its `parent`: `grid`, the main meter, or a node (with one tariff, everything is wired behind the one meter). Its JSON schema is in `openapi.json`, under `Config`.
 
 ```json
 "site": [
   {"id": "grid", "max_import": 9000, "max_export": 5000},
-  {"id": "inverter", "type": "hybrid_inverter", "max_import": 4000, "max_export": 4000,
+  {"id": "inverter", "parent": "grid", "type": "hybrid_inverter", "max_import": 4000, "max_export": 4000,
    "efficiency_import": 0.97, "efficiency_export": 0.97},
-  {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+  {"id": "garage", "parent": "grid", "type": "panel", "max_import": 7400, "max_export": 0},
   {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
   {"id": "l1", "type": "limit", "max_import": 5000},
   {"id": "pv", "parent": "inverter"},
@@ -42,7 +42,7 @@ Every device (`battery`, `deferrable0`, `deferrable1`, ...) is then planned on i
 | element | recognised by | what it holds |
 | --- | --- | --- |
 | the main meter | `id: "grid"` | `max_import`, `max_export` (W): they set `maximum_power_from_grid` / `maximum_power_to_grid` |
-| a node | any other id | an inverter, a panel, a breaker or a meter behind the main meter: `parent` (another node, or `grid`, the default), so nodes nest to any depth; `max_import` / `max_export` (W) on its connection to the parent (`max_export: 0`: no backfeed); `efficiency_import` / `efficiency_export` for a converter (1 by default); `type` (`hybrid_inverter`, `inverter`, `panel`, `breaker`, `meter`) |
+| a node | any other id | an inverter, a panel, a breaker or a meter behind the main meter: `parent` (another node, or `grid`), so nodes nest to any depth; `max_import` / `max_export` (W) on its connection to the parent (`max_export: 0`: no backfeed); `efficiency_import` / `efficiency_export` for a converter (1 by default); `type` (`hybrid_inverter`, `inverter`, `panel`, `breaker`, `meter`) |
 | a limit | `type: "limit"` | `max_import` and/or `max_export` (W) on what the devices tagged with it draw together, wherever they are - a phase, a shared cable, a contract |
 | a device | a device name: `pv`, `battery`, `water_heater`, `hvac`, `deferrable0`, ... | `parent`; `solver`; `group`; `config`; `limits` (the limits it counts against) |
 

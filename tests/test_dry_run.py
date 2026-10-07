@@ -490,13 +490,14 @@ SITE = [
     {"id": "grid", "max_import": 9000, "max_export": 5000},
     {
         "id": "inverter",
+        "parent": "grid",
         "type": "hybrid_inverter",
         "max_import": 4000,
         "max_export": 4000,
         "efficiency_import": 0.97,
         "efficiency_export": 0.97,
     },
-    {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+    {"id": "garage", "parent": "grid", "type": "panel", "max_import": 7400, "max_export": 0},
     {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
     {"id": "l1", "type": "limit", "max_import": 5000},
     {"id": "pv", "parent": "inverter"},
@@ -555,11 +556,19 @@ def _with(index: int, **change):
         (_with(1, efficiency_import=0), "efficiency_import must be in (0, 1]"),
         (_with(4, max_import=None), "needs max_import, max_export or both"),
         (_with(3, parent="nowhere"), "parent must be 'grid' or a node's id"),
+        (_with(1, parent=None), "'inverter' needs a parent"),
+        (_with(7, parent=None), "'deferrable0' needs a parent"),
         (_with(7, parent="l1"), "parent must be 'grid' or a node's id"),
-        (SITE + [{"id": "garage", "type": "breaker"}], "appears twice"),
+        (SITE + [{"id": "garage", "parent": "grid", "type": "breaker"}], "appears twice"),
         ([{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}], "form a loop"),
-        ([{"id": "x", "solver": {"url": "file:///etc/passwd"}}], "solver must be {url"),
-        ([{"id": "x", "solver": {"url": "http://h/", "rogue": 1}}], "solver must be {url"),
+        (
+            [{"id": "x", "parent": "grid", "solver": {"url": "file:///etc/passwd"}}],
+            "solver must be {url",
+        ),
+        (
+            [{"id": "x", "parent": "grid", "solver": {"url": "http://h/", "rogue": 1}}],
+            "solver must be {url",
+        ),
         ([{**REMOTE, "solver": {**REMOTE["solver"], "token_secret": "A!"}}], "must name a secret"),
     ],
 )
@@ -616,6 +625,8 @@ def test_the_published_schema_is_the_check():
     assert device["solver"]["enum"] == list(utils._SITE_SOLVERS)
     assert kinds["a node"]["properties"]["type"]["enum"] == list(utils._SITE_NODE_TYPES)
     assert kinds["a node"]["properties"]["id"]["pattern"] == utils._SITE_ID.pattern
+    for title in ("a node", "a device", "a remote solver"):
+        assert "parent" in kinds[title]["required"]
 
 
 def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):

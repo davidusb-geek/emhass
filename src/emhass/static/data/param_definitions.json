@@ -21,7 +21,7 @@
     },
     "site": {
       "friendly_name": "Site",
-      "Description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). A node (any other id: an inverter, a panel, a breaker) has a parent (another node or 'grid', the default), a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery, water_heater, hvac, deferrable0, ...) has a parent, a solver (emhass, the default, or home_energy_optimizer), a group (devices in one group are planned together by EMHASS's model), a config (home_energy_optimizer's settings) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000, \"efficiency_import\": 0.97, \"efficiency_export\": 0.97}, {\"id\": \"garage\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]",
+      "Description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). Every element but the main meter and the limits names its parent ('grid', the main meter, or a node). A node (any other id: an inverter, a panel, a breaker) has its parent, a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery, water_heater, hvac, deferrable0, ...) has a parent, a solver (emhass, the default, or home_energy_optimizer), a group (devices in one group are planned together by EMHASS's model), a config (home_energy_optimizer's settings) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"parent\": \"grid\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000, \"efficiency_import\": 0.97, \"efficiency_export\": 0.97}, {\"id\": \"garage\", \"parent\": \"grid\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]",
       "input": "object",
       "schema": {
         "type": ["array", "null"],
@@ -39,7 +39,7 @@
               "title": "a node",
               "type": "object",
               "additionalProperties": false,
-              "required": ["id"],
+              "required": ["id", "parent"],
               "properties": {
                 "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"pattern": "^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$"}},
                 "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
@@ -61,7 +61,7 @@
               "title": "a device",
               "type": "object",
               "additionalProperties": false,
-              "required": ["id"],
+              "required": ["id", "parent"],
               "properties": {
                 "id": {"type": "string", "pattern": "^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$"},
                 "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
@@ -81,7 +81,7 @@
               "title": "a remote solver (from the configuration only)",
               "type": "object",
               "additionalProperties": false,
-              "required": ["id", "solver"],
+              "required": ["id", "parent", "solver"],
               "properties": {
                 "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
                 "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},

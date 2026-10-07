@@ -654,8 +654,8 @@ def site_problem(site, from_request: bool = False) -> str | None:
     `site` is the house in one list, each element an object with an `id`:
 
     - "grid": the main meter, with `max_import` / `max_export` (W).
-    - a node (any other lower-case id): `parent` (`grid` or another node;
-      default `grid`), `type` (hybrid_inverter, inverter, panel, breaker,
+    - a node (any other lower-case id): `parent` (`grid` or another node),
+      `type` (hybrid_inverter, inverter, panel, breaker,
       meter), `max_import` / `max_export` (W) on its connection to its parent,
       `efficiency_import` / `efficiency_export` (in (0, 1]).
     - a limit (`type: "limit"`): `max_import` and/or `max_export` (W) on what
@@ -667,7 +667,8 @@ def site_problem(site, from_request: bool = False) -> str | None:
       From the configuration only: a site sent with a request may not name
       one, so no request makes EMHASS call a host of its choosing.
 
-    Ids are unique; parents are `grid` or nodes, and form a tree.
+    Ids are unique. Every element but the main meter and the limits has a
+    `parent` - `grid` or a node - and the parents form a tree.
 
     Args:
         site: The `site` value.
@@ -692,7 +693,11 @@ def site_problem(site, from_request: bool = False) -> str | None:
     for i, element in enumerate(site):
         if ids[element["id"]] in ("grid", "limit"):
             continue
-        up = element.get("parent", _SITE_ROOT)
+        if "parent" not in element:
+            # one tariff, one meter: every row but the meter and the limits
+            # says where it is wired
+            return f"site[{i}]: {element['id']!r} needs a parent ('grid', the main meter, or a node's id)"
+        up = element["parent"]
         if up != _SITE_ROOT and up not in nodes:
             return f"site[{i}].parent must be {_SITE_ROOT!r} or a node's id"
         parent[element["id"]] = up

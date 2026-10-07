@@ -190,7 +190,10 @@ def _hybrid_ready() -> bool:
 SITE_READY = pytest.mark.skipif(
     not _hep_at_least(0, 2, 8), reason="needs home-energy-optimizer >= 0.2.8 (site)"
 )
-LOADS = [{"id": "deferrable0", "group": "loads"}, {"id": "deferrable1", "group": "loads"}]
+LOADS = [
+    {"id": "deferrable0", "parent": "grid", "group": "loads"},
+    {"id": "deferrable1", "parent": "grid", "group": "loads"},
+]
 
 
 @needs_package
@@ -222,7 +225,7 @@ def test_grouped_loads_and_a_battery_planned_by_the_package():
     opt, res = _plan(
         *site,
         optimization_backend="dantzig_wolfe",
-        site=[{"id": "battery", "solver": "home_energy_optimizer"}, *LOADS],
+        site=[{"id": "battery", "parent": "grid", "solver": "home_energy_optimizer"}, *LOADS],
     )
     assert "fed_share_loads" in res.columns
     assert opt.optim_status == "Optimal"
@@ -332,8 +335,8 @@ def test_a_site_limit_holds_and_is_priced():
     site = _site()
     limit = [
         {"id": "loads_cap", "type": "limit", "max_import": 3500},
-        {"id": "deferrable0", "limits": ["loads_cap"]},
-        {"id": "deferrable1", "limits": ["loads_cap"]},
+        {"id": "deferrable0", "parent": "grid", "limits": ["loads_cap"]},
+        {"id": "deferrable1", "parent": "grid", "limits": ["loads_cap"]},
     ]
     opt, res = _plan(*site, optimization_backend="dantzig_wolfe", site=limit)
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
@@ -344,9 +347,9 @@ def test_a_site_limit_holds_and_is_priced():
             *site,
             optimization_backend="dantzig_wolfe",
             site=[
-                {"id": "half", "max_import": 1000},
+                {"id": "half", "parent": "grid", "max_import": 1000},
                 {"id": "deferrable0", "parent": "half", "group": "loads"},
-                {"id": "deferrable1", "group": "loads"},
+                {"id": "deferrable1", "parent": "grid", "group": "loads"},
             ],
         )
     assert (res["backend_used"] == "cvxpy").all()
@@ -358,13 +361,14 @@ def test_a_site_limit_holds_and_is_priced():
 FOUR_DER_SITE = [
     {
         "id": "inverter",
+        "parent": "grid",
         "type": "hybrid_inverter",
         "max_import": 4000,
         "max_export": 4000,
         "efficiency_import": 0.97,
         "efficiency_export": 0.97,
     },
-    {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+    {"id": "garage", "parent": "grid", "type": "panel", "max_import": 7400, "max_export": 0},
     {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
     {"id": "pv", "parent": "inverter"},
     {"id": "battery", "parent": "inverter"},
