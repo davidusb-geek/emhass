@@ -4382,6 +4382,9 @@ class Optimization:
                     constraints.append(p_k <= nominal_k * (1 - is_overshoot))
                 else:
                     constraints.append(p_k[:-1] <= nominal_k * (1 - is_overshoot[1:]))
+                    # The last step has no end temperature in the horizon: gate it
+                    # on its start, so its heat cannot escape the threshold.
+                    constraints.append(p_k[-1] <= nominal_k * (1 - is_overshoot[-1]))
 
             # Comfort-shortfall penalty toward the desired band: only deviation
             # below desired (sense=heat) / above desired (sense=cool) is priced.
