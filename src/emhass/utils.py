@@ -1895,30 +1895,32 @@ async def treat_runtimeparams(
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
             # Auto-extend the forecast window to cover the requested MPC horizon.
-            # forecast_dates was sized from delta_forecast_daily (default 1 day) above,
-            # before prediction_horizon was known; a longer horizon would otherwise be
-            # silently truncated by the [0:prediction_horizon] slice below, and the
-            # weather/Solcast fetch (which scales its request to the window length)
-            # would only pull 1 day. So grow the window to fit and rebuild it once.
-            steps_per_day = int(24 * 60 / optimization_time_step)
-            required_delta_forecast = max(
-                delta_forecast,
-                -(-int(prediction_horizon) // steps_per_day),  # ceil division
-            )
+            # Forecast days are local calendar days, so their timestep count is not
+            # always 24h / optimization_time_step: a DST spring-forward day is shorter
+            # and a fall-back day is longer. Compare the requested timestep horizon
+            # against the actual timezone-aware grid instead of assuming a fixed number
+            # of steps per day. Grow by whole local calendar days until the grid covers
+            # the request; downstream slicing still trims it to prediction_horizon.
+            required_delta_forecast = delta_forecast
+            extended_forecast_dates = forecast_dates
+            while len(extended_forecast_dates) < int(prediction_horizon):
+                required_delta_forecast += 1
+                extended_forecast_dates = get_forecast_dates(
+                    optimization_time_step, required_delta_forecast, time_zone
+                )
             if required_delta_forecast > delta_forecast:
                 logger.info(
-                    "naive-mpc prediction_horizon=%s exceeds the %s-day forecast window; "
-                    "extending delta_forecast_daily to %s day(s) to cover the full horizon "
-                    "and its weather forecast.",
+                    "naive-mpc prediction_horizon=%s exceeds the actual %s-day forecast "
+                    "grid (%s timestep(s)); extending delta_forecast_daily to %s day(s) "
+                    "to cover the full horizon and its weather forecast.",
                     prediction_horizon,
                     delta_forecast,
+                    len(forecast_dates),
                     required_delta_forecast,
                 )
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
-                forecast_dates = get_forecast_dates(
-                    optimization_time_step, delta_forecast, time_zone
-                )
+                forecast_dates = extended_forecast_dates
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain

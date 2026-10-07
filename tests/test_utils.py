@@ -2100,6 +2100,95 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             f"prediction_horizon is parsed, so the horizon is never extended.",
         )
 
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_horizon_extends_across_sydney_spring_forward(self, mock_now):
+        """A timestep-count MPC horizon must not be silently shortened by a
+        shorter DST local-calendar day.
+
+        Retained production shape from 2026-10-03 23:05 in Australia/Sydney: at a
+        5-minute optimization step, the next local calendar day crosses
+        spring-forward and contains 276 real timesteps (23 h). The retained
+        request used prediction_horizon=287, which therefore does not fit even
+        though the old fixed 288-steps/day proxy said that it did.
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        time_zone = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = time_zone
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
+        mock_now.return_value = start.astimezone(UTC)
+
+        one_day_grid = utils.get_forecast_dates(5, 1, time_zone)
+        self.assertEqual(len(one_day_grid), 276)
+
+        runtimeparams = {
+            "prediction_horizon": 287,
+            "optimization_time_step": 5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        _, _, optim_conf_dst, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(
+            optim_conf_dst["delta_forecast_daily"].days,
+            2,
+            "287 requested 5-minute timesteps do not fit the 276-slot Sydney "
+            "spring-forward calendar day; the forecast window must extend.",
+        )
+        self.assertGreaterEqual(
+            len(utils.get_forecast_dates(5, 2, time_zone)),
+            287,
+        )
+
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_horizon_uses_extra_fall_back_capacity(self, mock_now):
+        """A 25-hour local calendar day can satisfy more than the fixed
+        24h/timestep proxy and must not be extended unnecessarily."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        time_zone = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = time_zone
+        start = time_zone.localize(datetime(2027, 4, 3, 20, 15))
+        mock_now.return_value = start.astimezone(UTC)
+
+        one_day_grid = utils.get_forecast_dates(5, 1, time_zone)
+        self.assertEqual(len(one_day_grid), 300)
+
+        runtimeparams = {
+            "prediction_horizon": 295,
+            "optimization_time_step": 5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        _, _, optim_conf_dst, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(
+            optim_conf_dst["delta_forecast_daily"].days,
+            1,
+            "295 requested 5-minute timesteps fit inside the 300-slot Sydney "
+            "fall-back calendar day and must not trigger a spurious extension.",
+        )
+
     async def test_naive_mpc_horizon_unchanged_when_within_one_day(self):
         """Backwards-compat guard (must PASS before AND after the Phase 1 fix):
         a naive-mpc prediction_horizon that fits inside the default 1-day window
