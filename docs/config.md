@@ -304,10 +304,14 @@ Then the additional technical parameters:
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
+
 - `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False).
 - `compute_curtailment`: Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon (issue #342).
 - `inverter_stress_cost`: The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20).
 - `inverter_stress_segments`: The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10).
+
+When `pv_module_model` is a list, each entry is one PV plant and the other PV parameters are read per plant by position, so each of them needs a list with at least one entry per plant. The PVLib path (`weather_forecast_method` `open-meteo`) reads all of `pv_inverter_model`, `surface_tilt`, `surface_azimuth`, `modules_per_string` and `strings_per_inverter`; the `solar.forecast` method reads only `surface_tilt` and `surface_azimuth`. A list that is shorter than `pv_module_model`, or a single value where a list is expected, is a configuration error naming the parameter. A longer list keeps working, the extra entries are ignored and a warning says so.
+
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 
