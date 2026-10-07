@@ -29,6 +29,7 @@ from emhass.forecast_calibration import (
     CALIBRATION_TEST_DAYS,
     CALIBRATION_VAL_DAYS,
     compute_forecast_calibration,
+    trim_to_first_observation,
 )
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -3066,6 +3067,13 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
     if not await rh.get_data(days_list, [var_model]):
         logger.error("Forecast calibration: failed to retrieve load history from Home Assistant")
         return None
+    history = trim_to_first_observation(rh.df_final, var_model)
+    if history is None:
+        logger.error(
+            f"Forecast calibration: no observation of {var_model} in the retrieved history"
+        )
+        return None
+    rh.df_final = history
     rh.prepare_data(
         var_model,
         load_negative=retrieve_hass_conf.get("load_negative", False),
