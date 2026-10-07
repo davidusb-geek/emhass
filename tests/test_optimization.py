@@ -4368,6 +4368,21 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def test_startup_penalty_at_negative_prices(self):
+        """At a negative price the startup penalty must not become a reward.
+        Before, the start indicator (only bounded from below) was set in steps
+        where the load stayed off, and real starts were rewarded too, so the run
+        was split into one-step pieces. Now there is one start, while on."""
+        self.fcst.params["passed_data"]["load_cost_forecast"] = [-1.0] * 10
+        self.optim_conf.update({"set_deferrable_startup_penalty": [100.0]})
+
+        self.run_penalty_test_forecast()
+
+        starts = np.round(self.opt.vars["p_def_start"][0].value)
+        on = np.round(self.opt.vars["p_def_bin2"][0].value)
+        self.assertTrue(np.all(starts <= on), f"starts {starts} while on/off is {on}")
+        self.assertEqual(int(starts.sum()), 1)
+
     def test_running_single_const_pinned_from_start(self):
         """A running single-constant load is pinned ON from t=0 regardless of cost."""
         # Cheap at t=5..9, expensive at t=0..4 — without pinning the solver would defer.
@@ -12407,6 +12422,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             tank_overrides={"draw_off_demand": draw},
         )
         self.assertEqual(opt.optim_status, "Optimal")
+
+    def test_cap_is_ignored_on_a_cooling_tank(self):
+        """max_supply_temperature is a heating ceiling. On a cooling storage the
+        heating-side gate would keep a capped source off exactly while the
+        storage is warm and needs cooling, so the cap is ignored there with a
+        warning."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [30.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"efficiency": 3.0, "max_supply_temperature": 20.0}}
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "room",
+                "load_ids": [0],
+                "volume": 0.2,
+                "start_temperature": 30.0,
+                "thermal_loss": 0.0,
+                "sense": "cool",
+                "min_temperatures": [10.0] * 48,
+                "max_temperatures": [25.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("max_supply_temperature" in m for m in logs.output))
 
     def test_no_cap_lets_cheaper_heat_pump_do_the_work(self):
         """Regression: without `max_supply_temperature` the (cheaper) heat pump

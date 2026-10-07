@@ -50,6 +50,7 @@ from emhass.utils import (
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
     get_keys_to_mask,
+    inverter_power_curve_faults,
     param_to_config,
 )
 
@@ -442,6 +443,13 @@ async def parameter_set():
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
 
+    # Reject an unusable inverter curve before anything is written: build_params would
+    # otherwise clear it (recovery for an already-persisted file), and a silent clear
+    # here would leave the user believing the curve is active.
+    curve_faults = inverter_power_curve_faults(request_data)
+    if curve_faults:
+        return await make_response(curve_faults, 400)
+
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
     if type(params) is bool and not params:
@@ -575,6 +583,10 @@ async def _handle_action_dispatch(
         action_str = f" >> Performing {action_name}..."
         logger.info(action_str)
         opt_res = await optim_actions[action_name](input_data_dict, logger)
+        # False: the action stopped before the solver, e.g. on a rejected
+        # runtime forecast (#1135); there is no plan to render.
+        if isinstance(opt_res, bool) and not opt_res:
+            return await grab_log(action_str), 400
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return f"EMHASS >> Action {action_name} executed... \n", 200

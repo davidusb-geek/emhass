@@ -17,6 +17,8 @@ In practice:
 
 Before tuning anything else, **measure your forecast errors** for at least a week and address the largest one. The [HA forum thread](https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126) has many user reports comparing forecast methods.
 
+The same proportionality applies to the physical model. A well-calibrated scalar efficiency is usually enough; replace it with an optional [power-dependent inverter curve](../cookbook/battery_power_dependent_inverter_efficiency.md) only when power dependence is material for your hardware and use case, and check that it changes the schedule before keeping the extra solver work. A more faithful physical model does not automatically mean a materially better economic result.
+
 ## 2. Timestep alignment
 
 EMHASS internally works with a fixed `optimization_time_step` (default: 30 minutes). Three numbers must agree:
@@ -25,9 +27,11 @@ EMHASS internally works with a fixed `optimization_time_step` (default: 30 minut
 |-----------|---------|------------|
 | `optimization_time_step` | 30 min | EMHASS internal |
 | HA sensor publish interval | 5 min | should be ≤ `optimization_time_step` |
-| Forecast list length | (matches horizon) | `prediction_horizon × optimization_time_step / forecast_step` items |
+| Forecast list length | (matches horizon) | at least one item per horizon step |
 
-If your `prediction_horizon` is `N` and `optimization_time_step` is 30 minutes, lists like `pv_power_forecast` must be **`N` items long** (one per timestep, not hourly). EMHASS does not auto-resample. A length mismatch causes silent truncation or padding with zeros, which then poisons the optimization.
+If your `prediction_horizon` is `N` and `optimization_time_step` is 30 minutes, a plain list like `pv_power_forecast` must contain **at least `N` items** (one per timestep, not hourly). EMHASS does not resample a plain list. Extra items are ignored, and a shorter list is rejected with an error and not used, so the configured forecast method runs instead. Nothing is padded with zeros.
+
+If your source data is hourly or finer than the timestep, pass it as a timestamped mapping instead: EMHASS averages points within each timestep and holds each value until the next point. The [Forecast input contract](../passing_data.md#forecast-input-contract) describes both representations.
 
 Concrete example: a 24-hour horizon at 30-minute step = 48 items per list; at 15-minute step = 96 items.
 
@@ -64,8 +68,8 @@ A common new-user trap is starting with very low actual SOC where `soc_init` is 
 
 When EMHASS returns `optim_status: "Infeasible"` and publishes nothing, work through this list in order. The first match is almost always the cause.
 
-1. Forecast NaN. A sensor publishing `unavailable` becomes a NaN in the forecast list and the solver chokes. Check `pv_power_forecast`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast` for NaN/None entries. Fix at the HA-template level (use `default(0)` or filter out unavailable states).
-2. Timestep mismatch. List lengths don't match `prediction_horizon`. See section 2 above.
+1. Invalid forecast value. A sensor publishing `unavailable` becomes a NaN, `null` or string in the forecast. EMHASS rejects such values before the solver runs: the action fails with one error naming the forecast key, the reason and the first offending position or timestamp, so look for that error in the log first. Fix it at the source. Use a fallback only when it is trustworthy for that quantity, for example 0 W of PV at night. Otherwise let the cycle fail rather than fabricate a zero load or a zero price, which gives a valid-looking but wrong plan. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
+2. Timestep mismatch. A list shorter than `prediction_horizon` is rejected and ignored. See section 2 above.
 3. Windowed-deferrable infeasibility. A windowed deferrable load (EV, washing machine with hard deadline) requires more energy than the window×nominal-power product allows. Either widen the window, increase the power, or reduce the required energy.
 4. Battery state contradicts limits. `soc_init = 0.05` but `battery_minimum_state_of_charge = 0.30` (the default): the optimizer cannot find any valid trajectory because the *initial* state already violates a constraint. Either lower `battery_minimum_state_of_charge`, clamp `soc_init` before passing it, or accept that the battery genuinely cannot be used until it recovers above the minimum. See [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
 5. Thermal-battery infeasibility. `start_temperature` outside the `min_temperatures[0]` / `max_temperatures[0]` range, or a heating/cooling rate that physically cannot reach `min_temperatures` from `start_temperature` within the available timesteps. Widen the comfort range or increase the heat pump power.
