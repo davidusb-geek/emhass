@@ -170,6 +170,27 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     @patch("os.path.exists")
     @patch("emhass.web_server.build_params")
     @patch("emhass.web_server.param_to_config")
+    async def test_parameter_set_accepts_an_empty_heat_topology(
+        self, mock_p2c, mock_build_params, mock_exists, mock_file
+    ):
+        """An empty text box means "no topology": null, "", "null" and {} all
+        save, so the stricter type check does not lock out zero-config users."""
+        mock_exists.return_value = True
+        mock_build_params.return_value = {"new": "params"}
+        mock_p2c.return_value = {"new": "config"}
+        for empty in (None, "", "null", {}):
+            with self.subTest(value=empty):
+                f_defaults = AsyncMock()
+                f_defaults.read.return_value = orjson.dumps({"default": 1})
+                f_write = AsyncMock()
+                mock_file.return_value.__aenter__.side_effect = [f_defaults, f_write, f_write]
+                response = await self.client.post("/set-config", json={"heat_topology": empty})
+                self.assertEqual(response.status_code, 200)
+
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("os.path.exists")
+    @patch("emhass.web_server.build_params")
+    @patch("emhass.web_server.param_to_config")
     async def test_parameter_set_accepts_valid_heat_topology(
         self, mock_p2c, mock_build_params, mock_exists, mock_file
     ):
@@ -782,6 +803,15 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 "storage": storage,
                 "flows": [{"from": "gas", "to": "dhw"}],
             },
+            {
+                "sources": [gas],
+                "storage": storage,
+                "flows": [{"from": "gas", "to": "dhw"}],
+                "actuator_groups": [{"flows": [["gas"]], "mutual_exclusion": True}],
+            },
+            # Not an object at all: a list, or a JSON topology quoted as a string.
+            [{"id": "gas"}],
+            '{"sources": []}',
         ):
             with self.subTest(topology=bad):
                 response = await self.client.post("/set-config", json={"heat_topology": bad})
