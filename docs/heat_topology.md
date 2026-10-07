@@ -79,6 +79,10 @@ watts of source input:
 tied to its power only when the source is semi-continuous or has a `min_power`.
 A continuous source without `min_power` can stay "on" at 0 W, so both have
 little or no effect on it; give it a `min_power` if short cycling matters.
+Both apply per flow: a source that feeds two storages compiles into one load
+per flow, and each load counts its own starts. A source that switches from one
+storage to the other therefore starts the second flow, and its `max_startups`
+limits each flow separately, not the unit as a whole.
 
 A heat pump requires either `supply_temperature` or a `heating_curve`. A
 constant-efficiency source requires `efficiency`.
@@ -111,8 +115,16 @@ its ceiling, so the booster is scheduled exactly for the band above it.
 ```
 
 This is a physical limit, not a preference: it also holds in the relaxed
-fallback. For a soft preference, use `overshoot_temperature` with a desired
-temperature on the storage (see below); the two compose.
+fallback. To stop a source at a lower temperature while it can physically go
+higher, use `overshoot_temperature` with a desired temperature on the storage
+(see below); the two compose.
+
+A per-step list applies step by step: the heat a source delivers during a step
+stays within that step's ceiling, even when the next step's ceiling is higher.
+When every source feeding a storage has a ceiling and the storage's
+`min_temperature` lies above all of them at some step, the compiler logs a
+warning: no source can heat the storage that far, so only a storage that is
+already hot enough can hold that minimum.
 
 `supply_temperature` only sets the heat pump's COP; it is not a ceiling. Without
 `max_supply_temperature` the optimizer may plan to heat the storage above the

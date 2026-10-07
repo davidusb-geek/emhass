@@ -636,11 +636,18 @@ def compile_heat_topology(topology: dict) -> dict:
                 f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, got {penalty}"
             )
         startup_penalty.append(penalty)
-        starts_cap = int(src.get("max_startups", 0))
-        if starts_cap < 0:
+        raw_cap = src.get("max_startups", 0)
+        if (
+            isinstance(raw_cap, bool)
+            or not isinstance(raw_cap, int | float)
+            or raw_cap < 0
+            or raw_cap != int(raw_cap)
+        ):
             raise ValueError(
-                f"heat_topology.sources[{src['id']}].max_startups must be >= 0, got {starts_cap}"
+                f"heat_topology.sources[{src['id']}].max_startups must be a whole "
+                f"number >= 0, got {raw_cap!r}"
             )
+        starts_cap = int(raw_cap)
         max_startups.append(starts_cap)
         # Source-side fields - shape expected by resolve_thermal_battery_cop
         source_block: dict = {}
@@ -852,12 +859,13 @@ def compile_heat_topology(topology: dict) -> dict:
             "max_temperatures": list(s.get("max_temperature", []))
             or list(s.get("max_temperatures", [])),
         }
-        # Fail fast when the static minimum band is physically unreachable: if
-        # EVERY source feeding this tank has a max_supply_temperature and some
+        # Warn when the static minimum band is probably unreachable: if EVERY
+        # source feeding this tank has a max_supply_temperature and some
         # min_temperatures[t] exceeds the highest ceiling at t, no source can
-        # heat the tank into its band and the problem is infeasible by
-        # construction. Only the static list is checked here; a
-        # min_temperature_curve resolves against weather at solve time.
+        # heat the tank to it. It is a warning, not an error: a tank that starts
+        # hot enough can still hold the minimum, and the solver decides. Only the
+        # static list is checked here; a min_temperature_curve resolves against
+        # weather at solve time.
         feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
         if feeding_caps and all(c is not None for c in feeding_caps):
             for t, min_val in enumerate(tank["min_temperatures"]):
@@ -868,13 +876,19 @@ def compile_heat_topology(topology: dict) -> dict:
                     for c in feeding_caps
                 )
                 if float(min_val) > ceiling:
-                    raise ValueError(
-                        f"heat_topology.storage[{sid}].min_temperatures[{t}]={min_val} "
-                        f"exceeds the highest max_supply_temperature ({ceiling}) of "
-                        "the sources feeding this storage; no source can reach that "
-                        "temperature. Raise a source ceiling, lower the minimum, or "
-                        "add an uncapped source (e.g. an electric booster)."
+                    logging.getLogger(__name__).warning(
+                        "heat_topology.storage[%s].min_temperatures[%s]=%s exceeds the "
+                        "highest max_supply_temperature (%s) of the sources feeding "
+                        "this storage; no source can heat it that far, so only a tank "
+                        "that is already hot enough can hold it. Raise a source "
+                        "ceiling, lower the minimum, or add an uncapped source (e.g. "
+                        "an electric booster).",
+                        sid,
+                        t,
+                        min_val,
+                        ceiling,
                     )
+                    break
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
         # should track. Same linear law as the source's heating_curve.
