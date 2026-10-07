@@ -15,6 +15,7 @@ import aiofiles
 import numpy as np
 import orjson
 import pandas as pd
+import pytz
 
 from emhass import utils
 from emhass.command_line import (
@@ -541,6 +542,51 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             0,
             "opt_res must contain no NaN values",
         )
+
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_autoextends_dst_short_day_end_to_end(self, mock_now):
+        """A 287-step MPC request crossing Sydney spring-forward must produce
+        a 287-row optimization result rather than silently truncating to 276."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+        horizon = 287
+        time_zone = pytz.timezone("Australia/Sydney")
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
+        mock_now.return_value = start.astimezone(UTC)
+
+        runtimeparams = {
+            "prediction_horizon": horizon,
+            "optimization_time_step": 5,
+            "pv_power_forecast": list(range(1, horizon + 1)),
+            "load_power_forecast": list(range(1, horizon + 1)),
+            "load_cost_forecast": [0.15] * horizon,
+            "prod_price_forecast": [0.05] * horizon,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        params = copy.deepcopy(await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True))
+        params["retrieve_hass_conf"]["time_zone"] = "Australia/Sydney"
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        with patch.object(pd.Timestamp, "now", return_value=pd.Timestamp(start)):
+            idd = await set_input_data_dict(
+                emhass_conf,
+                costfun,
+                params_json,
+                runtimeparams_json,
+                action,
+                logger,
+                get_data_from_file=True,
+            )
+
+        self.assertIsInstance(idd, dict)
+        self.assertEqual(idd["fcst"].optim_conf["delta_forecast_daily"].days, 2)
+        self.assertEqual(len(idd["fcst"].forecast_dates), horizon)
+
+        opt_res = await naive_mpc_optim(idd, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertEqual(len(opt_res), horizon)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
 
     # Test naive mpc optimization
     async def test_naive_mpc_optim(self):
