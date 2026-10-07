@@ -112,6 +112,65 @@ def _get_now() -> datetime:
     return datetime.now(UTC)
 
 
+def add_local_calendar_days(
+    timestamp: pd.Timestamp | datetime,
+    days: int,
+    time_zone: datetime.tzinfo | str | None = None,
+) -> pd.Timestamp:
+    """Add local calendar days with deterministic pytz DST endpoint handling.
+
+    EMHASS forecast horizons use local civil/calendar days, not fixed 24-hour
+    durations. Valid wall times therefore retain the existing 23/24/25-hour
+    behavior across DST. If the nominal target wall time does not exist, move
+    it forward by the timezone's actual transition gap. If it is ambiguous,
+    select the post-transition (chronologically later) occurrence.
+
+    EMHASS uses either the configured IANA timezone name or a pytz timezone,
+    depending on the calling path. IANA names are normalized with
+    pytz.timezone(). When no timezone is configured and timestamp is naive,
+    preserve the pre-existing naive calendar-day behavior.
+    """
+    ts = pd.Timestamp(timestamp)
+    days = int(days)
+
+    if time_zone is None and ts.tzinfo is None:
+        return ts if days == 0 else ts + pd.DateOffset(days=days)
+
+    tz = time_zone if time_zone is not None else ts.tz
+    if isinstance(tz, str):
+        # Some existing runtime-parameter paths carry the configured IANA
+        # timezone name until get_yaml_parse() converts it. Preserve that
+        # established contract and resolve it through EMHASS's pytz dependency.
+        tz = pytz.timezone(tz)
+    if not hasattr(tz, "localize") or not hasattr(tz, "normalize"):
+        raise TypeError("time_zone must be an IANA timezone name or pytz timezone")
+
+    if ts.tzinfo is None:
+        ts = pd.Timestamp(tz.localize(ts.to_pydatetime(), is_dst=None))
+
+    local = ts.tz_convert(tz)
+    if days == 0:
+        return local
+
+    nominal = local.tz_localize(None) + pd.DateOffset(days=days)
+    nominal_dt = pd.Timestamp(nominal).to_pydatetime()
+    try:
+        resolved = tz.localize(nominal_dt, is_dst=None)
+    except pytz.NonExistentTimeError:
+        # Attach the pre-transition offset, then normalize. This advances the
+        # nominal wall time by the timezone's real gap (e.g. 60 min in Sydney,
+        # 30 min on Lord Howe) rather than hard-coding an hour.
+        resolved = tz.normalize(tz.localize(nominal_dt, is_dst=False))
+    except pytz.AmbiguousTimeError:
+        # The is_dst flag does not encode chronology (zones such as Africa/Casablanca
+        # and Europe/Dublin use negative DST), so pick the later UTC instant instead.
+        resolved = max(
+            tz.localize(nominal_dt, is_dst=True),
+            tz.localize(nominal_dt, is_dst=False),
+        )
+    return pd.Timestamp(resolved)
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
@@ -123,9 +182,9 @@ def get_forecast_dates(
 
     :param freq: Optimization time step.
     :type freq: int
-    :param delta_forecast: Number of days to forecast in the future to be used for the optimization.
+    :param delta_forecast: Number of local calendar days to forecast in the future for the optimization.
     :type delta_forecast: int
-    :param timedelta_days: Number of truncated days needed for each optimization iteration, defaults to 0
+    :param timedelta_days: Additional local calendar days needed for the forecast range, defaults to 0
     :type timedelta_days: Optional[int], optional
     :return: A list of future forecast dates.
     :rtype: pd.core.indexes.datetimes.DatetimeIndex
@@ -140,8 +199,8 @@ def get_forecast_dates(
     start_forecast = (
         pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
     )
-    end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
-    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+    total_days = int(delta_forecast) + int(timedelta_days or 0)
+    final_end_date = add_local_calendar_days(start_forecast, total_days, time_zone) - freq
 
     forecast_dates = pd.date_range(
         start=start_forecast,

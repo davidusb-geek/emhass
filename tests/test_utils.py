@@ -200,6 +200,193 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+10:00", actual_dates[2])
         self.assertIn("+11:00", actual_dates[3])
 
+    def test_add_local_calendar_days_sydney_nonexistent_endpoint(self):
+        """Nonexistent spring-forward endpoints move by the actual Sydney gap."""
+        tz = pytz.timezone("Australia/Sydney")
+        for minute in (0, 5, 30, 55):
+            with self.subTest(minute=minute):
+                start = tz.localize(datetime(2026, 10, 3, 2, minute))
+                result = utils.add_local_calendar_days(start, 1, tz)
+                self.assertEqual(
+                    result,
+                    tz.localize(datetime(2026, 10, 4, 3, minute)),
+                )
+                self.assertEqual(
+                    result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+                    pd.Timedelta(hours=24),
+                )
+
+    def test_add_local_calendar_days_accepts_configured_iana_name(self):
+        """Runtime-param paths may still carry the configured timezone as a string."""
+        start = pd.Timestamp("2026-10-03 02:05:00")
+        result = utils.add_local_calendar_days(start, 1, "Australia/Sydney")
+        expected = pytz.timezone("Australia/Sydney").localize(datetime(2026, 10, 4, 3, 5))
+        self.assertEqual(result, expected)
+
+    def test_add_local_calendar_days_preserves_naive_timezone_optional_behavior(self):
+        """No configured timezone keeps the pre-existing naive calendar-day path."""
+        start = pd.Timestamp("2026-10-03 02:05:00")
+        result = utils.add_local_calendar_days(start, 1, None)
+        self.assertEqual(result, pd.Timestamp("2026-10-04 02:05:00"))
+        self.assertIsNone(result.tzinfo)
+
+    def test_add_local_calendar_days_zero_is_identity_in_fall_back_fold(self):
+        """Zero calendar days must not switch between ambiguous fall-back occurrences."""
+        tz = pytz.timezone("Australia/Sydney")
+        first_occurrence = tz.localize(
+            datetime(2027, 4, 4, 2, 30),
+            is_dst=True,
+        )
+        result = utils.add_local_calendar_days(first_occurrence, 0, tz)
+        self.assertEqual(result, pd.Timestamp(first_occurrence))
+
+    def test_add_local_calendar_days_sydney_ambiguous_endpoint(self):
+        """Ambiguous fall-back endpoints select the post-transition occurrence."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2027, 4, 3, 2, 30))
+        result = utils.add_local_calendar_days(start, 1, tz)
+        expected = tz.localize(datetime(2027, 4, 4, 2, 30), is_dst=False)
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+            pd.Timedelta(hours=25),
+        )
+
+    def test_add_local_calendar_days_ambiguous_endpoint_is_chronologically_later(self):
+        """The later UTC instant wins, including zones where is_dst=False is the earlier one.
+
+        Africa/Casablanca and Europe/Dublin use negative DST: their clocks fall back
+        into the "DST" offset, so is_dst=True is the post-transition occurrence there.
+        """
+        cases = (
+            # zone, start (local), repeated wall time, expected later UTC instant
+            (
+                "Australia/Sydney",
+                datetime(2027, 4, 3, 2, 30),
+                "2027-04-04 02:30",
+                "2027-04-03 16:30",
+            ),
+            (
+                "Africa/Casablanca",
+                datetime(2026, 2, 14, 2, 30),
+                "2026-02-15 02:30",
+                "2026-02-15 02:30",
+            ),
+            (
+                "Europe/Dublin",
+                datetime(2026, 10, 24, 1, 30),
+                "2026-10-25 01:30",
+                "2026-10-25 01:30",
+            ),
+        )
+        for zone, start_naive, repeated, expected_utc in cases:
+            with self.subTest(zone=zone):
+                tz = pytz.timezone(zone)
+                start = tz.localize(start_naive)
+                result = utils.add_local_calendar_days(start, 1, tz)
+
+                nominal = datetime.fromisoformat(repeated)
+                earlier, later = sorted(
+                    (tz.localize(nominal, is_dst=True), tz.localize(nominal, is_dst=False)),
+                    key=lambda candidate: candidate.astimezone(UTC),
+                )
+                self.assertLess(earlier.astimezone(UTC), later.astimezone(UTC))
+                self.assertEqual(result, later)
+                self.assertEqual(result.tz_convert("UTC"), pd.Timestamp(expected_utc, tz="UTC"))
+
+    def test_add_local_calendar_days_nonexistent_endpoint_negative_dst(self):
+        """Spring-forward gaps advance by the real gap when the DST flag is negative."""
+        cases = (
+            ("Africa/Casablanca", datetime(2026, 3, 21, 2, 30), datetime(2026, 3, 22, 3, 30)),
+            ("Europe/Dublin", datetime(2026, 3, 28, 1, 30), datetime(2026, 3, 29, 2, 30)),
+        )
+        for zone, start_naive, expected_naive in cases:
+            with self.subTest(zone=zone):
+                tz = pytz.timezone(zone)
+                start = tz.localize(start_naive)
+                result = utils.add_local_calendar_days(start, 1, tz)
+                self.assertEqual(result, tz.localize(expected_naive))
+                self.assertEqual(
+                    result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+                    pd.Timedelta(hours=24),
+                )
+
+    def test_add_local_calendar_days_lord_howe_half_hour_transitions(self):
+        """DST resolution follows the timezone's 30-minute gap/fold, not a hard-coded hour."""
+        tz = pytz.timezone("Australia/Lord_Howe")
+
+        spring_start = tz.localize(datetime(2026, 10, 3, 2, 15))
+        spring_result = utils.add_local_calendar_days(spring_start, 1, tz)
+        self.assertEqual(
+            spring_result,
+            tz.localize(datetime(2026, 10, 4, 2, 45)),
+        )
+        self.assertEqual(
+            spring_result.tz_convert("UTC") - pd.Timestamp(spring_start).tz_convert("UTC"),
+            pd.Timedelta(hours=24),
+        )
+
+        fall_start = tz.localize(datetime(2026, 4, 4, 1, 45))
+        fall_result = utils.add_local_calendar_days(fall_start, 1, tz)
+        fall_expected = tz.localize(datetime(2026, 4, 5, 1, 45), is_dst=False)
+        self.assertEqual(fall_result, fall_expected)
+        self.assertEqual(
+            fall_result.tz_convert("UTC") - pd.Timestamp(fall_start).tz_convert("UTC"),
+            pd.Timedelta(hours=24, minutes=30),
+        )
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_nonexistent_endpoint(self, mock_ts_now):
+        """Issue #406 reproducer: 02:xx the day before spring-forward must not crash."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2026, 10, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 288)
+        self.assertEqual(dates[0], "2026-10-03T02:05:00+10:00")
+        self.assertEqual(dates[-1], "2026-10-04T03:00:00+11:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_extension_resolves_from_original_start(self, mock_ts_now):
+        """Extra forecast days must not carry a spring-gap shift into later days."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2026, 10, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz, timedelta_days=1)
+
+        self.assertEqual(len(dates), 564)
+        self.assertEqual(dates[0], "2026-10-03T02:05:00+10:00")
+        self.assertEqual(dates[-1], "2026-10-05T02:00:00+11:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_ambiguous_endpoint(self, mock_ts_now):
+        """Fall-back target inside 02:xx uses the post-transition occurrence."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2027, 4, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 300)
+        self.assertEqual(dates[0], "2027-04-03T02:05:00+11:00")
+        self.assertEqual(dates[-1], "2027-04-04T02:00:00+10:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_casablanca_ambiguous_endpoint_negative_dst(self, mock_ts_now):
+        """Negative-DST fall-back endpoint uses the later (+00:00) occurrence: a 25-hour window."""
+        tz = pytz.timezone("Africa/Casablanca")
+        start = tz.localize(datetime(2026, 2, 14, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 300)
+        self.assertEqual(dates[0], "2026-02-14T02:05:00+01:00")
+        self.assertEqual(dates[-1], "2026-02-15T02:00:00+00:00")
+
     def test_get_forecast_dates_host_tz_differs_from_config(self):
         """Issue #984: forecast dates must be correct when host clock is UTC but EMHASS tz differs.
 
