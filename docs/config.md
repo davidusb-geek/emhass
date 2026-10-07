@@ -19,6 +19,8 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `sensor_battery_state_of_charge`: The name of the measured battery state of charge sensor in percent from Home Assistant, for example 'sensor.battery_state_of_charge'. Only used by battery self-identification (`set_use_battery_identification`), and only retrieved when it is enabled. With `number_of_batteries` greater than 1, provide a list of exactly `number_of_batteries` sensor names, one per battery, the same way as `sensor_power_battery`.
 - `load_negative`: Set this parameter to True if the retrieved load variable is negative by convention. Defaults to False.
 - `set_zero_min`: Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.
+
+`load_negative` and `set_zero_min` only prepare the history retrieved from Home Assistant. They do not apply to a `load_power_forecast` passed at runtime, which is canonical non-negative consumption; see the [Forecast input contract](passing_data.md#forecast-input-contract).
 - `var_replace_zero`: The list of retrieved variables that we would want to replace nans (if they exist) with zeros. For example:
 	- 'sensor.power_photovoltaics'
 - `sensor_linear_interp`: The list of retrieved variables that we would want to interpolate nans values using linear interpolation. For example:
