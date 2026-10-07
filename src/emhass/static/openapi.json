@@ -572,6 +572,32 @@
             "x-unit": "fraction",
             "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100) (unit: fraction)"
           },
+          "inverter_power_curve_dc_ac": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "default": []
+              }
+            },
+            "title": "Hybrid inverter DC to AC power curve",
+            "x-unit": "W",
+            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+          },
+          "inverter_power_curve_ac_dc": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "default": []
+              }
+            },
+            "title": "Hybrid inverter AC to DC power curve",
+            "x-unit": "W",
+            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+          },
           "inverter_stress_cost": {
             "type": "number",
             "default": 0.0,

@@ -17,6 +17,8 @@ In practice:
 
 Before tuning anything else, **measure your forecast errors** for at least a week and address the largest one. The [HA forum thread](https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126) has many user reports comparing forecast methods.
 
+The same proportionality applies to the physical model. A well-calibrated scalar efficiency is usually enough; replace it with an optional [power-dependent inverter curve](../cookbook/battery_power_dependent_inverter_efficiency.md) only when power dependence is material for your hardware and use case, and check that it changes the schedule before keeping the extra solver work. A more faithful physical model does not automatically mean a materially better economic result.
+
 ## 2. Timestep alignment
 
 EMHASS internally works with a fixed `optimization_time_step` (default: 30 minutes). Three numbers must agree:

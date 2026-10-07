@@ -307,12 +307,65 @@ Then the additional technical parameters:
 - `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
 
 - `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False).
+- `inverter_ac_output_max` and `inverter_ac_input_max`: The maximum hybrid inverter AC output power (to the house and grid) and AC input power (from the grid, to charge the battery), in Watts (Default 5000 each).
+- `inverter_efficiency_dc_ac` and `inverter_efficiency_ac_dc`: Scalar efficiencies (percentage/100, Default 1.0) of the hybrid inverter conversion from the DC bus to AC and from AC to the DC bus. These are the default conversion model and stay fully supported; with only these set, the model is the one of every earlier release. Both are inverter parameters, not battery parameters: the battery's own efficiencies are `battery_charge_efficiency` and `battery_discharge_efficiency` (below).
+- `inverter_power_curve_dc_ac` and `inverter_power_curve_ac_dc`: Optional opt-in replacement of one direction's scalar efficiency by a power-dependent efficiency curve given as `[ac_power_w, efficiency]` points on the AC side (issue #746), solved as an exact piecewise-linear power transfer. Empty (the default) keeps the scalar. See [Hybrid inverter power curves](#hybrid-inverter-power-curves) below.
 - `compute_curtailment`: Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon (issue #342).
 - `inverter_stress_cost`: The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20).
 - `inverter_stress_segments`: The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10).
 
 When `pv_module_model` is a list, each entry is one PV plant and the other PV parameters are read per plant by position, so each of them needs a list with at least one entry per plant. The PVLib path (`weather_forecast_method` `open-meteo`) reads all of `pv_inverter_model`, `surface_tilt`, `surface_azimuth`, `modules_per_string` and `strings_per_inverter`; the `solar.forecast` method reads only `surface_tilt` and `surface_azimuth`. A list that is shorter than `pv_module_model`, or a single value where a list is expected, is a configuration error naming the parameter. A longer list keeps working, the extra entries are ignored and a warning says so.
 
+### Hybrid inverter power curves
+
+A real hybrid inverter loses a larger share of low power than of high power, which a single scalar efficiency cannot express. Setting `inverter_power_curve_dc_ac` and/or `inverter_power_curve_ac_dc` replaces the scalar efficiency of that direction with a power-dependent efficiency curve, which EMHASS converts to a power-transfer relation the optimizer must obey exactly. The feature is opt-in and each direction is independent: a direction without a curve keeps its scalar `inverter_efficiency_*`. It needs `inverter_is_hybrid` set to true. For measured-curve guidance see the [cookbook recipe](cookbook/battery_power_dependent_inverter_efficiency.md); for the equations see [the mathematical model](advanced_math_model.md#hybrid-inverter-conversion).
+
+Both parameters are a list of `[ac_power_w, efficiency]` points. The power coordinate is the **AC-side** power, the one that is commanded and measured at the inverter's AC terminals (the one `inverter_ac_output_max` and `inverter_ac_input_max` limit). Efficiency is a fraction (`0.97` for 97 %, never `97`). The DC bus is internal: it is where PV and the battery connect, and `P_batt` is a DC-bus power, not an AC one.
+
+| Parameter | Point is | AC-side power is | Efficiency is | Internal conversion |
+|---|---|---|---|---|
+| `inverter_power_curve_dc_ac` (discharge) | `[ac_output_power_w, efficiency]` | AC power delivered to the house and grid | AC output / DC input, `0 < efficiency <= 1` | `dc_input = ac_output / efficiency` |
+| `inverter_power_curve_ac_dc` (charge) | `[ac_input_power_w, efficiency]` | AC power drawn from the grid | DC output / AC input, `0 <= efficiency <= 1` | `dc_output = ac_input * efficiency` |
+
+```yaml
+plant_conf:
+  inverter_is_hybrid: true
+  inverter_ac_output_max: 4500
+  inverter_ac_input_max: 4500
+  # Illustrative values only - use your own measured or datasheet points.
+  # [ac_power_w, efficiency]; no point at 0 W is needed.
+  inverter_power_curve_dc_ac: [[100, 0.60], [1000, 0.82], [3000, 0.92], [4500, 0.94]]
+  inverter_power_curve_ac_dc: [[50, 0.0], [100, 0.55], [1000, 0.85], [4000, 0.93]]
+```
+
+Rules, each naming the parameter, the point and the value when violated:
+
+- at least two and at most 20 points, each a pair of finite numbers (booleans are rejected). The limit keeps the optimization tractable: every point after the first adds one binary variable per time step, so a 288-step horizon with 20 points on both curves already carries about 11 000 binaries. Datasheet efficiency tables rarely have more than a dozen points;
+- the AC-side power is strictly positive and strictly increasing. Do not enter a point at `0` W: efficiency at zero power is undefined, so EMHASS adds the transfer origin (0 W AC, 0 W DC) itself. This keeps the existing assumption that the inverter has no standby consumption in the model; keep accounting for standby where it is accounted for today (for example in the load forecast);
+- efficiency is a fraction between `0` and `1` (no energy gain). For `inverter_power_curve_ac_dc` (charging) it may be `0`: fixed losses can consume all of a small AC input, so a measured `[50, 0.0]` (50 W of AC input reaches the DC bus as 0 W) is valid and creates a flat zero-output segment (a dead zone). For `inverter_power_curve_dc_ac` (discharging) it must be above `0`: delivering positive AC output always takes DC power, and 0 % would need infinite DC input;
+- the converted DC-side power must not decrease as the AC-side power rises. It may stay flat (a dead zone, or an efficiency that falls exactly in proportion to power) but not fall;
+- `inverter_is_hybrid` must be true for the curve to be used.
+
+A parameter that is absent, or the explicit empty list `[]`, keeps the scalar efficiency. Any other value (`null`, `false`, `0`, an empty string, ...) is treated as a supplied curve and rejected as malformed: a curve is a physical model, so EMHASS never silently falls back to the scalar.
+
+If your datasheet gives efficiency against **DC** power instead, convert only the power coordinate to the AC side and copy the efficiency unchanged: `ac_power_w = dc_power_w * efficiency` for `inverter_power_curve_dc_ac` (AC is the output) and `ac_power_w = dc_power_w / efficiency` for `inverter_power_curve_ac_dc` (AC is the input).
+
+EMHASS converts each point once to a power-transfer breakpoint: `dc_input_w = ac_power_w / efficiency` for DC to AC, and `dc_output_w = ac_power_w * efficiency` for AC to DC. The optimizer then enforces the exact piecewise-linear *power transfer* through those breakpoints (and the internal origin). Efficiency itself is **not** interpolated between points: interpolating efficiency and multiplying by power would be quadratic and would change the optimization problem.
+
+How a violation is handled depends on where the curve comes from:
+
+- **Saving in the web configuration page** (`/set-config`) rejects an invalid curve with HTTP 400 and the reason shown in the page; nothing is written, so the previous configuration stays in place.
+- **Runtime parameters** passed to an optimization action are strict: an invalid curve, or a curve while `inverter_is_hybrid` is false, raises an error and the action does not run.
+- **An already-saved configuration** (for example an edited `config.json`) never prevents EMHASS or the configuration page from starting: an unusable curve is cleared, an error naming it is logged, and the scalar efficiency of that direction applies until you correct it. Check the log, because that is the only sign that the curve is not in use.
+- **`inverter_is_hybrid` false with a valid curve** keeps the curve stored and ignores it (a warning is logged), so you can switch hybrid off in the page without clearing the curves.
+
+Between points the converted power transfer is linear. The last point is the supported power domain and there is no extrapolation: the optimizer never plans more AC power through that direction than the last point's `ac_power_w`, and a warning is logged when the last point is below `inverter_ac_output_max` / `inverter_ac_input_max`. `inverter_ac_output_max` and `inverter_ac_input_max` still limit the AC side of a curved direction, so the effective limit is whichever is lower. A curve is a *total* transfer relation measured at the inverter boundary (it already contains its own conversion losses), not an increment on top of the scalar efficiency. While a direction has a curve, its scalar `inverter_efficiency_*` is not used at all. The curve acts on the whole DC bus, so for `dc_ac` the DC power is PV plus battery discharge.
+
+A dead zone is physics, not a defect, and EMHASS does not add a minimum-power rule: with a charge point such as `[50, 0.0]`, a sufficiently negative import price can make the optimizer draw that 50 W purely as inverter losses, because under your curve it is paid to do so. Every watt is still accounted for (it leaves as heat); it is not the unaccounted AC import that a one-sided relaxation of the curve would allow. EMHASS has no minimum battery charge or discharge power setting, so "never operate below N W" cannot be expressed by these curves.
+
+The curves describe the inverter only. They do not replace `battery_charge_efficiency` and `battery_discharge_efficiency`, which remain the separate battery/state-of-charge-stage efficiencies, and they do not replace `battery_charge_power_derating`, which stays a state-of-charge dependent power ceiling that is applied on top. With `number_of_batteries` greater than 1 nothing changes in how the curves are written: there is one hybrid inverter and one shared DC bus, so one curve per direction acts on the combined power of all batteries and PV; it is not a per-battery list. The curves may also be passed at runtime and a runtime value wins over the configured one. In the web configuration page, enter each curve as a single JSON list, for example `[[100, 0.60], [1000, 0.82], [4500, 0.94]]`; `[]` keeps the scalar efficiency, and a malformed list is rejected before saving.
+
+Existing configurations need no migration: leaving both parameters empty (their default), or not setting them at all, produces exactly the optimization of earlier releases. Each curved direction adds binary variables to the optimization: one fewer than its number of segments, per time step. With the internal origin, a curve of N configured points has N segments and adds N-1 binaries per time step. A 10-point curve therefore adds 9 binaries per time step (432 over 48 steps, 2592 over 288 steps) per curved direction, so keep curves to the few points your data justifies.
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 
@@ -320,8 +373,8 @@ If your system has a battery (set_use_battery=True), then you should define the 
 - `battery_discharge_power_max`: The maximum discharge power in Watts. Defaults to 1000.
 - `battery_charge_power_max`: The maximum charge power in Watts. Defaults to 1000.
 - `battery_charge_power_derating`: Optional table describing how the BMS steps its charge limit down as the battery fills, so the optimizer stops planning charge power the battery cannot deliver (issue #807). Each row is `[soc_threshold, power_max]`, both given as percentage/100, ascending by state of charge: above `soc_threshold` the charge power is capped at that much of `battery_charge_power_max`. For example `[[0.5, 0.84], [0.7, 0.42], [0.9, 0.23]]` means 84% of `battery_charge_power_max` above 50% SOC, 42% above 70% and 23% above 90%. Below the first threshold the flat maximum applies, so the table lists only the derating steps. Empty (the default) keeps the single flat ceiling, which is the behaviour of every earlier release.
-- `battery_discharge_efficiency`: The discharge efficiency. Defaults to 0.95.
-- `battery_charge_efficiency`: The charge efficiency. Defaults to 0.95.
+- `battery_discharge_efficiency`: The discharge efficiency of the battery itself (state-of-charge stage). Defaults to 0.95. The inverter conversion is configured separately, see `inverter_efficiency_dc_ac` and the optional power curves above.
+- `battery_charge_efficiency`: The charge efficiency of the battery itself (state-of-charge stage). Defaults to 0.95. The inverter conversion is configured separately, see `inverter_efficiency_ac_dc` and the optional power curves above.
 - `battery_nominal_energy_capacity`: The total capacity of the battery stack in Wh. Defaults to 5000.
 - `battery_minimum_state_of_charge`: The minimum allowable battery state of charge. Defaults to 0.3.
 - `battery_maximum_state_of_charge`: The maximum allowable battery state of charge. Defaults to 0.9.

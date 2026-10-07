@@ -50,6 +50,7 @@ from emhass.utils import (
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
     get_keys_to_mask,
+    inverter_power_curve_faults,
     param_to_config,
 )
 
@@ -441,6 +442,13 @@ async def parameter_set():
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # Reject an unusable inverter curve before anything is written: build_params would
+    # otherwise clear it (recovery for an already-persisted file), and a silent clear
+    # here would leave the user believing the curve is active.
+    curve_faults = inverter_power_curve_faults(request_data)
+    if curve_faults:
+        return await make_response(curve_faults, 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
