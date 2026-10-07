@@ -1247,6 +1247,45 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("figure_thermal", injection_dict)
         self.assertIn("figure_0", injection_dict)
 
+    def test_get_injection_dict_single_battery_soc(self):
+        # One battery: the bare SOC_opt column gives the SOC plot, as before
+        df = self.df.copy()
+        df["SOC_opt"] = 0.5
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_1", injection_dict, "SOC plot missing")
+        self.assertIn("SOC_opt", injection_dict["figure_1"])
+
+    def test_get_injection_dict_multi_battery_soc(self):
+        # number_of_batteries > 1 (#610): the result frame carries SOC_opt_<k> per battery
+        # and no bare SOC_opt; the SOC plot must still appear, with one trace per battery
+        df = self.df.copy()
+        df["SOC_opt_0"] = 0.5
+        df["SOC_opt_1"] = 0.7
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_1", injection_dict, "SOC plot missing with per-battery columns")
+        self.assertIn("SOC_opt_0", injection_dict["figure_1"])
+        self.assertIn("SOC_opt_1", injection_dict["figure_1"])
+
+    def test_get_injection_dict_no_soc_columns(self):
+        # No battery: no SOC plot, and a column that merely starts with SOC_opt_ but is not a
+        # per-battery index is not mistaken for one
+        df = self.df.copy()
+        df["SOC_opt_target"] = 0.6
+        injection_dict = utils.get_injection_dict(df)
+        self.assertNotIn("figure_1", injection_dict)
+        self.assertIn("figure_0", injection_dict)
+
+    def test_get_injection_dict_multi_battery_soc_traces_get_distinct_colours(self):
+        # The SOC palette is sized to the SOC traces, not to the power columns, so two
+        # batteries do not both land on the first two near-identical samples of the ramp
+        df = self.df.copy()
+        df["SOC_opt_0"] = 0.5
+        df["SOC_opt_1"] = 0.7
+        html = utils.get_injection_dict(df)["figure_1"]
+        # A two-point sample of the jet scale spans both ends of the ramp
+        self.assertIn("rgb(0, 0, 131)", html)
+        self.assertIn("rgb(128, 0, 0)", html)
+
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
