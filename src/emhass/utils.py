@@ -525,19 +525,26 @@ def calculate_surface_solar_gain(
     return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
 
 
-_TOPOLOGY_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_TOPOLOGY_DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
-_TOPOLOGY_NODE_KEYS = {
-    "id",
-    "parent",
-    "type",
-    "max_import",
-    "max_export",
-    "efficiency_from_parent",
-    "efficiency_to_parent",
+_SITE_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_SITE_DEVICE = re.compile(r"^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$")
+_SITE_ROOT = "grid"
+_SITE_NODE_TYPES = ("hybrid_inverter", "inverter", "panel", "breaker", "meter")
+_SITE_SOLVERS = ("emhass", "home_energy_optimizer")
+_SITE_KEYS = {
+    "grid": {"id", "max_import", "max_export"},
+    "node": {
+        "id",
+        "parent",
+        "type",
+        "max_import",
+        "max_export",
+        "efficiency_import",
+        "efficiency_export",
+    },
+    "limit": {"id", "type", "max_import", "max_export"},
+    "device": {"id", "parent", "solver", "group", "config", "limits"},
+    "remote": {"id", "parent", "solver", "limits"},
 }
-_TOPOLOGY_TYPES = ("hybrid_inverter", "inverter", "converter", "panel", "breaker", "meter")
-_TOPOLOGY_ROOT = "grid"
 
 
 def _finite_number(value) -> bool:
@@ -545,135 +552,197 @@ def _finite_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def electrical_topology_problem(topology) -> str | None:
-    """Why `electrical_topology` cannot be used as given, or None.
+def site_kind(element: dict) -> str:
+    """What a `site` element is: "grid" (the main meter), "limit" (a cap on
+    the devices tagged with it), "remote" (a solver on the network), "device"
+    (an EMHASS device name or "pv") or "node" (anything else: an inverter, a
+    panel, a breaker, a meter)."""
+    if element.get("id") == _SITE_ROOT:
+        return "grid"
+    if element.get("type") == "limit":
+        return "limit"
+    if isinstance(element.get("solver"), dict):
+        return "remote"
+    if isinstance(element.get("id"), str) and _SITE_DEVICE.match(element["id"]):
+        return "device"
+    return "node"
 
-    It may arrive with a request as well as from the configuration, so its
-    shape and types are checked before anything reads it:
 
-    - `nodes`: at most 64 objects with `id` (lower case, digits and `_`, at
-      most 32; not `grid`, the main meter), `parent` (`grid` or another
-      node's id; default `grid`), `type` (one of hybrid_inverter, inverter,
-      converter, panel, breaker, meter), `max_import` / `max_export` (W, >= 0)
-      and `efficiency_from_parent` / `efficiency_to_parent` (in (0, 1]). The
-      parents must form a tree.
-    - `devices`: device name (battery, water_heater, hvac, deferrableN) or
-      `pv` -> `grid` or a node's id.
-    - `constraints`: at most 64 objects with `name`, `devices` (a non-empty
-      list of device names) and `max_import` and/or `max_export` (W, >= 0).
+def _site_element_problem(element, where: str, from_request: bool) -> str | None:
+    """Why one `site` element cannot be used as given, or None (its shape and
+    types; site_problem checks how the elements refer to each other)."""
+    if not isinstance(element, dict) or not isinstance(element.get("id"), str):
+        return f"{where} must be an object with an id"
+    kind = site_kind(element)
+    extra = set(element) - _SITE_KEYS[kind]
+    if extra:
+        allowed = ", ".join(sorted(_SITE_KEYS[kind] - {"id"}))
+        return f"{where} ({kind} {element['id']!r}) may have only {allowed}, not {', '.join(sorted(extra))}"
+    if kind in ("node", "limit", "remote") and (
+        not _SITE_ID.match(element["id"]) or _SITE_DEVICE.match(element["id"])
+    ):
+        return f"{where}.id must be a short lower-case name (letters, digits, _), not a device's"
+    if (
+        kind == "node"
+        and element.get("type") is not None
+        and element["type"] not in _SITE_NODE_TYPES
+    ):
+        return f"{where}.type must be one of {', '.join(_SITE_NODE_TYPES + ('limit',))}"
+    for key in ("max_import", "max_export"):
+        v = element.get(key)
+        if v is not None and not (_finite_number(v) and v >= 0):
+            return f"{where}.{key} must be a finite number of W, >= 0"
+    for key in ("efficiency_import", "efficiency_export"):
+        v = element.get(key)
+        if v is not None and not (_finite_number(v) and 0 < v <= 1):
+            return f"{where}.{key} must be in (0, 1]"
+    if kind == "limit" and element.get("max_import") is None and element.get("max_export") is None:
+        return f"{where} needs max_import, max_export or both (W)"
+    limits = element.get("limits")
+    if limits is not None and (
+        not isinstance(limits, list)
+        or len(limits) > 16
+        or not all(isinstance(x, str) and _SITE_ID.match(x) for x in limits)
+    ):
+        return f"{where}.limits must be a list of limit ids"
+    if kind == "remote":
+        solver = element["solver"]
+        url = solver.get("url")
+        if (
+            set(solver) - {"url", "token_secret"}
+            or not isinstance(url, str)
+            or not re.match(r"^https?://[^\s/?#]+(/[^\s?#]*)?$", url)
+            or len(url) > 256
+        ):
+            return f"{where}.solver must be {{url: http(s)://host[:port]/path, token_secret}}"
+        secret = solver.get("token_secret")
+        if secret is not None and not (isinstance(secret, str) and _SITE_ID.match(secret)):
+            return f"{where}.solver.token_secret must name a secret (lower case, digits, _)"
+        if from_request:
+            return f"{where}: a remote solver is accepted from the configuration only, not with a request"
+    if kind == "device":
+        if element["id"] == "pv" and set(element) & {"solver", "group", "config"}:
+            return f"{where}: the PV is a forecast, planned by no solver"
+        if element.get("solver", "emhass") not in _SITE_SOLVERS:
+            return (
+                f"{where}.solver must be one of {', '.join(_SITE_SOLVERS)}, or a remote's {{url}}"
+            )
+        group = element.get("group")
+        if group is not None and not (isinstance(group, str) and _SITE_ID.match(group)):
+            return f"{where}.group must be a short lower-case name (letters, digits, _)"
+        config = element.get("config", {})
+        if not isinstance(config, dict) or len(config) > 64:
+            return f"{where}.config must be an object"
+        for key, value in config.items():
+            scalar = isinstance(value, (bool, int, float)) or (
+                isinstance(value, str) and len(value) <= 64
+            )
+            if (
+                not isinstance(key, str)
+                or not scalar
+                or (isinstance(value, float) and not math.isfinite(value))
+            ):
+                return (
+                    f"{where}.config[{key!r}] must be a finite number, a boolean or a short string"
+                )
+    return None
+
+
+def site_problem(site, from_request: bool = False) -> str | None:
+    """Why `site` cannot be used as given, or None.
+
+    `site` is the house in one list, each element an object with an `id`:
+
+    - "grid": the main meter, with `max_import` / `max_export` (W).
+    - a node (any other lower-case id): `parent` (`grid` or another node;
+      default `grid`), `type` (hybrid_inverter, inverter, panel, breaker,
+      meter), `max_import` / `max_export` (W) on its connection to its parent,
+      `efficiency_import` / `efficiency_export` (in (0, 1]).
+    - a limit (`type: "limit"`): `max_import` and/or `max_export` (W) on what
+      the devices tagged with it draw together.
+    - a device (pv, battery, water_heater, hvac, deferrableN): `parent`,
+      `solver` (emhass, the default, or home_energy_optimizer), `group`,
+      `config` (plain scalars) and `limits` (limit ids).
+    - a remote solver (`solver: {url, token_secret}`): `parent`, `limits`.
+      From the configuration only: a site sent with a request may not name
+      one, so no request makes EMHASS call a host of its choosing.
+
+    Ids are unique; parents are `grid` or nodes, and form a tree.
 
     Args:
-        topology: The `electrical_topology` value.
+        site: The `site` value.
+        from_request: Whether it arrived with a request (runtime parameters).
 
     Returns:
         str | None: The problem, for the log; None when it can be used.
     """
-    if not isinstance(topology, dict) or set(topology) - {"nodes", "devices", "constraints"}:
-        return "electrical_topology must be an object with nodes, devices and constraints only"
-    nodes = topology.get("nodes") or []
-    if not isinstance(nodes, list) or len(nodes) > 64:
-        return "electrical_topology.nodes must be a list of at most 64 nodes"
-    ids: list[str] = []
-    for i, node in enumerate(nodes):
-        where = f"electrical_topology.nodes[{i}]"
-        if not isinstance(node, dict) or set(node) - _TOPOLOGY_NODE_KEYS or "id" not in node:
-            return f"{where} must be an object with id and only {', '.join(sorted(_TOPOLOGY_NODE_KEYS - {'id'}))}"
-        nid = node["id"]
-        if (
-            not isinstance(nid, str)
-            or not _TOPOLOGY_ID.match(nid)
-            or nid == _TOPOLOGY_ROOT
-            or nid in ids
-        ):
-            return f"{where}.id must be a new, short lower-case name (letters, digits, _), not {_TOPOLOGY_ROOT!r}"
-        ids.append(nid)
-        if node.get("type") is not None and node["type"] not in _TOPOLOGY_TYPES:
-            return f"{where}.type must be one of {', '.join(_TOPOLOGY_TYPES)}"
-        for key in ("max_import", "max_export"):
-            v = node.get(key)
-            if v is not None and not (_finite_number(v) and v >= 0):
-                return f"{where}.{key} must be a finite number of W, >= 0"
-        for key in ("efficiency_from_parent", "efficiency_to_parent"):
-            v = node.get(key)
-            if v is not None and not (_finite_number(v) and 0 < v <= 1):
-                return f"{where}.{key} must be in (0, 1]"
-    parent = {}
-    for i, node in enumerate(nodes):
-        up = node.get("parent", _TOPOLOGY_ROOT)
-        if up != _TOPOLOGY_ROOT and up not in ids:
-            return (
-                f"electrical_topology.nodes[{i}].parent must be {_TOPOLOGY_ROOT!r} or a node's id"
-            )
-        parent[node["id"]] = up
-    for nid in ids:
+    if not isinstance(site, list) or len(site) > 128:
+        return "site must be a list of at most 128 elements"
+    ids: dict[str, str] = {}
+    for i, element in enumerate(site):
+        problem = _site_element_problem(element, f"site[{i}]", from_request)
+        if problem:
+            return problem
+        if element["id"] in ids:
+            return f"site[{i}]: {element['id']!r} appears twice"
+        ids[element["id"]] = site_kind(element)
+    nodes = {e for e, kind in ids.items() if kind == "node"}
+    limits = {e for e, kind in ids.items() if kind == "limit"}
+    parent: dict[str, str] = {}
+    for i, element in enumerate(site):
+        if ids[element["id"]] in ("grid", "limit"):
+            continue
+        up = element.get("parent", _SITE_ROOT)
+        if up != _SITE_ROOT and up not in nodes:
+            return f"site[{i}].parent must be {_SITE_ROOT!r} or a node's id"
+        parent[element["id"]] = up
+        unknown = [x for x in element.get("limits") or [] if x not in limits]
+        if unknown:
+            return f"site[{i}].limits names {unknown[0]!r}, which is no limit"
+    for nid in nodes:
         seen, at = set(), nid
-        while at != _TOPOLOGY_ROOT:
+        while at != _SITE_ROOT:
             if at in seen:
-                return f"electrical_topology: the parents of {nid!r} form a loop"
+                return f"site: the parents of {nid!r} form a loop"
             seen.add(at)
             at = parent[at]
-    devices = topology.get("devices") or {}
-    if not isinstance(devices, dict) or len(devices) > 64:
-        return "electrical_topology.devices must be an object of at most 64 devices"
-    for dev, node in devices.items():
-        if not isinstance(dev, str) or not (dev == "pv" or _TOPOLOGY_DEVICE.match(dev)):
-            return f"electrical_topology.devices: {dev!r} is not a device name"
-        if node != _TOPOLOGY_ROOT and node not in ids:
-            return f"electrical_topology.devices[{dev!r}] must be {_TOPOLOGY_ROOT!r} or a node's id"
-    constraints = topology.get("constraints") or []
-    if not isinstance(constraints, list) or len(constraints) > 64:
-        return "electrical_topology.constraints must be a list of at most 64 constraints"
-    names: set[str] = set()
-    for i, c in enumerate(constraints):
-        where = f"electrical_topology.constraints[{i}]"
-        if not isinstance(c, dict) or set(c) - {"name", "devices", "max_import", "max_export"}:
-            return f"{where} must be an object with name, devices, max_import and max_export only"
-        name = c.get("name")
-        if (
-            not isinstance(name, str)
-            or not _TOPOLOGY_ID.match(name)
-            or name in names
-            or name in ids
-        ):
-            return f"{where}.name must be a new, short lower-case name (letters, digits, _)"
-        names.add(name)
-        devs = c.get("devices")
-        if (
-            not isinstance(devs, list)
-            or not devs
-            or not all(isinstance(d, str) and _TOPOLOGY_DEVICE.match(d) for d in devs)
-        ):
-            return f"{where}.devices must be a non-empty list of device names"
-        if c.get("max_import") is None and c.get("max_export") is None:
-            return f"{where} needs max_import, max_export or both (W)"
-        for key in ("max_import", "max_export"):
-            v = c.get(key)
-            if v is not None and not (_finite_number(v) and v >= 0):
-                return f"{where}.{key} must be a finite number of W, >= 0"
     return None
 
 
-def electrical_topology_inverter(topology: dict) -> dict | None:
-    """The hybrid inverter in `topology` that EMHASS's own model can hold, as
-    the plant_conf keys that describe it, or None.
+def site_grid(site: list) -> dict:
+    """The main meter's limits in `site`, as EMHASS's own keys (W)."""
+    keys = {}
+    for element in site:
+        if site_kind(element) == "grid":
+            if element.get("max_import") is not None:
+                keys["maximum_power_from_grid"] = element["max_import"]
+            if element.get("max_export") is not None:
+                keys["maximum_power_to_grid"] = element["max_export"]
+    return keys
+
+
+def site_inverter(site: list) -> dict | None:
+    """The hybrid inverter in `site` that EMHASS's own model can hold, as the
+    plant_conf keys that describe it, or None.
 
     EMHASS's model has one hybrid inverter, on the main meter, with the PV and
     the battery on its DC side: a node of type hybrid_inverter whose parent is
-    the main meter, with no nodes under it, holding the PV and nothing but
-    the PV and the battery. A topology whose inverters are otherwise (a
-    second one, one behind a panel) is the coordinator's only.
+    the main meter, with nothing under it but the PV and the battery, the PV
+    included. Inverters otherwise (a second one, one behind a panel) are the
+    coordinator's only.
     """
-    nodes = topology.get("nodes") or []
-    devices = topology.get("devices") or {}
-    parents = {n.get("parent", _TOPOLOGY_ROOT) for n in nodes}
+    under: dict[str, set[str]] = {}
+    for element in site:
+        if site_kind(element) in ("node", "device", "remote"):
+            under.setdefault(element.get("parent", _SITE_ROOT), set()).add(element["id"])
     fits = [
-        n
-        for n in nodes
-        if n.get("type") == "hybrid_inverter"
-        and n.get("parent", _TOPOLOGY_ROOT) == _TOPOLOGY_ROOT
-        and n["id"] not in parents
-        and devices.get("pv") == n["id"]
-        and {d for d, at in devices.items() if at == n["id"]} <= {"pv", "battery"}
+        e
+        for e in site
+        if site_kind(e) == "node"
+        and e.get("type") == "hybrid_inverter"
+        and e.get("parent", _SITE_ROOT) == _SITE_ROOT
+        and "pv" in under.get(e["id"], set())
+        and under[e["id"]] <= {"pv", "battery"}
     ]
     if len(fits) != 1:
         return None
@@ -683,38 +752,37 @@ def electrical_topology_inverter(topology: dict) -> dict | None:
         keys["inverter_ac_output_max"] = n["max_export"]
     if n.get("max_import") is not None:
         keys["inverter_ac_input_max"] = n["max_import"]
-    keys["inverter_efficiency_dc_ac"] = n.get("efficiency_to_parent", 1.0)
-    keys["inverter_efficiency_ac_dc"] = n.get("efficiency_from_parent", 1.0)
+    keys["inverter_efficiency_dc_ac"] = n.get("efficiency_export", 1.0)
+    keys["inverter_efficiency_ac_dc"] = n.get("efficiency_import", 1.0)
     return keys
 
 
-def compile_electrical_topology(topology: dict, plant_conf: dict, logger: logging.Logger) -> bool:
-    """Fill EMHASS's inverter keys in `plant_conf` from `topology`'s hybrid
-    inverter, when EMHASS's own model can hold it
-    (`electrical_topology_inverter`), so the default solver - on a fallback,
-    or as the backend - plans the same inverter. The topology wins where the
-    keys disagree, with a warning. Returns whether the keys were filled.
+def compile_site(site: list, plant_conf: dict, logger: logging.Logger) -> bool:
+    """Fill EMHASS's own keys in `plant_conf` from `site`: the main meter's
+    limits (`site_grid`) and the hybrid inverter EMHASS's model can hold
+    (`site_inverter`), so the default solver - on a fallback, or as the
+    backend - plans the same meter and inverter. `site` wins where the keys
+    disagree, with a warning. Returns whether an inverter was filled.
     """
-    keys = electrical_topology_inverter(topology)
-    if keys is None:
-        if any(n.get("type") == "hybrid_inverter" for n in topology.get("nodes") or []):
-            logger.warning(
-                "electrical_topology: its hybrid inverter(s) are the coordinator's only; "
-                "EMHASS's own model holds one inverter, on the main meter, with just the PV and the battery"
-            )
-        return False
+    keys = site_grid(site)
+    inverter = site_inverter(site)
+    if inverter is None and any(
+        site_kind(e) == "node" and e.get("type") == "hybrid_inverter" for e in site
+    ):
+        logger.warning(
+            "site: its hybrid inverter(s) are the coordinator's only; EMHASS's own model "
+            "holds one inverter, on the main meter, with just the PV and the battery"
+        )
+    keys.update(inverter or {})
     changed = [
         k
         for k, v in keys.items()
         if k in plant_conf and plant_conf[k] not in (None, v) and k != "inverter_is_hybrid"
     ]
     if changed:
-        logger.warning(
-            "electrical_topology: its hybrid inverter replaces %s",
-            ", ".join(f"{k}={plant_conf[k]}" for k in changed),
-        )
+        logger.warning("site replaces %s", ", ".join(f"{k}={plant_conf[k]}" for k in changed))
     plant_conf.update(keys)
-    return True
+    return inverter is not None
 
 
 def compile_heat_topology(topology: dict) -> dict:
@@ -1820,6 +1888,16 @@ async def treat_runtimeparams(
                 # association[1] = legacy parameter name
                 # association[2] = parameter (config.json/config_defaults.json)
                 # association[3] = parameter list name if exists (not used, from legacy options.json)
+                # A remote solver in site is accepted from the configuration
+                # only: a site sent with a request that names one is not used,
+                # so no request makes EMHASS call a host of its choosing.
+                if runtimeparams.get("site") is not None:
+                    problem = site_problem(runtimeparams["site"], from_request=True)
+                    if problem:
+                        logger.error(
+                            "site (in the request): %s; the configured site is kept", problem
+                        )
+                        runtimeparams = {k: v for k, v in runtimeparams.items() if k != "site"}
                 for association in associations:
                     # Check parameter name exists in runtime
                     if runtimeparams.get(association[2], None) is not None:
@@ -2804,16 +2882,16 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
-    # electrical_topology: the coordinator's (optimization_backend), but its
-    # hybrid inverter is EMHASS's own too - fill the inverter keys from it, so
-    # the default solver plans the same inverter.
-    electrical_topology = optim_conf.get("electrical_topology")
-    if electrical_topology:
-        problem = electrical_topology_problem(electrical_topology)
+    # site: the house in one list, the coordinator's (optimization_backend);
+    # its main meter and hybrid inverter are EMHASS's own too - fill those
+    # keys from it, so the default solver plans the same meter and inverter.
+    site = optim_conf.get("site")
+    if site:
+        problem = site_problem(site)
         if problem:
-            logger.error("electrical_topology: %s; not used", problem)
+            logger.error("site: %s; not used", problem)
         else:
-            compile_electrical_topology(electrical_topology, plant_conf, logger)
+            compile_site(site, plant_conf, logger)
 
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the

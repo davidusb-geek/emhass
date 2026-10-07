@@ -229,70 +229,37 @@
             "title": "Optimization backend",
             "description": "cvxpy (default): one MILP over every device, as before. dantzig_wolfe: each device is planned as its own subproblem, by EMHASS's own model unless participants says otherwise, and a coordinator makes the plans agree at the meter. Needs the optional extra: pip install emhass[federated]. Anything the coordinator cannot plan yet runs on cvxpy, with a log line."
           },
-          "participants": {
+          "site": {
             "type": [
               "array",
               "null"
             ],
-            "maxItems": 64,
+            "maxItems": 128,
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "devices"
-              ],
-              "properties": {
-                "devices": {
-                  "type": "array",
-                  "minItems": 1,
-                  "uniqueItems": true,
-                  "items": {
-                    "type": "string",
-                    "pattern": "^(battery|water_heater|hvac|deferrable[0-9]{1,3})$"
-                  }
-                },
-                "solver": {
-                  "type": "string",
-                  "enum": [
-                    "emhass",
-                    "home_energy_optimizer"
-                  ],
-                  "default": "emhass"
-                },
-                "config": {
+              "anyOf": [
+                {
+                  "title": "the main meter",
                   "type": "object",
-                  "maxProperties": 64,
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "string",
-                        "maxLength": 64
-                      }
-                    ]
+                  "additionalProperties": false,
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "grid"
+                    },
+                    "max_import": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_export": {
+                      "type": "number",
+                      "minimum": 0
+                    }
                   }
-                }
-              }
-            },
-            "title": "Participants",
-            "description": "Optional, with a coordinator backend: groups of devices, each solved together by one solver. Example: [{\"devices\": [\"battery\"], \"solver\": \"home_energy_optimizer\"}, {\"devices\": [\"deferrable0\", \"deferrable1\"], \"solver\": \"emhass\"}]. Devices are battery and deferrable0, deferrable1, ...; solvers are emhass (EMHASS's own model) and home_energy_optimizer. Left empty, every device is its own participant, solved by EMHASS."
-          },
-          "electrical_topology": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "nodes": {
-                "type": "array",
-                "maxItems": 64,
-                "items": {
+                },
+                {
+                  "title": "a node",
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
@@ -303,19 +270,18 @@
                       "type": "string",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "not": {
-                        "const": "grid"
+                        "pattern": "^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$"
                       }
                     },
                     "parent": {
                       "type": "string",
-                      "default": "grid"
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
                     },
                     "type": {
                       "type": "string",
                       "enum": [
                         "hybrid_inverter",
                         "inverter",
-                        "converter",
                         "panel",
                         "breaker",
                         "meter"
@@ -329,54 +295,33 @@
                       "type": "number",
                       "minimum": 0
                     },
-                    "efficiency_from_parent": {
+                    "efficiency_import": {
                       "type": "number",
                       "exclusiveMinimum": 0,
-                      "maximum": 1,
-                      "default": 1
+                      "maximum": 1
                     },
-                    "efficiency_to_parent": {
+                    "efficiency_export": {
                       "type": "number",
                       "exclusiveMinimum": 0,
-                      "maximum": 1,
-                      "default": 1
+                      "maximum": 1
                     }
                   }
-                }
-              },
-              "devices": {
-                "type": "object",
-                "maxProperties": 64,
-                "propertyNames": {
-                  "pattern": "^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$"
                 },
-                "additionalProperties": {
-                  "type": "string"
-                }
-              },
-              "constraints": {
-                "type": "array",
-                "maxItems": 64,
-                "items": {
+                {
+                  "title": "a limit",
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
-                    "name",
-                    "devices"
+                    "id",
+                    "type"
                   ],
                   "properties": {
-                    "name": {
+                    "id": {
                       "type": "string",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$"
                     },
-                    "devices": {
-                      "type": "array",
-                      "minItems": 1,
-                      "uniqueItems": true,
-                      "items": {
-                        "type": "string",
-                        "pattern": "^(battery|water_heater|hvac|deferrable[0-9]{1,3})$"
-                      }
+                    "type": {
+                      "const": "limit"
                     },
                     "max_import": {
                       "type": "number",
@@ -386,24 +331,113 @@
                       "type": "number",
                       "minimum": 0
                     }
-                  },
-                  "anyOf": [
-                    {
-                      "required": [
-                        "max_import"
-                      ]
+                  }
+                },
+                {
+                  "title": "a device",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})$"
                     },
-                    {
-                      "required": [
-                        "max_export"
-                      ]
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "solver": {
+                      "type": "string",
+                      "enum": [
+                        "emhass",
+                        "home_energy_optimizer"
+                      ],
+                      "default": "emhass"
+                    },
+                    "group": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "config": {
+                      "type": "object",
+                      "maxProperties": 64,
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "string",
+                            "maxLength": 64
+                          }
+                        ]
+                      }
+                    },
+                    "limits": {
+                      "type": "array",
+                      "maxItems": 16,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                      }
                     }
-                  ]
+                  }
+                },
+                {
+                  "title": "a remote solver (from the configuration only)",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "solver"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "solver": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "url"
+                      ],
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "pattern": "^https?://",
+                          "maxLength": 256
+                        },
+                        "token_secret": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                        }
+                      }
+                    },
+                    "limits": {
+                      "type": "array",
+                      "maxItems": 16,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                      }
+                    }
+                  }
                 }
-              }
+              ]
             },
-            "title": "Electrical topology",
-            "description": "Optional, with a coordinator backend: the site's electrical tree. nodes: connection points behind the main meter ('grid') - a hybrid inverter, a panel, a breaker - each with a parent (another node or 'grid'), a type, max_import / max_export (W) on its connection to the parent, and efficiency_from_parent / efficiency_to_parent (a converter's). devices: where each device (battery, water_heater, hvac, deferrableN) and the PV sit (a node's id or 'grid'). constraints: limits (max_import / max_export, W) on what a set of devices draw together, wherever they are. A hybrid_inverter node on the main meter holding just the PV and the battery also sets EMHASS's own inverter keys, so the default solver plans the same inverter. Example: {\"nodes\": [{\"id\": \"inverter\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000, \"efficiency_from_parent\": 0.97, \"efficiency_to_parent\": 0.97}, {\"id\": \"garage\", \"type\": \"panel\", \"max_import\": 3500, \"max_export\": 0}], \"devices\": {\"pv\": \"inverter\", \"battery\": \"inverter\", \"water_heater\": \"garage\", \"hvac\": \"garage\"}}. The coordinator prices each node (fed_local_price_<id>) and constraint (fed_limit_price_<name>); the default solver holds only the inverter."
+            "title": "Site",
+            "description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). A node (any other id: an inverter, a panel, a breaker) has a parent (another node or 'grid', the default), a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery, water_heater, hvac, deferrable0, ...) has a parent, a solver (emhass, the default, or home_energy_optimizer), a group (devices in one group are planned together by EMHASS's model), a config (home_energy_optimizer's settings) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000, \"efficiency_import\": 0.97, \"efficiency_export\": 0.97}, {\"id\": \"garage\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]"
           },
           "sensor_power_photovoltaics": {
             "type": "string",

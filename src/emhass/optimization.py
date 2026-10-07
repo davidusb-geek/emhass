@@ -1,10 +1,8 @@
 import bz2
 import copy
 import logging
-import math
 import os
 import pickle
-import re
 import time
 from math import ceil, isfinite
 
@@ -140,19 +138,19 @@ def _coordinated_plan(opt, *args, **kwargs):
 
 
 def _warn_unheld_limits(opt) -> None:
-    """On a fallback, say what of `electrical_topology` the default solver
-    does not hold: every node and constraint but the hybrid inverter EMHASS's
-    own keys describe (utils.electrical_topology_inverter). For deferrable
+    """On a fallback, say what of `site` the default solver does not hold:
+    its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
+    own keys describe (utils.site_grid, utils.site_inverter). For deferrable
     loads alone, deferrable_load_groups it does hold."""
-    topology = opt.optim_conf.get("electrical_topology")
-    if not isinstance(topology, dict):
+    site = opt.optim_conf.get("site")
+    if not site or utils.site_problem(site):
         return
-    nodes = topology.get("nodes") or []
-    held = utils.electrical_topology_inverter(topology)
-    if topology.get("constraints") or len(nodes) > (1 if held else 0):
+    kinds = [utils.site_kind(e) for e in site]
+    held = utils.site_inverter(site)
+    if "limit" in kinds or kinds.count("node") > (1 if held else 0):
         opt.logger.warning(
-            "optimization_backend: the default solver does not hold electrical_topology's limits "
-            "(beyond a hybrid inverter EMHASS's own model can hold); "
+            "optimization_backend: the default solver does not hold site's nodes and limits "
+            "(beyond the main meter and a hybrid inverter EMHASS's own model can hold); "
             "for deferrable loads alone, deferrable_load_groups is"
         )
 
@@ -168,20 +166,15 @@ def _with_backend(res, requested: str, fallback_reason: str | None):
 
 
 _BACKENDS = ("cvxpy", "dantzig_wolfe")
-_SOLVERS = ("emhass", "home_energy_optimizer")
-_DEVICE = re.compile(r"^(battery|water_heater|hvac|deferrable[0-9]{1,3})$")
 
 
 def _coordinated_config_problem(optim_conf: dict) -> str | None:
-    """Why `optimization_backend` and `participants` cannot be used as given,
-    or None if they can.
+    """Why `optimization_backend` and `site` cannot be used as given, or None
+    if they can.
 
     Both may come from a request as well as from the configuration, so they
     are checked for shape and type before anything reads them: a known
-    backend; a list of participant groups, each with a non-empty list of
-    known device names, a known solver, and a `config` of plain scalars
-    (numbers, booleans, short strings) under string keys. `electrical_topology`,
-    if given, likewise (utils.electrical_topology_problem).
+    backend, and `site` (utils.site_problem).
 
     Args:
         optim_conf: The optimisation configuration.
@@ -194,44 +187,8 @@ def _coordinated_config_problem(optim_conf: dict) -> str | None:
         return "admm is planned for a later release, not available yet"
     if backend not in _BACKENDS:
         return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
-    if optim_conf.get("electrical_topology") is not None:
-        problem = utils.electrical_topology_problem(optim_conf["electrical_topology"])
-        if problem:
-            return problem
-    spec = optim_conf.get("participants")
-    if spec is None:
-        return None
-    if not isinstance(spec, list) or len(spec) > 64:
-        return "participants must be a list of at most 64 groups"
-    seen: set[str] = set()
-    for i, group in enumerate(spec):
-        if not isinstance(group, dict) or set(group) - {"devices", "solver", "config"}:
-            return f"participants[{i}] must be an object with devices, solver and config only"
-        devices = group.get("devices")
-        if (
-            not isinstance(devices, list)
-            or not devices
-            or not all(isinstance(d, str) and _DEVICE.match(d) for d in devices)
-        ):
-            return f"participants[{i}].devices must be a non-empty list of device names"
-        if seen & set(devices):
-            return f"participants[{i}] names a device another group already has"
-        seen |= set(devices)
-        if group.get("solver", "emhass") not in _SOLVERS:
-            return f"participants[{i}].solver must be one of {', '.join(_SOLVERS)}"
-        config = group.get("config", {})
-        if not isinstance(config, dict) or len(config) > 64:
-            return f"participants[{i}].config must be an object"
-        for key, value in config.items():
-            scalar = isinstance(value, (bool, int, float)) or (
-                isinstance(value, str) and len(value) <= 64
-            )
-            if (
-                not isinstance(key, str)
-                or not scalar
-                or (isinstance(value, float) and not math.isfinite(value))
-            ):
-                return f"participants[{i}].config[{key!r}] must be a finite number, a boolean or a short string"
+    if optim_conf.get("site") is not None:
+        return utils.site_problem(optim_conf["site"])
     return None
 
 

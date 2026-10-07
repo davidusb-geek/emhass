@@ -145,7 +145,7 @@ def test_default_backend_is_cvxpy_and_never_dispatches():
     and the plan has exactly its usual columns: no provenance columns."""
     rh, oc, pc = _confs()
     assert oc["optimization_backend"] == "cvxpy"
-    assert not oc.get("participants")
+    assert not oc.get("site")
     with mock.patch.object(optimization, "_coordinated_plan") as coordinated:
         _, res = _plan(*_site())
     coordinated.assert_not_called()
@@ -173,6 +173,26 @@ def test_the_web_page_shows_which_backend_made_the_plan():
     assert "backend_used" not in page["table1"]
 
 
+def _hep_at_least(*version: int) -> bool:
+    """Whether home-energy-optimizer is installed, at `version` or later."""
+    try:
+        from home_energy_optimizer import __version__
+    except ImportError:
+        return False
+    return tuple(int(x) for x in __version__.split(".")[:3]) >= version
+
+
+def _hybrid_ready() -> bool:
+    """home-energy-optimizer plans a hybrid inverter from 0.2.5."""
+    return _hep_at_least(0, 2, 5)
+
+
+SITE_READY = pytest.mark.skipif(
+    not _hep_at_least(0, 2, 8), reason="needs home-energy-optimizer >= 0.2.8 (site)"
+)
+LOADS = [{"id": "deferrable0", "group": "loads"}, {"id": "deferrable1", "group": "loads"}]
+
+
 @needs_package
 def test_dantzig_wolfe_matches_the_milp_on_a_battery_and_two_loads():
     """dantzig_wolfe returns every default column plus fed_*, a balanced plan
@@ -193,20 +213,18 @@ def test_dantzig_wolfe_matches_the_milp_on_a_battery_and_two_loads():
     assert _bill(res) <= _bill(milp) + 0.01  # the same plan value, within a cent
 
 
-@needs_package
-def test_grouped_participants_and_a_battery_planned_by_the_package():
-    """With both loads grouped as one EMHASS participant and the battery
-    planned by home-energy-optimizer, the plan balances and runs each load
-    its hours."""
+@SITE_READY
+def test_grouped_loads_and_a_battery_planned_by_the_package():
+    """With both loads in one group, planned together by EMHASS's model, and
+    the battery planned by home-energy-optimizer, the plan balances and runs
+    each load its hours; the group has one share of the saving."""
     site = _site()
     opt, res = _plan(
         *site,
         optimization_backend="dantzig_wolfe",
-        participants=[
-            {"devices": ["battery"], "solver": "home_energy_optimizer"},
-            {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
-        ],
+        site=[{"id": "battery", "solver": "home_energy_optimizer"}, *LOADS],
     )
+    assert "fed_share_loads" in res.columns
     assert opt.optim_status == "Optimal"
     assert _balance_holds(res, loads=2)
     for k, (watts, hours) in enumerate(((3000.0, 4), (750.0, 2))):
@@ -228,21 +246,7 @@ def test_unsupported_option_falls_back_to_cvxpy():
     assert any("set_nocharge_from_grid" in str(c) for c in warning.call_args_list)
 
 
-def _hep_at_least(*version: int) -> bool:
-    """Whether home-energy-optimizer is installed, at `version` or later."""
-    try:
-        from home_energy_optimizer import __version__
-    except ImportError:
-        return False
-    return tuple(int(x) for x in __version__.split(".")[:3]) >= version
-
-
-def _hybrid_ready() -> bool:
-    """home-energy-optimizer plans a hybrid inverter from 0.2.5."""
-    return _hep_at_least(0, 2, 5)
-
-
-@pytest.mark.skipif(not _hybrid_ready(), reason="needs home-energy-optimizer >= 0.2.5")
+@SITE_READY
 @pytest.mark.parametrize("rating_w", [5000, 3000, 2000])
 def test_a_hybrid_inverter_plans_as_the_milp_does(rating_w):
     """The PV and the battery on a hybrid inverter's DC bus, 8 kW of PV into
@@ -268,10 +272,7 @@ def test_a_hybrid_inverter_plans_as_the_milp_does(rating_w):
     opt, res = _plan(
         *site,
         optimization_backend="dantzig_wolfe",
-        participants=[
-            {"devices": ["battery"], "solver": "emhass"},
-            {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
-        ],
+        site=LOADS,
     )
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     assert _bill(res) == pytest.approx(_bill(milp), abs=0.01)
@@ -288,18 +289,17 @@ def test_a_hybrid_inverter_plans_as_the_milp_does(rating_w):
 LOAD_GROUP = [{"names": ["deferrable0", "deferrable1"], "max_power": 3000}]
 
 
-@pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
-def test_a_load_group_inside_one_participant_plans_as_the_milp_does():
-    """deferrable_load_groups with both loads in one participant group: that
-    participant's own EMHASS model holds the 3 kW budget, and the plan is the
-    default MILP's."""
+@SITE_READY
+def test_a_load_group_inside_one_group_plans_as_the_milp_does():
+    """deferrable_load_groups with both loads in one group: that group's own
+    EMHASS model holds the 3 kW budget, and the plan is the default MILP's."""
     rh, oc, pc, data, pv, load, buy, sell = _site()
     site = (rh, dict(oc, deferrable_load_groups=LOAD_GROUP), pc, data, pv, load, buy, sell)
     _, milp = _plan(*site)
     opt, res = _plan(
         *site,
         optimization_backend="dantzig_wolfe",
-        participants=[{"devices": ["deferrable0", "deferrable1"], "solver": "emhass"}],
+        site=LOADS,
     )
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3000 + 1e-3
@@ -307,8 +307,8 @@ def test_a_load_group_inside_one_participant_plans_as_the_milp_does():
 
 
 @pytest.mark.skipif(not _hep_at_least(0, 2, 6), reason="needs home-energy-optimizer >= 0.2.6")
-def test_a_load_group_across_participants_is_held_and_priced():
-    """The same budget with each load its own participant: the coordinator
+def test_a_load_group_across_groups_is_held_and_priced():
+    """The same budget with each load planned on its own: the coordinator
     holds it as a group limit, the loads still run their hours within 3 kW,
     the plan is within a few cents of the MILP's, and the group's own price
     is a column."""
@@ -324,75 +324,76 @@ def test_a_load_group_across_participants_is_held_and_priced():
     assert "fed_limit_price_deferrable0+deferrable1" in res.columns
 
 
-TOPOLOGY_READY = pytest.mark.skipif(
-    not _hep_at_least(0, 2, 7), reason="needs home-energy-optimizer >= 0.2.7"
-)
-
-
-@TOPOLOGY_READY
-def test_a_topology_constraint_holds_and_is_priced():
-    """A constraint over the two loads (each its own participant): their total
-    stays within 3.5 kW, its premium is fed_limit_price_<name>, and a node
-    that splits a participant group falls back, saying so."""
+@SITE_READY
+def test_a_site_limit_holds_and_is_priced():
+    """A limit over the two loads (each planned on its own): their total stays
+    within 3.5 kW and its premium is fed_limit_price_<id>; a group that sits
+    on two parents falls back, saying so."""
     site = _site()
-    topology = {
-        "constraints": [
-            {"name": "loads", "devices": ["deferrable0", "deferrable1"], "max_import": 3500}
-        ]
-    }
-    opt, res = _plan(*site, optimization_backend="dantzig_wolfe", electrical_topology=topology)
+    limit = [
+        {"id": "loads_cap", "type": "limit", "max_import": 3500},
+        {"id": "deferrable0", "limits": ["loads_cap"]},
+        {"id": "deferrable1", "limits": ["loads_cap"]},
+    ]
+    opt, res = _plan(*site, optimization_backend="dantzig_wolfe", site=limit)
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3500 + 1e-3
-    assert "fed_limit_price_loads" in res.columns
+    assert "fed_limit_price_loads_cap" in res.columns
     with mock.patch.object(logger, "warning") as warning:
         _, res = _plan(
             *site,
             optimization_backend="dantzig_wolfe",
-            participants=[{"devices": ["deferrable0", "deferrable1"], "solver": "emhass"}],
-            electrical_topology={
-                "nodes": [{"id": "half", "max_import": 1000}],
-                "devices": {"deferrable0": "half"},
-            },
+            site=[
+                {"id": "half", "max_import": 1000},
+                {"id": "deferrable0", "parent": "half", "group": "loads"},
+                {"id": "deferrable1", "group": "loads"},
+            ],
         )
     assert (res["backend_used"] == "cvxpy").all()
-    assert res["backend_fallback_reason"].str.contains("splits the participant").all()
-    # ...and says the default solver does not hold the topology's limits
-    assert any("does not hold electrical_topology" in str(c) for c in warning.call_args_list)
+    assert res["backend_fallback_reason"].str.contains("sits on 'half' and 'grid'").all()
+    # ...and says the default solver does not hold the site's limits
+    assert any("does not hold site's nodes and limits" in str(c) for c in warning.call_args_list)
 
 
-FOUR_DER_TOPOLOGY = {
-    "nodes": [
-        {
-            "id": "inverter",
-            "type": "hybrid_inverter",
-            "max_import": 4000,
-            "max_export": 4000,
-            "efficiency_from_parent": 0.97,
-            "efficiency_to_parent": 0.97,
-        },
-        {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
-        {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
-    ],
-    "devices": {
-        "pv": "inverter",
-        "battery": "inverter",
-        "water_heater": "heat",
-        "hvac": "heat",
-        "deferrable0": "garage",
-        "deferrable1": "garage",
+FOUR_DER_SITE = [
+    {
+        "id": "inverter",
+        "type": "hybrid_inverter",
+        "max_import": 4000,
+        "max_export": 4000,
+        "efficiency_import": 0.97,
+        "efficiency_export": 0.97,
     },
-}
+    {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+    {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
+    {"id": "pv", "parent": "inverter"},
+    {"id": "battery", "parent": "inverter"},
+    {"id": "deferrable0", "parent": "garage", "group": "loads"},
+    {"id": "deferrable1", "parent": "garage", "group": "loads"},
+    {
+        "id": "water_heater",
+        "parent": "heat",
+        "solver": "home_energy_optimizer",
+        "config": {"power_kw": 3.0, "liters": 180.0, "t_comfort": 55.0, "n_duty_levels": 2},
+    },
+    {
+        "id": "hvac",
+        "parent": "heat",
+        "solver": "home_energy_optimizer",
+        "config": {"power_kw": 1.5, "cop": 3.5, "t_comfort_low": 21.0, "t_comfort_high": 25.0},
+    },
+]
 
 
-@TOPOLOGY_READY
-def test_four_ders_on_an_electrical_topology():
+@SITE_READY
+def test_four_ders_on_one_site():
     """The README's four-DER house, from tools/emhass-coordination/
     config_four_der.json: the battery (EMHASS's model) and the PV behind a
     4 kW hybrid inverter; a garage panel (7.4 kW, no backfeed) with the two
-    loads (one EMHASS participant, a 3 kW budget its own model holds) and,
-    under it, a 3.5 kW breaker with the tank and the heat pump
-    (home-energy-optimizer's models). Every limit holds, every node is priced
-    and reported, and every player has a share."""
+    loads (one group, a 3 kW budget its own model holds) and, under it, a
+    3.5 kW breaker with the tank and the heat pump (home-energy-optimizer's
+    models). Every limit holds, every node is priced and reported, and every
+    player has a share."""
     rh, oc, pc, data, pv, load, buy, sell = _site()
     n = len(data)
     h = np.arange(n) * rh["optimization_time_step"].seconds / 3600
@@ -405,30 +406,7 @@ def test_four_ders_on_an_electrical_topology():
     )
     pc = dict(pc, compute_curtailment=True)
     site = (rh, oc, pc, data, pv * 1.6, load, buy, sell)
-    opt, res = _plan(
-        *site,
-        optimization_backend="dantzig_wolfe",
-        participants=[
-            {"devices": ["battery"], "solver": "emhass"},
-            {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
-            {
-                "devices": ["water_heater"],
-                "solver": "home_energy_optimizer",
-                "config": {"power_kw": 3.0, "liters": 180.0, "t_comfort": 55.0, "n_duty_levels": 2},
-            },
-            {
-                "devices": ["hvac"],
-                "solver": "home_energy_optimizer",
-                "config": {
-                    "power_kw": 1.5,
-                    "cop": 3.5,
-                    "t_comfort_low": 21.0,
-                    "t_comfort_high": 25.0,
-                },
-            },
-        ],
-        electrical_topology=FOUR_DER_TOPOLOGY,
-    )
+    opt, res = _plan(*site, optimization_backend="dantzig_wolfe", site=FOUR_DER_SITE)
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     assert res["P_hybrid_inverter"].abs().max() <= 4000 + 1e-3
     heat = res["P_water_heater"] + res["P_hvac"]
@@ -439,10 +417,9 @@ def test_four_ders_on_an_electrical_topology():
     for node in ("inverter", "garage", "heat"):
         assert f"fed_local_price_{node}" in res.columns and f"fed_node_power_{node}" in res.columns
     assert np.allclose(-res["fed_node_power_garage"], garage, atol=1e-3)  # + = up the tree
-    assert {
-        f"fed_share_{p}"
-        for p in ("solar", "battery", "water_heater", "hvac", "deferrable0+deferrable1")
-    } <= set(res.columns)
+    assert {f"fed_share_{p}" for p in ("solar", "battery", "water_heater", "hvac", "loads")} <= set(
+        res.columns
+    )
     # the main meter's bus balances: the inverter and the grid supply the load and the garage
     assert np.allclose(res["P_hybrid_inverter"] + res["P_grid"], res["P_Load"] + garage, atol=1e-3)
 

@@ -29,8 +29,6 @@ from emhass.command_line import (
 )
 from emhass.optimization import (
     _BACKENDS,
-    _DEVICE,
-    _SOLVERS,
     _coordinated_config_problem,
 )
 from emhass.utils import (
@@ -432,9 +430,9 @@ def test_only_a_real_true_is_a_dry_run():
 # --------------------------------------------------------------------------
 
 
-def _coordinated(data_path: pathlib.Path, runtime: dict, participants=None):
-    """Day-ahead with the coordinated backend switched on (and `participants`
-    if given); returns the plan."""
+def _coordinated(data_path: pathlib.Path, runtime: dict, site=None):
+    """Day-ahead with the coordinated backend switched on (and `site` if
+    given); returns the plan."""
 
     async def run():
         """Build the inputs with the backend on, and solve."""
@@ -444,7 +442,7 @@ def _coordinated(data_path: pathlib.Path, runtime: dict, participants=None):
             ec, secrets, await build_config(ec, logger, ec["defaults_path"]), logger
         )
         params["optim_conf"]["optimization_backend"] = "dantzig_wolfe"
-        params["optim_conf"]["participants"] = participants
+        params["optim_conf"]["site"] = site
         idd = await set_input_data_dict(
             ec,
             "profit",
@@ -488,216 +486,158 @@ def test_a_failing_coordinator_falls_back_to_the_default_solver(dry, caplog):
     OptimizationCache.clear()
 
 
+SITE = [
+    {"id": "grid", "max_import": 9000, "max_export": 5000},
+    {
+        "id": "inverter",
+        "type": "hybrid_inverter",
+        "max_import": 4000,
+        "max_export": 4000,
+        "efficiency_import": 0.97,
+        "efficiency_export": 0.97,
+    },
+    {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
+    {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
+    {"id": "l1", "type": "limit", "max_import": 5000},
+    {"id": "pv", "parent": "inverter"},
+    {"id": "battery", "parent": "inverter", "solver": "home_energy_optimizer", "limits": ["l1"]},
+    {"id": "deferrable0", "parent": "garage", "group": "loads"},
+    {"id": "deferrable1", "parent": "garage", "group": "loads"},
+    {
+        "id": "water_heater",
+        "parent": "heat",
+        "solver": "home_energy_optimizer",
+        "config": {"power_kw": 3.0, "n_duty_levels": 2, "comfort_mode": "linear"},
+    },
+    {"id": "hvac", "parent": "heat", "solver": "home_energy_optimizer", "limits": ["l1"]},
+]
+REMOTE = {
+    "id": "garage_emhass",
+    "parent": "garage",
+    "solver": {"url": "http://emhass-garage:5000/participant", "token_secret": "garage_token"},
+}
+
+
+def _with(index: int, **change):
+    """SITE with element `index` changed (a value of None removes the key)."""
+    element = {k: v for k, v in {**SITE[index], **change}.items() if v is not None}
+    return SITE[:index] + [element] + SITE[index + 1 :]
+
+
 @pytest.mark.parametrize(
-    "participants, problem",
+    "site, problem",
     [
-        ("battery", "must be a list"),
-        ([{"nodevices": 1}], "must be an object with devices, solver and config only"),
-        ([{"devices": []}], "non-empty list of device names"),
-        ([{"devices": ["battery; rm -rf /"]}], "non-empty list of device names"),
-        ([{"devices": ["__import__('os')"]}], "non-empty list of device names"),
-        ([{"devices": ["battery"], "solver": "os.system"}], "solver must be one of"),
-        ([{"devices": ["battery"]}, {"devices": ["battery"]}], "already has"),
+        ({"nodes": []}, "must be a list"),
+        ([{"id": f"n{i}"} for i in range(129)], "at most 128 elements"),
+        (["inverter"], "must be an object with an id"),
+        ([{"type": "panel"}], "must be an object with an id"),
+        (_with(1, id="Inverter!"), "short lower-case name"),
+        (_with(1, id="__import__('os')"), "short lower-case name"),
+        (_with(1, rogue=1), "may have only"),
+        (_with(0, parent="inverter"), "may have only"),
+        (_with(4, parent="grid"), "may have only"),
+        (_with(5, solver="emhass"), "planned by no solver"),
+        (_with(6, solver="os.system"), "solver must be one of"),
+        (_with(6, group="Loads!"), "group must be a short lower-case name"),
+        (_with(6, limits="l1"), "limits must be a list of limit ids"),
+        (_with(6, limits=["nope"]), "which is no limit"),
         (
-            [
-                {
-                    "devices": ["water_heater"],
-                    "solver": "home_energy_optimizer",
-                    "config": {"power_kw": {"__class__": 1}},
-                }
-            ],
+            _with(9, config={"power_kw": {"__class__": 1}}),
             "finite number, a boolean or a short string",
         ),
-        (
-            [
-                {
-                    "devices": ["hvac"],
-                    "solver": "home_energy_optimizer",
-                    "config": {"cop": float("nan")},
-                }
-            ],
-            "finite number, a boolean or a short string",
-        ),
-        (
-            [
-                {
-                    "devices": ["water_heater"],
-                    "solver": "home_energy_optimizer",
-                    "config": {"t_comfort": "x" * 65},
-                }
-            ],
-            "finite number, a boolean or a short string",
-        ),
-        ([{"devices": [f"deferrable{i}"]} for i in range(65)], "at most 64 groups"),
+        (_with(9, config={"t_comfort": "x" * 65}), "finite number, a boolean or a short string"),
+        (_with(10, config={"cop": float("nan")}), "finite number, a boolean or a short string"),
+        (_with(1, type="reactor"), "type must be one of"),
+        (_with(1, max_import=-1), "max_import must be a finite number of W, >= 0"),
+        (_with(1, max_export=float("inf")), "max_export must be a finite number of W, >= 0"),
+        (_with(1, max_export=True), "max_export must be a finite number of W, >= 0"),
+        (_with(1, efficiency_export=1.2), "efficiency_export must be in (0, 1]"),
+        (_with(1, efficiency_import=0), "efficiency_import must be in (0, 1]"),
+        (_with(4, max_import=None), "needs max_import, max_export or both"),
+        (_with(3, parent="nowhere"), "parent must be 'grid' or a node's id"),
+        (_with(7, parent="l1"), "parent must be 'grid' or a node's id"),
+        (SITE + [{"id": "garage", "type": "breaker"}], "appears twice"),
+        ([{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}], "form a loop"),
+        ([{"id": "x", "solver": {"url": "file:///etc/passwd"}}], "solver must be {url"),
+        ([{"id": "x", "solver": {"url": "http://h/", "rogue": 1}}], "solver must be {url"),
+        ([{**REMOTE, "solver": {**REMOTE["solver"], "token_secret": "A!"}}], "must name a secret"),
     ],
 )
-def test_participants_are_checked_before_anything_reads_them(participants, problem):
-    """`participants` can arrive with a request, so its shape and types are
-    checked first; anything unexpected means the default solver, never an
-    exception or an unknown name reaching the coordinator."""
-    reason = _coordinated_config_problem(
-        {"optimization_backend": "dantzig_wolfe", "participants": participants}
-    )
+def test_the_site_is_checked_before_anything_reads_it(site, problem):
+    """`site` can arrive with a request, so its shape and types are checked
+    first; anything unexpected means the default solver, never an exception or
+    an unknown name reaching the coordinator."""
+    reason = _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
     assert reason and problem in reason
 
 
-def test_a_known_backend_and_a_valid_spec_pass():
+def test_a_known_backend_and_a_valid_site_pass():
     assert _coordinated_config_problem({"optimization_backend": "dantzig_wolfe"}) is None
-    assert (
-        _coordinated_config_problem(
-            {
-                "optimization_backend": "dantzig_wolfe",
-                "participants": [
-                    {"devices": ["battery"], "solver": "home_energy_optimizer"},
-                    {"devices": ["deferrable0", "deferrable1"], "solver": "emhass"},
-                    {
-                        "devices": ["water_heater"],
-                        "solver": "home_energy_optimizer",
-                        "config": {"power_kw": 3.0, "n_duty_levels": 2, "comfort_mode": "linear"},
-                    },
-                ],
-            }
+    for site in (SITE, SITE + [REMOTE], []):
+        assert (
+            _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
+            is None
         )
-        is None
-    )
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
     # documented as future work, not offered: it says so and the default solver plans
     assert "later release" in _coordinated_config_problem({"optimization_backend": "admm"})
 
 
+def test_a_remote_solver_comes_from_the_configuration_only():
+    """A site sent with a request may not name a remote solver: no request
+    makes EMHASS call a host of its choosing."""
+    assert utils.site_problem(SITE + [REMOTE]) is None
+    reason = utils.site_problem(SITE + [REMOTE], from_request=True)
+    assert reason and "from the configuration only" in reason
+
+
 def test_the_published_schema_is_the_check():
-    """openapi.json describes participants as the check reads it - a list of
-    objects with these device names and solvers - and offers only the
-    backends EMHASS runs."""
+    """openapi.json describes site as the check reads it - one allowed key
+    set per kind of element, these device names and solvers - and offers only
+    the backends EMHASS runs."""
     spec = json.loads((root / "src/emhass/static/openapi.json").read_text())
     props = spec["components"]["schemas"]["Config"]["properties"]
     assert props["optimization_backend"]["enum"] == list(_BACKENDS)
-    group = props["participants"]["items"]
-    assert props["participants"]["type"] == ["array", "null"]
-    assert set(group["properties"]) == {"devices", "solver", "config"}
-    assert group["additionalProperties"] is False
-    assert group["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
-    assert group["properties"]["solver"]["enum"] == list(_SOLVERS)
-    topo = props["electrical_topology"]
-    assert set(topo["properties"]) == {"nodes", "devices", "constraints"}
-    node = topo["properties"]["nodes"]["items"]
-    assert set(node["properties"]) == utils._TOPOLOGY_NODE_KEYS
-    assert node["properties"]["id"]["pattern"] == utils._TOPOLOGY_ID.pattern
-    assert node["properties"]["type"]["enum"] == list(utils._TOPOLOGY_TYPES)
-    limit = topo["properties"]["constraints"]["items"]
-    assert set(limit["properties"]) == {"name", "devices", "max_import", "max_export"}
-    assert limit["properties"]["devices"]["items"]["pattern"] == _DEVICE.pattern
+    assert props["site"]["type"] == ["array", "null"]
+    kinds = {k["title"].split(" (")[0]: k for k in props["site"]["items"]["anyOf"]}
+    names = {
+        "the main meter": "grid",
+        "a node": "node",
+        "a limit": "limit",
+        "a device": "device",
+        "a remote solver": "remote",
+    }
+    assert set(kinds) == set(names)
+    for title, kind in names.items():
+        assert kinds[title]["additionalProperties"] is False
+        assert set(kinds[title]["properties"]) == utils._SITE_KEYS[kind]
+    device = kinds["a device"]["properties"]
+    assert device["id"]["pattern"] == utils._SITE_DEVICE.pattern
+    assert device["solver"]["enum"] == list(utils._SITE_SOLVERS)
+    assert kinds["a node"]["properties"]["type"]["enum"] == list(utils._SITE_NODE_TYPES)
+    assert kinds["a node"]["properties"]["id"]["pattern"] == utils._SITE_ID.pattern
 
 
-TOPOLOGY = {
-    "nodes": [
-        {
-            "id": "inverter",
-            "type": "hybrid_inverter",
-            "max_import": 4000,
-            "max_export": 4000,
-            "efficiency_from_parent": 0.97,
-            "efficiency_to_parent": 0.97,
-        },
-        {"id": "garage", "type": "panel", "max_import": 7400, "max_export": 0},
-        {"id": "heat", "type": "breaker", "parent": "garage", "max_import": 3500},
-    ],
-    "devices": {
-        "pv": "inverter",
-        "battery": "inverter",
-        "water_heater": "heat",
-        "hvac": "heat",
-        "deferrable0": "garage",
-        "deferrable1": "garage",
-    },
-    "constraints": [{"name": "l1", "devices": ["battery", "hvac"], "max_import": 5000}],
-}
-
-
-def _with(**change):
-    """TOPOLOGY with its first node changed."""
-    return {**TOPOLOGY, "nodes": [{**TOPOLOGY["nodes"][0], **change}] + TOPOLOGY["nodes"][1:]}
-
-
-@pytest.mark.parametrize(
-    "topology, problem",
-    [
-        (["nodes"], "an object with nodes, devices and constraints only"),
-        ({**TOPOLOGY, "rogue": 1}, "an object with nodes, devices and constraints only"),
-        ({"nodes": [{"id": "a", "rogue": 1}]}, "must be an object with id and only"),
-        (_with(id="Inverter!"), "new, short lower-case name"),
-        (_with(id="grid"), "new, short lower-case name"),
-        (_with(id="__import__('os')"), "new, short lower-case name"),
-        ({"nodes": [{"id": "a"}, {"id": "a"}]}, "new, short lower-case name"),
-        (_with(type="reactor"), "type must be one of"),
-        (_with(max_import=-1), "max_import must be a finite number of W, >= 0"),
-        (_with(max_export=float("inf")), "max_export must be a finite number of W, >= 0"),
-        (_with(max_export=True), "max_export must be a finite number of W, >= 0"),
-        (_with(efficiency_to_parent=1.2), "efficiency_to_parent must be in (0, 1]"),
-        (_with(efficiency_from_parent=0), "efficiency_from_parent must be in (0, 1]"),
-        ({"nodes": [{"id": "a", "parent": "nowhere"}]}, "parent must be 'grid' or a node's id"),
-        ({"nodes": [{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}]}, "form a loop"),
-        ({"devices": {"hvac; rm -rf /": "grid"}}, "is not a device name"),
-        ({"devices": {"hvac": "nowhere"}}, "must be 'grid' or a node's id"),
-        ({"devices": {f"deferrable{i}": "grid" for i in range(65)}}, "at most 64 devices"),
-        ({"nodes": [{"id": f"n{i}"} for i in range(65)]}, "at most 64 nodes"),
-        (
-            {"constraints": [{"name": "c", "devices": ["hvac"]}]},
-            "needs max_import, max_export or both",
-        ),
-        (
-            {"constraints": [{"name": "c", "devices": ["pv"], "max_import": 1}]},
-            "non-empty list of device names",
-        ),
-        (
-            {"constraints": [{"name": "c", "devices": ["hvac"], "max_import": "1"}]},
-            "max_import must be a finite",
-        ),
-        (
-            {"constraints": [{"name": "c", "devices": [], "max_import": 1}]},
-            "non-empty list of device names",
-        ),
-        (
-            {
-                "nodes": [{"id": "c"}],
-                "constraints": [{"name": "c", "devices": ["hvac"], "max_import": 1}],
-            },
-            "new, short lower-case name",
-        ),
-    ],
-)
-def test_the_topology_is_checked_before_anything_reads_it(topology, problem):
-    """`electrical_topology` can arrive with a request too: refused by shape
-    and type, by name, before the coordinator or the inverter keys see it."""
-    reason = _coordinated_config_problem(
-        {"optimization_backend": "dantzig_wolfe", "electrical_topology": topology}
-    )
-    assert reason and problem in reason
-
-
-def test_a_valid_topology_passes():
-    assert (
-        _coordinated_config_problem(
-            {"optimization_backend": "dantzig_wolfe", "electrical_topology": TOPOLOGY}
-        )
-        is None
-    )
-
-
-def test_the_topologys_inverter_sets_emhass_inverter_keys(caplog):
-    """A hybrid_inverter node on the main meter holding the PV and the battery
-    fills EMHASS's own inverter keys - its ratings and efficiencies - so the
-    default solver plans the same inverter; where the keys said otherwise,
-    the topology wins, with a warning."""
-    plant = {"inverter_is_hybrid": False, "inverter_ac_output_max": 5000}
+def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):
+    """The main meter's limits, and a hybrid_inverter node on it holding the PV
+    and the battery, fill EMHASS's own keys - so the default solver plans the
+    same meter and inverter; where the keys said otherwise, site wins, with a
+    warning."""
+    plant = {
+        "inverter_is_hybrid": False,
+        "inverter_ac_output_max": 5000,
+        "maximum_power_from_grid": 9000,
+    }
     with caplog.at_level("WARNING"):
-        assert utils.compile_electrical_topology(TOPOLOGY, plant, logger)
+        assert utils.compile_site(SITE, plant, logger)
     assert plant == {
         "inverter_is_hybrid": True,
         "inverter_ac_output_max": 4000,
         "inverter_ac_input_max": 4000,
         "inverter_efficiency_dc_ac": 0.97,
         "inverter_efficiency_ac_dc": 0.97,
+        "maximum_power_from_grid": 9000,
+        "maximum_power_to_grid": 5000,
     }
     assert "replaces inverter_ac_output_max=5000" in caplog.text
 
@@ -712,15 +652,21 @@ def test_the_topologys_inverter_sets_emhass_inverter_keys(caplog):
 def test_an_inverter_emhass_cannot_hold_leaves_its_keys(change, caplog):
     plant = {"inverter_is_hybrid": False}
     with caplog.at_level("WARNING"):
-        assert not utils.compile_electrical_topology(_with(**change), plant, logger)
+        assert not utils.compile_site(_with(1, **change)[1:], plant, logger)
     assert plant == {"inverter_is_hybrid": False}
 
 
-def test_the_input_pipeline_compiles_the_topology():
-    """Set in the configuration (or a request), the topology's inverter
-    reaches the default solver's plant configuration."""
+def test_a_second_device_on_the_inverter_leaves_its_keys():
+    site = SITE + [{"id": "deferrable2", "parent": "inverter"}]
+    assert utils.site_inverter(site) is None
 
-    async def run():
+
+def test_the_input_pipeline_compiles_the_site():
+    """Set in the configuration (or a request), the site's inverter and meter
+    reach the default solver's plant configuration; a request's site that
+    names a remote solver is not used."""
+
+    async def run(runtime: dict):
         with tempfile.TemporaryDirectory() as tmp:
             data_path = pathlib.Path(tmp) / "data"
             shutil.copytree(root / "data", data_path)
@@ -729,34 +675,36 @@ def test_the_input_pipeline_compiles_the_topology():
             params = await build_params(
                 ec, secrets, await build_config(ec, logger, ec["defaults_path"]), logger
             )
-            params["optim_conf"]["electrical_topology"] = TOPOLOGY
+            params["optim_conf"]["site"] = SITE
             idd = await set_input_data_dict(
                 ec,
                 "profit",
                 orjson.dumps(params).decode(),
-                orjson.dumps(FORECASTS).decode(),
+                orjson.dumps({**FORECASTS, **runtime}).decode(),
                 "dayahead-optim",
                 logger,
                 get_data_from_file=True,
             )
-            return idd["opt"].plant_conf
+            return idd["opt"].plant_conf, idd["opt"].optim_conf
 
-    plant = asyncio.run(run())
+    plant, _ = asyncio.run(run({}))
     assert plant["inverter_is_hybrid"] is True and plant["inverter_ac_output_max"] == 4000
+    assert plant["maximum_power_to_grid"] == 5000
+    _, optim = asyncio.run(run({"site": [REMOTE]}))
+    assert optim["site"] == SITE  # the configured one, kept
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
-def test_a_malformed_spec_in_a_request_still_plans(dry, caplog):
-    """The request that crashed with KeyError 'devices' before: now the
-    default solver plans, live or dry, and the log says why."""
+def test_a_malformed_site_in_a_request_still_plans(dry, caplog):
+    """The default solver plans, live or dry, and the log says why."""
     OptimizationCache.clear()
     with tempfile.TemporaryDirectory() as tmp, caplog.at_level("WARNING"):
         data_path = pathlib.Path(tmp) / "data"
         shutil.copytree(root / "data", data_path)
-        res = _coordinated(data_path, {"dry_run": dry}, participants=[{"nodevices": 1}])
+        res = _coordinated(data_path, {"dry_run": dry}, site=[{"nodevices": 1}])
     assert isinstance(res, pd.DataFrame) and (res["optim_status"] == "Optimal").all()
     assert (res["backend_used"] == "cvxpy").all()
     # refused by the check, by name - the coordinator never saw it
-    assert "participants[0] must be an object with devices, solver and config only" in caplog.text
+    assert "site[0] must be an object with an id" in caplog.text
     assert "coordinator raised" not in caplog.text
     OptimizationCache.clear()
