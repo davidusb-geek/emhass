@@ -72,7 +72,7 @@ watts of source input:
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
 | `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
-| `overshoot_temperature` | Optional soft threshold (degrees Celsius): with the storage's desired temperature set, this source stops while the storage is above it. Overrides the storage-level `overshoot_temperature`. |
+| `overshoot_temperature` | Optional threshold (degrees Celsius): with the storage's desired temperature set, this source stops beyond it (see below). Overrides the storage-level `overshoot_temperature`. |
 | `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
 | `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
 
@@ -168,11 +168,18 @@ comfort control is available through `desired_temperature` or
 `comfort_sense` (`heat` or `cool`).
 
 The storage's `overshoot_temperature` applies to every source that feeds it,
-unless a source sets its own. That makes a two-stage setup a preference: with
+unless a source sets its own. That makes a two-stage setup: with
 `desired_temperatures: 60` on the tank, `overshoot_temperature: 55` on the heat
-pump and `75` on the electric element, the element lifts the band above
-55 degrees Celsius only when the comfort penalty justifies it. The band stays
-soft, so comfort alone cannot make the problem infeasible.
+pump and `75` on the electric element, the heat pump stops at 55 degrees
+Celsius and the element lifts the tank above it only when the comfort penalty
+justifies it. The desired temperature is soft, but the threshold is a hard stop
+for its source. A continuous source does not heat (or cool) in a step that
+would end beyond it, as for `thermal_config`. A semi-continuous source, the
+default, is off while the storage starts a step beyond it, so one full-power
+step can still carry the storage across. When every source feeding a storage
+is continuous and has a threshold, a `min_temperature` above all of them (a
+`max_temperature` below them when cooling) can only be held by a storage that
+already starts there, and the compiler logs a warning for it.
 
 For predictable constraints, make the maximum-temperature array cover the
 optimization horizon. A shorter minimum-temperature array is extended using

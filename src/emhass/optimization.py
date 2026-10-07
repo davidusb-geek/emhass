@@ -4323,9 +4323,10 @@ class Optimization:
         # (same pattern as thermal_config / thermal_battery loads), and each
         # source with an overshoot_temperature is switched off while the tank
         # sits beyond its threshold - e.g. the heat pump stops at 55 C while
-        # the electric element keeps going to 75 C. Unlike the hard
-        # max_supply_temperature gate above (a physical limit), this is a
-        # preference: the band stays soft, which keeps the problem feasible.
+        # the electric element keeps going to 75 C. The desired temperature is
+        # soft; the threshold is a hard stop for its source, like thermal_config's
+        # overshoot_temperature (the compiler warns when it sits below a floor
+        # every feeding source would need to reach).
         penalty_term = None
         desired_raw = tank.get("desired_temperatures")
         if isinstance(desired_raw, int | float):
