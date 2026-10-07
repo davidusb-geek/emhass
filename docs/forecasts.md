@@ -365,6 +365,35 @@ This example is presented graphically here:
 
 ![](./images/hp_hc_periods.png)
 
+### Tariff schedule time zone
+
+By default the `start` and `end` times of `load_peak_hour_periods` are wall-clock times in the site `time_zone`, the same clock as the optimization timestamps. Some tariffs publish their periods on a different clock, for example a fixed UTC+10 all year while the site's civil time moves to UTC+11 in summer. For such a tariff the same wall-clock period lands on the wrong absolute intervals during daylight saving.
+
+The optional `tariff_schedule_time_zone` parameter (in `optim_conf`, next to `load_peak_hour_periods`) names the time zone identifier the periods are written in:
+
+- Empty or unset (the default): the periods are interpreted in the site `time_zone`, exactly as before.
+- A time zone identifier: each optimization timestep is re-expressed in that zone to decide whether it falls inside a peak period. The optimization timestamps themselves, the forecast days and the global `time_zone` are unchanged; only the timesteps selected as peak differ.
+- An identifier that is not recognised is an error: the run is aborted and the invalid value is logged. It never falls back to the site time zone.
+- It only applies to `load_cost_forecast_method=hp_hc_periods`. Load and production prices passed as timestamped data (or read from CSV) are not affected, and `capacity_charge_window` is still built by the caller, who is responsible for the clock it is written in.
+
+Only time zone identifiers are accepted; there is no separate offset syntax. A fixed offset is available as an `Etc/GMT` identifier, whose sign is inverted: `Etc/GMT-10` is UTC+10.
+
+Example: a tariff with a 17:00-21:00 peak on a fixed UTC+10 clock, at a site in `Australia/Sydney`:
+
+    - time_zone: Australia/Sydney
+    - tariff_schedule_time_zone: Etc/GMT-10
+    - load_peak_hour_periods:
+        - period_hp_1:
+            - start: '17:00'
+            - end: '21:00'
+
+| Date | Site clock | Peak timesteps (site time) |
+|---|---|---|
+| Standard time (UTC+10) | AEST | 17:00-21:00 |
+| Daylight time (UTC+11) | AEDT | 18:00-22:00 |
+
+In both cases the peak is the same absolute interval, 07:00-11:00 UTC. Without `tariff_schedule_time_zone` the peak would stay at 17:00-21:00 site time during daylight time.
+
 ## PV production selling price forecast
 
 The default method for this forecast is simply a constant value. This can be obtained using `method=constant`.
