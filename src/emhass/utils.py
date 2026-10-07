@@ -4573,13 +4573,18 @@ def validate_inverter_power_curve(
     points: list[tuple[float, float]] = [(0.0, 0.0)]
     for power, efficiency in configured:
         ac_power = power * efficiency if direction == "dc_ac" else power / efficiency
+        if not math.isfinite(ac_power):
+            raise ValueError(
+                f"{parameter_name}: {dc_name}={power} with efficiency={efficiency} converts to a "
+                f"non-finite AC-side power; use a larger efficiency"
+            )
         points.append((power, ac_power))
 
     ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
     for position in range(2, len(points)):
         ac_prev = points[position - 1][1]
         ac_now = points[position][1]
-        if ac_now < ac_prev:
+        if ac_now < ac_prev - 1e-9 * max(1.0, ac_prev):
             raise ValueError(
                 f"{parameter_name}: point {position} converts to {ac_name}={ac_now}, which is "
                 f"below {ac_prev} from the previous point: the resulting AC-side transfer "
@@ -4632,7 +4637,8 @@ def check_inverter_power_curves(
 
     Absent or empty curves are the default and leave the scalar
     ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
-    A configured [dc_power_w, efficiency] curve is validated and converted to internal transfer points (see :func:`validate_inverter_power_curve`).
+    A configured [dc_power_w, efficiency] curve is validated and converted to internal
+    transfer points (see :func:`validate_inverter_power_curve`).
 
     Two contracts, chosen by the caller:
 

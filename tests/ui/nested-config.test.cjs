@@ -90,7 +90,7 @@ test('existing empty per-load cost input is not rewritten by battery-specific pa
 
 // Generic contract for every static nested numeric-table parameter.
 const curveNames = ['inverter_power_curve_dc_ac', 'inverter_power_curve_ac_dc'];
-const curve = [[0, 0], [1000, 700], [5000, 4500]];
+const curve = [[50, 0], [1000, 0.7], [5000, 0.9]]; // [dc_power_w, efficiency]; 0 % at 50 W is valid
 function setupFor(pname, raw) {
   const ctx = setup(raw);
   const input = { type: 'text', value: raw };
@@ -110,7 +110,7 @@ for (const pname of curveNames) {
       assert.deepEqual(save.sent[pname], value);
     }
   });
-  for (const raw of ['[', '[0,0]', '[[0,"0"],[1000,700]]', '[[0,0],[1000,null]]', '[[true,0],[1000,700]]', '{}', 'null']) {
+  for (const raw of ['[', '[1000,0.9]', '[[1000,"0.9"],[5000,0.9]]', '[[1000,0.9],[5000,null]]', '[[true,0.9],[5000,0.9]]', '{}', 'null']) {
     test(`${pname}: invalid ${raw} is rejected with its name`, async () => {
       const ctx = setupFor(pname, raw);
       assert.equal(await ctx.saveConfiguration({ System: { [pname]: def } }), 0);
