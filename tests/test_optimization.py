@@ -4368,6 +4368,21 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def test_startup_penalty_at_negative_prices(self):
+        """At a negative price the startup penalty must not become a reward.
+        Before, the start indicator (only bounded from below) was set in steps
+        where the load stayed off, and real starts were rewarded too, so the run
+        was split into one-step pieces. Now there is one start, while on."""
+        self.fcst.params["passed_data"]["load_cost_forecast"] = [-1.0] * 10
+        self.optim_conf.update({"set_deferrable_startup_penalty": [100.0]})
+
+        self.run_penalty_test_forecast()
+
+        starts = np.round(self.opt.vars["p_def_start"][0].value)
+        on = np.round(self.opt.vars["p_def_bin2"][0].value)
+        self.assertTrue(np.all(starts <= on), f"starts {starts} while on/off is {on}")
+        self.assertEqual(int(starts.sum()), 1)
+
     def test_running_single_const_pinned_from_start(self):
         """A running single-constant load is pinned ON from t=0 regardless of cost."""
         # Cheap at t=5..9, expensive at t=0..4 — without pinning the solver would defer.
@@ -11990,6 +12005,322 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             opt.optim_status,
             "Optimal",
             "a crashed solve must not publish the previous run's status",
+        )
+
+    def _run_hp_booster_tank(
+        self,
+        hp_cap,
+        min_power=(0, 0),
+        single_constant=(False, False),
+        operating_hours=(0, 0),
+        def_current_state=None,
+        start_timesteps=(0, 0),
+        end_timesteps=(0, 0),
+        start_temperature=48.0,
+        thermal_loss=0.0,
+        min_temperatures=None,
+        tank_overrides=None,
+    ):
+        """Helper: one shared DHW tank fed by a heat pump (load 0, Carnot, cheap)
+        and an electric booster (load 1, efficiency 1.0). A mid-horizon
+        min_temperature of 60 C forces the tank above the HP cap so only an
+        uncapped source can satisfy it. `hp_cap` sets the HP max_supply_temperature
+        (None = uncapped, scalar, or per-step list). The remaining kwargs exist to
+        reproduce pinning/min-power interactions with the cap gate."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # must exceed the 53 C HP cap -> needs the booster
+        if min_temperatures is not None:
+            min_t = list(min_temperatures)
+        hp_source = {"supply_temperature": 55.0, "carnot_efficiency": 0.40}
+        if hp_cap is not None:
+            hp_source["max_supply_temperature"] = hp_cap
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = list(min_power)
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = list(operating_hours)
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = list(single_constant)
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = list(start_timesteps)
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = list(end_timesteps)
+        if def_current_state is not None:
+            self.optim_conf["def_current_state"] = list(def_current_state)
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": hp_source},  # load 0 = heat pump (cheap, Carnot)
+            {"thermal_source": {"efficiency": 1.0}},  # load 1 = electric booster
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": start_temperature,
+                "thermal_loss": thermal_loss,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+                **(tank_overrides or {}),
+            }
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        return opt, res
+
+    def _assert_hp_off_above_cap(self, res, cap, msg):
+        """Assert the HP (load 0) injects nothing whenever the tank exceeds cap."""
+        tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        temp = res[tank_cols[0]].reset_index(drop=True)
+        above = temp > cap + 1e-6
+        self.assertTrue(above.any(), "Tank never exceeded the cap; test exercises nothing")
+        self.assertLess(hp[above].max(), 1e-3, msg)
+
+    def test_per_source_max_supply_temperature_caps_heat_pump(self):
+        """A heat pump with `max_supply_temperature` only heats up to its cap; the
+        uncapped electric booster must supply the band above it."""
+        opt, res = self._run_hp_booster_tank(hp_cap=53.0)
+        self.assertEqual(opt.optim_status, "Optimal")
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        # The booster must fire to push the tank above the HP cap to reach 60 C.
+        self.assertGreater(booster.sum(), 0, "Booster should supply the band above the HP cap")
+        self._assert_hp_off_above_cap(
+            res, 53.0, "Heat pump injected heat while the tank was above max_supply_temperature"
+        )
+
+    def test_rising_per_step_cap_gates_on_the_current_step(self):
+        """Heat injected during step t ends at t+1, so it is bounded by the ceiling
+        of step t, not of step t+1. With caps [53, 65, ...] and a 54 C floor at
+        t=1, the heat pump may not lift the tank past 53 C during step 0: the
+        booster must deliver it."""
+        min_t = [45.0] * 48
+        min_t[1] = 54.0
+        opt, res = self._run_hp_booster_tank(hp_cap=[53.0] + [65.0] * 47, min_temperatures=min_t)
+        self.assertEqual(opt.optim_status, "Optimal")
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertLess(hp[0], 1e-3, "The heat pump heated past its step-0 ceiling")
+        self.assertGreater(booster[0], 0, "The booster must lift the tank to 54 C in step 0")
+
+    def test_start_far_above_cap_does_not_bind_the_initial_state(self):
+        """The cap gate's big-M must cover the start temperature too: a tank that
+        starts far above both its cap and its own maximum (index 0 is never
+        bounded) and is drawn down in the first step stays feasible with the
+        capped heat pump simply off."""
+        draw = [23.5] + [0.0] * 47  # kWh: draws the 200 L tank from 160 C to ~59 C
+        opt, res = self._run_hp_booster_tank(
+            hp_cap=53.0,
+            start_temperature=160.0,
+            min_temperatures=[45.0] * 48,
+            tank_overrides={"draw_off_demand": draw},
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+
+    def test_cap_is_ignored_on_a_cooling_tank(self):
+        """max_supply_temperature is a heating ceiling. On a cooling storage the
+        heating-side gate would keep a capped source off exactly while the
+        storage is warm and needs cooling, so the cap is ignored there with a
+        warning."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [30.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"efficiency": 3.0, "max_supply_temperature": 20.0}}
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "room",
+                "load_ids": [0],
+                "volume": 0.2,
+                "start_temperature": 30.0,
+                "thermal_loss": 0.0,
+                "sense": "cool",
+                "min_temperatures": [10.0] * 48,
+                "max_temperatures": [25.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("max_supply_temperature" in m for m in logs.output))
+
+    def test_no_cap_lets_cheaper_heat_pump_do_the_work(self):
+        """Regression: without `max_supply_temperature` the (cheaper) heat pump
+        covers the whole range itself and the booster stays idle."""
+        opt, res = self._run_hp_booster_tank(hp_cap=None)
+        self.assertEqual(opt.optim_status, "Optimal")
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertGreater(hp.sum(), 0)
+        self.assertAlmostEqual(
+            booster.sum(),
+            0.0,
+            delta=1.0,
+            msg="With no cap the (higher-COP) heat pump should serve all demand",
+        )
+
+    def test_cap_above_demand_keeps_booster_idle(self):
+        """A cap above everything the plan needs (80 C > tank max 65 C) must be a
+        no-op: the gate exists but never binds, so the heat pump serves all demand."""
+        opt, res = self._run_hp_booster_tank(hp_cap=80.0)
+        self.assertEqual(opt.optim_status, "Optimal")
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertAlmostEqual(
+            booster.sum(),
+            0.0,
+            delta=1.0,
+            msg="A never-binding cap must not change dispatch",
+        )
+
+    def test_per_step_list_cap_pads_to_horizon(self):
+        """A per-step cap list shorter than the horizon is forward-filled with its
+        last value: the 53 C ceiling keeps applying after the list ends, so the
+        booster must still serve the 60 C band late in the horizon."""
+        opt, res = self._run_hp_booster_tank(hp_cap=[53.0] * 20)
+        self.assertEqual(opt.optim_status, "Optimal")
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertGreater(
+            booster.sum(), 0, "Booster should fire: the padded cap still binds at steps 28-34"
+        )
+        self._assert_hp_off_above_cap(
+            res, 53.0, "Padded per-step cap was not enforced beyond the list length"
+        )
+
+    def test_capped_pinned_running_min_power_stays_optimal(self):
+        """Regression for the cap/pin infeasibility trap (post-legionella restart):
+        the tank starts ABOVE the HP cap (56 > 53) while the HP is single-constant,
+        currently running (def_current_state=1), with min_power>0 and
+        operating_hours>0. The running_lb pin would force p[0] >= min_power while
+        the cap gate forces p[0] == 0 -> infeasible -> silent 'Optimal (Relaxed)'
+        that drops single_constant for every load. Shared-tank members are
+        temperature-driven, so the pin must not apply: the solver schedules the
+        run later, once standby losses pull the tank far enough below the cap
+        (one min-power step adds ~6 C on this 200 L tank, so it needs ~47 C)."""
+        opt, res = self._run_hp_booster_tank(
+            hp_cap=53.0,
+            min_power=(1000, 0),
+            single_constant=(True, False),
+            operating_hours=(0.5, 0),  # one 30-min step; longer runs can't stay under cap
+            def_current_state=(1, 0),
+            start_temperature=56.0,
+            thermal_loss=0.25,  # tank cools ~0.5 C/step -> below cap from ~step 6
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        self.assertGreater(hp.sum(), 0, "HP should run its block once the tank cools below cap")
+        self._assert_hp_off_above_cap(
+            res, 53.0, "Pinned-start exemption must not weaken the cap gate"
+        )
+
+    def test_capped_window_outside_horizon_stays_optimal(self):
+        """Regression: shared-tank members with a configured window entirely
+        outside the horizon (start=600, end=800, n=48) must not be gagged by the
+        zeroed window mask - the tank's min_temperatures would become unreachable
+        and the plan unpublishable. The window is ignored for shared-tank sources
+        (temperature constraints drive them)."""
+        opt, res = self._run_hp_booster_tank(
+            hp_cap=53.0,
+            single_constant=(True, True),
+            start_timesteps=(600, 600),
+            end_timesteps=(800, 800),
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        total = (
+            res["P_deferrable0"].reset_index(drop=True).sum()
+            + res["P_deferrable1"].reset_index(drop=True).sum()
+        )
+        self.assertGreater(total, 0, "Sources must dispatch to hold the 45-60 C band")
+
+    def test_cap_survives_relaxed_lp_fallback(self):
+        """The cap gate is a physical limit, so it must keep holding in the
+        relaxed-LP fallback (which keeps its booleans, like the tank's hard
+        min/max temperatures). Two mutually exclusive standard loads needing
+        13 h each on a 24 h horizon make the MILP provably infeasible; the
+        relaxation drops mutual exclusion and solves, but the heat pump must
+        still stay off above its max_supply_temperature."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
+        self.optim_conf["number_of_deferrable_loads"] = 4
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000, 1000, 1000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0, 13, 13]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 4
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
+        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
+        self.optim_conf["is_electric_load"] = [True] * 4
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": 55.0,
+                    "carnot_efficiency": 0.40,
+                    "max_supply_temperature": 53.0,
+                }
+            },
+            {"thermal_source": {"efficiency": 1.0}},
+            {},
+            {},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 48.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        # Loads 2 and 3 may never run simultaneously, yet each must deliver
+        # 13 h x 1 kW: 26 h of combined runtime in a 24 h horizon. The MILP is
+        # infeasible by construction; the relaxation drops mutual exclusion.
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable2", "deferrable3"], "mutual_exclusion": True}
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertGreater(booster.sum(), 0, "Booster must serve the band above the HP cap")
+        self._assert_hp_off_above_cap(
+            res, 53.0, "Relaxed fallback must not weaken the max_supply_temperature gate"
         )
 
 

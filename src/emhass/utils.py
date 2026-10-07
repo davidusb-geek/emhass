@@ -661,10 +661,13 @@ def compile_heat_topology(topology: dict) -> dict:
     min_power = []
     treat_semi_cont = []
     operating_hours = []
+    startup_penalty = []
+    max_startups = []
     def_load_config = []
     cost_per_load: list = []
     is_electric_load: list[bool] = []
     flow_to_load_idx: dict[tuple[str, str], int] = {}
+    cap_by_src_id: dict[str, float | list | None] = {}
 
     for i, f in enumerate(flows):
         src = src_by_id[f["from"]]
@@ -682,6 +685,29 @@ def compile_heat_topology(topology: dict) -> dict:
         min_power.append(src_min_power)
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
+        # Anti-short-cycle controls (optional, per source). The startup penalty
+        # prices each off->on switch (softly discouraging short-cycling); the
+        # max_startups cap is a hard limit on the number of starts per horizon.
+        # Both default to 0 (disabled) so existing topologies are unchanged.
+        penalty = float(src.get("startup_penalty", 0.0))
+        if penalty < 0:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, got {penalty}"
+            )
+        startup_penalty.append(penalty)
+        raw_cap = src.get("max_startups", 0)
+        if (
+            isinstance(raw_cap, bool)
+            or not isinstance(raw_cap, int | float)
+            or raw_cap < 0
+            or raw_cap != int(raw_cap)
+        ):
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].max_startups must be a whole "
+                f"number >= 0, got {raw_cap!r}"
+            )
+        starts_cap = int(raw_cap)
+        max_startups.append(starts_cap)
         # Source-side fields - shape expected by resolve_thermal_battery_cop
         source_block: dict = {}
         src_type = src.get("type", "").lower()
@@ -741,6 +767,67 @@ def compile_heat_topology(topology: dict) -> dict:
         if "comfort_sense" in target_storage:
             source_block["sense"] = str(target_storage["comfort_sense"]).lower()
         is_electric_load.append(bool(src.get("electric", type_is_electric.get(src_type, True))))
+        # Optional per-source temperature ceiling: this source may only add heat
+        # while the shared tank is at or below this temperature (e.g. a heat pump
+        # limited to its supply/condenser temperature). A source without it (e.g.
+        # an electric booster) can drive the tank up to the tank's max_temperatures.
+        _cap = src.get("max_supply_temperature")
+        if _cap is not None:
+            if isinstance(_cap, (list, tuple, np.ndarray)):
+                cap_value = [float(x) for x in _cap]
+                if not cap_value:
+                    raise ValueError(
+                        f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                        "is an empty list; omit the key to leave the source uncapped."
+                    )
+            else:
+                cap_value = float(_cap)
+            if any(x <= 0 for x in (cap_value if isinstance(cap_value, list) else [cap_value])):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                    "must be > 0 degC; a non-positive ceiling permanently disables "
+                    "the source. Omit the key to leave it uncapped."
+                )
+            source_block["max_supply_temperature"] = cap_value
+            cap_by_src_id[src["id"]] = cap_value
+        else:
+            cap_by_src_id[src["id"]] = None
+            # A constant-supply heat pump (supply_temperature, no heating curve)
+            # cannot physically heat water above its supply temperature, but
+            # supply_temperature drives the COP only - it is NOT enforced as a
+            # ceiling. Without max_supply_temperature the optimiser may plan to
+            # heat the tank above it (a physically unreachable setpoint). Warn so
+            # the user can add max_supply_temperature to cap it. (Left opt-in:
+            # auto-capping at supply_temperature makes a tank whose min_temperature
+            # sits at the supply temperature infeasible.)
+            # Not needed when the storage's own ceiling already sits at or below
+            # the supply temperature, and not meaningful for a cooling source.
+            storage_max = target_storage.get(
+                "max_temperatures", target_storage.get("max_temperature")
+            )
+            storage_max_values = [
+                float(v)
+                for v in (storage_max if isinstance(storage_max, list) else [storage_max])
+                if isinstance(v, int | float)
+            ]
+            already_capped = bool(storage_max_values) and max(storage_max_values) <= float(
+                source_block.get("supply_temperature", float("inf"))
+            )
+            if (
+                "supply_temperature" in source_block
+                and source_block.get("sense", "heat") != "cool"
+                and not already_capped
+            ):
+                logging.getLogger(__name__).warning(
+                    "heat_topology.sources[%s] is a fixed-supply heat pump "
+                    "(supply_temperature=%.0f C) without max_supply_temperature: "
+                    "supply_temperature sets the COP only and is not enforced as a "
+                    "physical ceiling, so the optimiser may heat the tank above it. "
+                    "Set max_supply_temperature to cap the tank at the supply "
+                    "temperature.",
+                    src["id"],
+                    float(source_block["supply_temperature"]),
+                )
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")
@@ -831,6 +918,37 @@ def compile_heat_topology(topology: dict) -> dict:
             "max_temperatures": list(s.get("max_temperature", []))
             or list(s.get("max_temperatures", [])),
         }
+        # Warn when the static minimum band is probably unreachable: if EVERY
+        # source feeding this tank has a max_supply_temperature and some
+        # min_temperatures[t] exceeds the highest ceiling at t, no source can
+        # heat the tank to it. It is a warning, not an error: a tank that starts
+        # hot enough can still hold the minimum, and the solver decides. Only the
+        # static list is checked here; a min_temperature_curve resolves against
+        # weather at solve time.
+        feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
+        is_cooling = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+        if not is_cooling and feeding_caps and all(c is not None for c in feeding_caps):
+            for t, min_val in enumerate(tank["min_temperatures"]):
+                if min_val is None:
+                    continue
+                ceiling = max(
+                    (c[t] if t < len(c) else c[-1]) if isinstance(c, list) else c
+                    for c in feeding_caps
+                )
+                if float(min_val) > ceiling:
+                    logging.getLogger(__name__).warning(
+                        "heat_topology.storage[%s].min_temperatures[%s]=%s exceeds the "
+                        "highest max_supply_temperature (%s) of the sources feeding "
+                        "this storage; no source can heat it that far, so only a tank "
+                        "that is already hot enough can hold it. Raise a source "
+                        "ceiling, lower the minimum, or add an uncapped source (e.g. "
+                        "an electric booster).",
+                        sid,
+                        t,
+                        min_val,
+                        ceiling,
+                    )
+                    break
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
         # should track. Same linear law as the source's heating_curve.
@@ -905,9 +1023,9 @@ def compile_heat_topology(topology: dict) -> dict:
         "treat_deferrable_load_as_semi_cont": treat_semi_cont,
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
-        "set_deferrable_startup_penalty": [0.0] * num_loads,
+        "set_deferrable_startup_penalty": startup_penalty,
         "deferrable_load_max_cost": [0.0] * num_loads,
-        "set_deferrable_max_startups": [0] * num_loads,
+        "set_deferrable_max_startups": max_startups,
         "start_timesteps_of_each_deferrable_load": [0] * num_loads,
         "end_timesteps_of_each_deferrable_load": [0] * num_loads,
         "def_load_config": def_load_config,

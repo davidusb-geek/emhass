@@ -34,6 +34,7 @@ These parameters define the basic thermal battery system:
     * Radiator systems: typically 50-70°C
     * Lower temperatures = better heat pump efficiency
     * Example: `35.0` for underfloor heating
+    * Note: this drives the COP only - it is not enforced as a physical ceiling. To stop the optimiser heating the tank above the supply temperature, keep `max_temperatures` at or below it. In a [heat_topology](heat_topology.md), set the source's `max_supply_temperature` instead.
 
 * **volume**: Volume of the thermal storage medium in m³.
     * For underfloor heating: concrete slab volume (floor area × screed thickness)
