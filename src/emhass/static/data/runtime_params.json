@@ -152,7 +152,7 @@
     },
     "shared_thermal_tanks": {
       "friendly_name": "Shared thermal tanks",
-      "Description": "Runtime list of shared thermal storage tanks (multi-source storage): the manual flat alternative to heat_topology (issue #539). Each tank object carries id, load_ids, volume, start_temperature, min/max_temperatures, and demand fields - the same schema the heat_topology compiler emits. Ignored with a warning if not a list of objects. When heat_topology is also set, the compiled topology replaces this list: pass heat_topology itself at runtime instead.",
+      "Description": "Runtime list of shared thermal storage tanks (multi-source storage): the manual flat alternative to heat_topology (issue #539). Each tank object carries id, load_ids, volume, start_temperature, min/max_temperatures, and demand fields - the same schema the heat_topology compiler emits; each load in load_ids needs a def_load_config entry with a thermal_source block (efficiency, supply_temperature or heating_curve). Ignored with a warning if not a list of objects. When heat_topology is also set, the compiled topology replaces this list (unless extend_deferrable_loads is true, which keeps it and appends the topology's tanks).",
       "input": "object",
       "default_value": null,
       "unit": "none",

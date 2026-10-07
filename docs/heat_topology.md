@@ -355,7 +355,42 @@ A topology is rebuilt on every run instead of reusing the cached (warm-start)
 problem, so each run uses the live `start_temperature` and the current
 forecast. This also holds for every day of a perfect-forecast run. Pass the
 measured storage temperature as `start_temperature` in the `heat_topology` you
-send at runtime; the solve takes a few seconds longer than a warm start.
+send at runtime, or send only `shared_tank_start_temperatures` (for example
+`{"dhw": 48.5}`) to override the start temperature per storage id without
+resending the topology. The solve takes a few seconds longer than a warm start.
+
+## Combining with other deferrable loads
+
+By default the compiler replaces the whole deferrable-load set with the
+topology's flows, because it cannot tell configured loads apart from the
+shipped defaults. If you also have ordinary deferrable loads (washing machine,
+EV charger, ...) in the per-load arrays, set `extend_deferrable_loads` at the
+top level of the topology:
+
+```json
+{
+  "heat_topology": {
+    "extend_deferrable_loads": true,
+    "sources": ["..."],
+    "storage": ["..."],
+    "flows": ["..."]
+  }
+}
+```
+
+Your configured loads then keep indices `0..N-1`, and the topology's loads are
+appended at `N..N+M-1`. `N` is your `number_of_deferrable_loads`: the shipped
+defaults configure two example loads (3000 W for 4 h, and 750 W), so set
+it to the number of ordinary loads you really have, or to 0. Shared-tank `load_ids` and actuator-group references are
+shifted accordingly, and manually declared `shared_thermal_tanks` or
+`deferrable_load_groups` entries are kept, with the compiled ones appended.
+
+```{warning}
+The appended topology loads are numbered after your configured loads, so adding
+or removing a manual load later renumbers them (`sensor.p_deferrable2` silently
+changes meaning). Keep the manual load count stable once a topology is in use, or
+remap the published entities with `custom_deferrable_forecast_id`.
+```
 
 ## Validation and troubleshooting
 
