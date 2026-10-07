@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Tests for the optional hybrid-inverter power-transfer curves (issue #746).
+"""Tests for the optional hybrid-inverter power-dependent efficiency curves (issue #746).
 
 ``inverter_power_curve_dc_ac`` / ``inverter_power_curve_ac_dc`` replace the scalar
 ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` of one direction with
-an exact piecewise-linear relation between the DC-side power (the optimiser's
-``p_dc_ac`` / ``p_ac_dc``) and the AC-side power. Layers covered here:
+a user-facing [dc_power_w, efficiency] curve that is converted to the exact
+piecewise-linear relation between the optimiser's DC-side and AC-side power. Layers covered here:
 
 * config layer: ``utils.validate_inverter_power_curve`` / ``check_inverter_power_curves``
   and the real build_params / runtime entry points;
@@ -44,22 +44,24 @@ DC_AC = "inverter_power_curve_dc_ac"
 AC_DC = "inverter_power_curve_ac_dc"
 logger = logging.getLogger("inverter_curve_test")
 
-# Synthetic, illustrative curves (not any real hardware).
-CHARGE_CURVE = [[0, 0], [1000, 1500], [4000, 4500]]  # lossy first kW, then lossless
-DISCHARGE_CURVE = [[0, 0], [1000, 700], [5000, 4500]]
+# Synthetic, illustrative [dc_power_w, efficiency] curves (not any real hardware).
+# They convert to the same transfer points used by the original #1168 tests:
+# charge -> (0,0),(1000,1500),(4000,4500); discharge -> (0,0),(1000,700),(5000,4500).
+CHARGE_CURVE = [[1000, 2 / 3], [4000, 8 / 9]]
+DISCHARGE_CURVE = [[1000, 0.7], [5000, 0.9]]
 
 
-def interp(curve, x):
-    pts = np.asarray(curve, dtype=float)
+def interp(curve, x, direction):
+    points = utils.validate_inverter_power_curve(curve, "test_curve", direction)
+    pts = np.asarray(points, dtype=float)
     return np.interp(x, pts[:, 0], pts[:, 1])
-
 
 # --------------------------------------------------------------------------- #
 # Config layer
 # --------------------------------------------------------------------------- #
 
 
-def test_valid_curves_are_accepted_as_tuples():
+def test_valid_curves_are_converted_to_internal_transfer_tuples():
     assert utils.validate_inverter_power_curve(CHARGE_CURVE, AC_DC, "ac_dc") == [
         (0.0, 0.0),
         (1000.0, 1500.0),
@@ -71,28 +73,41 @@ def test_valid_curves_are_accepted_as_tuples():
     )
 
 
-def test_lossless_curve_is_valid():
-    assert utils.validate_inverter_power_curve([[0, 0], [5000, 5000]], DC_AC, "dc_ac")
+def test_zero_origin_is_inserted_internally():
+    assert utils.validate_inverter_power_curve(
+        [[1000, 1.0], [5000, 1.0]], DC_AC, "dc_ac"
+    ) == [(0.0, 0.0), (1000.0, 1000.0), (5000.0, 5000.0)]
+
+
+def test_zero_efficiency_above_zero_power_is_valid_for_dc_to_ac():
+    assert utils.validate_inverter_power_curve(
+        [[50, 0.0], [1000, 0.7]], DC_AC, "dc_ac"
+    ) == [(0.0, 0.0), (50.0, 0.0), (1000.0, 700.0)]
+
+
+def test_zero_efficiency_above_zero_power_is_not_finite_for_ac_to_dc():
+    with pytest.raises(ValueError, match="infinite AC input"):
+        utils.validate_inverter_power_curve([[50, 0.0], [1000, 0.7]], AC_DC, "ac_dc")
 
 
 @pytest.mark.parametrize(
     "curve,direction,expected",
     [
-        ("0,0;1,1", "dc_ac", "at least 2"),  # wrong type
-        ([[0, 0]], "dc_ac", "at least 2"),  # one point
-        ([[0, 0], [1000]], "dc_ac", "pair"),  # wrong cardinality
-        ([[0, 0], [1000, 900, 5]], "dc_ac", "pair"),  # wrong cardinality
-        ([[0, 0], ["1000", 900]], "dc_ac", "expected a number"),  # wrong type
-        ([[0, 0], [True, 900]], "dc_ac", "expected a number"),  # bool is not a power
-        ([[0, 0], [float("nan"), 900]], "dc_ac", "finite"),
-        ([[0, 0], [1000, -5]], "dc_ac", "non-negative"),
-        ([[10, 5], [1000, 900]], "dc_ac", "first point must be [0, 0]"),  # no zero anchor
-        ([[0, 0], [1000, 900], [800, 850]], "dc_ac", "ascend strictly"),  # DC not ascending
-        ([[0, 0], [1000, 900], [1000, 950]], "dc_ac", "ascend strictly"),  # duplicate DC
-        ([[0, 0], [1000, 900], [2000, 900]], "dc_ac", "rise strictly"),  # AC flat
-        ([[0, 0], [1000, 900], [2000, 800]], "dc_ac", "rise strictly"),  # non-monotone AC
-        ([[0, 0], [1000, 1100]], "dc_ac", "more AC power than the DC"),  # gain on discharge
-        ([[0, 0], [1000, 900]], "ac_dc", "more DC power than the AC"),  # gain on charge
+        ("1000,0.9;5000,0.95", "dc_ac", "at least 2"),
+        ([[1000, 0.9]], "dc_ac", "at least 2"),
+        ([[1000], [5000, 0.95]], "dc_ac", "pair"),
+        ([[1000, 0.9, 5], [5000, 0.95]], "dc_ac", "pair"),
+        ([["1000", 0.9], [5000, 0.95]], "dc_ac", "expected a number"),
+        ([[True, 0.9], [5000, 0.95]], "dc_ac", "expected a number"),
+        ([[float("nan"), 0.9], [5000, 0.95]], "dc_ac", "finite"),
+        ([[0, 0.9], [5000, 0.95]], "dc_ac", "strictly positive"),
+        ([[-10, 0.9], [5000, 0.95]], "dc_ac", "strictly positive"),
+        ([[1000, -0.01], [5000, 0.95]], "dc_ac", "0 <= efficiency <= 1"),
+        ([[1000, 1.01], [5000, 0.95]], "dc_ac", "0 <= efficiency <= 1"),
+        ([[1000, 0.9], [800, 0.95]], "dc_ac", "ascend strictly"),
+        ([[1000, 0.9], [1000, 0.95]], "dc_ac", "ascend strictly"),
+        ([[1000, 0.9], [2000, 0.4]], "dc_ac", "non-decreasing"),
+        ([[1000, 0.5], [2000, 1.0]], "ac_dc", "non-decreasing"),
     ],
 )
 def test_malformed_curve_is_rejected_with_a_named_reason(curve, direction, expected):
@@ -101,7 +116,6 @@ def test_malformed_curve_is_rejected_with_a_named_reason(curve, direction, expec
     message = str(err.value)
     assert "my_param" in message
     assert expected in message
-
 
 def test_absent_and_empty_curves_are_the_legacy_default(caplog):
     for conf in ({}, {DC_AC: [], AC_DC: []}, {DC_AC: None}):
@@ -189,14 +203,14 @@ def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
             params["optim_conf"], params["plant_conf"], "profit", rh
         )
 
-    other = [[0, 0], [1000, 800], [5000, 4600]]
+    other = [[1000, 0.8], [5000, 0.92]]
     assert key() == key()  # default (empty) curves: stable
     assert key(**{DC_AC: DISCHARGE_CURVE}) == key(**{DC_AC: DISCHARGE_CURVE})
     assert key(**{DC_AC: DISCHARGE_CURVE}) != key()
     assert key(**{DC_AC: DISCHARGE_CURVE}) != key(**{DC_AC: other})
     assert key(**{AC_DC: CHARGE_CURVE}) != key()
     assert key(**{AC_DC: CHARGE_CURVE}) != key(**{DC_AC: DISCHARGE_CURVE})
-    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: CHARGE_CURVE[:2]})
+    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: [[1000, 0.70], [4000, 0.90]]})
 
 
 def test_invalid_persisted_curve_is_disabled_by_build_params(caplog):
@@ -207,7 +221,7 @@ def test_invalid_persisted_curve_is_disabled_by_build_params(caplog):
             {
                 "inverter_is_hybrid": True,
                 "inverter_efficiency_ac_dc": 0.97,
-                AC_DC: [[0, 0], [1000, 900]],
+                AC_DC: [[1000, 1.1], [2000, 0.9]],
                 DC_AC: DISCHARGE_CURVE,
             }
         )
@@ -243,7 +257,7 @@ def test_runtime_curve_is_validated_on_the_runtime_path():
     *_, treated_plant = asyncio.run(_treat({AC_DC: CHARGE_CURVE}))
     assert treated_plant[AC_DC] == CHARGE_CURVE
     with pytest.raises(ValueError, match=AC_DC):
-        asyncio.run(_treat({AC_DC: [[0, 0], [1000, 900]]}))
+        asyncio.run(_treat({AC_DC: [[1000, 1.1], [2000, 0.9]]}))
     # Strict also when the persisted config had no curve and hybrid is off.
     off = _build_params({"inverter_is_hybrid": False})
     off_json = orjson.dumps(off).decode("utf-8")
@@ -267,7 +281,7 @@ def test_runtime_curve_is_validated_on_the_runtime_path():
 # Web configuration recovery vs strictness
 # --------------------------------------------------------------------------- #
 
-INVALID_CURVE = [[0, 0], [1000, 1100]]  # AC output above DC input: physically impossible
+INVALID_CURVE = [[1000, 1.1], [2000, 0.9]]  # efficiency above 1 is physically impossible
 
 
 @pytest.fixture
@@ -322,13 +336,13 @@ def test_set_config_rejects_an_invalid_active_curve_without_touching_saved_files
     status, body = web.post({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE})
     assert status == 400
     assert DC_AC in " ".join(body)
-    assert "exceed" in " ".join(body) or "above" in " ".join(body)
+    assert "efficiency" in " ".join(body)
     assert web.conf["config_path"].read_bytes() == config_before
     assert (web.conf["data_path"] / "params.pkl").read_bytes() == params_before
 
 
 def test_set_config_rejects_an_invalid_curve_even_while_hybrid_is_off(web):
-    status, body = web.post({"inverter_is_hybrid": False, AC_DC: [[0, 0], [1000, 900]]})
+    status, body = web.post({"inverter_is_hybrid": False, AC_DC: [[1000, 1.1], [2000, 0.9]]})
     assert status == 400
     assert AC_DC in " ".join(body)
 
@@ -501,42 +515,42 @@ def _assert_curve_equality(res, charge_curve=None, discharge_curve=None, atol=2.
     charging, discharging = batt < -1.0, batt > 1.0
     if charge_curve is not None:
         np.testing.assert_allclose(
-            hybrid[charging], -interp(charge_curve, -batt[charging]), atol=atol
+            hybrid[charging], -interp(charge_curve, -batt[charging], "ac_dc"), atol=atol
         )
     if discharge_curve is not None:
         np.testing.assert_allclose(
-            hybrid[discharging], interp(discharge_curve, batt[discharging]), atol=atol
+            hybrid[discharging], interp(discharge_curve, batt[discharging], "dc_ac"), atol=atol
         )
     return charging.sum(), discharging.sum()
 
 
-def test_curve_adds_points_minus_two_binaries_per_timestep():
-    """Documented scale: a P-point curve has P-1 segments and P-2 ordering binaries per step
-    (the direction binary is the existing one), e.g. 10 points -> 8 per step."""
-    points = 10
-    curve = [[100 * k, 100 * k * (0.9 + 0.01 * k)] for k in range(points)]
-    curve = [[0, 0]] + [[dc, ac] for dc, ac in curve[1:]]
+def test_curve_adds_configured_points_minus_one_binaries_per_timestep():
+    """The implicit origin adds the first transfer breakpoint.
+
+    A configured P-point efficiency curve therefore has P transfer segments and
+    P-1 ordering binaries per step; the direction binary already exists.
+    """
+    points = 9
+    curve = [[500 * k, 0.90 + 0.005 * k] for k in range(1, points + 1)]
     opt, _ = _solve({DC_AC: curve})
     binaries = opt.vars["inv_curve_dc_ac_b"]
-    assert len(binaries) == points - 2
+    assert len(binaries) == points - 1
     assert all(var.attributes["boolean"] and var.size == opt.num_timesteps for var in binaries)
     assert all(not var.attributes["boolean"] for var in opt.vars["inv_curve_dc_ac_u"])
-    assert "inv_curve_ac_dc_b" not in opt.vars  # the scalar direction adds none
-
+    assert "inv_curve_ac_dc_b" not in opt.vars
 
 def test_flat_curves_equal_the_scalar_efficiencies():
     scalar = {"inverter_efficiency_dc_ac": 0.95, "inverter_efficiency_ac_dc": 0.95}
     _, res_scalar = _solve(scalar)
     flat = {
-        DC_AC: [[0, 0], [10000, 9500]],
-        AC_DC: [[0, 0], [9500, 10000]],  # 95 % charge: 10000 W AC -> 9500 W DC
+        DC_AC: [[1000, 0.95], [10000, 0.95]],
+        AC_DC: [[1000, 0.95], [9500, 0.95]],
     }
     _, res_curve = _solve(flat)
     for column in ("P_hybrid_inverter", "P_batt", "P_grid", "SOC_opt"):
         np.testing.assert_allclose(
             res_curve[column].to_numpy(), res_scalar[column].to_numpy(), atol=1.0
         )
-
 
 def test_two_segment_charge_curve_is_obeyed_exactly():
     opt, res = _solve({AC_DC: CHARGE_CURVE})
@@ -573,7 +587,7 @@ def test_pinned_charge_power_lands_on_the_curve(dc_w):
         soc_final=soc_final,
     )
     assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
-    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(-interp(CHARGE_CURVE, dc_w), abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(-interp(CHARGE_CURVE, dc_w, "ac_dc"), abs=1.0)
 
 
 @pytest.mark.parametrize("dc_w", [250, 1000, 3000, 5000])  # interior, breakpoint, interior, end
@@ -588,7 +602,7 @@ def test_pinned_discharge_power_lands_on_the_curve(dc_w):
         soc_final=soc_final,
     )
     assert res["P_batt"].iloc[0] == pytest.approx(dc_w, abs=1.0)
-    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(interp(DISCHARGE_CURVE, dc_w), abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(interp(DISCHARGE_CURVE, dc_w, "dc_ac"), abs=1.0)
 
 
 def test_idle_has_zero_power_both_sides():
@@ -600,14 +614,14 @@ def test_idle_has_zero_power_both_sides():
 
 def test_curve_domain_caps_dc_power():
     """The last curve point is the supported domain: no extrapolation beyond 2000 W DC."""
-    short = [[0, 0], [1000, 1100], [2000, 2300]]
+    short = [[1000, 1000 / 1100], [2000, 2000 / 2300]]
     _, res = _solve({AC_DC: short})
     assert (-res["P_batt"]).max() <= 2000.0 + 1.0
     _assert_curve_equality(res, charge_curve=short)
 
 
 def test_ac_limits_apply_on_the_ac_side_of_a_curved_direction():
-    wide = [[0, 0], [8000, 7600]]
+    wide = [[1000, 0.95], [8000, 0.95]]
     # A load above the AC limit makes the limit bind (discharge is worth more than it costs).
     _, res = _solve(
         {DC_AC: wide, "inverter_ac_output_max": 3000, "battery_discharge_power_max": 8000},
@@ -616,7 +630,7 @@ def test_ac_limits_apply_on_the_ac_side_of_a_curved_direction():
     assert 3000.0 - 1.0 <= res["P_hybrid_inverter"].max() <= 3000.0 + 1.0
     _, res = _solve(
         {
-            AC_DC: [[0, 0], [8000, 8400]],
+            AC_DC: [[1000, 0.95], [8000, 8000 / 8400]],
             "inverter_ac_input_max": 2500,
             "battery_charge_power_max": 8000,
         }
@@ -697,7 +711,7 @@ def test_one_curved_direction_leaves_the_other_scalar():
 
 
 def test_malformed_curve_fails_the_model_build():
-    opt = build_optimization({DC_AC: [[0, 0], [1000, 1200]]})
+    opt = build_optimization({DC_AC: [[1000, 1.2], [2000, 0.9]]})
     df_input, p_pv, p_load = _frame(CHEAP_THEN_DEAR)
     with pytest.raises(ValueError, match=DC_AC):
         opt.perform_dayahead_forecast_optim(df_input, p_pv, p_load, soc_init=0.1, soc_final=0.1)
