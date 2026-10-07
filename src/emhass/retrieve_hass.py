@@ -1092,8 +1092,10 @@ class RetrieveHass:
         to whole steps. At evaluation time ``t`` that rollup covers ``(t - step, t]``, so the
         returned timestamps are shifted back by one step to label each bucket by its
         start, matching the InfluxDB ``GROUP BY time()`` and the pandas ``resample`` paths.
-        Empty buckets are forward-filled like InfluxDB's ``FILL(previous)`` (leading buckets
-        before the first sample stay absent).
+        Empty buckets are forward-filled like InfluxDB's ``FILL(previous)``: leading buckets
+        before the first sample stay absent (no backward fill), and the last known state is
+        held through every eligible bucket up to (but not including) ``end_time``, matching
+        the half-open query interval ``[start_time, end_time)``.
         """
         self.logger.debug(f"Retrieving sensor: {sensor}")
         step_s = int(self.freq.total_seconds())
@@ -1164,8 +1166,13 @@ class RetrieveHass:
                 "keeping the first value of each"
             )
         df_sensor = df_sensor[~duplicated].sort_index()
-        # FILL(previous): complete the grid between the first and last sample.
-        full_index = pd.date_range(df_sensor.index.min(), df_sensor.index.max(), freq=self.freq)
+        # FILL(previous): complete the grid from the first sample through the last bucket
+        # strictly before end_time (the query window is the half-open interval
+        # [start_time, end_time)), holding the most recent state through any trailing
+        # buckets that got no new sample. Leading buckets before the first sample are
+        # intentionally left absent (no backward fill).
+        last_bucket = pd.to_datetime(last_eval - step_s, unit="s", utc=True)
+        full_index = pd.date_range(df_sensor.index.min(), last_bucket, freq=self.freq)
         df_sensor = df_sensor.reindex(full_index).ffill()
         df_sensor.index.name = "time"
         self.logger.debug(

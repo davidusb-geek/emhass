@@ -423,6 +423,111 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(p_pv_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(p_pv_forecast))
 
+    def _two_plant_conf(self):
+        """Two PV plants with every sibling list at the matching length."""
+        self.plant_conf["pv_module_model"] = [
+            self.plant_conf["pv_module_model"][0],
+            self.plant_conf["pv_module_model"][0],
+        ]
+        self.plant_conf["pv_inverter_model"] = [
+            self.plant_conf["pv_inverter_model"][0],
+            self.plant_conf["pv_inverter_model"][0],
+        ]
+        self.plant_conf["surface_tilt"] = [30, 45]
+        self.plant_conf["surface_azimuth"] = [270, 90]
+        self.plant_conf["modules_per_string"] = [8, 8]
+        self.plant_conf["strings_per_inverter"] = [1, 1]
+
+    @staticmethod
+    def _synthetic_weather(index):
+        """Minimal irradiance frame so the pvlib path can run without a network fetch."""
+        return pd.DataFrame(
+            {
+                "ghi": 400.0,
+                "dni": 300.0,
+                "dhi": 100.0,
+                "temp_air": 20.0,
+                "wind_speed": 1.0,
+            },
+            index=index,
+        )
+
+    def test_pvlib_short_pv_plant_list_raises_named_error(self):
+        """A sibling list shorter than pv_module_model is a ValueError naming the parameter,
+        not the bare IndexError the plant loop used to throw at the second plant."""
+        self._two_plant_conf()
+        self.plant_conf["surface_tilt"] = [30]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("surface_tilt", str(ctx.exception))
+        self.assertIn("pv_module_model has 2", str(ctx.exception))
+
+    def test_pvlib_scalar_pv_plant_sibling_raises_named_error(self):
+        """A sibling given as one value next to a list of plants is rejected instead of being
+        indexed character by character (the "5000" -> "5" trap)."""
+        self._two_plant_conf()
+        self.plant_conf["pv_inverter_model"] = "5000"
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_inverter_model", str(ctx.exception))
+        self.assertIn("must be a list", str(ctx.exception))
+
+    def test_pvlib_long_pv_plant_list_warns_and_runs(self):
+        """A sibling list longer than pv_module_model still runs (the extra entries were always
+        ignored) but is now logged."""
+        self._two_plant_conf()
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        self.assertTrue(
+            any(
+                "surface_azimuth has 3 entries but pv_module_model has 2" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+
+    def test_pvlib_matching_pv_plant_lists_no_warning(self):
+        """Equal-length lists produce no length warning (the common, correct config)."""
+        self._two_plant_conf()
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertNoLogs(logger, level="WARNING"):
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_single_plant_scalars_unchanged(self):
+        """A non-list pv_module_model takes the single-plant path exactly as before."""
+        self.plant_conf["pv_module_model"] = self.plant_conf["pv_module_model"][0]
+        self.plant_conf["pv_inverter_model"] = self.plant_conf["pv_inverter_model"][0]
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 270
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    async def test_solar_forecast_short_pv_plant_list_raises_before_fetch(self):
+        """The solar.forecast path checks the tilt and azimuth lists before opening a session,
+        so a short list fails with the named error instead of after a live request."""
+        from unittest.mock import patch
+
+        self._two_plant_conf()
+        self.plant_conf["surface_azimuth"] = [270]
+        self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+        with (
+            patch.object(self.fcst, "_get_cached_forecast_or_none", return_value=None),
+            patch("emhass.forecast.aiohttp.ClientSession") as session_cls,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await self.fcst._get_weather_solar_forecast("unused-cache-path")
+        self.assertIn("surface_azimuth", str(ctx.exception))
+        session_cls.assert_not_called()
+
     async def test_get_weather_covariates(self):
         """get_weather_covariates returns the requested + derived columns aligned to the index."""
         from unittest.mock import patch
@@ -1718,8 +1823,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Override forecast window to a fixed start date (naive ISO string).
 
         Rebuilds ``forecast_dates`` and ``forecast_dates_tz`` using the same
-        ``DateOffset`` logic as ``Forecast.__init__`` so that DST transitions
-        within the window are handled correctly.
+        local-calendar-day helper as ``Forecast.__init__`` so DST transitions,
+        including nonexistent/ambiguous endpoint wall times, use one contract.
         """
         delta_days = fcst.optim_conf["delta_forecast_daily"].days
         start_ts = (
@@ -1727,7 +1832,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             .tz_localize(fcst.time_zone, nonexistent="shift_forward")
             .floor(fcst.freq)
         )
-        end_ts = (start_ts + pd.DateOffset(days=delta_days)).replace(microsecond=0)
+        end_ts = utils.add_local_calendar_days(start_ts, delta_days, fcst.time_zone).replace(
+            microsecond=0
+        )
         dates = (
             pd.date_range(
                 start=start_ts,
@@ -1831,6 +1938,54 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48 + 2)
         self._pin_forecast_to_date(fcst, "2025-10-24 00:00:00")
         await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48 + 2)
+
+    async def test_forecast_constructor_resolves_sydney_nonexistent_endpoint(self):
+        """Forecast.__init__ uses the shared DST-safe calendar endpoint contract."""
+        import pytz
+
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        tz = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = tz
+        retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(minutes=5)
+        retrieve_hass_conf["method_ts_round"] = "first"
+        optim_conf["delta_forecast_daily"] = pd.Timedelta(days=1)
+        start = tz.localize(pd.Timestamp("2026-10-03 02:05:00").to_pydatetime())
+
+        with unittest.mock.patch.object(pd.Timestamp, "now", return_value=pd.Timestamp(start)):
+            fcst = Forecast(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                params_json,
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+
+        expected_end = tz.localize(pd.Timestamp("2026-10-04 03:05:00").to_pydatetime())
+        self.assertEqual(fcst.start_forecast, pd.Timestamp(start))
+        self.assertEqual(fcst.end_forecast, pd.Timestamp(expected_end))
+        self.assertEqual(len(fcst.forecast_dates), 288)
+        self.assertEqual(
+            fcst.forecast_dates[-1],
+            pd.Timestamp("2026-10-04 03:00:00", tz=tz),
+        )
+
+        csv_dates = fcst.get_forecast_days_csv(timedelta_days=0)
+        self.assertEqual(len(csv_dates), 288)
+        self.assertEqual(csv_dates[0], fcst.forecast_dates[0])
+        self.assertEqual(csv_dates[-1], fcst.forecast_dates[-1])
+
+        # Extending by one additional calendar day is resolved from the
+        # original start, not from the already gap-shifted one-day endpoint.
+        extended = fcst.get_forecast_days_csv(timedelta_days=1)
+        self.assertEqual(len(extended), 564)
+        self.assertEqual(
+            extended[-1],
+            pd.Timestamp("2026-10-05 02:00:00", tz=tz),
+        )
 
     # Guard regression: _get_weather_list / _get_load_forecast_list must not crash on None input
     async def test_get_weather_list_none_does_not_crash(self):
@@ -3936,6 +4091,234 @@ class TestForecastDaysCsvStartAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(out), self.HORIZON)
         self.assertTrue(out.index.equals(df.index))
         self.assertTrue((out[fcst.var_load_cost] == 0.25).all())
+
+
+class TestTariffScheduleTimeZone(unittest.IsolatedAsyncioTestCase):
+    """Native ``hp_hc_periods`` peak periods may be written on a tariff schedule clock.
+
+    ``tariff_schedule_time_zone`` (issue #1167, provisional name) names the clock
+    the wall-clock ``load_peak_hour_periods`` are written in. Unset keeps the
+    site ``time_zone``, which is the existing behaviour. The optimisation
+    timestamps stay in the site zone either way; only the peak membership of
+    each absolute instant moves.
+    """
+
+    SITE = "Australia/Sydney"
+    FIXED_AEST = "Etc/GMT-10"  # POSIX sign: Etc/GMT-10 is UTC+10 (checked below)
+    PEAK = 0.40
+    OFFPEAK = 0.10
+    PERIODS = {"period_hp_1": [{"start": "17:00"}, {"end": "21:00"}]}
+    ABSENT = object()
+    KEEP = object()  # leave whatever the built config parsed into optim_conf
+
+    async def asyncSetUp(self):
+        self.params = await TestForecast.get_test_params()
+        self.params["passed_data"]["prediction_horizon"] = 10
+        self.params["passed_data"]["load_cost_forecast"] = [0.25] * 200
+
+    def _fcst(self, site=None, schedule=ABSENT, periods=None, params=None):
+        import pytz
+
+        params = params if params is not None else self.params
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(15, "minutes")
+        retrieve_hass_conf["time_zone"] = pytz.timezone(site or self.SITE)
+        optim_conf["load_peak_hours_cost"] = self.PEAK
+        optim_conf["load_offpeak_hours_cost"] = self.OFFPEAK
+        optim_conf["load_peak_hour_periods"] = periods or self.PERIODS
+        if schedule is self.ABSENT:
+            optim_conf.pop("tariff_schedule_time_zone", None)
+        elif schedule is not self.KEEP:
+            optim_conf["tariff_schedule_time_zone"] = schedule
+        return Forecast(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+
+    @staticmethod
+    def _frame(fcst, start, days=1):
+        idx = pd.date_range(
+            start, periods=96 * days, freq="15min", tz=fcst.time_zone, inclusive="left"
+        )
+        return pd.DataFrame({"p_load_forecast": 500.0}, index=idx)
+
+    def _peak_times(self, out, col):
+        """Site wall-clock times of the rows priced as peak."""
+        return [t.strftime("%H:%M") for t in out.index[out[col] == self.PEAK]]
+
+    @staticmethod
+    def _times(first, last):
+        return [t.strftime("%H:%M") for t in pd.date_range(first, last, freq="15min")]
+
+    def test_fixed_offset_name_has_the_expected_sign(self):
+        """``Etc/GMT-10`` is UTC+10 (POSIX inverts the sign), so it is fixed AEST."""
+        import pytz
+
+        for month in (1, 7):
+            moment = pd.Timestamp(2026, month, 15, 12).to_pydatetime()
+            self.assertEqual(
+                pytz.timezone(self.FIXED_AEST).utcoffset(moment), pd.Timedelta(hours=10)
+            )
+
+    def test_unset_matches_the_legacy_site_clock_algorithm(self):
+        """A. Unset/empty/None/blank reproduce the pre-change ``between_time`` result."""
+        periods = {
+            "period_hp_1": [{"start": "02:54"}, {"end": "15:24"}],
+            "period_hp_2": [{"start": "17:24"}, {"end": "20:24"}],
+        }
+        for site in (self.SITE, "Australia/Lord_Howe", "Europe/Brussels"):
+            for start in ("2026-01-15", "2026-04-04", "2026-07-15", "2026-10-03"):
+                for schedule in (self.ABSENT, "", None, "  "):
+                    with self.subTest(site=site, start=start, schedule=schedule):
+                        fcst = self._fcst(site, schedule, periods)
+                        df = self._frame(fcst, start, days=3)
+                        out = fcst.get_load_cost_forecast(df.copy())
+                        # The removed implementation, verbatim, as the oracle.
+                        legacy = pd.Series(self.OFFPEAK, index=out.index)
+                        for period in periods.values():
+                            hit = legacy.between_time(period[0]["start"], period[1]["end"])
+                            legacy.loc[hit.index] = self.PEAK
+                        pd.testing.assert_series_equal(
+                            out[fcst.var_load_cost], legacy, check_names=False
+                        )
+
+    def test_site_clock_is_the_default_schedule_clock(self):
+        """Naming the site zone explicitly equals leaving the setting unset."""
+        fcst = self._fcst()
+        named = self._fcst(schedule=self.SITE)
+        df = self._frame(fcst, "2026-01-15", days=2)
+        col = fcst.var_load_cost
+        pd.testing.assert_series_equal(
+            fcst.get_load_cost_forecast(df.copy())[col],
+            named.get_load_cost_forecast(df.copy())[col],
+        )
+
+    def test_sydney_standard_time(self):
+        """B. Fixed UTC+10 schedule in AEST: 17:00-21:00 tariff time is 17:00-21:00 Sydney."""
+        fcst = self._fcst(schedule=self.FIXED_AEST)
+        out = fcst.get_load_cost_forecast(self._frame(fcst, "2026-07-15"))
+        self.assertEqual(out.index[0].utcoffset(), pd.Timedelta(hours=10))
+        self.assertEqual(self._peak_times(out, fcst.var_load_cost), self._times("17:00", "21:00"))
+
+    def test_sydney_daylight_time(self):
+        """C. The same schedule in AEDT lands on 18:00-22:00 Sydney: same absolute instants."""
+        fcst = self._fcst(schedule=self.FIXED_AEST)
+        summer = fcst.get_load_cost_forecast(self._frame(fcst, "2026-01-15"))
+        winter = fcst.get_load_cost_forecast(self._frame(fcst, "2026-07-15"))
+        col = fcst.var_load_cost
+        self.assertEqual(summer.index[0].utcoffset(), pd.Timedelta(hours=11))
+        self.assertEqual(self._peak_times(summer, col), self._times("18:00", "22:00"))
+        # Without the setting the AEDT peak stays at site 17:00-21:00 (the issue's reproducer).
+        unset = self._fcst()
+        legacy = unset.get_load_cost_forecast(self._frame(unset, "2026-01-15"))
+        self.assertEqual(self._peak_times(legacy, col), self._times("17:00", "21:00"))
+        # The tariff clock is preserved: 07:00-11:00 UTC in both seasons.
+        for out in (summer, winter):
+            peak = out.index[out[col] == self.PEAK]
+            utc_times = [t.tz_convert("UTC").strftime("%H:%M") for t in peak]
+            self.assertEqual(utc_times, self._times("07:00", "11:00"))
+
+    def test_lord_howe_half_hour_dst_follows_timezone_rules(self):
+        """D. A 30-minute DST step moves the site-time peak by 30 minutes, not an hour."""
+        fcst = self._fcst("Australia/Lord_Howe", self.FIXED_AEST)
+        col = fcst.var_load_cost
+        # Lord Howe is UTC+11 until 2026-04-05 02:00 local, UTC+10:30 until
+        # 2026-10-04 02:00 local, then UTC+11 again.
+        expectations = {
+            "2026-04-04": ("18:00", "22:00"),  # +11:00
+            "2026-04-06": ("17:30", "21:30"),  # +10:30
+            "2026-10-03": ("17:30", "21:30"),  # +10:30
+            "2026-10-05": ("18:00", "22:00"),  # +11:00
+        }
+        for start, (first, last) in expectations.items():
+            with self.subTest(day=start):
+                out = fcst.get_load_cost_forecast(self._frame(fcst, start))
+                self.assertEqual(self._peak_times(out, col), self._times(first, last))
+        # Across both transition days the peak rows are exactly the 07:00-11:00 UTC instants.
+        for start in ("2026-04-03", "2026-10-02"):
+            with self.subTest(span=start):
+                out = fcst.get_load_cost_forecast(self._frame(fcst, start, days=4))
+                utc = out.index.tz_convert("UTC")
+                minutes = utc.hour * 60 + utc.minute
+                expected = (minutes >= 7 * 60) & (minutes <= 11 * 60)
+                self.assertEqual((out[col] == self.PEAK).tolist(), list(expected))
+
+    def test_schedule_clock_ahead_of_site_by_a_day_boundary(self):
+        """A schedule zone far ahead of the site still selects by its own wall clock."""
+        fcst = self._fcst("America/Los_Angeles", "Pacific/Auckland")
+        out = fcst.get_load_cost_forecast(self._frame(fcst, "2026-07-15", days=2))
+        auckland = out.index.tz_convert("Pacific/Auckland")
+        expected = [(17, 0) <= (t.hour, t.minute) <= (21, 0) for t in auckland]
+        self.assertEqual((out[fcst.var_load_cost] == self.PEAK).tolist(), expected)
+
+    def test_external_price_paths_ignore_the_setting(self):
+        """E. List and csv prices never read ``tariff_schedule_time_zone``."""
+        plain = self._fcst()
+        for schedule in (self.FIXED_AEST, "Not/AZone", 5):
+            fcst = self._fcst(schedule=schedule)
+            for method, kwargs in (
+                ("list", {}),
+                ("list", {"list_and_perfect": True}),
+                ("csv", {"csv_path": "data_load_cost_forecast.csv"}),
+            ):
+                with self.subTest(schedule=schedule, method=method, kwargs=kwargs):
+                    df = pd.DataFrame({"p_load_forecast": 500.0}, index=fcst.forecast_dates[:10])
+                    got = fcst.get_load_cost_forecast(df.copy(), method=method, **kwargs)
+                    want = plain.get_load_cost_forecast(df.copy(), method=method, **kwargs)
+                    pd.testing.assert_frame_equal(got, want)
+
+    def test_invalid_schedule_time_zone_fails_loudly(self):
+        """F. A bad non-empty value is reported and aborts, never falling back to site time."""
+        for bad in ("Not/AZone", "UTC+10", "AEST-10", 5, ["Etc/GMT-10"]):
+            with self.subTest(value=bad):
+                fcst = self._fcst(schedule=bad)
+                df = self._frame(fcst, "2026-01-15")
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    out = fcst.get_load_cost_forecast(df)
+                self.assertIs(out, False)
+                self.assertTrue(
+                    any("tariff_schedule_time_zone" in line for line in logs.output),
+                    logs.output,
+                )
+
+    def test_index_integrity(self):
+        """G. The optimisation timestamps stay in the site zone and are not mutated."""
+        fcst = self._fcst(schedule=self.FIXED_AEST)
+        df = self._frame(fcst, "2026-01-15", days=2)
+        index_before = df.index.copy()
+        out = fcst.get_load_cost_forecast(df)
+        col = fcst.var_load_cost
+        # Same instants, in the same order (the pre-existing cast to ns may change the
+        # index resolution, so compare timestamps rather than dtype).
+        self.assertEqual(list(out.index), list(index_before))
+        self.assertEqual(str(out.index.tz), str(fcst.time_zone))
+        self.assertEqual(str(out.index[0]), "2026-01-15 00:00:00+11:00")
+        self.assertTrue((out["p_load_forecast"] == 500.0).all())
+        self.assertEqual(set(out[col].unique()), {self.PEAK, self.OFFPEAK})
+
+    async def test_setting_flows_from_config_to_forecast(self):
+        """The default is empty (inherit) and a configured value reaches ``optim_conf``."""
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        self.assertEqual(config["tariff_schedule_time_zone"], "")
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        self.assertEqual(params["optim_conf"]["tariff_schedule_time_zone"], "")
+        config["tariff_schedule_time_zone"] = self.FIXED_AEST
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        self.assertEqual(params["optim_conf"]["tariff_schedule_time_zone"], self.FIXED_AEST)
+        self.assertEqual(
+            utils.param_to_config(params, logger)["tariff_schedule_time_zone"], self.FIXED_AEST
+        )
+        fcst = self._fcst(schedule=self.KEEP, params=params)
+        self.assertEqual(fcst.optim_conf["tariff_schedule_time_zone"], self.FIXED_AEST)
+        out = fcst.get_load_cost_forecast(self._frame(fcst, "2026-01-15"))
+        self.assertEqual(self._peak_times(out, fcst.var_load_cost), self._times("18:00", "22:00"))
 
 
 class _FakeRecorderRetrieveHass:

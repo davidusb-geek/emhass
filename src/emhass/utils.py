@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import csv
+import itertools
 import logging
 import math
 import os
@@ -112,6 +113,65 @@ def _get_now() -> datetime:
     return datetime.now(UTC)
 
 
+def add_local_calendar_days(
+    timestamp: pd.Timestamp | datetime,
+    days: int,
+    time_zone: datetime.tzinfo | str | None = None,
+) -> pd.Timestamp:
+    """Add local calendar days with deterministic pytz DST endpoint handling.
+
+    EMHASS forecast horizons use local civil/calendar days, not fixed 24-hour
+    durations. Valid wall times therefore retain the existing 23/24/25-hour
+    behavior across DST. If the nominal target wall time does not exist, move
+    it forward by the timezone's actual transition gap. If it is ambiguous,
+    select the post-transition (chronologically later) occurrence.
+
+    EMHASS uses either the configured IANA timezone name or a pytz timezone,
+    depending on the calling path. IANA names are normalized with
+    pytz.timezone(). When no timezone is configured and timestamp is naive,
+    preserve the pre-existing naive calendar-day behavior.
+    """
+    ts = pd.Timestamp(timestamp)
+    days = int(days)
+
+    if time_zone is None and ts.tzinfo is None:
+        return ts if days == 0 else ts + pd.DateOffset(days=days)
+
+    tz = time_zone if time_zone is not None else ts.tz
+    if isinstance(tz, str):
+        # Some existing runtime-parameter paths carry the configured IANA
+        # timezone name until get_yaml_parse() converts it. Preserve that
+        # established contract and resolve it through EMHASS's pytz dependency.
+        tz = pytz.timezone(tz)
+    if not hasattr(tz, "localize") or not hasattr(tz, "normalize"):
+        raise TypeError("time_zone must be an IANA timezone name or pytz timezone")
+
+    if ts.tzinfo is None:
+        ts = pd.Timestamp(tz.localize(ts.to_pydatetime(), is_dst=None))
+
+    local = ts.tz_convert(tz)
+    if days == 0:
+        return local
+
+    nominal = local.tz_localize(None) + pd.DateOffset(days=days)
+    nominal_dt = pd.Timestamp(nominal).to_pydatetime()
+    try:
+        resolved = tz.localize(nominal_dt, is_dst=None)
+    except pytz.NonExistentTimeError:
+        # Attach the pre-transition offset, then normalize. This advances the
+        # nominal wall time by the timezone's real gap (e.g. 60 min in Sydney,
+        # 30 min on Lord Howe) rather than hard-coding an hour.
+        resolved = tz.normalize(tz.localize(nominal_dt, is_dst=False))
+    except pytz.AmbiguousTimeError:
+        # The is_dst flag does not encode chronology (zones such as Africa/Casablanca
+        # and Europe/Dublin use negative DST), so pick the later UTC instant instead.
+        resolved = max(
+            tz.localize(nominal_dt, is_dst=True),
+            tz.localize(nominal_dt, is_dst=False),
+        )
+    return pd.Timestamp(resolved)
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
@@ -123,9 +183,9 @@ def get_forecast_dates(
 
     :param freq: Optimization time step.
     :type freq: int
-    :param delta_forecast: Number of days to forecast in the future to be used for the optimization.
+    :param delta_forecast: Number of local calendar days to forecast in the future for the optimization.
     :type delta_forecast: int
-    :param timedelta_days: Number of truncated days needed for each optimization iteration, defaults to 0
+    :param timedelta_days: Additional local calendar days needed for the forecast range, defaults to 0
     :type timedelta_days: Optional[int], optional
     :return: A list of future forecast dates.
     :rtype: pd.core.indexes.datetimes.DatetimeIndex
@@ -140,8 +200,8 @@ def get_forecast_dates(
     start_forecast = (
         pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
     )
-    end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
-    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+    total_days = int(delta_forecast) + int(timedelta_days or 0)
+    final_end_date = add_local_calendar_days(start_forecast, total_days, time_zone) - freq
 
     forecast_dates = pd.date_range(
         start=start_forecast,
@@ -874,7 +934,8 @@ def compile_heat_topology(topology: dict) -> dict:
         # static list is checked here; a min_temperature_curve resolves against
         # weather at solve time.
         feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
-        if feeding_caps and all(c is not None for c in feeding_caps):
+        is_cooling = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+        if not is_cooling and feeding_caps and all(c is not None for c in feeding_caps):
             for t, min_val in enumerate(tank["min_temperatures"]):
                 if min_val is None:
                     continue
@@ -1412,6 +1473,34 @@ def update_params_with_ha_config(
     return params
 
 
+def describe_invalid_forecast_value(forecast_key: str, items) -> str | None:
+    """Describe the first forecast value that is not a finite real number (#1135).
+
+    :param forecast_key: Name used in the diagnostic, e.g. ``load_power_forecast``.
+    :param items: ``(location, value)`` pairs: ``enumerate(values)`` for a list \
+        (reported as a position) or ``mapping.items()``/``series.items()`` \
+        (reported as the timestamp).
+    :return: One diagnostic for the first invalid value, or None if all are valid. \
+        NaN, +/-Inf, booleans (``bool`` subclasses ``int``) and non-numeric \
+        values are invalid; the sign of a value is not checked here.
+    """
+    for location, value in items:
+        if isinstance(value, bool | np.bool_):
+            reason = "boolean value"
+        elif not isinstance(value, int | float | np.integer | np.floating):
+            reason = "non-numeric value"
+        elif isinstance(value, float | np.floating) and not math.isfinite(value):
+            reason = "non-finite value"
+        else:
+            continue
+        where = f"position {location}" if isinstance(location, int) else location
+        return (
+            f"{forecast_key} contains {reason} {value!r} at {where}; "
+            "forecast values must be finite real numbers"
+        )
+    return None
+
+
 def _align_runtime_forecast_mapping(
     forecast_input: dict,
     forecast_dates: list[str],
@@ -1516,6 +1605,15 @@ def _validate_and_align_external_pv_pair(
             )
         numeric_inputs = [list(p50_input.values()), list(p10_input.values())]
 
+    # #1135: validate the original values before NumPy/pandas can coerce
+    # booleans or numeric-looking strings into floats. This is the same
+    # finite-real contract used by the ordinary runtime forecast path.
+    for key, source in (("pv_power_forecast", p50_input), ("pv_power_forecast_p10", p10_input)):
+        items = source.items() if both_mappings else enumerate(source)
+        invalid = describe_invalid_forecast_value(key, items)
+        if invalid is not None:
+            return None, None, invalid
+
     try:
         numeric = np.asarray(numeric_inputs, dtype=float)
     except (TypeError, ValueError):
@@ -1528,21 +1626,27 @@ def _validate_and_align_external_pv_pair(
     if both_lists:
         horizon = len(forecast_dates)
         return p50_input[:horizon], p10_input[:horizon], None
-    return (
-        _align_runtime_forecast_mapping(
-            dict(zip(p50_input, numeric[0])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        _align_runtime_forecast_mapping(
-            dict(zip(p10_input, numeric[1])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        None,
+
+    aligned_p50 = _align_runtime_forecast_mapping(
+        dict(zip(p50_input, numeric[0])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
     )
+    aligned_p10 = _align_runtime_forecast_mapping(
+        dict(zip(p10_input, numeric[1])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
+    )
+    for key, values in (
+        ("pv_power_forecast", aligned_p50),
+        ("pv_power_forecast_p10", aligned_p10),
+    ):
+        invalid = describe_invalid_forecast_value(key, enumerate(values))
+        if invalid is not None:
+            return None, None, f"{invalid} after timestamp alignment"
+    return aligned_p50, aligned_p10, None
 
 
 _LOAD_PUBLISH_ID_KEYS = (
@@ -1831,6 +1935,12 @@ async def treat_runtimeparams(
         check_batt_charge_derating(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
+        # Strict: a curve in the request must be valid and usable (no recovery).
+        check_inverter_power_curves(
+            params["plant_conf"],
+            logger,
+            supplied=[name for name, *_ in _INVERTER_CURVE_PARAMS if name in runtimeparams],
+        )
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -1955,30 +2065,32 @@ async def treat_runtimeparams(
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
             # Auto-extend the forecast window to cover the requested MPC horizon.
-            # forecast_dates was sized from delta_forecast_daily (default 1 day) above,
-            # before prediction_horizon was known; a longer horizon would otherwise be
-            # silently truncated by the [0:prediction_horizon] slice below, and the
-            # weather/Solcast fetch (which scales its request to the window length)
-            # would only pull 1 day. So grow the window to fit and rebuild it once.
-            steps_per_day = int(24 * 60 / optimization_time_step)
-            required_delta_forecast = max(
-                delta_forecast,
-                -(-int(prediction_horizon) // steps_per_day),  # ceil division
-            )
+            # Forecast days are local calendar days, so their timestep count is not
+            # always 24h / optimization_time_step: a DST spring-forward day is shorter
+            # and a fall-back day is longer. Compare the requested timestep horizon
+            # against the actual timezone-aware grid instead of assuming a fixed number
+            # of steps per day. Grow by whole local calendar days until the grid covers
+            # the request; downstream slicing still trims it to prediction_horizon.
+            required_delta_forecast = delta_forecast
+            extended_forecast_dates = forecast_dates
+            while len(extended_forecast_dates) < int(prediction_horizon):
+                required_delta_forecast += 1
+                extended_forecast_dates = get_forecast_dates(
+                    optimization_time_step, required_delta_forecast, time_zone
+                )
             if required_delta_forecast > delta_forecast:
                 logger.info(
-                    "naive-mpc prediction_horizon=%s exceeds the %s-day forecast window; "
-                    "extending delta_forecast_daily to %s day(s) to cover the full horizon "
-                    "and its weather forecast.",
+                    "naive-mpc prediction_horizon=%s exceeds the actual %s-day forecast "
+                    "grid (%s timestep(s)); extending delta_forecast_daily to %s day(s) "
+                    "to cover the full horizon and its weather forecast.",
                     prediction_horizon,
                     delta_forecast,
+                    len(forecast_dates),
                     required_delta_forecast,
                 )
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
-                forecast_dates = get_forecast_dates(
-                    optimization_time_step, delta_forecast, time_zone
-                )
+                forecast_dates = extended_forecast_dates
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
@@ -2237,6 +2349,10 @@ async def treat_runtimeparams(
             "outdoor_temperature_forecast_method",
         ]
         paired_external_pv = "pv_power_forecast_p10" in runtimeparams
+        # Internal provenance marker used only to distinguish an omitted
+        # outdoor-temperature runtime forecast from one supplied and rejected
+        # by the #1135 numerical-validity contract.
+        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = False
 
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
@@ -2246,40 +2362,59 @@ async def treat_runtimeparams(
                 continue
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
+                invalid = None
+
+                # Preserve the existing legacy stringified-list compatibility,
+                # but normalize it before length/value validation so the parsed
+                # values are subject to the same #1135 finite-real contract.
+                if isinstance(forecast_input, str):
+                    try:
+                        parsed_forecast = ast.literal_eval(forecast_input)
+                    except (SyntaxError, ValueError):
+                        parsed_forecast = None
+                    if isinstance(parsed_forecast, list):
+                        forecast_input = parsed_forecast
+                        runtimeparams[forecast_key] = parsed_forecast
+
                 if isinstance(forecast_input, dict):
-                    forecast_input = _align_runtime_forecast_mapping(
-                        forecast_input,
-                        forecast_dates,
-                        optimization_time_step,
-                        time_zone,
+                    # Check the supplied values before pandas aggregation can
+                    # coerce (bool -> 1.0) or fail on them, so the diagnostic
+                    # names the source timestamp and value (#1135).
+                    invalid = describe_invalid_forecast_value(forecast_key, forecast_input.items())
+                    if invalid is None:
+                        forecast_input = _align_runtime_forecast_mapping(
+                            forecast_input,
+                            forecast_dates,
+                            optimization_time_step,
+                            time_zone,
+                        )
+                if (
+                    invalid is None
+                    and isinstance(forecast_input, list)
+                    and len(forecast_input) >= len(forecast_dates)
+                ):
+                    invalid = describe_invalid_forecast_value(
+                        forecast_key, enumerate(forecast_input)
                     )
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = forecast_input
-                    params["optim_conf"][forecast_methods[method]] = "list"
-                else:
+                    if invalid is None:
+                        params["passed_data"][forecast_key] = forecast_input
+                        params["optim_conf"][forecast_methods[method]] = "list"
+                elif invalid is None:
                     logger.error(
                         f"ERROR: The passed data is either the wrong type or the length is not correct, length should be {str(len(forecast_dates))}"
                     )
                     logger.error(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
-                # Check if string contains list, if so extract
-                if isinstance(forecast_input, str) and isinstance(
-                    ast.literal_eval(forecast_input), list
-                ):
-                    forecast_input = ast.literal_eval(forecast_input)
-                    runtimeparams[forecast_key] = forecast_input
-                list_non_digits = [
-                    x for x in forecast_input if not (isinstance(x, int) or isinstance(x, float))
-                ]
-                if len(list_non_digits) > 0:
-                    logger.warning(
-                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
-                    )
-                    for x in list_non_digits:
-                        logger.warning(
-                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
-                        )
+                if invalid is not None:
+                    # Fail closed (#1135): select the list method without data
+                    # so the forecast/optimization cycle stops instead of
+                    # falling back to the configured forecast method.
+                    logger.error("ERROR: %s", invalid)
+                    params["passed_data"][forecast_key] = None
+                    params["optim_conf"][forecast_methods[method]] = "list"
+                    if forecast_key == "outdoor_temperature_forecast":
+                        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = True
             else:
                 params["passed_data"][forecast_key] = None
 
@@ -2930,14 +3065,27 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
     # Figure 1: Battery SOC (Optional)
+    # One trace per SOC column: the bare "SOC_opt" with one battery, or "SOC_opt_<k>" per
+    # battery when number_of_batteries > 1 (#610), where no bare "SOC_opt" exists.
     image_path_1 = None
-    if "SOC_opt" in df.columns.to_list():
+    cols_soc = [
+        i
+        for i in df.columns.to_list()
+        if i == "SOC_opt" or (i.startswith("SOC_opt_") and i[len("SOC_opt_") :].isdigit())
+    ]
+    if cols_soc:
+        # Size the palette to the SOC traces, not the power columns above: with one
+        # battery this is the same first colour as before, with several it spreads them.
+        n_colors = len(cols_soc)
+        colors_soc = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
         fig_1 = px.line(
-            df["SOC_opt"],
+            df[cols_soc],
             title="Battery state of charge schedule after optimization results",
             template="presentation",
             line_shape="hv",
-            color_discrete_sequence=colors,
+            color_discrete_sequence=colors_soc,
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
@@ -3850,6 +3998,9 @@ async def build_params(
     check_batt_charge_derating(
         num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
     )
+    # Persisted configuration recovers (an unusable curve is cleared and logged) so the
+    # service and configuration page stay reachable; /set-config validates strictly first.
+    check_inverter_power_curves(params["plant_conf"], logger, recover=True)
 
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
@@ -4501,6 +4652,257 @@ def _charge_derating_fault(table: list[list[float]]) -> str | None:
             )
         previous_soc, previous_max = soc_threshold, power_max
     return None
+
+
+# Hard cap on the points of one inverter curve. The MILP carries P-1 timestep-sized
+# binaries per curved direction, so the solve time grows with the point count; a
+# datasheet efficiency table has 5-12 points, so this leaves ample headroom while
+# stopping an oversized (accidental or hostile) curve before any variable exists.
+INVERTER_CURVE_MAX_POINTS = 20
+
+
+def _finite_curve_number(value, parameter_name: str, position: int, name: str) -> float:
+    """Return value as a finite float, or raise ValueError (never OverflowError)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
+        )
+    try:
+        number = float(value)
+    except OverflowError:  # an int too large for a float
+        number = math.inf
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a finite number"
+        )
+    return number
+
+
+def inverter_power_curve_is_unset(curve) -> bool:
+    """True only for the explicit empty list, the default that keeps the scalar efficiency.
+
+    Every other value (None, False, 0, "", () ...) is a supplied curve and must be
+    validated: treating falsey values as "unset" would silently swap the physical model.
+    """
+    return isinstance(curve, list) and not curve
+
+
+def validate_inverter_power_curve(
+    curve: list, parameter_name: str, direction: str
+) -> list[tuple[float, float]]:
+    """
+    Validate one configured inverter efficiency curve and return internal
+    (ac_w, dc_w) transfer points (#746).
+
+    Public configuration uses [ac_power_w, efficiency] points, indexed on the AC
+    side, which is where inverters and AC-coupled batteries are commanded and
+    measured. Efficiency is a fraction, so 97% is 0.97. The zero-power transfer
+    origin is inserted internally; users do not provide an efficiency at 0 W.
+
+    - ``dc_ac`` (discharge): ``[ac_output_power_w, efficiency]``, with
+      ``dc_input = ac_output / efficiency``. Delivering positive AC power needs
+      DC power, so efficiency must be > 0.
+    - ``ac_dc`` (charge): ``[ac_input_power_w, efficiency]``, with
+      ``dc_output = ac_input * efficiency``. Fixed losses can consume all of a
+      small AC input, so efficiency may be 0 (for example 50 W AC in -> 0 W DC out).
+
+    The DC-side transfer must be non-decreasing. Flat segments are valid.
+
+    :param curve: configured [ac_power_w, efficiency] points
+    :type curve: list
+    :param parameter_name: name used in error messages
+    :type parameter_name: str
+    :param direction: dc_ac or ac_dc
+    :type direction: str
+    :raises ValueError: when the curve is unusable
+    :return: internal transfer points as (ac_w, dc_w) tuples
+    :rtype: list[tuple[float, float]]
+    """
+    ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
+    pair = f"[{ac_name}, efficiency]"
+    if not isinstance(curve, list | tuple) or len(curve) < 2:
+        raise ValueError(
+            f"{parameter_name}: must be a list of at least 2 {pair} points, got {curve!r}"
+        )
+    if len(curve) > INVERTER_CURVE_MAX_POINTS:
+        raise ValueError(
+            f"{parameter_name}: has {len(curve)} points, at most {INVERTER_CURVE_MAX_POINTS} "
+            f"are supported (each adds binary variables to every time step)"
+        )
+
+    configured: list[tuple[float, float]] = []
+    for position, row in enumerate(curve, start=1):
+        if not isinstance(row, list | tuple) or len(row) != 2:
+            raise ValueError(
+                f"{parameter_name}: point {position} is {row!r}, expected a {pair} pair"
+            )
+        power = _finite_curve_number(row[0], parameter_name, position, ac_name)
+        efficiency = _finite_curve_number(row[1], parameter_name, position, "efficiency")
+        if power <= 0:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={power}, expected a strictly "
+                f"positive AC-side power in watts; the zero-power origin is added internally"
+            )
+        if efficiency < 0 or efficiency > 1:
+            raise ValueError(
+                f"{parameter_name}: point {position} has efficiency={efficiency}, expected "
+                f"0 <= efficiency <= 1 (percentage/100; use 0.97 for 97%)"
+            )
+        if direction == "dc_ac" and efficiency == 0:
+            raise ValueError(
+                f"{parameter_name}: point {position} has efficiency=0 at positive {ac_name}; "
+                f"DC-to-AC delivers AC output, so zero efficiency would require infinite DC "
+                f"input and cannot be represented by this curve"
+            )
+        configured.append((power, efficiency))
+
+    for position in range(2, len(configured) + 1):
+        previous_power = configured[position - 2][0]
+        power = configured[position - 1][0]
+        if power <= previous_power:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={power}, which does not "
+                f"exceed the {previous_power} before it: points must ascend strictly by {ac_name}"
+            )
+
+    points: list[tuple[float, float]] = [(0.0, 0.0)]
+    for power, efficiency in configured:
+        dc_power = power / efficiency if direction == "dc_ac" else power * efficiency
+        if not math.isfinite(dc_power):
+            raise ValueError(
+                f"{parameter_name}: {ac_name}={power} with efficiency={efficiency} converts to a "
+                f"non-finite DC-side power; use a larger efficiency"
+            )
+        points.append((power, dc_power))
+
+    for position in range(2, len(points)):
+        dc_prev = points[position - 1][1]
+        dc_now = points[position][1]
+        if dc_now < dc_prev - 1e-9 * max(1.0, dc_prev):
+            raise ValueError(
+                f"{parameter_name}: point {position} converts to DC-side power {dc_now}, which "
+                f"is below {dc_prev} from the previous point: the DC-side transfer power must "
+                f"be non-decreasing"
+            )
+    for (ac_a, dc_a), (ac_b, dc_b) in itertools.pairwise(points):
+        if not math.isfinite((dc_b - dc_a) / (ac_b - ac_a)):
+            raise ValueError(
+                f"{parameter_name}: points around {ac_name}={ac_b} are too close together "
+                f"to form a finite segment slope"
+            )
+    return points
+
+
+_INVERTER_CURVE_PARAMS = (
+    ("inverter_power_curve_dc_ac", "dc_ac", "inverter_ac_output_max", "inverter_efficiency_dc_ac"),
+    ("inverter_power_curve_ac_dc", "ac_dc", "inverter_ac_input_max", "inverter_efficiency_ac_dc"),
+)
+
+
+def inverter_power_curve_faults(config: dict) -> list[str]:
+    """
+    Return one message per unusable inverter power curve in an explicit save request (#746).
+
+    Used by ``/set-config`` before anything is written, so a curve the user typed is
+    rejected with its reason instead of being silently dropped. An absent parameter or
+    an explicit empty list is fine (scalar efficiency); any other value is validated.
+    The hybrid flag is not checked, since a valid curve may be kept while
+    ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
+
+    :param config: the submitted flat configuration
+    :type config: dict
+    :return: validation messages (empty when every curve is usable)
+    :rtype: list[str]
+    """
+    faults = []
+    for parameter_name, direction, *_ in _INVERTER_CURVE_PARAMS:
+        curve = config.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
+            continue
+        try:
+            validate_inverter_power_curve(curve, parameter_name, direction)
+        except ValueError as err:
+            faults.append(str(err))
+    return faults
+
+
+def check_inverter_power_curves(
+    plant_conf: dict,
+    logger: logging.Logger,
+    *,
+    recover: bool = False,
+    supplied: tuple[str, ...] | list[str] = (),
+) -> None:
+    """
+    Validate the optional inverter power-dependent efficiency curves of a plant_conf (#746).
+
+    An absent parameter or an explicit empty list is the default and leaves the scalar
+    ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
+    Any other value is a configured [ac_power_w, efficiency] curve: it is validated and
+    converted to internal transfer points (see :func:`validate_inverter_power_curve`).
+
+    Two contracts, chosen by the caller:
+
+    - strict (default, runtime parameters): a fault raises ValueError, because a
+      request that carries a curve expects it to be used and silently falling back
+      to the scalar would change the physics.
+    - ``recover=True`` (persisted configuration in ``build_params``): the unusable
+      curve is cleared and logged at error level, so the scalar efficiency of that
+      direction applies and the configuration page and service stay reachable to
+      repair it. Same trade-off as ``battery_charge_power_derating``.
+
+    A valid curve with ``inverter_is_hybrid`` false is dormant: it is kept, ignored
+    by the optimizer, and warned about, so switching hybrid off in the UI never
+    discards or rejects a stored curve. A curve named in ``supplied`` (set by the
+    current request) with hybrid off raises ValueError instead, as it would be
+    ignored without the requester knowing.
+
+    :param plant_conf: the plant_conf dict
+    :type plant_conf: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :param recover: clear and log an unusable curve instead of raising
+    :type recover: bool
+    :param supplied: curve parameter names provided by the current request
+    :type supplied: tuple[str, ...] | list[str]
+    :raises ValueError: when a curve is unusable and ``recover`` is False
+    """
+    hybrid = plant_conf.get("inverter_is_hybrid", False)
+    for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
+        curve = plant_conf.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
+            continue
+        try:
+            points = validate_inverter_power_curve(curve, parameter_name, direction)
+            if not hybrid and parameter_name in supplied:
+                raise ValueError(
+                    f"{parameter_name}: requires inverter_is_hybrid=true; the curves model the "
+                    f"hybrid inverter's DC bus <-> AC conversion"
+                )
+        except ValueError as err:
+            if not recover:
+                raise
+            # At error level: a dropped curve is otherwise indistinguishable from a
+            # working one, as the scalar efficiency applies either way.
+            logger.error(
+                f"{err}. Ignoring {parameter_name}: the scalar {scalar_name}="
+                f"{plant_conf.get(scalar_name, 1.0)} applies until the curve is corrected."
+            )
+            plant_conf[parameter_name] = []
+            continue
+        if not hybrid:
+            logger.warning(
+                f"{parameter_name} is set but inverter_is_hybrid is false: the curve is "
+                f"kept and ignored until inverter_is_hybrid is enabled."
+            )
+            continue
+        limit = plant_conf.get(limit_name)
+        if isinstance(limit, int | float) and points[-1][0] < limit:
+            logger.warning(
+                f"{parameter_name}: the curve ends at {points[-1][0]} W on the AC side, below "
+                f"{limit_name}={limit} W. The curve's last point is the supported power "
+                f"domain, so the optimizer will not plan beyond it."
+            )
 
 
 def check_batt_charge_derating(

@@ -93,6 +93,31 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_json["id"], 1)
         await self.client.shutdown()
 
+    async def test_send_reconnects_when_disconnected(self):
+        """A send from a disconnected client reconnects without re-acquiring its lock."""
+        mock_ws = MagicMock()
+        mock_ws.send = AsyncMock()
+        mock_ws.close = AsyncMock()
+
+        async def connect():
+            self.client._ws = mock_ws
+            self.client._connected = True
+            self.client._authenticated = True
+
+        async def send_message(message):
+            payload = orjson.loads(message)
+            self.client._pending[payload["id"]].set_result({"ok": True})
+
+        mock_ws.send.side_effect = send_message
+        self.client._connect = AsyncMock(side_effect=connect)
+
+        result = await asyncio.wait_for(self.client.send("ping"), timeout=2.0)
+
+        self.assertEqual(result, {"ok": True})
+        self.client._connect.assert_awaited_once()
+        mock_ws.send.assert_awaited_once()
+        await self.client.shutdown()
+
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_convenience_methods(self, mock_connect):
         self._setup_mock_ws(mock_connect)
