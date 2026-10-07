@@ -887,6 +887,29 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             opt_res = await main()
             self.assertIsNone(opt_res)
 
+    # CLI test that "False" is not read as True for the boolean arguments
+    async def test_main_false_bool_arguments(self):
+        argv = ["main", "--action", "test", "--config", str(emhass_conf["config_path"])]
+        with (
+            patch("sys.argv", argv + ["--debug", "False", "--log2file", "False"]),
+            patch(
+                "emhass.command_line.utils.get_logger", return_value=(MagicMock(), MagicMock())
+            ) as mock_get_logger,
+            patch(
+                "emhass.command_line.set_input_data_dict", new_callable=AsyncMock, return_value={}
+            ) as mock_set_input_data_dict,
+        ):
+            await main()
+        self.assertIs(mock_get_logger.call_args.kwargs["save_to_file"], False)
+        # get_data_from_file is the last positional argument
+        self.assertIs(mock_set_input_data_dict.call_args.args[-1], False)
+
+    # CLI test that a boolean argument rejects a value that is not a boolean
+    async def test_main_invalid_bool_argument(self):
+        with patch("sys.argv", ["main", "--action", "test", "--debug", "maybe"]):
+            with self.assertRaises(SystemExit):
+                await main()
+
     # CLI test action perfect-optim action
     async def test_main_perfect_forecast_optim(self):
         test_params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)

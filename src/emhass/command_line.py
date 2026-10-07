@@ -4334,6 +4334,16 @@ async def publish_json(
     return entity_data[metadata[entity_id]["name"]]
 
 
+def _parse_bool_arg(value: str) -> bool:
+    """Parse a boolean command line value; argparse `type=bool` reads any text as True."""
+    value = value.lower()
+    if value in {"true", "1", "yes", "on"}:
+        return True
+    if value in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value!r}")
+
+
 async def main():
     r"""Define the main command line entry function.
 
@@ -4384,7 +4394,7 @@ async def main():
     )
     parser.add_argument(
         "--log2file",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Define if we should log to a file or not",
     )
@@ -4402,7 +4412,7 @@ async def main():
     )
     parser.add_argument(
         "--debug",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Use True for testing purposes",
     )
