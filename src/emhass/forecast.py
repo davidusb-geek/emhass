@@ -68,6 +68,7 @@ from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
     add_date_features,
+    add_local_calendar_days,
     describe_invalid_forecast_value,
     get_days_list,
     set_df_index_freq,
@@ -317,13 +318,13 @@ class Forecast:
                 _delta_days,
             )
         if self.params["passed_data"].get("weather_forecast_cache", False):
-            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days * 2)).replace(
-                microsecond=0
-            )
+            self.end_forecast = add_local_calendar_days(
+                self.start_forecast, _delta_days * 2, self.time_zone
+            ).replace(microsecond=0)
         else:
-            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days)).replace(
-                microsecond=0
-            )
+            self.end_forecast = add_local_calendar_days(
+                self.start_forecast, _delta_days, self.time_zone
+            ).replace(microsecond=0)
         self.forecast_dates = pd.date_range(
             start=self.start_forecast,
             end=self.end_forecast - self.freq,
@@ -1798,6 +1799,9 @@ class Forecast:
         r"""
         Get the date range vector of forecast dates that will be used when loading a CSV file.
 
+        The configured forecast horizon and any CSV extension are local calendar-day
+        counts resolved once from the frozen forecast start.
+
         :return: The forecast dates vector
         :rtype: pd.date_range
 
@@ -1809,12 +1813,15 @@ class Forecast:
         # _extract_daily_forecast then raises KeyError (issue #1076). The
         # rounding itself still happens exactly once, in __init__.
         start_forecast_csv = self.start_forecast
-        end_forecast_csv = (
-            start_forecast_csv + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        total_days = self.optim_conf["delta_forecast_daily"].days + int(timedelta_days or 0)
+        end_forecast_csv = add_local_calendar_days(
+            start_forecast_csv,
+            total_days,
+            self.time_zone,
         ).replace(microsecond=0)
         forecast_dates_csv = pd.date_range(
             start=start_forecast_csv,
-            end=end_forecast_csv + timedelta(days=timedelta_days) - self.freq,
+            end=end_forecast_csv - self.freq,
             freq=self.freq,
             tz=self.time_zone,
         )
@@ -2778,8 +2785,10 @@ class Forecast:
                 self.logger.info("Saved the forecast results to cache, for later reference.")
 
         # Trim cached data to match requested dates
-        end_forecast = (
-            self.start_forecast + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        end_forecast = add_local_calendar_days(
+            self.start_forecast,
+            self.optim_conf["delta_forecast_daily"].days,
+            self.time_zone,
         ).replace(microsecond=0)
         forecast_dates = pd.date_range(
             start=self.start_forecast,
