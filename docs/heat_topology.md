@@ -72,6 +72,7 @@ watts of source input:
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
 | `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
+| `overshoot_temperature` | Optional soft threshold (degrees Celsius): with the storage's desired temperature set, this source stops while the storage is above it. Overrides the storage-level `overshoot_temperature`. |
 | `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
 | `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
 
@@ -166,6 +167,13 @@ comfort control is available through `desired_temperature` or
 `desired_temperatures`, `overshoot_temperature`, `penalty_factor`, and
 `comfort_sense` (`heat` or `cool`).
 
+The storage's `overshoot_temperature` applies to every source that feeds it,
+unless a source sets its own. That makes a two-stage setup a preference: with
+`desired_temperatures: 60` on the tank, `overshoot_temperature: 55` on the heat
+pump and `75` on the electric element, the element lifts the band above
+55 degrees Celsius only when the comfort penalty justifies it. The band stays
+soft, so comfort alone cannot make the problem infeasible.
+
 For predictable constraints, make the maximum-temperature array cover the
 optimization horizon. A shorter minimum-temperature array is extended using
 its final value, but a maximum-temperature array is not currently extended.
@@ -189,6 +197,11 @@ Consumers are folded into their target storage:
 
 Only one `building_demand` consumer is allowed per storage. Multiple profile
 consumers targeting one storage are added element by element.
+
+A `profile` and a `building_demand` consumer on the same storage add up, so one
+storage can serve hot water and space heating at once (a combi tank). The
+standing loss is counted once: the flat `thermal_loss` when a draw-off profile
+is present, otherwise the indoor/outdoor loss.
 
 ### Cost tracks
 
