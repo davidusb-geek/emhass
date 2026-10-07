@@ -721,6 +721,82 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg=f"expected an out-of-range clamp warning, got: {logs.output}",
         )
 
+    def test_battery_soc_final_reward_factor(self):
+        """Test that defining a battery_soc_final_reward_factor causes
+        the optimizer to keep energy in the battery if final prices are high
+        enough."""
+
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": True,
+                "compute_curtailment": False,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_use_pv": False,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_final_reward_factor": 0.7,
+            }
+        )
+        soc_init = 0.6
+        soc_final = 0.5
+        
+        # Create input data: 4 periods of 30 minutes, constant energy cost
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = 0.4
+        df_input[self.fcst.var_load_cost] = [0.8, 0.8, 0.8, 1.0]
+
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res = self.opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt.var_load_cost].values,
+            df_input[self.opt.var_prod_price].values,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # With the reward factor, the optimizer should keep the
+        # initial energy in the battery, instead of selling it off to
+        # reach the specified soc_final. It should however not charge
+        # it from the grid because the cost to buy the energy (0.8) is
+        # higher than the final price * reward factor (1.0 * 0.7 =
+        # 0.7).
+        self.assertAlmostEqual(
+            opt_res.loc[opt_res.index[-1], "SOC_opt"],
+            soc_init,
+        )
+        
     def test_capacity_charge_shaves_peak_import(self):
         """Issue #623: an opt-in ``capacity_cost_per_kw`` must flatten the peak
         grid import. With the feature off no peak variable is created and the
