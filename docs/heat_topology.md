@@ -384,6 +384,9 @@ defaults configure two example loads (3000 W for 4 h, and 750 W), so set
 it to the number of ordinary loads you really have, or to 0. Shared-tank `load_ids` and actuator-group references are
 shifted accordingly, and manually declared `shared_thermal_tanks` or
 `deferrable_load_groups` entries are kept, with the compiled ones appended.
+A per-load runtime parameter given as a single value (for example
+`"nominal_power_of_deferrable_loads": 3000`) applies to your configured loads
+only; the topology loads keep their compiled values.
 
 ```{warning}
 The appended topology loads are numbered after your configured loads, so adding

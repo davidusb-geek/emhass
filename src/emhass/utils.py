@@ -1028,6 +1028,17 @@ def compile_heat_topology(topology: dict) -> dict:
     }
 
 
+def _per_user_load_list(value, offset: int) -> list:
+    """A per-load value as a list for the user's ``offset`` loads: a list is
+    copied, a scalar (e.g. a runtime override) applies to each of them, and a
+    missing value is empty."""
+    if isinstance(value, list):
+        return list(value)
+    if value is None:
+        return []
+    return [value] * offset
+
+
 def _extend_optim_conf_with_compiled_topology(
     optim_conf: dict, compiled: dict, logger: logging.Logger
 ) -> None:
@@ -1063,18 +1074,21 @@ def _extend_optim_conf_with_compiled_topology(
         "is_electric_load": True,
     }
     for key, default in pad_defaults.items():
-        existing = optim_conf.get(key)
-        existing = list(existing) if isinstance(existing, list) else []
+        existing = _per_user_load_list(optim_conf.get(key), offset)
         existing += [default] * (offset - len(existing))
         optim_conf[key] = existing[:offset] + list(compiled[key])
-    # Minimum on/off times are not compiled; keep the user's entries for their
-    # own loads and give the topology loads no minimum (a longer user array
-    # must not leak onto the appended loads).
+    # Minimum on/off times and MPC operating timesteps are not compiled; keep the
+    # user's entries for their own loads and give the topology loads none (a
+    # longer user array must not leak onto the appended loads).
     n_compiled = len(compiled["def_load_config"])
-    for key in ("def_minimum_on_time", "def_minimum_off_time"):
+    for key in (
+        "def_minimum_on_time",
+        "def_minimum_off_time",
+        "operating_timesteps_of_each_deferrable_load",
+    ):
         existing = optim_conf.get(key)
-        if isinstance(existing, list):
-            existing = list(existing)[:offset]
+        if existing is not None:
+            existing = _per_user_load_list(existing, offset)[:offset]
             optim_conf[key] = existing + [0] * (offset - len(existing)) + [0] * n_compiled
     # def_load_config pads with fresh dicts (no shared instance between slots).
     def_cfgs = optim_conf.get("def_load_config")
@@ -2317,7 +2331,30 @@ async def treat_runtimeparams(
         # as def_load_config above - runtime-only, no config-file counterpart.
         if "shared_thermal_tanks" in runtimeparams:
             tanks = runtimeparams["shared_thermal_tanks"]
-            if isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
+
+            # A load feeds at most one tank, once: listing it twice would count
+            # its heat twice while its electricity is counted once. Compare the
+            # ids as the optimizer reads them (int()), so 0, 0.0 and "00" match.
+            def _member_key(i):
+                try:
+                    return int(i)
+                except (TypeError, ValueError):
+                    return str(i)
+
+            member_ids = [
+                _member_key(i)
+                for t in (tanks if isinstance(tanks, list) else [])
+                if isinstance(t, dict)
+                for i in (t.get("load_ids") or [])
+            ]
+            duplicate_ids = sorted({str(i) for i in member_ids if member_ids.count(i) > 1})
+            if duplicate_ids:
+                logger.warning(
+                    "shared_thermal_tanks lists load_ids %s more than once; a load "
+                    "can feed only one tank, once. Ignoring the runtime tanks.",
+                    duplicate_ids,
+                )
+            elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
                 params["optim_conf"]["shared_thermal_tanks"] = tanks
                 topology = params["optim_conf"].get("heat_topology")
                 if isinstance(topology, dict) and topology:
@@ -2804,6 +2841,11 @@ async def treat_runtimeparams(
     # it down to flat optim_conf primitives. Runtime override wins over static
     # config because runtimeparams have already been merged above.
     heat_topology = optim_conf.get("heat_topology")
+    extend_mode = bool(
+        isinstance(heat_topology, dict)
+        and heat_topology
+        and heat_topology.get("extend_deferrable_loads", False)
+    )
     if isinstance(heat_topology, dict) and heat_topology:
         try:
             compiled = compile_heat_topology(heat_topology)
@@ -2817,6 +2859,12 @@ async def treat_runtimeparams(
             # loads (the compiler cannot tell configured loads apart from
             # defaults, which is why replace is the default).
             _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+            # naive-mpc-optim reads the operating timesteps from passed_data.
+            passed = params.get("passed_data") or {}
+            if passed.get("operating_timesteps_of_each_deferrable_load") is not None:
+                passed["operating_timesteps_of_each_deferrable_load"] = optim_conf[
+                    "operating_timesteps_of_each_deferrable_load"
+                ]
         else:
             # Default replace mode: merge compiled fields into optim_conf,
             # allowing user-set fields to win for things the compiler always
@@ -2893,6 +2941,8 @@ async def treat_runtimeparams(
                 try:
                     temp_value = float(temp)
                 except (TypeError, ValueError):
+                    temp_value = None
+                if temp_value is None or not math.isfinite(temp_value):
                     logger.warning(
                         "shared_tank_start_temperatures['%s']=%r is not numeric; ignoring.",
                         tank_id,
@@ -2938,6 +2988,16 @@ async def treat_runtimeparams(
                 # array should never be reported as a runtime override.
                 was_provided = runtime_value is not None
 
+                if (
+                    was_provided
+                    and not isinstance(runtime_value, list)
+                    and extend_mode
+                    and isinstance(optim_conf.get(def_array_name), list)
+                    and len(optim_conf[def_array_name]) == final_num_def_loads
+                ):
+                    # Extend mode already applied the scalar to the user's own
+                    # loads and kept the compiled values of the topology loads.
+                    continue
                 if was_provided and not isinstance(runtime_value, list):
                     # A runtime scalar means every load, not "pad with the
                     # default" - mirrors check_batt_params's silent

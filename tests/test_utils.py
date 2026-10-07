@@ -1694,6 +1694,68 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["is_electric_load"], [True] * (original_num + 2))
         self.assertIn("thermal_source", out["def_load_config"][original_num])
 
+    async def test_heat_topology_extend_keeps_compiled_values_under_runtime_scalars(self):
+        """In extend mode a runtime scalar applies to the user's own loads only:
+        the appended topology loads keep their compiled ratings and get no
+        minimum on/off time. Before, the scalar was broadcast over every load,
+        so a 3000 W runtime nominal power overwrote a 3500 W heat pump."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        n_user = optim_conf["number_of_deferrable_loads"]
+        runtimeparams_json = orjson.dumps(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "nominal_power_of_deferrable_loads": 1234,
+                "def_minimum_on_time": 2,
+            }
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][:n_user], [1234] * n_user)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][n_user:], [3500.0, 3000.0])
+        self.assertEqual(out["def_minimum_on_time"][:n_user], [2] * n_user)
+        self.assertEqual(out["def_minimum_on_time"][n_user:], [0, 0])
+
+    async def test_heat_topology_extend_pads_operating_timesteps_for_mpc(self):
+        """A runtime operating_timesteps_of_each_deferrable_load covers the user's
+        loads; extend mode appends 0 for the topology loads in optim_conf and in
+        passed_data, which naive-mpc-optim reads. A short array made the
+        optimizer index past its end."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        n_user = optim_conf["number_of_deferrable_loads"]
+        runtimeparams_json = orjson.dumps(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "prediction_horizon": 10,
+                "operating_timesteps_of_each_deferrable_load": [4] * n_user,
+            }
+        ).decode("utf-8")
+        params_out, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        expected = [4] * n_user + [0, 0]
+        self.assertEqual(out["operating_timesteps_of_each_deferrable_load"], expected)
+        passed = orjson.loads(params_out)["passed_data"]
+        self.assertEqual(passed["operating_timesteps_of_each_deferrable_load"], expected)
+
     async def test_heat_topology_extend_does_not_leak_minimum_times(self):
         """A def_minimum_on/off_time array longer than the user's load count must
         not leak its extra entries onto the appended topology loads."""
@@ -1843,6 +1905,39 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
         self.assertTrue(any("not numeric" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_non_finite(self):
+        """A non-finite override (e.g. a sensor reading "nan" or "inf") warns
+        and keeps the configured start_temperature: NaN would erase the
+        initial-state constraint."""
+        for bad in ("nan", "inf", float("nan")):
+            with self.subTest(value=bad), self.assertLogs(logger, level="WARNING"):
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                        "shared_tank_start_temperatures": {"dhw": bad},
+                    }
+                )
+                self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_duplicate_members(self):
+        """A runtime tank that lists the same load twice would count that source's
+        heat twice while its electricity is counted once: the tank list is
+        ignored with a warning."""
+        # The optimizer reads members with int(), so 0, 0.0 and "00" are the
+        # same load.
+        for ids in ([0, 0], [0, 0.0], [0, "00"]):
+            tank = self._manual_tank()
+            tank["load_ids"] = ids
+            with self.subTest(load_ids=ids), self.assertLogs(logger, level="WARNING") as log_cm:
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "def_load_config": [{"thermal_source": {"efficiency": 1.0}}],
+                        "shared_thermal_tanks": [tank],
+                    }
+                )
+                self.assertFalse(out.get("shared_thermal_tanks"))
+                self.assertTrue(any("load_ids" in m for m in log_cm.output))
 
     async def test_treat_runtimeparams_shared_tank_start_temperature_patches_compiled(self):
         """The override applies AFTER the heat_topology compile, so a tank that
