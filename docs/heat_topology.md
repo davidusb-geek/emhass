@@ -254,7 +254,12 @@ Each flow compiles to one deferrable load, numbered in the order of `flows`
 (the first flow is load 0). The optimization results carry
 `predicted_temp_heater{k}` (the temperature of the storage that load `k`
 feeds) and `heating_demand_heater{k}` for every such load, just as for a
-`thermal_battery`. To publish them to Home Assistant, pass
+`thermal_battery`. When the storage sets `desired_temperature(s)`,
+`min_temperature(s)` or `max_temperature(s)`, each of its loads also carries
+`target_temp_heater{k}`, `min_temp_heater{k}` and `max_temp_heater{k}`, so the
+comfort band can be plotted next to the predicted temperature. `min_temp_heater{k}`
+is the floor the optimizer enforced, including a `min_temperature_curve`. To publish them
+to Home Assistant, pass
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
 When several flows feed the same storage, each of their
@@ -265,6 +270,14 @@ storage's temperature. The ids are matched by position (entry `k` is load `k`);
 loads without an entry publish under the default names, such as
 `sensor.p_deferrable{k}` and `sensor.temp_predicted{k}`.
 
+### Rolling MPC
+
+A topology is rebuilt on every run instead of reusing the cached (warm-start)
+problem, so each run uses the live `start_temperature` and the current
+forecast. This also holds for every day of a perfect-forecast run. Pass the
+measured storage temperature as `start_temperature` in the `heat_topology` you
+send at runtime; the solve takes a few seconds longer than a warm start.
+
 ## Validation and troubleshooting
 
 EMHASS validates the graph before optimization and reports the offending field
@@ -274,7 +287,9 @@ path for:
 - flows that reference unknown sources or storage;
 - consumers that target unknown storage;
 - unsupported source or consumer types;
+- source or storage entries without an `id`;
 - missing heat-pump supply-temperature data;
+- a `profile` consumer without `profile`;
 - a source `min_power` greater than its `nominal_power`;
 - missing constant source efficiency; and
 - missing cost-track references.

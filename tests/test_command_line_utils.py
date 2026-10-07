@@ -225,6 +225,132 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["fcst"].optim_conf["production_price_forecast_method"], "list"
         )
 
+    @staticmethod
+    async def _params_with_shared_tank(start_temperature):
+        """Default params plus a shared-thermal-tank config (#970 fix).
+
+        Two modulating sources feeding one DHW tank, set in optim_conf exactly as
+        a compiled heat_topology leaves them. Returns (params_json,
+        runtimeparams_json) ready for set_input_data_dict.
+        """
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"].update(
+            {
+                "number_of_deferrable_loads": 2,
+                "nominal_power_of_deferrable_loads": [3000, 3000],
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "def_load_config": [
+                    {"thermal_source": {"efficiency": 3.0}},
+                    {"thermal_source": {"efficiency": 1.0}},
+                ],
+                "shared_thermal_tanks": [
+                    {
+                        "id": "dhw",
+                        "load_ids": [0, 1],
+                        "volume": 0.3,
+                        "start_temperature": start_temperature,
+                        "min_temperatures": [45.0] * 48,
+                        "max_temperatures": [65.0] * 48,
+                    }
+                ],
+            }
+        )
+        runtimeparams = {
+            "pv_power_forecast": [i + 1 for i in range(48)],
+            "load_power_forecast": [i + 1 for i in range(48)],
+            "load_cost_forecast": [i + 1 for i in range(48)],
+            "prod_price_forecast": [i + 1 for i in range(48)],
+        }
+        params["passed_data"] = runtimeparams
+        return (
+            orjson.dumps(params).decode("utf-8"),
+            orjson.dumps(runtimeparams).decode("utf-8"),
+        )
+
+    async def test_set_input_data_dict_bypasses_cache_for_shared_thermal_tanks(self):
+        """Shared tanks bake all forecast-dependent state (start_temperature,
+        demand, COP, losses) into the problem as constants, and the cache-hit
+        refresh path never updates them. So the warm-start cache must be
+        bypassed when shared tanks are present, otherwise every MPC tick
+        re-solves against the first tick's tank temperature (issue #970).
+
+        Without the bypass, the first call stores the object in the cache and
+        the second call returns the same cached (stale) object.
+        """
+        OptimizationCache.clear(logger)
+        params_json, runtimeparams_json = await self._params_with_shared_tank(48.0)
+        idd1 = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        # The optimization object was still built, but never stored in the cache
+        self.assertIsNotNone(idd1["opt"])
+        self.assertIsNone(
+            OptimizationCache._instance,
+            "Shared-tank problems must not be stored in the warm-start cache (#970)",
+        )
+        # A second tick with a NEW tank temperature gets a fresh object, not a
+        # stale cached one - so the new start_temperature is honored.
+        params_json2, runtimeparams_json2 = await self._params_with_shared_tank(40.0)
+        idd2 = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json2,
+            runtimeparams_json2,
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertIsNot(
+            idd2["opt"], idd1["opt"], "Each shared-tank run must build a fresh problem (#970)"
+        )
+        self.assertEqual(
+            idd2["opt"].optim_conf["shared_thermal_tanks"][0]["start_temperature"], 40.0
+        )
+
+    async def test_set_input_data_dict_caches_without_shared_thermal_tanks(self):
+        """Regression guard: the warm-start cache must still work for ordinary
+        (non-shared-tank) configs - the bypass is scoped to shared tanks only.
+        """
+        OptimizationCache.clear(logger)
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        runtimeparams = {
+            "pv_power_forecast": [i + 1 for i in range(48)],
+            "load_power_forecast": [i + 1 for i in range(48)],
+            "load_cost_forecast": [i + 1 for i in range(48)],
+            "prod_price_forecast": [i + 1 for i in range(48)],
+        }
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        idd1 = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        # Normal config IS cached
+        self.assertIsNotNone(OptimizationCache._instance)
+        idd2 = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        # Identical config -> cache hit -> same reused object
+        self.assertIs(idd2["opt"], idd1["opt"], "Non-shared configs must still warm-start")
+
     # Test day-ahead optimization
     async def test_webserver_get_injection_dict(self):
         costfun = "profit"
