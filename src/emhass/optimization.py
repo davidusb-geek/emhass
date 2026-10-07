@@ -4265,6 +4265,15 @@ class Optimization:
         # hardware cannot execute.
         finite_max_temps = [v for v in max_temperatures_list if v is not None]
         tank_temp_ub = max(finite_max_temps) if finite_max_temps else None
+        # The ceiling is a heating limit: on a cooling storage the gate would keep
+        # a capped source off exactly while the storage is warm and needs cooling.
+        if tank_sense == "cool" and any(cap is not None for cap in source_caps):
+            self.logger.warning(
+                "Shared tank %s cools: max_supply_temperature is a heating ceiling "
+                "and is ignored for its sources.",
+                tank_id,
+            )
+            source_caps = [None] * len(source_caps)
         for k, cap in zip(load_ids, source_caps):
             if cap is None:
                 continue
