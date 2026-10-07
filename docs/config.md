@@ -228,6 +228,7 @@ The following parameters and definitions are only needed if `load_cost_forecast_
 		- period_hp_2:
 			- start: '17:24'
 			- end: '20:24'
+	- `tariff_schedule_time_zone`: Optional. The time zone identifier of the clock the `load_peak_hour_periods` are written in, for a tariff whose schedule clock differs from the site `time_zone` (for example a tariff published in fixed UTC+10 at a site whose civil time observes daylight saving). Empty by default, which interprets the periods in the site `time_zone` as before. See [Tariff schedule time zone](forecasts.md#tariff-schedule-time-zone).
 	- `load_peak_hours_cost`: The cost of the electrical energy from the grid during peak hours in currency/kWh. Defaults to 0.1907.
 	- `load_offpeak_hours_cost`: The cost of the electrical energy from the grid during non-peak hours in currency/kWh. Defaults to 0.1419.
 - `production_price_forecast_method`: Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are `constant` for a constant fixed value or `csv` to load custom price forecasts from a CSV file. The default CSV file path that will be used is `/data/data_prod_price_forecast.csv`.
