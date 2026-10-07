@@ -5823,6 +5823,42 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         temps = res["predicted_temp_heater0"].to_numpy()
         self.assertLessEqual(temps[1:].max(), 52.0 + 0.01)
 
+    def test_shared_tank_overshoot_gates_the_last_step_of_a_continuous_source(self):
+        """The last step has no end temperature in the horizon, so a continuous
+        source there is gated on the start-of-step temperature like a
+        semi-continuous one. Without it a negative price in the final slot ran
+        the source while the tank sat above its threshold."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 60.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                "desired_temperatures": 50.0,
+                "overshoot_temperature": 55.0,
+            },
+        ]
+        opt = self.create_optimization()
+        prices = self.df_input_data_dayahead[opt.var_load_cost].to_numpy(dtype=float).copy()
+        prices[:] = 0.30
+        prices[-1] = -0.30
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLess(res["P_deferrable0"].to_numpy()[-1], 1e-3)
+
     def test_shared_tank_desired_only_penalty_pulls_temperature(self):
         """desired_temperatures without any overshoot gates is a pure soft
         target: no source is blocked, but the shortfall penalty pulls the tank
