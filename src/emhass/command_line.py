@@ -823,7 +823,8 @@ async def adjust_pv_forecast(
     :type emhass_conf: dict
     :param test_df_literal: DataFrame containing test data for debugging purposes.
     :type test_df_literal: pd.DataFrame
-    :return: The adjusted PV forecast as a pandas Series.
+    :return: The adjusted PV forecast as a pandas Series. On handled model training
+        or loading failures, the original unadjusted PV forecast is returned.
     :rtype: pd.Series
     """
     # Normalize data_path to Path object for safety (handles both str and Path types)
@@ -880,8 +881,10 @@ async def adjust_pv_forecast(
             logger.error(
                 f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
             )
-            logger.error("Cannot recover from this error")
-            return False
+            logger.warning(
+                "Unable to load the adjusted PV model. Falling back to unadjusted PV forecast."
+            )
+            return p_pv_forecast
     # Call the predict method
     p_pv_forecast_in = p_pv_forecast.rename("forecast").to_frame()
     try:
