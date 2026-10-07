@@ -4442,17 +4442,42 @@ class Optimization:
             sense_coeff = 1 if sense == "heat" else -1
             finite_min_temps = [v for v in min_temperatures_list if v is not None]
 
+            # The temperature at the end of the last step lies past the horizon,
+            # so it is modelled here only for the overshoot gate of continuous
+            # sources (their rule is "no heat in a step that would end beyond the
+            # threshold"). end_step_span bounds how far one step can move it.
+            def _nominal(j):
+                nom = self.optim_conf["nominal_power_of_deferrable_loads"][j]
+                return max(nom) if isinstance(nom, list | np.ndarray) else nom
+
+            heat_last = 0
+            end_step_span = 0.0
+            for j, cops in zip(load_ids, cop_arrays):
+                heat_last = (
+                    heat_last
+                    + float(cops[-1]) * self.vars["p_deferrable"][j][-1] / 1000 * self.time_step
+                )
+                end_step_span += float(_nominal(j)) * float(np.max(cops)) / 1000 * self.time_step
+            temp_end = predicted_temp[-1] + conversion * (
+                sense_coeff * heat_last - heating_demand[-1] - thermal_losses[-1]
+            )
+            end_step_span = conversion * (
+                end_step_span + abs(float(heating_demand[-1])) + abs(float(thermal_losses[-1]))
+            )
+
             for k, overshoot in zip(load_ids, source_overshoots):
                 if overshoot is None:
                     continue
                 overshoot = float(overshoot)
                 # The indicator is two-sided, so M must dominate the distance
-                # from the threshold to BOTH feasible temperature extremes.
+                # from the threshold to BOTH feasible temperature extremes,
+                # including the pinned start temperature (index 0 is not bounded
+                # by the configured band).
                 big_m_os = SHARED_TANK_CAP_BIG_M_TEMP
-                if tank_temp_ub is not None:
-                    big_m_os = max(big_m_os, tank_temp_ub - overshoot)
-                if finite_min_temps:
-                    big_m_os = max(big_m_os, overshoot - min(finite_min_temps))
+                upper = [v for v in (tank_temp_ub, float(start_temperature)) if v is not None]
+                big_m_os = max(big_m_os, max(upper) - overshoot)
+                lower = [*finite_min_temps, float(start_temperature)]
+                big_m_os = max(big_m_os, overshoot - min(lower))
                 is_overshoot = cp.Variable(
                     required_len, boolean=True, name=f"is_overshoot_shared_{tank_id}_{k}"
                 )
@@ -4483,9 +4508,15 @@ class Optimization:
                     constraints.append(p_k <= nominal_k * (1 - is_overshoot))
                 else:
                     constraints.append(p_k[:-1] <= nominal_k * (1 - is_overshoot[1:]))
-                    # The last step has no end temperature in the horizon: gate it
-                    # on its start, so its heat cannot escape the threshold.
-                    constraints.append(p_k[-1] <= nominal_k * (1 - is_overshoot[-1]))
+                    # The last step ends past the horizon: gate it on the modelled
+                    # end temperature, so its heat cannot cross the threshold.
+                    allow_end = cp.Variable(boolean=True, name=f"os_end_{tank_id}_{k}")
+                    big_m_end = big_m_os + end_step_span
+                    if sense == "heat":
+                        constraints.append(temp_end - overshoot <= big_m_end * (1 - allow_end))
+                    else:
+                        constraints.append(temp_end - overshoot >= -big_m_end * (1 - allow_end))
+                    constraints.append(p_k[-1] <= nominal_k * allow_end)
 
             # Comfort-shortfall penalty toward the desired band: only deviation
             # below desired (sense=heat) / above desired (sense=cool) is priced.
