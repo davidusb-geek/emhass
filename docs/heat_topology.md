@@ -71,6 +71,14 @@ watts of source input:
 | `efficiency` | Required constant conversion efficiency for gas, oil, district, electric, and constant-efficiency sources. |
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
+| `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
+| `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
+| `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
+
+`startup_penalty` and `max_startups` act on the source's on/off state, which is
+tied to its power only when the source is semi-continuous or has a `min_power`.
+A continuous source without `min_power` can stay "on" at 0 W, so both have
+little or no effect on it; give it a `min_power` if short cycling matters.
 
 A heat pump requires either `supply_temperature` or a `heating_curve`. A
 constant-efficiency source requires `efficiency`.
@@ -83,6 +91,35 @@ Source type controls electric-balance membership by default:
 
 An explicit `electric: true` or `electric: false` overrides the default. This
 keeps a gas boiler's fuel input out of the household electric power balance.
+
+#### Per-source temperature ceiling
+
+When two sources feed the same storage but reach different maximum
+temperatures, for example a DHW tank fed by a heat pump (condenser limit about
+53 degrees Celsius) and an electric booster (up to 65 degrees Celsius), the
+optimizer would otherwise let the cheaper heat pump cover the band above its
+limit too, which it physically cannot deliver. `max_supply_temperature` makes
+that limit hard: the source only injects heat while the storage is at or below
+its ceiling, so the booster is scheduled exactly for the band above it.
+
+```json
+"sources": [
+  {"id": "hp", "type": "heatpump", "nominal_power": 3500,
+   "supply_temperature": 55, "max_supply_temperature": 53},
+  {"id": "booster", "type": "electric", "nominal_power": 3000, "efficiency": 1.0}
+]
+```
+
+This is a physical limit, not a preference: it also holds in the relaxed
+fallback. For a soft preference, use `overshoot_temperature` with a desired
+temperature on the storage (see below); the two compose.
+
+`supply_temperature` only sets the heat pump's COP; it is not a ceiling. Without
+`max_supply_temperature` the optimizer may plan to heat the storage above the
+supply temperature, and the compiler logs a warning for such a heat pump. To
+cap the storage at the supply temperature, set `max_supply_temperature` equal
+to `supply_temperature`. The cap is opt-in because it makes a storage whose
+minimum temperature sits at the supply temperature infeasible.
 
 ### Storage
 
