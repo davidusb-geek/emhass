@@ -2048,6 +2048,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         # Test 3: Fallback to df_weather with Timezone conversion and GHI
         input_data_dict["params"]["passed_data"] = {}  # Remove passed outdoor temp
+        input_data_dict["fcst"].optim_conf = {
+            "load_cost_forecast_method": "list",
+            "production_price_forecast_method": "list",
+            "outdoor_temperature_forecast_method": "list",
+        }
         # Weather index is timezone naive, dayahead is UTC
         weather_idx = pd.date_range("2025-01-01", periods=5, freq="2h")
         df_weather = pd.DataFrame(
@@ -2077,6 +2082,20 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             "much coarser than dayahead" in warning_logs, "Resolution warning should have triggered"
         )
+
+        # Test 3b: supplied-but-rejected runtime temperature must fail closed,
+        # rather than using the weather fallback that is valid for omission.
+        input_data_dict["params"]["passed_data"] = {
+            "outdoor_temperature_forecast": None,
+            "_outdoor_temperature_forecast_rejected": True,
+        }
+        with self.assertLogs(logger, level="ERROR") as cm:
+            rejected = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIs(rejected, False)
+        self.assertIn("was supplied but rejected", str(cm.output))
+
+        # Restore the omitted-key case for the remaining fallback checks.
+        input_data_dict["params"]["passed_data"] = {}
         # Test 4: Timezone mismatch (Dayahead Naive, Weather Aware)
         # Make dayahead naive
         input_data_dict["df_input_data_dayahead"].index = input_data_dict[

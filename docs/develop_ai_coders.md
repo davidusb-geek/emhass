@@ -102,6 +102,7 @@ Run through before opening. Each item has a *why* — skip the item only if the 
 - [ ] `pytest tests/` passes locally? *Why: CI runs the same suite; local-fail = CI-fail = wasted review cycle.*
 - [ ] `uvx ruff check .` clean? *Why: ruff is enforced via `.github/workflows/code-quality.yml`; a red lint blocks merge.*
 - [ ] Sign conventions verified (if PR touches power / SOC / cost variables)? *Why: column names do not encode sign; see §3 sign-conventions landmine.*
+- [ ] Forecast ingestion, runtime forecast processing, mapping alignment, forecast post-processing or load/PV physical-domain handling touched? Checked against the [Forecast input contract](passing_data.md#forecast-input-contract), and `tests/test_forecast_validity_contract.py` (signed prices/temperatures, final load boundary) still passes? *Why: a generic `>= 0` rule, a dropped bool check or a silent timestamp shift gives a valid-looking but wrong plan.*
 - [ ] One concern per PR (scope discipline)? *Why: bundled PRs invite scope-objection on one part and block the whole PR.*
 - [ ] Issue or Discussion linked in PR body if applicable? *Why: makes review context one-click; saves maintainer time.*
 - [ ] Reproducer in body if behavior-change fix? *Why: lets the maintainer confirm the bug, not just the patch.*

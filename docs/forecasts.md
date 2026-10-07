@@ -401,6 +401,10 @@ You need to be careful here to send the correct amount of data on this list, the
 EMHASS supports two formats for passing forecast data as runtime parameters: **list format** and **dictionary format
 with timestamps**. Understanding when to use each format can significantly simplify your Home Assistant automations.
 
+Both formats follow the [Forecast input contract](passing_data.md#forecast-input-contract): every value must be a finite
+real number (no `NaN`, `null`, booleans or strings), prices and temperatures may be negative, and the load and PV power
+that reach the optimizer are kept at or above 0 W.
+
 #### List Format (Traditional)
 
 The list format passes forecast values as a simple array. This is the most compact format but requires careful
@@ -408,7 +412,8 @@ attention to timing and data length.
 
 **Requirements:**
 - The list must contain values for the **current time period first**, followed by future values
-- The list length must match your prediction horizon based on `optimization_time_step`
+- The list must contain at least one value per horizon step based on `optimization_time_step`. Extra values are
+ignored, and a shorter list is rejected with an error rather than padded
 - Values must be in the correct order (chronological)
 
 **Example:**
@@ -429,14 +434,15 @@ When to use list format:
 Dictionary Format with Timestamps (Recommended for most users)
 
 The dictionary format allows you to pass forecast values with explicit timestamps. EMHASS will automatically handle
-resampling, alignment, and gap filling.
+aggregation, alignment, and gap filling.
 
 Advantages:
-- Automatic resampling: If your data is hourly but EMHASS runs at 15-minute intervals, resampling happens
-automatically
+- Automatic alignment: If your data is hourly but EMHASS runs at 15-minute intervals, each hourly value is held for
+the 15-minute steps it covers
 - Flexible timing: No need to calculate exact list length or worry about current time alignment
 - Self-documenting: Timestamps make it clear which value applies when
-- Automatic gap filling: Missing timestamps are filled using forward-fill and backward-fill
+- Automatic gap filling: Each value holds until the next supplied point, and steps before the first point take the
+first value
 - Timezone aware: Timestamps are parsed and converted to your configured timezone
 
 Format:
@@ -464,11 +470,14 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 ```
 
 What happens internally:
-1. Timestamps are parsed as ISO8601 format with timezone
-2. Data is resampled to match your optimization_time_step (e.g., from 1h to 15min intervals)
-3. Values are aligned with the forecast horizon using nearest-neighbor interpolation
-4. Any missing values are filled using forward-fill then backward-fill
-5. The result is converted to a list for the optimizer
+1. Every value is checked against the [numerical contract](passing_data.md#forecast-input-contract), so an invalid value
+is reported with its source timestamp and the action fails
+2. Timestamps are parsed as ISO8601 and converted to your configured timezone
+3. Points that fall inside the same `optimization_time_step` are averaged (e.g., four 15-minute values become one hourly
+value); coarser data is not interpolated
+4. Values are matched to the forecast grid by UTC instant and each value holds until the next point (step semantics)
+5. Horizon steps before the first supplied point take the first supplied value (backfill)
+6. The result is converted to a list for the optimizer
 
 When to use dictionary format:
 - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
@@ -495,7 +504,7 @@ shell_command:
 	emhass_dayahead_nordpool_list: >
 		curl -i -H "Content-Type: application/json" -X POST -d '{
 			"load_cost_forecast": {{(
-				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float(0)] +
+				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float] +
 				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
 				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
 				[now().hour:][:24]
@@ -504,7 +513,8 @@ shell_command:
 ```
 
 Notice how the list format requires:
-- Adding the current hour value first `[states("sensor.nordpool...")]`
+- Adding the current hour value first `[states("sensor.nordpool...")]`. `| float` has no default on purpose: if the
+sensor is unavailable the template fails and the call is skipped, instead of sending a price of 0
 - Extracting values from dictionaries `map(attribute="value")`
 - Slicing from current hour `[now().hour:]`
 - Limiting to the correct length `[:24]`
@@ -516,13 +526,13 @@ Important Notes
 Timezone handling:
 - Timestamps should include timezone information (e.g., +00:00 for UTC, +02:00 for CEST)
 - EMHASS will convert timestamps to your configured timezone from `secrets_emhass.yaml`
-- If timestamps don't include timezone, they're assumed to be in your local timezone
+- If timestamps don't include timezone, they're read as UTC, not as your local time. Always include the offset to
+avoid a silent shift
 
 Data resolution:
 - Dictionary format works best when your source data is at a coarser resolution than your optimization_time_step
 - Example: Hourly price data automatically resampled to 15-minute intervals
-- The resampling uses "nearest neighbor" method, so hourly prices are held constant for all 15-minute intervals within
-that hour
+- Each hourly price is held constant for all 15-minute intervals within that hour (step semantics, no interpolation)
 
 Current values:
 - When using list format, the first value in the list must be the current period
@@ -594,10 +604,10 @@ An MPC call may look like this for 4 deferrable loads:
 
 ```yaml
     post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
-          ([states('sensor.amber_general_price')|float(0)] +
+          ([states('sensor.amber_general_price')|float] +
           state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
           }}, \"prod_price_forecast\":{{(
-          ([states('sensor.amber_feed_in_price')|float(0)] +
+          ([states('sensor.amber_feed_in_price')|float] +
           state_attr('sensor.amber_feed_in_forecast', 'forecasts')|map(attribute='per_kwh')|list)[:48]) 
           }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
           }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100

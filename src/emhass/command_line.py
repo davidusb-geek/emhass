@@ -1955,7 +1955,8 @@ async def _get_dayahead_pv_forecast(ctx: SetupContext):
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
@@ -2070,7 +2071,8 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     # Calculate PV power
     p_pv_forecast = ctx.fcst.get_power_from_weather(
@@ -2660,6 +2662,17 @@ def prepare_forecast_and_weather_data(
     passed_outdoor_temp = input_data_dict["params"]["passed_data"].get(
         "outdoor_temperature_forecast"
     )
+    # Absence and rejection are different contracts. A genuinely omitted
+    # runtime temperature may use the existing weather-temperature fallback;
+    # a supplied value rejected by #1135 must fail closed.
+    if passed_outdoor_temp is None and input_data_dict["params"]["passed_data"].get(
+        "_outdoor_temperature_forecast_rejected", False
+    ):
+        logger.error(
+            "outdoor_temperature_forecast was supplied but rejected; "
+            "not falling back to the weather forecast temperature."
+        )
+        return False
 
     if passed_outdoor_temp is not None:
         forecast_len = len(df_input_data_dayahead)

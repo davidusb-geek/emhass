@@ -66,7 +66,12 @@ from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
-from emhass.utils import add_date_features, get_days_list, set_df_index_freq
+from emhass.utils import (
+    add_date_features,
+    describe_invalid_forecast_value,
+    get_days_list,
+    set_df_index_freq,
+)
 
 header_accept = "application/json"
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
@@ -2395,6 +2400,10 @@ class Forecast:
         # Post-processing (Mix Forecast)
         p_load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
+            # +/-Inf or a non-numeric first value would crash the blend's
+            # round() before the final load check below can report it (#1135).
+            if self._reject_invalid_load(p_load_forecast):
+                return False
             # Load forecasts don't need curtailment protection - always use feedback
             p_load_forecast = Forecast.get_mix_forecast(
                 df_now,
@@ -2406,8 +2415,33 @@ class Forecast:
                 logger=self.logger,
                 configured_col=self.var_load,
             )
+        # Optimizer-facing load contract (#1135), enforced once for every method
+        # and after mixing: P_Load must be finite and >= 0 W. Household
+        # consumption cannot be negative, so a finite negative value (e.g. an
+        # unconstrained regression excursion) is clipped like negative PV;
+        # a non-finite value cannot be repaired and fails the cycle.
+        if self._reject_invalid_load(p_load_forecast):
+            return False
+        negative = p_load_forecast < 0
+        if negative.any():
+            self.logger.warning(
+                "Load forecast contained %d negative value(s); minimum=%g W, first at %s. "
+                "Values were clipped to 0 W before optimization.",
+                int(negative.sum()),
+                p_load_forecast.min(),
+                negative.idxmax(),
+            )
+            p_load_forecast = p_load_forecast.clip(lower=0)
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast
+
+    def _reject_invalid_load(self, p_load_forecast: pd.Series) -> bool:
+        """Log and return True if the load forecast holds a value that is not a finite real number."""
+        invalid = describe_invalid_forecast_value("P_Load", p_load_forecast.items())
+        if invalid is None:
+            return False
+        self.logger.error("Load forecast rejected before optimization: %s", invalid)
+        return True
 
     def get_load_cost_forecast(
         self,
@@ -2467,8 +2501,9 @@ class Forecast:
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
-            # Check if the passed data has the correct length
-            if (
+            # Check if the passed data has the correct length. None means the
+            # runtime value was rejected (#1135): fail rather than crash.
+            if data_list is None or (
                 len(data_list) < len(self.forecast_dates)
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
@@ -2544,8 +2579,9 @@ class Forecast:
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
-            # Check if the passed data has the correct length
-            if (
+            # Check if the passed data has the correct length. None means the
+            # runtime value was rejected (#1135): fail rather than crash.
+            if data_list is None or (
                 len(data_list) < len(self.forecast_dates)
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
