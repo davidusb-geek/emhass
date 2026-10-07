@@ -2629,8 +2629,12 @@ class Optimization:
                 penalty = self.optim_conf["set_deferrable_startup_penalty"][k]
                 if penalty > 0:
                     nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    # Vectorized cost calculation for this load's startups
-                    startup_cost_vector = cp.multiply(p_def_start[k], unit_load_cost)
+                    # Vectorized cost calculation for this load's startups. The
+                    # price is clipped to non-negative (param_load_cost_pos, as
+                    # for battery_first): at a negative price the penalty would
+                    # otherwise reward every start and split a run into
+                    # one-step pieces.
+                    startup_cost_vector = cp.multiply(p_def_start[k], self.param_load_cost_pos)
                     total_startup_cost = cp.sum(startup_cost_vector)
 
                     term = -scale * penalty * nominal_power * total_startup_cost
@@ -4703,6 +4707,10 @@ class Optimization:
                     p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
                 )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
+                # A start also needs the load on: without this upper bound a
+                # negative price turns the startup penalty into a reward for starts
+                # in steps where the load stays off.
+                constraints.append(p_def_start[k] <= p_def_bin2[k])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
