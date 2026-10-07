@@ -3062,6 +3062,36 @@ class TestOptimizationCache(unittest.TestCase):
 
         self.assertNotEqual(key1, key2)
 
+    def test_cache_key_tracks_thermal_source_block(self):
+        """A thermal_source block (shared-tank source) must be hashed into the
+        cache key: its fields (max_supply_temperature, COP parameters) are baked
+        into the problem at build time, so any change must force a rebuild."""
+
+        def key_for(thermal_source):
+            conf = self.optim_conf.copy()
+            conf["def_load_config"] = [
+                {"thermal_source": thermal_source},
+                {"thermal_source": {"efficiency": 1.0}},
+            ]
+            return OptimizationCache._compute_cache_key(
+                conf, self.plant_conf, self.costfun, self.retrieve_hass_conf
+            )
+
+        base = {"supply_temperature": 55.0, "carnot_efficiency": 0.40}
+        key_no_cap = key_for(dict(base))
+        key_cap_53 = key_for({**base, "max_supply_temperature": 53.0})
+        key_cap_46 = key_for({**base, "max_supply_temperature": 46.0})
+        key_cap_list = key_for({**base, "max_supply_temperature": [53.0, 53.0, 46.0, 46.0]})
+
+        # Adding, changing (scalar) or changing (per-step list) the cap must all
+        # produce distinct keys; identical config must reproduce the same key.
+        self.assertNotEqual(key_no_cap, key_cap_53)
+        self.assertNotEqual(key_cap_53, key_cap_46)
+        self.assertNotEqual(key_cap_53, key_cap_list)
+        self.assertEqual(key_cap_53, key_for({**base, "max_supply_temperature": 53.0}))
+        # COP parameters are baked in too - changing them must also miss the cache.
+        self.assertNotEqual(key_no_cap, key_for({**base, "carnot_efficiency": 0.35}))
+
     def test_cache_key_different_for_multi_component_capacity_charge(self):
         """Issue #540 Part B: capacity_cost_per_kw as a LIST (K independent
         capacity/demand components) changes the mathematical structure - K

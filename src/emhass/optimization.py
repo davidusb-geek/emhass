@@ -93,6 +93,13 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 # whenever that is possible, while a contradictory target relaxes to the closest
 # reachable SoC instead of returning infeasible.
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+# Default big-M (deg C) for the per-source max_supply_temperature gate on
+# shared thermal tanks. When allow_k = 0 the gate must leave the tank
+# temperature unconstrained, so M must be at least (highest feasible tank
+# temperature - lowest source cap). 100 covers domestic hot-water tanks; the
+# gate widens it per tank when a configured max_temperatures says the tank can
+# run hotter (e.g. industrial or glycol systems).
+SHARED_TANK_CAP_BIG_M_TEMP = 100.0
 
 
 class Optimization:
@@ -2622,8 +2629,12 @@ class Optimization:
                 penalty = self.optim_conf["set_deferrable_startup_penalty"][k]
                 if penalty > 0:
                     nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    # Vectorized cost calculation for this load's startups
-                    startup_cost_vector = cp.multiply(p_def_start[k], unit_load_cost)
+                    # Vectorized cost calculation for this load's startups. The
+                    # price is clipped to non-negative (param_load_cost_pos, as
+                    # for battery_first): at a negative price the penalty would
+                    # otherwise reward every start and split a run into
+                    # one-step pieces.
+                    startup_cost_vector = cp.multiply(p_def_start[k], self.param_load_cost_pos)
                     total_startup_cost = cp.sum(startup_cost_vector)
 
                     term = -scale * penalty * nominal_power * total_startup_cost
@@ -4189,12 +4200,17 @@ class Optimization:
         # Per-source COP arrays (HP uses Carnot, gas / oil / district use flat
         # efficiency). Resolve each source's conversion factor from its config.
         cop_arrays: list[np.ndarray] = []
+        # Optional per-source temperature ceiling (e.g. a heat pump capped at its
+        # supply temperature). None = no cap (e.g. an electric booster).
+        source_caps: list[float | None] = []
         for k in load_ids:
             src_cfg = self._get_load_source_config(k)
             cops = utils.resolve_thermal_battery_cop(
                 src_cfg, outdoor_temp_arr.tolist(), length=required_len
             )
             cop_arrays.append(np.asarray(cops))
+            # scalar, per-step list, or None (uncapped)
+            source_caps.append(src_cfg.get("max_supply_temperature"))
 
         # Comfort sense (heat vs cool). The compiler propagates the destination
         # storage's comfort_sense onto tank["sense"]; default to heat for legacy
@@ -4240,6 +4256,62 @@ class Optimization:
         if max_idx:
             max_vals = np.array([max_temperatures_list[i] for i in max_idx])
             constraints.append(predicted_temp[max_idx] <= max_vals)
+
+        # Per-source temperature ceiling. A source with `max_supply_temperature`
+        # (e.g. a heat pump that cannot raise water above its supply/condenser
+        # temperature) may only inject heat while the tank is at or below that
+        # ceiling; a source without a cap (e.g. an electric booster) can drive the
+        # tank up to the tank's own max_temperatures. Big-M gate: allow_k[t] == 1
+        # permits source k at step t, and is only allowed while temp[t] <= cap.
+        # The gate is a physical limit, so it is kept (booleans included) in the
+        # relaxed-LP fallback rebuild too - same treatment as the tank's hard
+        # min/max temperatures; the fallback must not publish a plan the
+        # hardware cannot execute.
+        finite_max_temps = [v for v in max_temperatures_list if v is not None]
+        tank_temp_ub = max(finite_max_temps) if finite_max_temps else None
+        # The ceiling is a heating limit: on a cooling storage the gate would keep
+        # a capped source off exactly while the storage is warm and needs cooling.
+        if tank_sense == "cool" and any(cap is not None for cap in source_caps):
+            self.logger.warning(
+                "Shared tank %s cools: max_supply_temperature is a heating ceiling "
+                "and is ignored for its sources.",
+                tank_id,
+            )
+            source_caps = [None] * len(source_caps)
+        for k, cap in zip(load_ids, source_caps):
+            if cap is None:
+                continue
+            # cap may be a scalar or a per-step list (e.g. a weather-dependent
+            # supply temperature). Broadcast / pad to the horizon length.
+            if isinstance(cap, list | tuple | np.ndarray):
+                cap_list = [float(x) for x in cap]
+                if len(cap_list) < required_len:
+                    cap_list += [cap_list[-1]] * (required_len - len(cap_list))
+                cap_arr = np.array(cap_list[:required_len])
+            else:
+                cap_arr = np.full(required_len, float(cap))
+            # M must dominate (max feasible tank temperature - cap), otherwise
+            # allow_k = 0 would wrongly bound the tank temperature itself.
+            # The start temperature counts too: index 0 is never bounded by the
+            # tank's own maximum, so it can sit above every configured limit.
+            big_m_temp = SHARED_TANK_CAP_BIG_M_TEMP
+            temp_ub = max(v for v in (tank_temp_ub, float(start_temperature)) if v is not None)
+            big_m_temp = max(big_m_temp, temp_ub - float(cap_arr.min()))
+            nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+            if isinstance(nominal_k, list | np.ndarray):
+                nominal_k = max(nominal_k)
+            allow_k = cp.Variable(required_len, boolean=True, name=f"src_below_cap_{tank_id}_{k}")
+            p_k = self.vars["p_deferrable"][k]
+            # A capped source may only inject heat at step t when the tank stays at or
+            # below its ceiling BOTH at the start of the step (it cannot heat water
+            # already hotter than its supply temperature) AND at t+1 (it must not push
+            # the tank past the cap). Both ends are held to step t's ceiling: the heat
+            # of step t is delivered under cap[t], even when cap[t+1] is higher.
+            # allow_k[t] == 0 forces p_k[t] == 0; an uncapped source (e.g. an
+            # electric booster) has no such gate and can go higher.
+            constraints.append(predicted_temp - cap_arr <= big_m_temp * (1 - allow_k))
+            constraints.append(predicted_temp[1:] - cap_arr[:-1] <= big_m_temp * (1 - allow_k[:-1]))
+            constraints.append(p_k <= nominal_k * allow_k)
 
         # Soft comfort constraints (overshoot/desired/penalty) — same pattern as the
         # per-load thermal_battery path. Without this the hard min/max are the ONLY
@@ -4635,6 +4707,10 @@ class Optimization:
                     p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
                 )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
+                # A start also needs the load on: without this upper bound a
+                # negative price turns the startup penalty into a reward for starts
+                # in steps where the load stays off.
+                constraints.append(p_def_start[k] <= p_def_bin2[k])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
@@ -5740,6 +5816,11 @@ class Optimization:
             #      to honour the tail of an in-progress min-on window (issue #952).
             # When both apply to the same k, take the ELEMENTWISE MAX (OR) of the two
             # masks -- the stricter force wins, and neither overwrites the other.
+            # Shared-tank members are exempt from the single-constant pin (A): they are
+            # temperature-driven, and pinning a capped source ON while the tank starts
+            # above its max_supply_temperature would contradict the cap gate
+            # (p[0] >= min_power vs p[0] == 0) and force the relaxed-LP fallback,
+            # silently dropping single_constant for every load.
             if k < len(self.param_running_lb):
                 current_state = (
                     self.param_def_current_state[k].value > 0.5
@@ -5755,6 +5836,7 @@ class Optimization:
                     and constraint_active
                     and required_timesteps > 0
                     and k not in window_empty_loads
+                    and k not in shared_tank_membership
                 ):
                     # Re-derive the configured window end so we respect def_end_timestep.
                     if def_total_timestep and def_total_timestep[k] > 0:
@@ -5972,14 +6054,13 @@ class Optimization:
         # Thermal loads (thermal_config, thermal_battery, and shared-tank sources) are
         # always active since they're driven by temperature constraints, not operating
         # timesteps. Shared-tank members already skip the energy/operating constraints
-        # above (is_thermal_battery), so they must not be deactivated here either —
-        # otherwise a member with operating_hours == 0 (the natural setting for a
-        # temperature-driven source) is pinned to 0 W, the tank cannot hold its
-        # min_temperatures band, and the problem goes infeasible. Sequence loads
-        # (list-valued nominal power) are likewise always active: their runtime is the
-        # length of the sequence and operating_hours is meaningless for them, so a value
-        # of 0 must not deactivate the load (issue #887). The energy constraint already
-        # exempts sequence loads, so this keeps param_load_active consistent with it.
+        # above (is_thermal_battery), so they must not be deactivated here either.
+        # Sequence loads (list-valued nominal power) are likewise always active: their
+        # runtime is the length of the sequence and operating_hours is meaningless for
+        # them, so a value of 0 must not deactivate the load (issue #887). The energy
+        # constraint already exempts sequence loads, so this keeps param_load_active
+        # consistent with it. (shared_tank_membership computed above, before the
+        # energy-parameter loop.)
         nominal_powers = self.optim_conf["nominal_power_of_deferrable_loads"]
         for k in range(min(num_deferrable_loads, len(self.param_load_active))):
             is_thermal = k in self.param_thermal or k in shared_tank_membership
