@@ -994,6 +994,11 @@ def compile_heat_topology(topology: dict) -> dict:
     for gi, g in enumerate(groups):
         names = []
         for flow_pair in g.get("flows", []):
+            if not isinstance(flow_pair, list | tuple) or len(flow_pair) != 2:
+                raise ValueError(
+                    f"heat_topology.actuator_groups[{gi}].flows entries must be "
+                    f"[source_id, storage_id] pairs, got {flow_pair!r}"
+                )
             key = (flow_pair[0], flow_pair[1])
             if key not in flow_to_load_idx:
                 raise ValueError(

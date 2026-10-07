@@ -447,6 +447,18 @@ async def parameter_set():
     # run: the compiler's ValueError names the offending field, so surface it
     # in the UI alert now rather than failing an unattended run later.
     heat_topology = request_data.get("heat_topology")
+    # An empty text box arrives as null, "", "null" or {} and means "no
+    # topology". Anything else that is not an object (a list, a JSON topology
+    # quoted as a string) would be saved and then silently ignored at run time.
+    if heat_topology not in (None, "", "null") and not isinstance(heat_topology, dict):
+        app.logger.warning("Rejected config save: heat_topology is not an object")
+        return await make_response(
+            [
+                "heat_topology is invalid: it must be a JSON object, got "
+                f"{type(heat_topology).__name__}"
+            ],
+            400,
+        )
     if isinstance(heat_topology, dict) and heat_topology:
         try:
             compile_heat_topology(heat_topology)
