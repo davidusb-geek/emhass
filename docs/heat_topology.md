@@ -21,8 +21,11 @@ Set `heat_topology` in `optim_conf` for a static configuration, or pass it as a
 top-level runtime parameter to an optimization endpoint. Runtime parameters
 take precedence over the static configuration.
 
-In the add-on configuration page, the field is an object input. Paste valid
-JSON, not a quoted JSON string. For example, the Python configuration below
+In the add-on configuration page, the field is a multi-line text box. Paste
+valid JSON, not a quoted JSON string. When you save, EMHASS compiles the
+topology first: an invalid topology is not saved, and the alert names the
+offending field (for example
+`flows[2].from=ghost_source does not match any source.id`). For example, the Python configuration below
 can be converted to JSON with:
 
 ```python
