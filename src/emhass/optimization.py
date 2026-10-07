@@ -2853,51 +2853,58 @@ class Optimization:
         constraints.append(-p_grid_neg <= cp.multiply(max_power_to_grid_arr, (1 - D)))
 
     def _inverter_power_curve(self, parameter_name: str, direction: str):
-        """Return the validated (dc_points, ac_points) of one inverter curve, or None.
+        """Return the validated (ac_points, dc_points) of one inverter curve, or None.
 
-        None (empty/absent parameter) means the scalar efficiency of that direction
-        applies. A malformed curve raises ValueError naming the parameter: it is a
-        physical model, so silently falling back to the scalar would hide the error.
+        None (absent parameter or explicit empty list) means the scalar efficiency of
+        that direction applies. Any other value is validated and a malformed one raises
+        ValueError naming the parameter: it is a physical model, so silently falling
+        back to the scalar would hide the error.
         """
-        raw = self.plant_conf.get(parameter_name)
-        if not raw:
+        raw = self.plant_conf.get(parameter_name, [])
+        if utils.inverter_power_curve_is_unset(raw):
             return None
         points = utils.validate_inverter_power_curve(raw, parameter_name, direction)
         return [p[0] for p in points], [p[1] for p in points]
 
     def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
-        """Exact piecewise-linear transfer ac = f(dc) by the incremental method.
+        """Exact piecewise-linear transfer dc = f(ac) by the incremental method.
 
-        Segment k (k = 0..K-1) has width w_k = dc_{k+1} - dc_k and slope
-        s_k = (ac_{k+1} - ac_k) / w_k. With fill fractions u_k in [0, 1]:
+        The curve is indexed on the AC side, the power the user commands and
+        measures; ``dc_var`` (p_dc_ac or p_ac_dc) is the DC-bus flow it implies.
+        Segment k (k = 0..K-1) has width w_k = ac_{k+1} - ac_k and slope
+        s_k = (dc_{k+1} - dc_k) / w_k. With fill fractions u_k in [0, 1]:
 
-            dc = sum_k w_k u_k          ac = sum_k s_k w_k u_k
+            ac = sum_k w_k u_k          dc = sum_k s_k w_k u_k
 
         and K-1 binaries b_k force the segments to fill in order
-        (u_{k+1} <= b_k <= u_k), so ac is exactly f(dc) on every timestep, convex
-        or not. ``gate`` (the existing is_dc_sourcing direction binary, or its
-        complement) bounds the first segment, so no extra on/off binary is needed
-        and the direction cannot be active together with the opposite one. The
-        curve's last DC point is the supported power domain: no extrapolation.
-        Returns the AC-side power expression.
+        (u_{k+1} <= b_k <= u_k), so dc is exactly f(ac) on every timestep, convex
+        or not, and a flat segment (zero DC for positive AC) is just s_k = 0. The AC
+        power is an expression of the fill fractions, not a free variable, so every
+        watt of AC is accounted for. ``gate`` (the existing is_dc_sourcing direction
+        binary, or its complement) bounds the first segment, so no extra on/off
+        binary is needed and the direction cannot be active together with the
+        opposite one. The curve's last AC point is the supported power domain: no
+        extrapolation. Returns the AC-side power expression.
         """
-        dc_pts, ac_pts = curve
+        ac_pts, dc_pts = curve
         n = self.num_timesteps
-        n_seg = len(dc_pts) - 1
-        widths = [dc_pts[k + 1] - dc_pts[k] for k in range(n_seg)]
-        slopes = [(ac_pts[k + 1] - ac_pts[k]) / widths[k] for k in range(n_seg)]
+        n_seg = len(ac_pts) - 1
+        widths = [ac_pts[k + 1] - ac_pts[k] for k in range(n_seg)]
+        slopes = [(dc_pts[k + 1] - dc_pts[k]) / widths[k] for k in range(n_seg)]
         u = [cp.Variable(n, nonneg=True, name=f"{name}_u{k}") for k in range(n_seg)]
         b = [cp.Variable(n, boolean=True, name=f"{name}_b{k}") for k in range(n_seg - 1)]
         for u_k in u:
             constraints.append(u_k <= 1)
-        constraints.append(dc_var == sum(w * u_k for w, u_k in zip(widths, u, strict=True)))
+        constraints.append(
+            dc_var == sum((s * w) * u_k for s, w, u_k in zip(slopes, widths, u, strict=True))
+        )
         constraints.append(u[0] <= gate)
         for k in range(n_seg - 1):
             constraints.append(u[k + 1] <= b[k])
             constraints.append(b[k] <= u[k])
         self.vars[f"{name}_u"] = u
         self.vars[f"{name}_b"] = b
-        return sum((s * w) * u_k for s, w, u_k in zip(slopes, widths, u, strict=True))
+        return sum(w * u_k for w, u_k in zip(widths, u, strict=True))
 
     def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
         """Add constraints specific to hybrid inverters (Vectorized)."""
@@ -2952,11 +2959,17 @@ class Optimization:
         if p_nom_inverter_input is None:
             p_nom_inverter_input = p_nom_inverter_output
 
-        eff_dc_ac = self.plant_conf.get("inverter_efficiency_dc_ac", 1.0)
-        eff_ac_dc = self.plant_conf.get("inverter_efficiency_ac_dc", 1.0)
-
-        p_dc_ac_max = p_nom_inverter_output / eff_dc_ac
-        p_ac_dc_max = p_nom_inverter_input * eff_ac_dc
+        # Optional exact piecewise-linear AC<->DC transfer curves (issue #746). A
+        # direction with a curve ignores its scalar efficiency entirely, so the scalar
+        # (and any limit derived from it) is only read for a scalar direction.
+        curve_dc_ac = self._inverter_power_curve("inverter_power_curve_dc_ac", "dc_ac")
+        curve_ac_dc = self._inverter_power_curve("inverter_power_curve_ac_dc", "ac_dc")
+        if curve_dc_ac is None:
+            eff_dc_ac = self.plant_conf.get("inverter_efficiency_dc_ac", 1.0)
+            p_dc_ac_max = p_nom_inverter_output / eff_dc_ac
+        if curve_ac_dc is None:
+            eff_ac_dc = self.plant_conf.get("inverter_efficiency_ac_dc", 1.0)
+            p_ac_dc_max = p_nom_inverter_input * eff_ac_dc
 
         n = self.num_timesteps
 
@@ -2982,14 +2995,13 @@ class Optimization:
 
         constraints.append(e_dc_balance == 0)
 
-        # Optional exact piecewise-linear AC<->DC transfer curves (issue #746).
         # An empty/absent curve keeps the scalar efficiency of that direction, so
         # with both curves absent the expressions and constraints below are exactly
-        # the legacy ones. A curve is an EQUALITY between the DC-side variable
-        # (p_dc_ac / p_ac_dc) and the AC-side power: never an inequality, which
-        # would let the solver import extra AC for free at negative prices.
-        curve_dc_ac = self._inverter_power_curve("inverter_power_curve_dc_ac", "dc_ac")
-        curve_ac_dc = self._inverter_power_curve("inverter_power_curve_ac_dc", "ac_dc")
+        # the legacy ones. A curve is an EQUALITY between the AC-side power and the
+        # DC-side variable (p_dc_ac / p_ac_dc): never an inequality, which would let
+        # the solver import extra AC that no DC power accounts for. A genuine
+        # dead zone (AC input that reaches the DC bus as 0 W, e.g. 50 W -> 0 W) is a
+        # flat segment of that equality: the AC is consumed as inverter losses.
         if curve_dc_ac is None:
             ac_out = p_dc_ac * eff_dc_ac
         else:
@@ -3008,7 +3020,7 @@ class Optimization:
         constraints.append(p_hybrid_inverter == ac_out - ac_in)
 
         # Enforce Binary Logic (Cannot source and sink DC simultaneously).
-        # A curved direction is limited on its AC side (the curve's own DC range
+        # A curved direction is limited on its AC side (the curve's last AC point
         # is enforced by the transfer segments); a scalar direction keeps the
         # legacy DC-side bound.
         if curve_ac_dc is None:
