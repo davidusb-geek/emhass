@@ -867,7 +867,8 @@ def compile_heat_topology(topology: dict) -> dict:
         # static list is checked here; a min_temperature_curve resolves against
         # weather at solve time.
         feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
-        if feeding_caps and all(c is not None for c in feeding_caps):
+        is_cooling = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+        if not is_cooling and feeding_caps and all(c is not None for c in feeding_caps):
             for t, min_val in enumerate(tank["min_temperatures"]):
                 if min_val is None:
                     continue

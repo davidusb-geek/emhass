@@ -3911,8 +3911,17 @@ class TestCompileHeatTopology(unittest.TestCase):
         tank (it can serve the band above the heat pump's ceiling)."""
         topo = self._hp_booster_topo(53.0)
         topo["storage"][0]["min_temperature"] = [45.0, 45.0, 60.0, 45.0]
-        out = utils.compile_heat_topology(topo)  # must not raise
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            out = utils.compile_heat_topology(topo)
         self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
+
+    def test_min_temperatures_above_cap_ok_on_a_cooling_storage(self):
+        """The ceiling is a heating limit, so a cooling storage is not checked
+        against it: no warning for a minimum above the cap."""
+        topo = self._capped_hp_only_topo(53.0, [45.0, 45.0, 60.0, 45.0])
+        topo["storage"][0]["comfort_sense"] = "cool"
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            utils.compile_heat_topology(topo)
 
     def test_min_temperatures_vs_padded_per_step_cap(self):
         """The ceiling check pads a short per-step cap with its last value, and
@@ -3923,8 +3932,11 @@ class TestCompileHeatTopology(unittest.TestCase):
                 self._capped_hp_only_topo([53.0, 46.0], [45.0, 45.0, 45.0, 50.0])
             )
         self.assertTrue(any("min_temperatures[3]" in m for m in logs.output))
-        # min == ceiling everywhere is reachable -> compiles.
-        out = utils.compile_heat_topology(self._capped_hp_only_topo(53.0, [53.0, 53.0, 53.0, 53.0]))
+        # min == ceiling everywhere is reachable -> compiles without a warning.
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            out = utils.compile_heat_topology(
+                self._capped_hp_only_topo(53.0, [53.0, 53.0, 53.0, 53.0])
+            )
         self.assertEqual(len(out["shared_thermal_tanks"]), 1)
 
     def test_actuator_group_emits_deferrable_group(self):
