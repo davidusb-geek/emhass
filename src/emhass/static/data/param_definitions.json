@@ -862,10 +862,10 @@
       "requires": {
         "set_use_battery": true
     }
-    }
+    },
     "battery_soc_final_reward_factor": {
       "friendly_name": "Battery SOC final reward factor",
-      "Description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both direction.",
+      "Description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both directions.",
       "input": "float",
       "default_value": 0.0,
       "unit": "fraction",

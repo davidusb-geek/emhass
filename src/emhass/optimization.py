@@ -5377,7 +5377,7 @@ class Optimization:
         # with more energy is rewarded by the purchase cost of the
         # excess final energy multiplied by the reward factor. If not
         # defined, the same penalty applies.
-        reward_factor = self.optim_conf.get("battery_soc_final_reward_factor")
+        reward_factor = self.optim_conf.get("battery_soc_final_reward_factor", 0.0)
         if reward_factor > 0.0:
             self.param_soc_final_reward.value = (
                 0.001

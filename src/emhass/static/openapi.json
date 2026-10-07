@@ -1143,11 +1143,11 @@
             "title": "Battery SOC surplus cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
-	  "battery_final_soc_reward_factor": {
-	    "type": "float",
+	  "battery_soc_final_reward_factor": {
+	    "type": "number",
 	    "default": 0.0,
       	    "title": "Battery final SOC reward factor",
-      	    "description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both direction."
+      	    "description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both directions."
     	  },
           "capacity_cost_per_kw": {
             "type": "array",
