@@ -562,6 +562,14 @@ def compile_heat_topology(topology: dict) -> dict:
     groups = topology.get("actuator_groups", []) or []
     cost_tracks = topology.get("cost_tracks", {}) or {}
 
+    # Validate ids up front so a malformed entry raises the documented
+    # ValueError naming the offending field, not an internal KeyError (the
+    # documented contract: an invalid topology raises ValueError).
+    for kind, entries in (("sources", sources), ("storage", storage)):
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict) or entry.get("id") in (None, ""):
+                raise ValueError(f"heat_topology.{kind}[{i}] is missing the required 'id' field")
+
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
     sto_by_id = {s["id"]: s for s in storage}
@@ -654,6 +662,10 @@ def compile_heat_topology(topology: dict) -> dict:
                 )
             source_block["carnot_efficiency"] = float(src.get("carnot_efficiency", 0.4))
         elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
+            if src.get("efficiency") is None:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}] (type={src_type}) requires 'efficiency'"
+                )
             source_block["efficiency"] = float(src["efficiency"])
         else:
             raise ValueError(
@@ -686,12 +698,14 @@ def compile_heat_topology(topology: dict) -> dict:
 
     # Aggregate consumer demand onto storage
     storage_demand: dict[str, dict] = {}
-    for c in consumers:
+    for ci, c in enumerate(consumers):
         target = c["target"]
         if target not in storage_demand:
             storage_demand[target] = {"profile": None, "building": None, "pool": None}
         ctype = (c.get("type") or "").lower()
         if ctype == "profile":
+            if c.get("profile") is None:
+                raise ValueError(f"heat_topology.consumers[{ci}] (type=profile) requires 'profile'")
             prof = list(c["profile"])
             existing = storage_demand[target]["profile"]
             if existing is None:

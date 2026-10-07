@@ -1939,6 +1939,28 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(res, pd.DataFrame)
         self.assertEqual(res.index.tz, time_zone)
 
+    async def test_compile_heat_topology_missing_fields_raise_valueerror(self):
+        """Missing required fields must raise ValueError naming the field, not a
+        bare KeyError: the documented contract is that an invalid topology
+        raises ValueError."""
+        no_efficiency = {
+            "sources": [{"id": "gas", "type": "gas", "nominal_power": 20000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [{"from": "gas", "to": "dhw"}],
+        }
+        with self.assertRaises(ValueError) as cm:
+            utils.compile_heat_topology(no_efficiency)
+        self.assertIn("efficiency", str(cm.exception))
+        no_profile = {
+            "sources": [{"id": "gas", "type": "gas", "efficiency": 0.9, "nominal_power": 20000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [{"from": "gas", "to": "dhw"}],
+            "consumers": [{"id": "tap", "type": "profile", "target": "dhw"}],
+        }
+        with self.assertRaises(ValueError) as cm:
+            utils.compile_heat_topology(no_profile)
+        self.assertIn("profile", str(cm.exception))
+
 
 class TestHeatingDemand(unittest.TestCase):
     def test_calculate_heating_demand_basic(self):
@@ -4265,6 +4287,48 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_compile_heat_topology_rejects_empty_dict(self):
         """Empty dict must return {} without raising."""
         self.assertEqual(utils.compile_heat_topology({}), {})
+
+    def test_integer_id_zero_is_a_valid_id(self):
+        """An id of 0 is a valid id, not a missing one."""
+        topo = {
+            "sources": [{"id": 0, "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": 0, "to": "dhw"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        self.assertEqual(compiled["number_of_deferrable_loads"], 1)
+
+    def test_missing_id_raises_value_error_with_field_path(self):
+        """A source/storage entry without an `id` must raise the documented
+        ValueError naming the offending field, not an internal KeyError: the
+        documented contract is that an invalid topology raises ValueError."""
+        no_source_id = {
+            "sources": [{"type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_source_id)
+        self.assertIn("sources[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
+
+        no_storage_id = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_storage_id)
+        self.assertIn("storage[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
 
 
 class TestRuntimeBanner(unittest.TestCase):
