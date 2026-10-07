@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import csv
+import itertools
 import logging
 import math
 import os
@@ -4490,40 +4491,80 @@ def _charge_derating_fault(table: list[list[float]]) -> str | None:
     return None
 
 
+# Hard cap on the points of one inverter curve. The MILP carries P-1 timestep-sized
+# binaries per curved direction, so the solve time grows with the point count; a
+# datasheet efficiency table has 5-12 points, so this leaves ample headroom while
+# stopping an oversized (accidental or hostile) curve before any variable exists.
+INVERTER_CURVE_MAX_POINTS = 20
+
+
+def _finite_curve_number(value, parameter_name: str, position: int, name: str) -> float:
+    """Return value as a finite float, or raise ValueError (never OverflowError)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
+        )
+    try:
+        number = float(value)
+    except OverflowError:  # an int too large for a float
+        number = math.inf
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a finite number"
+        )
+    return number
+
+
+def inverter_power_curve_is_unset(curve) -> bool:
+    """True only for the explicit empty list, the default that keeps the scalar efficiency.
+
+    Every other value (None, False, 0, "", () ...) is a supplied curve and must be
+    validated: treating falsey values as "unset" would silently swap the physical model.
+    """
+    return isinstance(curve, list) and not curve
+
+
 def validate_inverter_power_curve(
     curve: list, parameter_name: str, direction: str
 ) -> list[tuple[float, float]]:
     """
     Validate one configured inverter efficiency curve and return internal
-    (dc_w, ac_w) transfer points (#746).
+    (ac_w, dc_w) transfer points (#746).
 
-    Public configuration uses [dc_power_w, efficiency] points. Efficiency is
-    a fraction, so 97% is 0.97. The zero-power transfer origin is inserted
-    internally; users do not provide an efficiency at 0 W.
+    Public configuration uses [ac_power_w, efficiency] points, indexed on the AC
+    side, which is where inverters and AC-coupled batteries are commanded and
+    measured. Efficiency is a fraction, so 97% is 0.97. The zero-power transfer
+    origin is inserted internally; users do not provide an efficiency at 0 W.
 
-    DC-to-AC accepts 0 <= efficiency <= 1, including measured zero-efficiency
-    low-power points. AC-to-DC uses DC output as the power coordinate, so its
-    efficiency must be > 0: zero efficiency at positive DC output would require
-    infinite AC input and is outside this transfer-function model.
+    - ``dc_ac`` (discharge): ``[ac_output_power_w, efficiency]``, with
+      ``dc_input = ac_output / efficiency``. Delivering positive AC power needs
+      DC power, so efficiency must be > 0.
+    - ``ac_dc`` (charge): ``[ac_input_power_w, efficiency]``, with
+      ``dc_output = ac_input * efficiency``. Fixed losses can consume all of a
+      small AC input, so efficiency may be 0 (for example 50 W AC in -> 0 W DC out).
 
-    The converted AC-side transfer must be non-decreasing. Flat segments are
-    valid, including a DC-to-AC dead zone such as 50 W DC -> 0 W AC.
+    The DC-side transfer must be non-decreasing. Flat segments are valid.
 
-    :param curve: configured [dc_power_w, efficiency] points
+    :param curve: configured [ac_power_w, efficiency] points
     :type curve: list
     :param parameter_name: name used in error messages
     :type parameter_name: str
     :param direction: dc_ac or ac_dc
     :type direction: str
     :raises ValueError: when the curve is unusable
-    :return: internal transfer points as (dc_w, ac_w) tuples
+    :return: internal transfer points as (ac_w, dc_w) tuples
     :rtype: list[tuple[float, float]]
     """
-    dc_name = "dc_input_power_w" if direction == "dc_ac" else "dc_output_power_w"
-    pair = f"[{dc_name}, efficiency]"
+    ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
+    pair = f"[{ac_name}, efficiency]"
     if not isinstance(curve, list | tuple) or len(curve) < 2:
         raise ValueError(
             f"{parameter_name}: must be a list of at least 2 {pair} points, got {curve!r}"
+        )
+    if len(curve) > INVERTER_CURVE_MAX_POINTS:
+        raise ValueError(
+            f"{parameter_name}: has {len(curve)} points, at most {INVERTER_CURVE_MAX_POINTS} "
+            f"are supported (each adds binary variables to every time step)"
         )
 
     configured: list[tuple[float, float]] = []
@@ -4532,63 +4573,59 @@ def validate_inverter_power_curve(
             raise ValueError(
                 f"{parameter_name}: point {position} is {row!r}, expected a {pair} pair"
             )
-        power, efficiency = row
-        for name, value in ((dc_name, power), ("efficiency", efficiency)):
-            if isinstance(value, bool) or not isinstance(value, int | float):
-                raise ValueError(
-                    f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
-                )
-            if not math.isfinite(value):
-                raise ValueError(
-                    f"{parameter_name}: point {position} has {name}={value!r}, "
-                    f"expected a finite number"
-                )
+        power = _finite_curve_number(row[0], parameter_name, position, ac_name)
+        efficiency = _finite_curve_number(row[1], parameter_name, position, "efficiency")
         if power <= 0:
             raise ValueError(
-                f"{parameter_name}: point {position} has {dc_name}={power}, expected a strictly "
-                f"positive DC-side power in watts; the zero-power origin is added internally"
+                f"{parameter_name}: point {position} has {ac_name}={power}, expected a strictly "
+                f"positive AC-side power in watts; the zero-power origin is added internally"
             )
         if efficiency < 0 or efficiency > 1:
             raise ValueError(
                 f"{parameter_name}: point {position} has efficiency={efficiency}, expected "
                 f"0 <= efficiency <= 1 (percentage/100; use 0.97 for 97%)"
             )
-        if direction == "ac_dc" and efficiency == 0:
+        if direction == "dc_ac" and efficiency == 0:
             raise ValueError(
-                f"{parameter_name}: point {position} has efficiency=0 at positive {dc_name}; "
-                f"AC-to-DC uses DC output as the power coordinate, so zero efficiency would "
-                f"require infinite AC input and cannot be represented by this curve"
+                f"{parameter_name}: point {position} has efficiency=0 at positive {ac_name}; "
+                f"DC-to-AC delivers AC output, so zero efficiency would require infinite DC "
+                f"input and cannot be represented by this curve"
             )
-        configured.append((float(power), float(efficiency)))
+        configured.append((power, efficiency))
 
     for position in range(2, len(configured) + 1):
         previous_power = configured[position - 2][0]
         power = configured[position - 1][0]
         if power <= previous_power:
             raise ValueError(
-                f"{parameter_name}: point {position} has {dc_name}={power}, which does not "
-                f"exceed the {previous_power} before it: points must ascend strictly by {dc_name}"
+                f"{parameter_name}: point {position} has {ac_name}={power}, which does not "
+                f"exceed the {previous_power} before it: points must ascend strictly by {ac_name}"
             )
 
     points: list[tuple[float, float]] = [(0.0, 0.0)]
     for power, efficiency in configured:
-        ac_power = power * efficiency if direction == "dc_ac" else power / efficiency
-        if not math.isfinite(ac_power):
+        dc_power = power / efficiency if direction == "dc_ac" else power * efficiency
+        if not math.isfinite(dc_power):
             raise ValueError(
-                f"{parameter_name}: {dc_name}={power} with efficiency={efficiency} converts to a "
-                f"non-finite AC-side power; use a larger efficiency"
+                f"{parameter_name}: {ac_name}={power} with efficiency={efficiency} converts to a "
+                f"non-finite DC-side power; use a larger efficiency"
             )
-        points.append((power, ac_power))
+        points.append((power, dc_power))
 
-    ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
     for position in range(2, len(points)):
-        ac_prev = points[position - 1][1]
-        ac_now = points[position][1]
-        if ac_now < ac_prev - 1e-9 * max(1.0, ac_prev):
+        dc_prev = points[position - 1][1]
+        dc_now = points[position][1]
+        if dc_now < dc_prev - 1e-9 * max(1.0, dc_prev):
             raise ValueError(
-                f"{parameter_name}: point {position} converts to {ac_name}={ac_now}, which is "
-                f"below {ac_prev} from the previous point: the resulting AC-side transfer "
-                f"power must be non-decreasing"
+                f"{parameter_name}: point {position} converts to DC-side power {dc_now}, which "
+                f"is below {dc_prev} from the previous point: the DC-side transfer power must "
+                f"be non-decreasing"
+            )
+    for (ac_a, dc_a), (ac_b, dc_b) in itertools.pairwise(points):
+        if not math.isfinite((dc_b - dc_a) / (ac_b - ac_a)):
+            raise ValueError(
+                f"{parameter_name}: points around {ac_name}={ac_b} are too close together "
+                f"to form a finite segment slope"
             )
     return points
 
@@ -4604,9 +4641,10 @@ def inverter_power_curve_faults(config: dict) -> list[str]:
     Return one message per unusable inverter power curve in an explicit save request (#746).
 
     Used by ``/set-config`` before anything is written, so a curve the user typed is
-    rejected with its reason instead of being silently dropped. Empty or absent
-    curves are fine; the hybrid flag is not checked, since a valid curve may be kept
-    while ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
+    rejected with its reason instead of being silently dropped. An absent parameter or
+    an explicit empty list is fine (scalar efficiency); any other value is validated.
+    The hybrid flag is not checked, since a valid curve may be kept while
+    ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
 
     :param config: the submitted flat configuration
     :type config: dict
@@ -4615,8 +4653,8 @@ def inverter_power_curve_faults(config: dict) -> list[str]:
     """
     faults = []
     for parameter_name, direction, *_ in _INVERTER_CURVE_PARAMS:
-        curve = config.get(parameter_name)
-        if not curve:
+        curve = config.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
             continue
         try:
             validate_inverter_power_curve(curve, parameter_name, direction)
@@ -4635,10 +4673,10 @@ def check_inverter_power_curves(
     """
     Validate the optional inverter power-dependent efficiency curves of a plant_conf (#746).
 
-    Absent or empty curves are the default and leave the scalar
+    An absent parameter or an explicit empty list is the default and leaves the scalar
     ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
-    A configured [dc_power_w, efficiency] curve is validated and converted to internal
-    transfer points (see :func:`validate_inverter_power_curve`).
+    Any other value is a configured [ac_power_w, efficiency] curve: it is validated and
+    converted to internal transfer points (see :func:`validate_inverter_power_curve`).
 
     Two contracts, chosen by the caller:
 
@@ -4668,8 +4706,8 @@ def check_inverter_power_curves(
     """
     hybrid = plant_conf.get("inverter_is_hybrid", False)
     for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
-        curve = plant_conf.get(parameter_name)
-        if not curve:
+        curve = plant_conf.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
             continue
         try:
             points = validate_inverter_power_curve(curve, parameter_name, direction)
@@ -4696,9 +4734,9 @@ def check_inverter_power_curves(
             )
             continue
         limit = plant_conf.get(limit_name)
-        if isinstance(limit, int | float) and points[-1][1] < limit:
+        if isinstance(limit, int | float) and points[-1][0] < limit:
             logger.warning(
-                f"{parameter_name}: the curve ends at {points[-1][1]} W on the AC side, below "
+                f"{parameter_name}: the curve ends at {points[-1][0]} W on the AC side, below "
                 f"{limit_name}={limit} W. The curve's last point is the supported power "
                 f"domain, so the optimizer will not plan beyond it."
             )

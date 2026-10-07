@@ -90,7 +90,7 @@ test('existing empty per-load cost input is not rewritten by battery-specific pa
 
 // Generic contract for every static nested numeric-table parameter.
 const curveNames = ['inverter_power_curve_dc_ac', 'inverter_power_curve_ac_dc'];
-const curve = [[50, 0], [1000, 0.7], [5000, 0.9]]; // [dc_power_w, efficiency]; 0 % at 50 W is valid
+const curve = [[50, 0], [1000, 0.7], [5000, 0.9]]; // [ac_power_w, efficiency]; 0 % charge efficiency at 50 W is valid
 function setupFor(pname, raw) {
   const ctx = setup(raw);
   const input = { type: 'text', value: raw };
