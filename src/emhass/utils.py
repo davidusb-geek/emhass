@@ -4494,45 +4494,46 @@ def validate_inverter_power_curve(
     curve: list, parameter_name: str, direction: str
 ) -> list[tuple[float, float]]:
     """
-    Validate one inverter power-transfer curve and return it as (dc_w, ac_w) tuples (#746).
+    Validate one configured inverter efficiency curve and return internal
+    (dc_w, ac_w) transfer points (#746).
 
-    The curve is a list of [dc_power_w, ac_power_w] points, DC side first, both in watts:
+    Public configuration uses [dc_power_w, efficiency] points. Efficiency is
+    a fraction, so 97% is 0.97. The zero-power transfer origin is inserted
+    internally; users do not provide an efficiency at 0 W.
 
-    - ``direction="dc_ac"``: [dc_input_power_w, ac_output_power_w] (discharge/PV export side)
-    - ``direction="ac_dc"``: [dc_output_power_w, ac_input_power_w] (grid charging side)
+    DC-to-AC accepts 0 <= efficiency <= 1, including measured zero-efficiency
+    low-power points. AC-to-DC uses DC output as the power coordinate, so its
+    efficiency must be > 0: zero efficiency at positive DC output would require
+    infinite AC input and is outside this transfer-function model.
 
-    Rules (each fault names the parameter, the row and the value): at least two
-    points; each point a pair of finite numbers; first point [0, 0] (standby is not
-    part of the curve); DC strictly increasing; AC strictly increasing; no energy
-    gain (``dc_ac``: ac <= dc, ``ac_dc``: ac >= dc).
+    The converted AC-side transfer must be non-decreasing. Flat segments are
+    valid, including a DC-to-AC dead zone such as 50 W DC -> 0 W AC.
 
-    :param curve: the configured curve
+    :param curve: configured [dc_power_w, efficiency] points
     :type curve: list
     :param parameter_name: name used in error messages
     :type parameter_name: str
-    :param direction: "dc_ac" or "ac_dc"
+    :param direction: dc_ac or ac_dc
     :type direction: str
     :raises ValueError: when the curve is unusable
-    :return: validated points as (dc_w, ac_w) tuples
+    :return: internal transfer points as (dc_w, ac_w) tuples
     :rtype: list[tuple[float, float]]
     """
-    labels = {
-        "dc_ac": ("dc_input_power_w", "ac_output_power_w"),
-        "ac_dc": ("dc_output_power_w", "ac_input_power_w"),
-    }
-    dc_name, ac_name = labels[direction]
-    pair = f"[{dc_name}, {ac_name}]"
+    dc_name = "dc_input_power_w" if direction == "dc_ac" else "dc_output_power_w"
+    pair = f"[{dc_name}, efficiency]"
     if not isinstance(curve, list | tuple) or len(curve) < 2:
         raise ValueError(
             f"{parameter_name}: must be a list of at least 2 {pair} points, got {curve!r}"
         )
-    points: list[tuple[float, float]] = []
+
+    configured: list[tuple[float, float]] = []
     for position, row in enumerate(curve, start=1):
         if not isinstance(row, list | tuple) or len(row) != 2:
             raise ValueError(
                 f"{parameter_name}: point {position} is {row!r}, expected a {pair} pair"
             )
-        for name, value in zip((dc_name, ac_name), row, strict=True):
+        power, efficiency = row
+        for name, value in ((dc_name, power), ("efficiency", efficiency)):
             if isinstance(value, bool) or not isinstance(value, int | float):
                 raise ValueError(
                     f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
@@ -4542,40 +4543,47 @@ def validate_inverter_power_curve(
                     f"{parameter_name}: point {position} has {name}={value!r}, "
                     f"expected a finite number"
                 )
-            if value < 0:
-                raise ValueError(
-                    f"{parameter_name}: point {position} has {name}={value}, "
-                    f"expected a non-negative power in watts"
-                )
-        points.append((float(row[0]), float(row[1])))
-    if points[0] != (0.0, 0.0):
-        raise ValueError(
-            f"{parameter_name}: the first point must be [0, 0] (zero power in, zero power "
-            f"out; standby consumption is not part of the curve), got {list(points[0])}"
-        )
-    for position in range(2, len(points) + 1):
-        (dc_prev, ac_prev), (dc_now, ac_now) = points[position - 2], points[position - 1]
-        if dc_now <= dc_prev:
+        if power <= 0:
             raise ValueError(
-                f"{parameter_name}: point {position} has {dc_name}={dc_now}, which does not "
-                f"exceed the {dc_prev} before it: points must ascend strictly by {dc_name}"
+                f"{parameter_name}: point {position} has {dc_name}={power}, expected a strictly "
+                f"positive DC-side power in watts; the zero-power origin is added internally"
             )
-        if ac_now <= ac_prev:
+        if efficiency < 0 or efficiency > 1:
             raise ValueError(
-                f"{parameter_name}: point {position} has {ac_name}={ac_now}, which does not "
-                f"exceed the {ac_prev} before it: {ac_name} must rise strictly with {dc_name}"
+                f"{parameter_name}: point {position} has efficiency={efficiency}, expected "
+                f"0 <= efficiency <= 1 (percentage/100; use 0.97 for 97%)"
             )
-        if direction == "dc_ac" and ac_now > dc_now:
+        if direction == "ac_dc" and efficiency == 0:
             raise ValueError(
-                f"{parameter_name}: point {position} has {ac_name}={ac_now} above "
-                f"{dc_name}={dc_now}: the inverter cannot output more AC power than the DC "
-                f"power it receives"
+                f"{parameter_name}: point {position} has efficiency=0 at positive {dc_name}; "
+                f"AC-to-DC uses DC output as the power coordinate, so zero efficiency would "
+                f"require infinite AC input and cannot be represented by this curve"
             )
-        if direction == "ac_dc" and ac_now < dc_now:
+        configured.append((float(power), float(efficiency)))
+
+    for position in range(2, len(configured) + 1):
+        previous_power = configured[position - 2][0]
+        power = configured[position - 1][0]
+        if power <= previous_power:
             raise ValueError(
-                f"{parameter_name}: point {position} has {ac_name}={ac_now} below "
-                f"{dc_name}={dc_now}: the inverter cannot deliver more DC power than the "
-                f"AC power it absorbs"
+                f"{parameter_name}: point {position} has {dc_name}={power}, which does not "
+                f"exceed the {previous_power} before it: points must ascend strictly by {dc_name}"
+            )
+
+    points: list[tuple[float, float]] = [(0.0, 0.0)]
+    for power, efficiency in configured:
+        ac_power = power * efficiency if direction == "dc_ac" else power / efficiency
+        points.append((power, ac_power))
+
+    ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
+    for position in range(2, len(points)):
+        ac_prev = points[position - 1][1]
+        ac_now = points[position][1]
+        if ac_now < ac_prev:
+            raise ValueError(
+                f"{parameter_name}: point {position} converts to {ac_name}={ac_now}, which is "
+                f"below {ac_prev} from the previous point: the resulting AC-side transfer "
+                f"power must be non-decreasing"
             )
     return points
 
@@ -4620,11 +4628,11 @@ def check_inverter_power_curves(
     supplied: tuple[str, ...] | list[str] = (),
 ) -> None:
     """
-    Validate the optional inverter power-transfer curves of a plant_conf (#746).
+    Validate the optional inverter power-dependent efficiency curves of a plant_conf (#746).
 
     Absent or empty curves are the default and leave the scalar
     ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
-    A configured curve is validated (see :func:`validate_inverter_power_curve`).
+    A configured [dc_power_w, efficiency] curve is validated and converted to internal transfer points (see :func:`validate_inverter_power_curve`).
 
     Two contracts, chosen by the caller:
 
