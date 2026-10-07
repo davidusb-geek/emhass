@@ -49,12 +49,15 @@ logger = logging.getLogger("inverter_curve_test")
 # charge -> (0,0),(1000,1500),(4000,4500); discharge -> (0,0),(1000,700),(5000,4500).
 CHARGE_CURVE = [[1000, 2 / 3], [4000, 8 / 9]]
 DISCHARGE_CURVE = [[1000, 0.7], [5000, 0.9]]
+# Measured 0 % efficiency at 50 W: 50 W DC -> 0 W AC (a flat dead zone), then 700 W AC at 1 kW.
+DEAD_ZONE_CURVE = [[50, 0.0], [1000, 0.7], [5000, 0.9]]
 
 
 def interp(curve, x, direction):
     points = utils.validate_inverter_power_curve(curve, "test_curve", direction)
     pts = np.asarray(points, dtype=float)
     return np.interp(x, pts[:, 0], pts[:, 1])
+
 
 # --------------------------------------------------------------------------- #
 # Config layer
@@ -74,15 +77,19 @@ def test_valid_curves_are_converted_to_internal_transfer_tuples():
 
 
 def test_zero_origin_is_inserted_internally():
-    assert utils.validate_inverter_power_curve(
-        [[1000, 1.0], [5000, 1.0]], DC_AC, "dc_ac"
-    ) == [(0.0, 0.0), (1000.0, 1000.0), (5000.0, 5000.0)]
+    assert utils.validate_inverter_power_curve([[1000, 1.0], [5000, 1.0]], DC_AC, "dc_ac") == [
+        (0.0, 0.0),
+        (1000.0, 1000.0),
+        (5000.0, 5000.0),
+    ]
 
 
 def test_zero_efficiency_above_zero_power_is_valid_for_dc_to_ac():
-    assert utils.validate_inverter_power_curve(
-        [[50, 0.0], [1000, 0.7]], DC_AC, "dc_ac"
-    ) == [(0.0, 0.0), (50.0, 0.0), (1000.0, 700.0)]
+    assert utils.validate_inverter_power_curve([[50, 0.0], [1000, 0.7]], DC_AC, "dc_ac") == [
+        (0.0, 0.0),
+        (50.0, 0.0),
+        (1000.0, 700.0),
+    ]
 
 
 def test_zero_efficiency_above_zero_power_is_not_finite_for_ac_to_dc():
@@ -107,7 +114,9 @@ def test_zero_efficiency_above_zero_power_is_not_finite_for_ac_to_dc():
         ([[1000, 0.9], [800, 0.95]], "dc_ac", "ascend strictly"),
         ([[1000, 0.9], [1000, 0.95]], "dc_ac", "ascend strictly"),
         ([[1000, 0.9], [2000, 0.4]], "dc_ac", "non-decreasing"),
-        ([[1000, 0.5], [2000, 1.0]], "ac_dc", "non-decreasing"),
+        ([[1000, 0.5], [1500, 1.0]], "ac_dc", "non-decreasing"),  # 2000 W then 1500 W AC in
+        ([[1000, 97], [5000, 0.95]], "dc_ac", "use 0.97 for 97%"),  # percentage, not a fraction
+        ([[1000, 1e-320], [5000, 0.95]], "ac_dc", "non-finite"),
     ],
 )
 def test_malformed_curve_is_rejected_with_a_named_reason(curve, direction, expected):
@@ -116,6 +125,27 @@ def test_malformed_curve_is_rejected_with_a_named_reason(curve, direction, expec
     message = str(err.value)
     assert "my_param" in message
     assert expected in message
+
+
+def test_flat_converted_transfer_is_allowed_where_physically_valid():
+    # DC -> AC: 100 W DC -> 50 W AC, 200 W DC -> 50 W AC (efficiency halves as power doubles).
+    assert utils.validate_inverter_power_curve([[100, 0.5], [200, 0.25]], DC_AC, "dc_ac") == [
+        (0.0, 0.0),
+        (100.0, 50.0),
+        (200.0, 50.0),
+    ]
+    # AC -> DC: 100 W DC needs 200 W AC, 200 W DC needs 200 W AC.
+    assert utils.validate_inverter_power_curve([[100, 0.5], [200, 1.0]], AC_DC, "ac_dc") == [
+        (0.0, 0.0),
+        (100.0, 200.0),
+        (200.0, 200.0),
+    ]
+
+
+def test_zero_efficiency_dead_zone_is_valid_in_build_params_for_dc_to_ac():
+    params = _build_params({"inverter_is_hybrid": True, DC_AC: DEAD_ZONE_CURVE})
+    assert params["plant_conf"][DC_AC] == DEAD_ZONE_CURVE
+
 
 def test_absent_and_empty_curves_are_the_legacy_default(caplog):
     for conf in ({}, {DC_AC: [], AC_DC: []}, {DC_AC: None}):
@@ -539,18 +569,22 @@ def test_curve_adds_configured_points_minus_one_binaries_per_timestep():
     assert all(not var.attributes["boolean"] for var in opt.vars["inv_curve_dc_ac_u"])
     assert "inv_curve_ac_dc_b" not in opt.vars
 
+
 def test_flat_curves_equal_the_scalar_efficiencies():
     scalar = {"inverter_efficiency_dc_ac": 0.95, "inverter_efficiency_ac_dc": 0.95}
-    _, res_scalar = _solve(scalar)
+    # Strictly rising import prices: no tied schedules, so the two models must agree step by step.
+    frame = _frame([0.05, 0.06, 0.07, 0.08, 0.60, 0.61, 0.62, 0.63])
+    _, res_scalar = _solve(scalar, frame=frame)
     flat = {
         DC_AC: [[1000, 0.95], [10000, 0.95]],
         AC_DC: [[1000, 0.95], [9500, 0.95]],
     }
-    _, res_curve = _solve(flat)
+    _, res_curve = _solve(flat, frame=frame)
     for column in ("P_hybrid_inverter", "P_batt", "P_grid", "SOC_opt"):
         np.testing.assert_allclose(
             res_curve[column].to_numpy(), res_scalar[column].to_numpy(), atol=1.0
         )
+
 
 def test_two_segment_charge_curve_is_obeyed_exactly():
     opt, res = _solve({AC_DC: CHARGE_CURVE})
@@ -587,7 +621,9 @@ def test_pinned_charge_power_lands_on_the_curve(dc_w):
         soc_final=soc_final,
     )
     assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
-    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(-interp(CHARGE_CURVE, dc_w, "ac_dc"), abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        -interp(CHARGE_CURVE, dc_w, "ac_dc"), abs=1.0
+    )
 
 
 @pytest.mark.parametrize("dc_w", [250, 1000, 3000, 5000])  # interior, breakpoint, interior, end
@@ -602,7 +638,64 @@ def test_pinned_discharge_power_lands_on_the_curve(dc_w):
         soc_final=soc_final,
     )
     assert res["P_batt"].iloc[0] == pytest.approx(dc_w, abs=1.0)
-    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(interp(DISCHARGE_CURVE, dc_w, "dc_ac"), abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        interp(DISCHARGE_CURVE, dc_w, "dc_ac"), abs=1.0
+    )
+
+
+@pytest.mark.parametrize("dc_w", [500, 1000, 3000])  # interior, breakpoint, interior
+def test_dead_zone_discharge_curve_is_obeyed_exactly(dc_w):
+    """A measured 0 % point at 50 W is a flat zero-AC segment of the exact PWL, not a defect."""
+    soc_final = 0.9 - dc_w * 0.5 / CAP
+    _, res = _solve(
+        {DC_AC: DEAD_ZONE_CURVE, "battery_charge_power_max": 0},
+        frame=_frame([0.8] + [0.1] * 7, load=5000.0),
+        soc_init=0.9,
+        soc_final=soc_final,
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(dc_w, abs=1.0)
+    expected = interp(DEAD_ZONE_CURVE, dc_w, "dc_ac")
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(expected, abs=1.0)
+
+
+def test_dead_zone_segment_delivers_zero_ac_when_dc_is_forced_through_it():
+    """Dewi's 0 % at 50 W: DC drawn inside the dead zone produces exactly 0 W AC.
+
+    Capping discharge at 50 W DC and demanding a lower final SoC (paid for by the terminal
+    penalty) forces the battery to run the flat zero-output segment at every step.
+    """
+    _, res = _solve(
+        {DC_AC: DEAD_ZONE_CURVE, "battery_charge_power_max": 0, "battery_discharge_power_max": 50},
+        frame=_frame([0.6] * 8, load=5000.0),
+        soc_init=0.9,
+        soc_final=0.5,
+    )
+    assert res["P_batt"].max() >= 50.0 - 1.0
+    np.testing.assert_allclose(res["P_hybrid_inverter"].to_numpy(), 0.0, atol=1.0)
+
+
+def test_dead_zone_discharge_curve_never_wastes_energy_in_the_dead_zone_when_free():
+    """Unpinned, discharging inside the dead zone only loses energy, so no step lands there."""
+    _, res = _solve({DC_AC: DEAD_ZONE_CURVE, AC_DC: CHARGE_CURVE})
+    batt = res["P_batt"].to_numpy()
+    assert not ((batt > 1.0) & (batt < 50.0 - 1.0)).any()
+    _assert_curve_equality(res, charge_curve=CHARGE_CURVE, discharge_curve=DEAD_ZONE_CURVE)
+
+
+def test_flat_ac_to_dc_segment_is_solved_exactly():
+    """[[1000, 0.5], [2000, 1.0]] needs 2000 W AC for both 1000 W and 2000 W DC."""
+    flat = [[1000, 0.5], [2000, 1.0], [4000, 1.0]]
+    for dc_w in (1500, 2000):
+        soc_final = 0.1 + dc_w * 0.5 / CAP
+        _, res = _solve(
+            {AC_DC: flat, "battery_discharge_power_max": 0},
+            frame=_frame([0.05] + [0.5] * 7),
+            soc_init=0.1,
+            soc_final=soc_final,
+        )
+        assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
+        expected = interp(flat, dc_w, "ac_dc")
+        assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(-expected, abs=1.0)
 
 
 def test_idle_has_zero_power_both_sides():
