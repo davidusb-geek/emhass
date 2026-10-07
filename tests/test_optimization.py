@@ -12003,6 +12003,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         end_timesteps=(0, 0),
         start_temperature=48.0,
         thermal_loss=0.0,
+        min_temperatures=None,
+        tank_overrides=None,
     ):
         """Helper: one shared DHW tank fed by a heat pump (load 0, Carnot, cheap)
         and an electric booster (load 1, efficiency 1.0). A mid-horizon
@@ -12015,6 +12017,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         min_t = [45.0] * 48
         for i in range(28, 34):
             min_t[i] = 60.0  # must exceed the 53 C HP cap -> needs the booster
+        if min_temperatures is not None:
+            min_t = list(min_temperatures)
         hp_source = {"supply_temperature": 55.0, "carnot_efficiency": 0.40}
         if hp_cap is not None:
             hp_source["max_supply_temperature"] = hp_cap
@@ -12045,6 +12049,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "thermal_loss": thermal_loss,
                 "min_temperatures": min_t,
                 "max_temperatures": [65.0] * 48,
+                **(tank_overrides or {}),
             }
         ]
         opt = self.create_optimization()
@@ -12080,6 +12085,34 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self._assert_hp_off_above_cap(
             res, 53.0, "Heat pump injected heat while the tank was above max_supply_temperature"
         )
+
+    def test_rising_per_step_cap_gates_on_the_current_step(self):
+        """Heat injected during step t ends at t+1, so it is bounded by the ceiling
+        of step t, not of step t+1. With caps [53, 65, ...] and a 54 C floor at
+        t=1, the heat pump may not lift the tank past 53 C during step 0: the
+        booster must deliver it."""
+        min_t = [45.0] * 48
+        min_t[1] = 54.0
+        opt, res = self._run_hp_booster_tank(hp_cap=[53.0] + [65.0] * 47, min_temperatures=min_t)
+        self.assertEqual(opt.optim_status, "Optimal")
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        self.assertLess(hp[0], 1e-3, "The heat pump heated past its step-0 ceiling")
+        self.assertGreater(booster[0], 0, "The booster must lift the tank to 54 C in step 0")
+
+    def test_start_far_above_cap_does_not_bind_the_initial_state(self):
+        """The cap gate's big-M must cover the start temperature too: a tank that
+        starts far above both its cap and its own maximum (index 0 is never
+        bounded) and is drawn down in the first step stays feasible with the
+        capped heat pump simply off."""
+        draw = [23.5] + [0.0] * 47  # kWh: draws the 200 L tank from 160 C to ~59 C
+        opt, res = self._run_hp_booster_tank(
+            hp_cap=53.0,
+            start_temperature=160.0,
+            min_temperatures=[45.0] * 48,
+            tank_overrides={"draw_off_demand": draw},
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
 
     def test_no_cap_lets_cheaper_heat_pump_do_the_work(self):
         """Regression: without `max_supply_temperature` the (cheaper) heat pump

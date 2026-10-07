@@ -4279,9 +4279,11 @@ class Optimization:
                 cap_arr = np.full(required_len, float(cap))
             # M must dominate (max feasible tank temperature - cap), otherwise
             # allow_k = 0 would wrongly bound the tank temperature itself.
+            # The start temperature counts too: index 0 is never bounded by the
+            # tank's own maximum, so it can sit above every configured limit.
             big_m_temp = SHARED_TANK_CAP_BIG_M_TEMP
-            if tank_temp_ub is not None:
-                big_m_temp = max(big_m_temp, tank_temp_ub - float(cap_arr.min()))
+            temp_ub = max(v for v in (tank_temp_ub, float(start_temperature)) if v is not None)
+            big_m_temp = max(big_m_temp, temp_ub - float(cap_arr.min()))
             nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
             if isinstance(nominal_k, list | np.ndarray):
                 nominal_k = max(nominal_k)
@@ -4290,10 +4292,12 @@ class Optimization:
             # A capped source may only inject heat at step t when the tank stays at or
             # below its ceiling BOTH at the start of the step (it cannot heat water
             # already hotter than its supply temperature) AND at t+1 (it must not push
-            # the tank past the cap). allow_k[t] == 0 forces p_k[t] == 0; an uncapped
-            # source (e.g. an electric booster) has no such gate and can go higher.
+            # the tank past the cap). Both ends are held to step t's ceiling: the heat
+            # of step t is delivered under cap[t], even when cap[t+1] is higher.
+            # allow_k[t] == 0 forces p_k[t] == 0; an uncapped source (e.g. an
+            # electric booster) has no such gate and can go higher.
             constraints.append(predicted_temp - cap_arr <= big_m_temp * (1 - allow_k))
-            constraints.append(predicted_temp[1:] - cap_arr[1:] <= big_m_temp * (1 - allow_k[:-1]))
+            constraints.append(predicted_temp[1:] - cap_arr[:-1] <= big_m_temp * (1 - allow_k[:-1]))
             constraints.append(p_k <= nominal_k * allow_k)
 
         # Soft comfort constraints (overshoot/desired/penalty) — same pattern as the
