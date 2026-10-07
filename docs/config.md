@@ -122,7 +122,7 @@ Example:
 - `set_deferrable_load_single_constant`: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
-- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time.
+- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time. A negative electricity price counts as zero here, so a start is never rewarded.
 - `def_minimum_on_time`: Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (short-cycle / min-up-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to stay on for at least 3 consecutive timesteps once started; load 1 has no constraint. A list shorter than `number_of_deferrable_loads` is padded with `0`, and a `null` entry counts as `0`, like the other per-load lists.
 
   Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
