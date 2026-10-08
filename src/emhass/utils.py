@@ -1110,7 +1110,11 @@ def _runtime_shared_tanks_problem(tanks, n_loads: int) -> str | None:
         if not isinstance(load_ids, list):
             return f"tank {t.get('id')!r} needs load_ids as a list, got {load_ids!r}"
         for i in load_ids:
-            whole = isinstance(i, int | float) and not isinstance(i, bool) and float(i).is_integer()
+            # Check ints without converting them to float, which overflows for a
+            # huge integer.
+            whole = (isinstance(i, int) and not isinstance(i, bool)) or (
+                isinstance(i, float) and i.is_integer()
+            )
             if not whole or not 0 <= int(i) < n_loads:
                 return (
                     f"tank {t.get('id')!r} has load_ids entry {i!r}; it must be a "
@@ -1189,6 +1193,21 @@ def _extend_optim_conf_with_compiled_topology(
         if existing is not None:
             existing = _per_user_load_list(existing, offset)[:offset]
             optim_conf[key] = existing + [0] * (offset - len(existing)) + [0] * n_compiled
+    # Runtime state for the user's loads: the appended topology loads get the
+    # defaults the optimizer would assume (off, no elapsed time, no power), so
+    # every array matches the final load count. An array that already covers
+    # every load is kept, and one of any other length is left to the
+    # optimizer's own length handling.
+    for key, default in (
+        ("def_current_state", False),
+        ("def_current_on_timesteps", 0),
+        ("def_current_off_timesteps", 0),
+        ("def_current_power", 0.0),
+        ("def_current_operating_timesteps", 0),
+    ):
+        existing = optim_conf.get(key)
+        if isinstance(existing, list) and len(existing) == offset:
+            optim_conf[key] = list(existing) + [default] * n_compiled
     # def_load_config pads with fresh dicts (no shared instance between slots).
     def_cfgs = optim_conf.get("def_load_config")
     def_cfgs = list(def_cfgs) if isinstance(def_cfgs, list) else []
@@ -3109,7 +3128,7 @@ async def treat_runtimeparams(
                 try:
                     # A boolean is not a temperature (float(True) would be 1.0).
                     temp_value = None if isinstance(temp, bool) else float(temp)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     temp_value = None
                 if temp_value is None or not math.isfinite(temp_value):
                     logger.warning(
