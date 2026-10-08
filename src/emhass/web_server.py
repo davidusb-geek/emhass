@@ -41,6 +41,7 @@ from emhass.command_line import (
 )
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
+    HEAT_TOPOLOGY_KEYS,
     build_config,
     build_legacy_config_params,
     build_params,
@@ -461,9 +462,22 @@ async def parameter_set():
             400,
         )
     if isinstance(heat_topology, dict) and heat_topology:
+        # The compiler ignores keys it does not know, so a misspelled section
+        # (e.g. "source") would compile to zero loads and, in replace mode,
+        # remove the configured ones. At save time that is a typo: reject it.
+        unknown = sorted(set(heat_topology) - HEAT_TOPOLOGY_KEYS)
+        if unknown:
+            app.logger.warning("Rejected config save: heat_topology unknown keys %s", unknown)
+            return await make_response(
+                [
+                    f"heat_topology is invalid: unknown key(s) {unknown}; expected "
+                    f"{sorted(HEAT_TOPOLOGY_KEYS)}"
+                ],
+                400,
+            )
         try:
             compile_heat_topology(heat_topology)
-        except (ValueError, KeyError, TypeError, AttributeError) as e:
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as e:
             # The compiler raises ValueError with a field path; the others are a
             # backstop for malformed entries it does not check explicitly (e.g. a
             # string where an object is expected), which would otherwise surface
