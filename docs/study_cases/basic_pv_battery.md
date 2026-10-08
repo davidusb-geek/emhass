@@ -39,6 +39,8 @@ battery_target_state_of_charge: 0.6    # default — also used as default soc_in
 
 For the meaning of each parameter and acceptable ranges, see [Configuration](../config.md).
 
+The `battery_*_efficiency` values above are the battery's own scalar efficiencies, which is all this tutorial needs. If you have a hybrid inverter whose losses at low power matter, see [Power-dependent hybrid inverter efficiency](../cookbook/battery_power_dependent_inverter_efficiency.md); it is optional and leaves this simple path unchanged.
+
 ## Run
 
 ```bash

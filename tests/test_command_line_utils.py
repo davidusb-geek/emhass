@@ -15,6 +15,7 @@ import aiofiles
 import numpy as np
 import orjson
 import pandas as pd
+import pytz
 
 from emhass import utils
 from emhass.command_line import (
@@ -25,6 +26,7 @@ from emhass.command_line import (
     _load_opt_res_latest,
     _prepare_dayahead_optim,
     _publish_and_update_freq,
+    _publish_from_saved_entities,
     adjust_pv_forecast,
     continual_publish,
     dayahead_forecast_optim,
@@ -541,6 +543,51 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "opt_res must contain no NaN values",
         )
 
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_autoextends_dst_short_day_end_to_end(self, mock_now):
+        """A 287-step MPC request crossing Sydney spring-forward must produce
+        a 287-row optimization result rather than silently truncating to 276."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+        horizon = 287
+        time_zone = pytz.timezone("Australia/Sydney")
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
+        mock_now.return_value = start.astimezone(UTC)
+
+        runtimeparams = {
+            "prediction_horizon": horizon,
+            "optimization_time_step": 5,
+            "pv_power_forecast": list(range(1, horizon + 1)),
+            "load_power_forecast": list(range(1, horizon + 1)),
+            "load_cost_forecast": [0.15] * horizon,
+            "prod_price_forecast": [0.05] * horizon,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        params = copy.deepcopy(await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True))
+        params["retrieve_hass_conf"]["time_zone"] = "Australia/Sydney"
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        with patch.object(pd.Timestamp, "now", return_value=pd.Timestamp(start)):
+            idd = await set_input_data_dict(
+                emhass_conf,
+                costfun,
+                params_json,
+                runtimeparams_json,
+                action,
+                logger,
+                get_data_from_file=True,
+            )
+
+        self.assertIsInstance(idd, dict)
+        self.assertEqual(idd["fcst"].optim_conf["delta_forecast_daily"].days, 2)
+        self.assertEqual(len(idd["fcst"].forecast_dates), horizon)
+
+        opt_res = await naive_mpc_optim(idd, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertEqual(len(opt_res), horizon)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+
     # Test naive mpc optimization
     async def test_naive_mpc_optim(self):
         # Test mpc optimization
@@ -885,6 +932,29 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             opt_res = await main()
             self.assertIsNone(opt_res)
+
+    # CLI test that "False" is not read as True for the boolean arguments
+    async def test_main_false_bool_arguments(self):
+        argv = ["main", "--action", "test", "--config", str(emhass_conf["config_path"])]
+        with (
+            patch("sys.argv", argv + ["--debug", "False", "--log2file", "False"]),
+            patch(
+                "emhass.command_line.utils.get_logger", return_value=(MagicMock(), MagicMock())
+            ) as mock_get_logger,
+            patch(
+                "emhass.command_line.set_input_data_dict", new_callable=AsyncMock, return_value={}
+            ) as mock_set_input_data_dict,
+        ):
+            await main()
+        self.assertIs(mock_get_logger.call_args.kwargs["save_to_file"], False)
+        # get_data_from_file is the last positional argument
+        self.assertIs(mock_set_input_data_dict.call_args.args[-1], False)
+
+    # CLI test that a boolean argument rejects a value that is not a boolean
+    async def test_main_invalid_bool_argument(self):
+        with patch("sys.argv", ["main", "--action", "test", "--debug", "maybe"]):
+            with self.assertRaises(SystemExit):
+                await main()
 
     # CLI test action perfect-optim action
     async def test_main_perfect_forecast_optim(self):
@@ -1794,6 +1864,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_logger = Mock()
         mock_fcst = Mock()
         mock_rh = Mock()
+        p_pv_forecast = pd.Series([1, 2])
         # 1. Force is_model_outdated to False so it attempts to load
         # 2. Mock aiofiles to return bytes
         # 3. Mock pickle.loads to raise a generic Exception (not one of the specific caught ones)
@@ -1810,7 +1881,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             result = await adjust_pv_forecast(
                 logger=mock_logger,
                 fcst=mock_fcst,
-                p_pv_forecast=pd.Series([1, 2]),
+                p_pv_forecast=p_pv_forecast,
                 get_data_from_file=False,
                 retrieve_hass_conf={},
                 optim_conf={"adjusted_pv_model_max_age": 1},
@@ -1819,13 +1890,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 test_df_literal=pd.DataFrame(),
             )
             # Assertions
-            self.assertFalse(result, "Should return False on generic exception")
-            # Verify we hit the specific exception block
-            # logger.error(f"Unexpected error loading adjusted PV model: ...")
-            # logger.error("Cannot recover from this error")
+            pd.testing.assert_series_equal(result, p_pv_forecast)
+            mock_fcst.adjust_pv_forecast_predict.assert_not_called()
+
             error_logs = [str(call) for call in mock_logger.error.mock_calls]
+            warning_logs = [str(call) for call in mock_logger.warning.mock_calls]
             self.assertTrue(any("Unexpected error loading" in log for log in error_logs))
-            self.assertTrue(any("Cannot recover" in log for log in error_logs))
+            self.assertTrue(
+                any("Falling back to unadjusted PV forecast" in log for log in warning_logs)
+            )
 
     async def test_publish_thermal_loads(self):
         """
@@ -2047,6 +2120,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         # Test 3: Fallback to df_weather with Timezone conversion and GHI
         input_data_dict["params"]["passed_data"] = {}  # Remove passed outdoor temp
+        input_data_dict["fcst"].optim_conf = {
+            "load_cost_forecast_method": "list",
+            "production_price_forecast_method": "list",
+            "outdoor_temperature_forecast_method": "list",
+        }
         # Weather index is timezone naive, dayahead is UTC
         weather_idx = pd.date_range("2025-01-01", periods=5, freq="2h")
         df_weather = pd.DataFrame(
@@ -2076,6 +2154,20 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             "much coarser than dayahead" in warning_logs, "Resolution warning should have triggered"
         )
+
+        # Test 3b: supplied-but-rejected runtime temperature must fail closed,
+        # rather than using the weather fallback that is valid for omission.
+        input_data_dict["params"]["passed_data"] = {
+            "outdoor_temperature_forecast": None,
+            "_outdoor_temperature_forecast_rejected": True,
+        }
+        with self.assertLogs(logger, level="ERROR") as cm:
+            rejected = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIs(rejected, False)
+        self.assertIn("was supplied but rejected", str(cm.output))
+
+        # Restore the omitted-key case for the remaining fallback checks.
+        input_data_dict["params"]["passed_data"] = {}
         # Test 4: Timezone mismatch (Dayahead Naive, Weather Aware)
         # Make dayahead naive
         input_data_dict["df_input_data_dayahead"].index = input_data_dict[
@@ -2229,6 +2321,47 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         # Expected new frequency based on the mocked lowest_time_step
         self.assertEqual(res, pd.Timedelta(minutes=15))
+
+    @patch("emhass.command_line.publish_json", new_callable=AsyncMock)
+    async def test_publish_from_saved_entities_skips_tmp_files(self, mock_publish_json):
+        """publish-data must skip in-flight atomic-write temp files, like the
+        continual-publish loop already does: publishing one derives a bogus
+        entity_id and KeyErrors on the metadata lookup, aborting the whole
+        publish instead of skipping the stray file."""
+        mock_publish_json.return_value = pd.DataFrame({"col": [1.0]})
+        with tempfile.TemporaryDirectory() as td:
+            data_path = pathlib.Path(td)
+            entity_dir = data_path / "entities"
+            entity_dir.mkdir()
+            (entity_dir / "sensor1.json").write_text("{}")
+            (entity_dir / "metadata.json").write_text("{}")
+            (entity_dir / "sensor1.json.1234.deadbeef.tmp").write_text("{}")
+            (entity_dir / "metadata.json.1234.tmp").write_text("{}")
+            input_data_dict = {"emhass_conf": {"data_path": data_path}}
+            params = {"passed_data": {"publish_prefix": "all"}}
+            logger = MagicMock()
+            res = await _publish_from_saved_entities(input_data_dict, logger, params)
+        # Only the real entity file is published - not metadata, not temp files.
+        mock_publish_json.assert_called_once()
+        self.assertEqual(mock_publish_json.call_args[0][0], "sensor1.json")
+        self.assertIsNotNone(res)
+        self.assertEqual(list(res.columns), ["sensor1"])
+
+    async def test_publish_from_saved_entities_only_temp_files_falls_back(self):
+        """When the only saved files are metadata and in-flight temp files, there
+        is nothing to publish: fall back to opt_res_latest (None) instead of
+        failing on an empty concat."""
+        with tempfile.TemporaryDirectory() as td:
+            data_path = pathlib.Path(td)
+            entity_dir = data_path / "entities"
+            entity_dir.mkdir()
+            (entity_dir / "metadata.json").write_text("{}")
+            (entity_dir / "sensor.p_pv.json.12.ab.tmp").write_text("{}")
+            input_data_dict = {"emhass_conf": {"data_path": data_path}}
+            for prefix in ("all", "sensor.p_pv"):
+                params = {"passed_data": {"publish_prefix": prefix}}
+                res = await _publish_from_saved_entities(input_data_dict, MagicMock(), params)
+                self.assertIsNone(res, prefix)
 
     @patch("emhass.command_line.pd.read_json")
     @patch("emhass.command_line.aiofiles.open")
