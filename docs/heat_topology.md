@@ -71,6 +71,18 @@ watts of source input:
 | `efficiency` | Required constant conversion efficiency for gas, oil, district, electric, and constant-efficiency sources. |
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
+| `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
+| `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
+| `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
+
+`startup_penalty` and `max_startups` act on the source's on/off state, which is
+tied to its power only when the source is semi-continuous or has a `min_power`.
+A continuous source without `min_power` can stay "on" at 0 W, so both have
+little or no effect on it; give it a `min_power` if short cycling matters.
+Both apply per flow: a source that feeds two storages compiles into one load
+per flow, and each load counts its own starts. A source that switches from one
+storage to the other therefore starts the second flow, and its `max_startups`
+limits each flow separately, not the unit as a whole.
 
 A heat pump requires either `supply_temperature` or a `heating_curve`. A
 constant-efficiency source requires `efficiency`.
@@ -83,6 +95,45 @@ Source type controls electric-balance membership by default:
 
 An explicit `electric: true` or `electric: false` overrides the default. This
 keeps a gas boiler's fuel input out of the household electric power balance.
+
+#### Per-source temperature ceiling
+
+When two sources feed the same storage but reach different maximum
+temperatures, for example a DHW tank fed by a heat pump (condenser limit about
+53 degrees Celsius) and an electric booster (up to 65 degrees Celsius), the
+optimizer would otherwise let the cheaper heat pump cover the band above its
+limit too, which it physically cannot deliver. `max_supply_temperature` makes
+that limit hard: the source only injects heat while the storage is at or below
+its ceiling, so the booster is scheduled exactly for the band above it.
+
+```json
+"sources": [
+  {"id": "hp", "type": "heatpump", "nominal_power": 3500,
+   "supply_temperature": 55, "max_supply_temperature": 53},
+  {"id": "booster", "type": "electric", "nominal_power": 3000, "efficiency": 1.0}
+]
+```
+
+This is a physical limit, not a preference: it also holds in the relaxed
+fallback. To stop a source at a lower temperature while it can physically go
+higher, use `overshoot_temperature` with a desired temperature on the storage
+(see below); the two compose.
+
+A per-step list applies step by step: the heat a source delivers during a step
+stays within that step's ceiling, even when the next step's ceiling is higher.
+When every source feeding a storage has a ceiling and the storage's
+`min_temperature` lies above all of them at some step, the compiler logs a
+warning: no source can heat the storage that far, so only a storage that is
+already hot enough can hold that minimum. The ceiling is a heating limit: on a
+cooling storage it does not apply, and the optimizer logs a warning when one
+is set.
+
+`supply_temperature` only sets the heat pump's COP; it is not a ceiling. Without
+`max_supply_temperature` the optimizer may plan to heat the storage above the
+supply temperature, and the compiler logs a warning for such a heat pump. To
+cap the storage at the supply temperature, set `max_supply_temperature` equal
+to `supply_temperature`. The cap is opt-in because it makes a storage whose
+minimum temperature sits at the supply temperature infeasible.
 
 ### Storage
 
@@ -254,7 +305,12 @@ Each flow compiles to one deferrable load, numbered in the order of `flows`
 (the first flow is load 0). The optimization results carry
 `predicted_temp_heater{k}` (the temperature of the storage that load `k`
 feeds) and `heating_demand_heater{k}` for every such load, just as for a
-`thermal_battery`. To publish them to Home Assistant, pass
+`thermal_battery`. When the storage sets `desired_temperature(s)`,
+`min_temperature(s)` or `max_temperature(s)`, each of its loads also carries
+`target_temp_heater{k}`, `min_temp_heater{k}` and `max_temp_heater{k}`, so the
+comfort band can be plotted next to the predicted temperature. `min_temp_heater{k}`
+is the floor the optimizer enforced, including a `min_temperature_curve`. To publish them
+to Home Assistant, pass
 `custom_predicted_temperature_id` and `custom_heating_demand_id` with one entry
 per load index; see [Thermal battery](thermal_battery.md) for an example.
 When several flows feed the same storage, each of their
@@ -265,6 +321,14 @@ storage's temperature. The ids are matched by position (entry `k` is load `k`);
 loads without an entry publish under the default names, such as
 `sensor.p_deferrable{k}` and `sensor.temp_predicted{k}`.
 
+### Rolling MPC
+
+A topology is rebuilt on every run instead of reusing the cached (warm-start)
+problem, so each run uses the live `start_temperature` and the current
+forecast. This also holds for every day of a perfect-forecast run. Pass the
+measured storage temperature as `start_temperature` in the `heat_topology` you
+send at runtime; the solve takes a few seconds longer than a warm start.
+
 ## Validation and troubleshooting
 
 EMHASS validates the graph before optimization and reports the offending field
@@ -274,7 +338,9 @@ path for:
 - flows that reference unknown sources or storage;
 - consumers that target unknown storage;
 - unsupported source or consumer types;
+- source or storage entries without an `id`;
 - missing heat-pump supply-temperature data;
+- a `profile` consumer without `profile`;
 - a source `min_power` greater than its `nominal_power`;
 - missing constant source efficiency; and
 - missing cost-track references.

@@ -32,6 +32,7 @@ No recipes yet. See `docs/study_cases/heat_pump_walkthrough.md` for the long-for
 ### Battery
 
 - [Battery-aware runtime params](battery_aware_runtime_params.md) — feed live SOC into MPC; avoids the percent/fraction gotcha.
+- [Power-dependent hybrid inverter efficiency](battery_power_dependent_inverter_efficiency.md) — optional, opt-in power-dependent efficiency curves for the inverter's DC↔AC conversion in both directions, entered as AC-side `[ac_power_w, efficiency]` points from your datasheet or measurements and solved as an exact piecewise-linear power transfer; the scalar default is unchanged.
 
 Additional battery recipes welcome (charging-from-grid strategies, calendar-aware reservation, etc.) — see [Discussion #823](https://github.com/davidusb-geek/emhass/discussions/823) for good-practices crowdsourcing.
 
