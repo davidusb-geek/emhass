@@ -833,6 +833,82 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg=f"expected an out-of-range clamp warning, got: {logs.output}",
         )
 
+    def test_battery_soc_final_reward_factor(self):
+        """Test that defining a battery_soc_final_reward_factor causes
+        the optimizer to keep energy in the battery if final prices are high
+        enough."""
+
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": True,
+                "compute_curtailment": False,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_use_pv": False,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_final_reward_factor": 0.7,
+            }
+        )
+        soc_init = 0.6
+        soc_final = 0.5
+        
+        # Create input data: 4 periods of 30 minutes, constant energy cost
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = 0.4
+        df_input[self.fcst.var_load_cost] = [0.8, 0.8, 0.8, 1.0]
+
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res = self.opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt.var_load_cost].values,
+            df_input[self.opt.var_prod_price].values,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # With the reward factor, the optimizer should keep the
+        # initial energy in the battery, instead of selling it off to
+        # reach the specified soc_final. It should however not charge
+        # it from the grid because the cost to buy the energy (0.8) is
+        # higher than the final price * reward factor (1.0 * 0.7 =
+        # 0.7).
+        self.assertAlmostEqual(
+            opt_res.loc[opt_res.index[-1], "SOC_opt"],
+            soc_init,
+        )
+        
     def test_capacity_charge_shaves_peak_import(self):
         """Issue #623: an opt-in ``capacity_cost_per_kw`` must flatten the peak
         grid import. With the feature off no peak variable is created and the
@@ -4368,6 +4444,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def test_start_upper_bound_only_with_a_startup_penalty(self):
+        """start <= on only matters where a start is priced: without a startup
+        penalty it adds nothing to the optimum but can slow HiGHS down a lot on
+        problems with many semi-continuous loads, so it is only added for loads
+        with startup_penalty > 0."""
+
+        def has_bound(penalty):
+            self.fcst.params["passed_data"]["load_cost_forecast"] = [1.0] * 10
+            self.optim_conf.update(
+                {
+                    "set_deferrable_startup_penalty": [penalty],
+                    "treat_deferrable_load_as_semi_cont": [True],
+                }
+            )
+            self.run_penalty_test_forecast()
+            return any(str(c) == "p_def_start_0 <= p_def_bin2_0" for c in self.opt.prob.constraints)
+
+        self.assertFalse(has_bound(0.0))
+        self.assertTrue(has_bound(1.0))
+
+    def test_startup_penalty_at_negative_prices(self):
+        """At a negative price the startup penalty must not become a reward.
+        Before, the start indicator (only bounded from below) was set in steps
+        where the load stayed off, and real starts were rewarded too, so the run
+        was split into one-step pieces. Now there is one start, while on."""
+        self.fcst.params["passed_data"]["load_cost_forecast"] = [-1.0] * 10
+        self.optim_conf.update({"set_deferrable_startup_penalty": [100.0]})
+
+        self.run_penalty_test_forecast()
+
+        starts = np.round(self.opt.vars["p_def_start"][0].value)
+        on = np.round(self.opt.vars["p_def_bin2"][0].value)
+        self.assertTrue(np.all(starts <= on), f"starts {starts} while on/off is {on}")
+        self.assertEqual(int(starts.sum()), 1)
+
     def test_running_single_const_pinned_from_start(self):
         """A running single-constant load is pinned ON from t=0 regardless of cost."""
         # Cheap at t=5..9, expensive at t=0..4 — without pinning the solver would defer.
@@ -5682,6 +5793,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             draw_sum + 0.7 * building_sum,
             "Tank must serve draw-off AND building demand, not just one of them",
         )
+        # The demand the tank model uses is exactly the sum, step by step.
+        draw_off = np.zeros(48)
+        draw_off[14], draw_off[40] = 1.0, 1.2
+        expected = draw_off + np.asarray(building_demand, dtype=float)
+        n = len(res)
+        np.testing.assert_allclose(
+            res["heating_demand_heater0"].to_numpy(dtype=float), expected[:n], rtol=1e-9
+        )
 
     def test_shared_tank_per_source_overshoot_gates_source(self):
         """A source with overshoot_temperature stops while the tank is above
@@ -5859,6 +5978,140 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt.optim_status, "Optimal")
         self.assertLess(res["P_deferrable0"].to_numpy()[-1], 1e-3)
 
+    def test_shared_tank_overshoot_bounds_the_end_of_the_last_step(self):
+        """The last step's heat ends after the horizon, so a continuous source
+        there is bounded by the modelled end temperature: from a start at the
+        threshold, a negative price in the final slot must not run it past the
+        threshold."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 55.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                "desired_temperatures": 60.0,
+                "overshoot_temperature": 55.0,
+            },
+        ]
+        opt = self.create_optimization()
+        prices = self.df_input_data_dayahead[opt.var_load_cost].to_numpy(dtype=float).copy()
+        prices[:] = 0.30
+        prices[-1] = -0.30
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLess(res["P_deferrable0"].to_numpy()[-1], 1e-3)
+
+    def test_shared_tank_overshoot_indicator_covers_the_start_temperature(self):
+        """The overshoot indicator applies at index 0 too, so its big-M must
+        cover the pinned start temperature: a tank that starts far beyond its
+        configured bounds and is drawn down in the first step stays feasible."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.2,
+                "start_temperature": 160.0,
+                "thermal_loss": 0.0,
+                "draw_off_demand": [23.5] + [0.0] * 47,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                "desired_temperatures": 50.0,
+                "overshoot_temperature": 55.0,
+            },
+        ]
+        opt = self.create_optimization()
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+
+    def _run_single_source_tank(self, source, tank_extra):
+        """One continuous 3 kW source (efficiency 3) on a 300 L shared tank."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 3.0, **source}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0],
+                "volume": 0.3,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [65.0] * 48,
+                **tank_extra,
+            }
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res
+
+    def test_shared_tank_null_source_overshoot_inherits_the_storage_threshold(self):
+        """overshoot_temperature: null on a source means "not set": the source
+        inherits the storage's threshold instead of losing the gate. The tank
+        starts at the threshold, so with the gate the comfort target cannot pull
+        it higher."""
+        opt, res = self._run_single_source_tank(
+            {"overshoot_temperature": None},
+            {
+                "start_temperature": 55.0,
+                "desired_temperatures": 60.0,
+                "overshoot_temperature": 55.0,
+            },
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 55.0 + 0.05)
+
+    def test_shared_tank_overshoot_below_a_curve_floor_warns_at_solve_time(self):
+        """A min_temperature_curve is only known at solve time, so the solver
+        warns when its resolved floor lies above the threshold of every
+        continuous source (the compiler can only check the static list)."""
+        with self.assertLogs(level="WARNING") as logs:
+            self._run_single_source_tank(
+                {"overshoot_temperature": 55.0},
+                {
+                    "desired_temperatures": 50.0,
+                    "start_temperature": 62.0,
+                    "min_temperature_curve": {
+                        "slope": 1.0,
+                        "offset": 70.0,
+                        "min_supply": 20.0,
+                        "max_supply": 70.0,
+                    },
+                },
+            )
+        self.assertTrue(
+            any("overshoot_temperature" in m and "dhw" in m for m in logs.output), logs.output
+        )
+
     def test_shared_tank_desired_only_penalty_pulls_temperature(self):
         """desired_temperatures without any overshoot gates is a pure soft
         target: no source is blocked, but the shortfall penalty pulls the tank
@@ -5981,6 +6234,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((temp > 55.05).any(), "the tank never went above 55 C")
         ends_above = (temp.shift(-1) > 55.05).fillna(False)
         self.assertLess(hp[ends_above].max(), 1e-3)
+        # ... and it does heat below the threshold, so the gate is not simply
+        # keeping it off all the time.
+        self.assertGreater(hp[temp < 54.95].max(), 0, "the heat pump never heated below 55 C")
 
     async def test_full_stack_topology_extend_with_other_loads_end_to_end(self):
         """The compiled-topology counterpart of the runtime-tanks test: a
@@ -6094,6 +6350,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             1e-3,
             "Compiled max_supply_temperature must gate the HP at its shifted index",
         )
+        # ... and the HP does heat below its cap, so the gate is not simply
+        # keeping it off all the time.
+        self.assertGreater(hp[temp < 52.95].max(), 0, "the heat pump never heated below its cap")
 
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
@@ -6309,6 +6568,23 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
         tank_total = res["P_deferrable2"].sum() + res["P_deferrable3"].sum()
         self.assertGreater(tank_total, 0, "Tank members must dispatch to hold the band")
+        # Their heat really drives the tank. Without heat the tank only loses
+        # its standing loss (0.05 kW over 30 min in 200 L, about 0.11 K per
+        # step); in every step where the members run without a draw-off it
+        # does better than that, and with them off it does not. The published
+        # temperatures are rounded to 0.01 K, hence the 0.02 K tolerance.
+        temp = res[tank_cols[0]].to_numpy(dtype=float)
+        members = (res["P_deferrable2"] + res["P_deferrable3"]).to_numpy(dtype=float)
+        rise = np.diff(temp)
+        loss_drift = -0.05 * dt * 3600 / (1000 * 4.186 * 0.20)
+        no_draw = np.asarray(draw_off[: len(rise)]) == 0
+        runs = (members[:-1] > 1.0) & no_draw
+        self.assertTrue(runs.any(), "no step with the members running and no draw-off")
+        self.assertTrue(np.all(rise[runs] > loss_drift + 0.02), "their heat did not reach the tank")
+        off = members[:-1] < 1e-6
+        self.assertTrue(
+            np.all(rise[off] <= loss_drift + 0.02), "the tank gained heat with them off"
+        )
 
     def test_is_electric_load_excludes_load_from_grid_balance(self):
         """A load with is_electric_load[k]=False must not appear in p_def_sum
@@ -12695,6 +12971,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             tank_overrides={"draw_off_demand": draw},
         )
         self.assertEqual(opt.optim_status, "Optimal")
+
+    def test_cap_is_ignored_on_a_cooling_tank(self):
+        """max_supply_temperature is a heating ceiling. On a cooling storage the
+        heating-side gate would keep a capped source off exactly while the
+        storage is warm and needs cooling, so the cap is ignored there with a
+        warning."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [30.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"efficiency": 3.0, "max_supply_temperature": 20.0}}
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "room",
+                "load_ids": [0],
+                "volume": 0.2,
+                "start_temperature": 30.0,
+                "thermal_loss": 0.0,
+                "sense": "cool",
+                "min_temperatures": [10.0] * 48,
+                "max_temperatures": [25.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("max_supply_temperature" in m for m in logs.output))
 
     def test_no_cap_lets_cheaper_heat_pump_do_the_work(self):
         """Regression: without `max_supply_temperature` the (cheaper) heat pump

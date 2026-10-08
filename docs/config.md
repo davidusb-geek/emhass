@@ -19,6 +19,8 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `sensor_battery_state_of_charge`: The name of the measured battery state of charge sensor in percent from Home Assistant, for example 'sensor.battery_state_of_charge'. Only used by battery self-identification (`set_use_battery_identification`), and only retrieved when it is enabled. With `number_of_batteries` greater than 1, provide a list of exactly `number_of_batteries` sensor names, one per battery, the same way as `sensor_power_battery`.
 - `load_negative`: Set this parameter to True if the retrieved load variable is negative by convention. Defaults to False.
 - `set_zero_min`: Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.
+
+`load_negative` and `set_zero_min` only prepare the history retrieved from Home Assistant. They do not apply to a `load_power_forecast` passed at runtime, which is canonical non-negative consumption; see the [Forecast input contract](passing_data.md#forecast-input-contract).
 - `var_replace_zero`: The list of retrieved variables that we would want to replace nans (if they exist) with zeros. For example:
 	- 'sensor.power_photovoltaics'
 - `sensor_linear_interp`: The list of retrieved variables that we would want to interpolate nans values using linear interpolation. For example:
@@ -75,7 +77,7 @@ These are the parameters needed to properly define the optimization problem.
 
 - `set_use_pv`: Set to True if we should consider an solar PV system. Defaults to False.
 - `set_use_battery`: Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False.
-- `delta_forecast_daily`: The number of days for forecasted data. Defaults to 1.
+- `delta_forecast_daily`: The number of **local calendar days** covered by the forecast window. Defaults to 1. This is not a fixed 24-hour duration: when a valid window crosses daylight saving time, the number of optimization timesteps follows the configured timezone (for example 23 hours across spring-forward and 25 hours across fall-back). If the nominal endpoint itself falls in a skipped or repeated wall-clock interval, EMHASS resolves it deterministically using the timezone transition: nonexistent endpoints move forward by the actual DST gap and ambiguous endpoints use the post-transition occurrence.
 - `number_of_deferrable_loads`: Define the number of deferrable loads to consider. Defaults to 2.
 - `nominal_power_of_deferrable_loads`: The nominal power for each deferrable load in Watts. This is a list with a number of elements consistent with the number of deferrable loads defined before. A load can also be given a list of powers in place of a single value to define a **sequence load**: a fixed power profile that the optimizer runs exactly once, contiguously, choosing only the start time (for example a washing-machine programme). Mind the nesting: with `number_of_deferrable_loads: 1`, `[[1000, 2000, 1500]]` is one sequence load with the profile 1000 W, 2000 W, 1500 W, whereas `[1000, 2000, 1500]` with `number_of_deferrable_loads: 3` is three separate single-power loads. A sequence load's runtime is fixed by the length of its sequence, so `operating_hours_of_each_deferrable_load` does not apply to it and that load's value (including 0) is ignored. For example:
 	- 3000
@@ -122,7 +124,7 @@ Example:
 - `set_deferrable_load_single_constant`: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
-- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time.
+- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time. A negative electricity price counts as zero here, so a start is never rewarded.
 - `def_minimum_on_time`: Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (short-cycle / min-up-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to stay on for at least 3 consecutive timesteps once started; load 1 has no constraint. A list shorter than `number_of_deferrable_loads` is padded with `0`, and a `null` entry counts as `0`, like the other per-load lists.
 
   Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
@@ -212,7 +214,7 @@ Example:
 	Defaults to an empty list (no groups).
 - `weather_forecast_method`: This will define the weather forecast method that will be used. The options are `open-meteo` to use the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/), `solcast` to use the [Solcast](https://solcast.com/) solar forecast service, `solar.forecast` to use the free public [Solar.Forecast](https://forecast.solar/) account and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `open-meteo` method.
 - `weather_forecast_pv_quantile_bias`: Blend factor that biases a central P50 PV forecast toward its conservative P10 (low) companion. `0` (default) uses P50, preserving existing behaviour; `1` uses P10; intermediate values apply `bias * P10 + (1 - bias) * P50`. With `weather_forecast_method: solcast`, EMHASS uses Solcast `pv_estimate` / `pv_estimate10`. For caller-supplied forecasts, the same blend applies when `pv_power_forecast_p10` is supplied alongside `pv_power_forecast`; without that companion the existing P50-only path is unchanged.
-- `load_forecast_method`: The load forecast method that will be used. The options are `typical` which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month, `naive` also called persistence that assumes that the forecast for a future period will be equal to the observed values in a past period, `mlforecaster` that uses regression models considering auto-regression lags as features and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `typical`.
+- `load_forecast_method`: The load forecast method that will be used. The options are `typical` which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month, `naive` also called persistence that assumes that the load at each time of day will be equal to the load observed at the same time of day on the previous day, `mlforecaster` that uses regression models considering auto-regression lags as features and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `typical`.
 ```{note} 
 
 For more information on these methods check the dedicated [Forecast section](forecasts)
@@ -226,6 +228,7 @@ The following parameters and definitions are only needed if `load_cost_forecast_
 		- period_hp_2:
 			- start: '17:24'
 			- end: '20:24'
+	- `tariff_schedule_time_zone`: Optional. The time zone identifier of the clock the `load_peak_hour_periods` are written in, for a tariff whose schedule clock differs from the site `time_zone` (for example a tariff published in fixed UTC+10 at a site whose civil time observes daylight saving). Empty by default, which interprets the periods in the site `time_zone` as before. See [Tariff schedule time zone](forecasts.md#tariff-schedule-time-zone).
 	- `load_peak_hours_cost`: The cost of the electrical energy from the grid during peak hours in currency/kWh. Defaults to 0.1907.
 	- `load_offpeak_hours_cost`: The cost of the electrical energy from the grid during non-peak hours in currency/kWh. Defaults to 0.1419.
 - `production_price_forecast_method`: Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are `constant` for a constant fixed value or `csv` to load custom price forecasts from a CSV file. The default CSV file path that will be used is `/data/data_prod_price_forecast.csv`.
@@ -302,10 +305,67 @@ Then the additional technical parameters:
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
+
 - `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False).
+- `inverter_ac_output_max` and `inverter_ac_input_max`: The maximum hybrid inverter AC output power (to the house and grid) and AC input power (from the grid, to charge the battery), in Watts (Default 5000 each).
+- `inverter_efficiency_dc_ac` and `inverter_efficiency_ac_dc`: Scalar efficiencies (percentage/100, Default 1.0) of the hybrid inverter conversion from the DC bus to AC and from AC to the DC bus. These are the default conversion model and stay fully supported; with only these set, the model is the one of every earlier release. Both are inverter parameters, not battery parameters: the battery's own efficiencies are `battery_charge_efficiency` and `battery_discharge_efficiency` (below).
+- `inverter_power_curve_dc_ac` and `inverter_power_curve_ac_dc`: Optional opt-in replacement of one direction's scalar efficiency by a power-dependent efficiency curve given as `[ac_power_w, efficiency]` points on the AC side (issue #746), solved as an exact piecewise-linear power transfer. Empty (the default) keeps the scalar. See [Hybrid inverter power curves](#hybrid-inverter-power-curves) below.
 - `compute_curtailment`: Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon (issue #342).
 - `inverter_stress_cost`: The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20).
 - `inverter_stress_segments`: The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10).
+
+When `pv_module_model` is a list, each entry is one PV plant and the other PV parameters are read per plant by position, so each of them needs a list with at least one entry per plant. The PVLib path (`weather_forecast_method` `open-meteo`) reads all of `pv_inverter_model`, `surface_tilt`, `surface_azimuth`, `modules_per_string` and `strings_per_inverter`; the `solar.forecast` method reads only `surface_tilt` and `surface_azimuth`. A list that is shorter than `pv_module_model`, or a single value where a list is expected, is a configuration error naming the parameter. A longer list keeps working, the extra entries are ignored and a warning says so.
+
+### Hybrid inverter power curves
+
+A real hybrid inverter loses a larger share of low power than of high power, which a single scalar efficiency cannot express. Setting `inverter_power_curve_dc_ac` and/or `inverter_power_curve_ac_dc` replaces the scalar efficiency of that direction with a power-dependent efficiency curve, which EMHASS converts to a power-transfer relation the optimizer must obey exactly. The feature is opt-in and each direction is independent: a direction without a curve keeps its scalar `inverter_efficiency_*`. It needs `inverter_is_hybrid` set to true. For measured-curve guidance see the [cookbook recipe](cookbook/battery_power_dependent_inverter_efficiency.md); for the equations see [the mathematical model](advanced_math_model.md#hybrid-inverter-conversion).
+
+Both parameters are a list of `[ac_power_w, efficiency]` points. The power coordinate is the **AC-side** power, the one that is commanded and measured at the inverter's AC terminals (the one `inverter_ac_output_max` and `inverter_ac_input_max` limit). Efficiency is a fraction (`0.97` for 97 %, never `97`). The DC bus is internal: it is where PV and the battery connect, and `P_batt` is a DC-bus power, not an AC one.
+
+| Parameter | Point is | AC-side power is | Efficiency is | Internal conversion |
+|---|---|---|---|---|
+| `inverter_power_curve_dc_ac` (discharge) | `[ac_output_power_w, efficiency]` | AC power delivered to the house and grid | AC output / DC input, `0 < efficiency <= 1` | `dc_input = ac_output / efficiency` |
+| `inverter_power_curve_ac_dc` (charge) | `[ac_input_power_w, efficiency]` | AC power drawn from the grid | DC output / AC input, `0 <= efficiency <= 1` | `dc_output = ac_input * efficiency` |
+
+```yaml
+plant_conf:
+  inverter_is_hybrid: true
+  inverter_ac_output_max: 4500
+  inverter_ac_input_max: 4500
+  # Illustrative values only - use your own measured or datasheet points.
+  # [ac_power_w, efficiency]; no point at 0 W is needed.
+  inverter_power_curve_dc_ac: [[100, 0.60], [1000, 0.82], [3000, 0.92], [4500, 0.94]]
+  inverter_power_curve_ac_dc: [[50, 0.0], [100, 0.55], [1000, 0.85], [4000, 0.93]]
+```
+
+Rules, each naming the parameter, the point and the value when violated:
+
+- at least two and at most 20 points, each a pair of finite numbers (booleans are rejected). The limit keeps the optimization tractable: every point after the first adds one binary variable per time step, so a 288-step horizon with 20 points on both curves already carries about 11 000 binaries. Datasheet efficiency tables rarely have more than a dozen points;
+- the AC-side power is strictly positive and strictly increasing. Do not enter a point at `0` W: efficiency at zero power is undefined, so EMHASS adds the transfer origin (0 W AC, 0 W DC) itself. This keeps the existing assumption that the inverter has no standby consumption in the model; keep accounting for standby where it is accounted for today (for example in the load forecast);
+- efficiency is a fraction between `0` and `1` (no energy gain). For `inverter_power_curve_ac_dc` (charging) it may be `0`: fixed losses can consume all of a small AC input, so a measured `[50, 0.0]` (50 W of AC input reaches the DC bus as 0 W) is valid and creates a flat zero-output segment (a dead zone). For `inverter_power_curve_dc_ac` (discharging) it must be above `0`: delivering positive AC output always takes DC power, and 0 % would need infinite DC input;
+- the converted DC-side power must not decrease as the AC-side power rises. It may stay flat (a dead zone, or an efficiency that falls exactly in proportion to power) but not fall;
+- `inverter_is_hybrid` must be true for the curve to be used.
+
+A parameter that is absent, or the explicit empty list `[]`, keeps the scalar efficiency. Any other value (`null`, `false`, `0`, an empty string, ...) is treated as a supplied curve and rejected as malformed: a curve is a physical model, so EMHASS never silently falls back to the scalar.
+
+If your datasheet gives efficiency against **DC** power instead, convert only the power coordinate to the AC side and copy the efficiency unchanged: `ac_power_w = dc_power_w * efficiency` for `inverter_power_curve_dc_ac` (AC is the output) and `ac_power_w = dc_power_w / efficiency` for `inverter_power_curve_ac_dc` (AC is the input).
+
+EMHASS converts each point once to a power-transfer breakpoint: `dc_input_w = ac_power_w / efficiency` for DC to AC, and `dc_output_w = ac_power_w * efficiency` for AC to DC. The optimizer then enforces the exact piecewise-linear *power transfer* through those breakpoints (and the internal origin). Efficiency itself is **not** interpolated between points: interpolating efficiency and multiplying by power would be quadratic and would change the optimization problem.
+
+How a violation is handled depends on where the curve comes from:
+
+- **Saving in the web configuration page** (`/set-config`) rejects an invalid curve with HTTP 400 and the reason shown in the page; nothing is written, so the previous configuration stays in place.
+- **Runtime parameters** passed to an optimization action are strict: an invalid curve, or a curve while `inverter_is_hybrid` is false, raises an error and the action does not run.
+- **An already-saved configuration** (for example an edited `config.json`) never prevents EMHASS or the configuration page from starting: an unusable curve is cleared, an error naming it is logged, and the scalar efficiency of that direction applies until you correct it. Check the log, because that is the only sign that the curve is not in use.
+- **`inverter_is_hybrid` false with a valid curve** keeps the curve stored and ignores it (a warning is logged), so you can switch hybrid off in the page without clearing the curves.
+
+Between points the converted power transfer is linear. The last point is the supported power domain and there is no extrapolation: the optimizer never plans more AC power through that direction than the last point's `ac_power_w`, and a warning is logged when the last point is below `inverter_ac_output_max` / `inverter_ac_input_max`. `inverter_ac_output_max` and `inverter_ac_input_max` still limit the AC side of a curved direction, so the effective limit is whichever is lower. A curve is a *total* transfer relation measured at the inverter boundary (it already contains its own conversion losses), not an increment on top of the scalar efficiency. While a direction has a curve, its scalar `inverter_efficiency_*` is not used at all. The curve acts on the whole DC bus, so for `dc_ac` the DC power is PV plus battery discharge.
+
+A dead zone is physics, not a defect, and EMHASS does not add a minimum-power rule: with a charge point such as `[50, 0.0]`, a sufficiently negative import price can make the optimizer draw that 50 W purely as inverter losses, because under your curve it is paid to do so. Every watt is still accounted for (it leaves as heat); it is not the unaccounted AC import that a one-sided relaxation of the curve would allow. EMHASS has no minimum battery charge or discharge power setting, so "never operate below N W" cannot be expressed by these curves.
+
+The curves describe the inverter only. They do not replace `battery_charge_efficiency` and `battery_discharge_efficiency`, which remain the separate battery/state-of-charge-stage efficiencies, and they do not replace `battery_charge_power_derating`, which stays a state-of-charge dependent power ceiling that is applied on top. With `number_of_batteries` greater than 1 nothing changes in how the curves are written: there is one hybrid inverter and one shared DC bus, so one curve per direction acts on the combined power of all batteries and PV; it is not a per-battery list. The curves may also be passed at runtime and a runtime value wins over the configured one. In the web configuration page, enter each curve as a single JSON list, for example `[[100, 0.60], [1000, 0.82], [4500, 0.94]]`; `[]` keeps the scalar efficiency, and a malformed list is rejected before saving.
+
+Existing configurations need no migration: leaving both parameters empty (their default), or not setting them at all, produces exactly the optimization of earlier releases. Each curved direction adds binary variables to the optimization: one fewer than its number of segments, per time step. With the internal origin, a curve of N configured points has N segments and adds N-1 binaries per time step. A 10-point curve therefore adds 9 binaries per time step (432 over 48 steps, 2592 over 288 steps) per curved direction, so keep curves to the few points your data justifies.
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 
@@ -313,8 +373,8 @@ If your system has a battery (set_use_battery=True), then you should define the 
 - `battery_discharge_power_max`: The maximum discharge power in Watts. Defaults to 1000.
 - `battery_charge_power_max`: The maximum charge power in Watts. Defaults to 1000.
 - `battery_charge_power_derating`: Optional table describing how the BMS steps its charge limit down as the battery fills, so the optimizer stops planning charge power the battery cannot deliver (issue #807). Each row is `[soc_threshold, power_max]`, both given as percentage/100, ascending by state of charge: above `soc_threshold` the charge power is capped at that much of `battery_charge_power_max`. For example `[[0.5, 0.84], [0.7, 0.42], [0.9, 0.23]]` means 84% of `battery_charge_power_max` above 50% SOC, 42% above 70% and 23% above 90%. Below the first threshold the flat maximum applies, so the table lists only the derating steps. Empty (the default) keeps the single flat ceiling, which is the behaviour of every earlier release.
-- `battery_discharge_efficiency`: The discharge efficiency. Defaults to 0.95.
-- `battery_charge_efficiency`: The charge efficiency. Defaults to 0.95.
+- `battery_discharge_efficiency`: The discharge efficiency of the battery itself (state-of-charge stage). Defaults to 0.95. The inverter conversion is configured separately, see `inverter_efficiency_dc_ac` and the optional power curves above.
+- `battery_charge_efficiency`: The charge efficiency of the battery itself (state-of-charge stage). Defaults to 0.95. The inverter conversion is configured separately, see `inverter_efficiency_ac_dc` and the optional power curves above.
 - `battery_nominal_energy_capacity`: The total capacity of the battery stack in Wh. Defaults to 5000.
 - `battery_minimum_state_of_charge`: The minimum allowable battery state of charge. Defaults to 0.3.
 - `battery_maximum_state_of_charge`: The maximum allowable battery state of charge. Defaults to 0.9.

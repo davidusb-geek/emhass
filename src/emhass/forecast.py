@@ -54,6 +54,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import pytz
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -66,11 +67,20 @@ from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
-from emhass.utils import add_date_features, get_days_list, set_df_index_freq
+from emhass.utils import (
+    add_date_features,
+    add_local_calendar_days,
+    describe_invalid_forecast_value,
+    get_days_list,
+    set_df_index_freq,
+)
 
 header_accept = "application/json"
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
 error_msg_method_not_valid = "Passed method is not valid"
+error_msg_tariff_schedule_time_zone = (
+    "tariff_schedule_time_zone is not a valid time zone identifier: %r"
+)
 
 # Per-request timeout (seconds) for the Open-Meteo HTTP fetch. Without an
 # explicit timeout aiohttp's default is long, so a slow/hanging Open-Meteo
@@ -166,9 +176,9 @@ class Forecast:
     data to electrical power. The PVLib module is used to model the PV plant.
 
     The specific methods for the load forecast are a first method (`naive`) that uses
-    a naive approach, also called persistance. It simply assumes that the forecast for
-    a future period will be equal to the observed values in a past period. The past
-    period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
+    a naive approach, also called persistance. It simply assumes that the load at each
+    time of day will be equal to the load observed at the same time of day on the most
+    recent day where it is known (see `get_naive_load_forecast`). A second method (`mlforecaster`)
     uses an internal custom forecasting model using machine learning. There is a section
     in the documentation explaining how to use this method.
 
@@ -312,13 +322,13 @@ class Forecast:
                 _delta_days,
             )
         if self.params["passed_data"].get("weather_forecast_cache", False):
-            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days * 2)).replace(
-                microsecond=0
-            )
+            self.end_forecast = add_local_calendar_days(
+                self.start_forecast, _delta_days * 2, self.time_zone
+            ).replace(microsecond=0)
         else:
-            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days)).replace(
-                microsecond=0
-            )
+            self.end_forecast = add_local_calendar_days(
+                self.start_forecast, _delta_days, self.time_zone
+            ).replace(microsecond=0)
         self.forecast_dates = pd.date_range(
             start=self.start_forecast,
             end=self.end_forecast - self.freq,
@@ -808,6 +818,7 @@ class Forecast:
             )
         headers = {"Accept": header_accept}
         data = pd.DataFrame()
+        self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_SOLAR_FORECAST)
 
         async with aiohttp.ClientSession() as session:
             for i in range(len(self.plant_conf["pv_module_model"])):
@@ -1370,10 +1381,58 @@ class Forecast:
             self.logger.error(f"Invalid type for {device_type} model: {type(model_spec)}")
             return None
 
+    # The plant_conf lists each forecast path reads per PV plant (indexed by the
+    # position of the plant in pv_module_model) when pv_module_model is a list.
+    _PV_PLANT_LIST_KEYS_PVLIB = (
+        "pv_inverter_model",
+        "surface_tilt",
+        "surface_azimuth",
+        "modules_per_string",
+        "strings_per_inverter",
+    )
+    _PV_PLANT_LIST_KEYS_SOLAR_FORECAST = ("surface_tilt", "surface_azimuth")
+
+    def _check_pv_plant_lists(self, keys: tuple[str, ...]) -> None:
+        """
+        Check the sibling PV plant lists against ``pv_module_model``.
+
+        Each entry of ``pv_module_model`` is one PV plant and every key in ``keys`` is read
+        per plant by position, so each of them has to be a list with at least one entry per
+        plant. A shorter list, or a single value where a list is expected, raises a
+        ValueError naming the parameter and the expected count. A longer list is accepted
+        with a warning, since only the first entries are read. Nothing is checked when
+        ``pv_module_model`` is not a list.
+
+        :param keys: The plant_conf keys the calling forecast path reads per plant
+        :type keys: tuple[str, ...]
+        """
+        models = self.plant_conf.get("pv_module_model")
+        if not isinstance(models, list):
+            return
+        n_plants = len(models)
+        for key in keys:
+            value = self.plant_conf.get(key)
+            if not isinstance(value, list):
+                raise ValueError(
+                    f"{key} must be a list with one entry per PV plant when pv_module_model "
+                    f"is a list ({n_plants} plants), got {type(value).__name__}"
+                )
+            if len(value) < n_plants:
+                raise ValueError(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
+                    "each PV plant needs its own value"
+                )
+            if len(value) > n_plants:
+                self.logger.warning(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}; "
+                    "the extra entries are ignored"
+                )
+
     def _calculate_pvlib_power(self, df_weather: pd.DataFrame) -> pd.Series:
         """
         Helper to simulate PV power generation using PVLib when no direct forecast is available.
         """
+        self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_PVLIB)
         # Setting the main parameters of the PV plant
         location = Location(latitude=self.lat, longitude=self.lon)
         temp_params = TEMPERATURE_MODEL_PARAMETERS["sapm"]["close_mount_glass_glass"]
@@ -1744,6 +1803,9 @@ class Forecast:
         r"""
         Get the date range vector of forecast dates that will be used when loading a CSV file.
 
+        The configured forecast horizon and any CSV extension are local calendar-day
+        counts resolved once from the frozen forecast start.
+
         :return: The forecast dates vector
         :rtype: pd.date_range
 
@@ -1755,12 +1817,15 @@ class Forecast:
         # _extract_daily_forecast then raises KeyError (issue #1076). The
         # rounding itself still happens exactly once, in __init__.
         start_forecast_csv = self.start_forecast
-        end_forecast_csv = (
-            start_forecast_csv + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        total_days = self.optim_conf["delta_forecast_daily"].days + int(timedelta_days or 0)
+        end_forecast_csv = add_local_calendar_days(
+            start_forecast_csv,
+            total_days,
+            self.time_zone,
         ).replace(microsecond=0)
         forecast_dates_csv = pd.date_range(
             start=start_forecast_csv,
-            end=end_forecast_csv + timedelta(days=timedelta_days) - self.freq,
+            end=end_forecast_csv - self.freq,
             freq=self.freq,
             tz=self.time_zone,
         )
@@ -1978,6 +2043,73 @@ class Forecast:
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
 
+    @staticmethod
+    def get_naive_load_forecast(
+        history: pd.Series,
+        forecast_dates: pd.DatetimeIndex,
+        tolerance: pd.Timedelta = pd.Timedelta(0),
+        logger: logging.Logger | None = None,
+    ) -> pd.Series:
+        r"""
+        Naive 1-day persistence: forecast each step with the load seen at the same time of day.
+
+        The value for a forecast timestamp ``t`` is the observation at the same local
+        wall-clock time ``n`` calendar days earlier, ``n >= 1`` being the smallest
+        number of days for which that time is already in the history. Any horizon
+        (shorter or longer than one day) thus repeats the most recent day of history
+        aligned on the time of day. When the forecast starts right after the last
+        observation and spans one day, this is the plain "last 24 h carried forward".
+
+        Calendar days are used, like ``delta_forecast_daily``, so across a DST change
+        07:00 is still forecast from 07:00. A wall-clock time that is missing on that
+        day (a gap in the history, or a time that did not exist or occurred twice
+        because of a DST change) is taken from the day before instead. If no earlier
+        day has it either (history too short), the observation nearest to
+        ``t - n * 24h`` is used and a warning is logged, so no NaN is returned.
+
+        :param history: Observed load with a tz-aware DatetimeIndex, oldest first.
+        :type history: pd.Series
+        :param forecast_dates: The tz-aware timestamps to forecast.
+        :type forecast_dates: pd.DatetimeIndex
+        :param tolerance: Maximum distance between a wanted past timestamp and the \
+            history sample used for it, defaults to 0 (exact match only).
+        :type tolerance: pd.Timedelta, optional
+        :param logger: Optional logger for the history-too-short warning.
+        :type logger: logging.Logger, optional
+        :return: The forecast values indexed by ``forecast_dates``.
+        :rtype: pd.Series
+        """
+        history = history.dropna()
+        one_day = pd.Timedelta(days=1)
+        tz = forecast_dates.tz
+        wall_clock = forecast_dates.tz_localize(None)
+        last_wall_clock = history.index[-1].tz_convert(tz).tz_localize(None)
+        days_back = np.maximum(1, np.ceil((wall_clock - last_wall_clock) / one_day))
+        first_wall_clock = history.index[0].tz_convert(tz).tz_localize(None)
+        # Calendar days covered, not 24 h spans: a spring-forward day lasts 23 h.
+        history_days = (last_wall_clock.normalize() - first_wall_clock.normalize()).days + 1
+        yhat = np.full(len(forecast_dates), np.nan)
+        for extra_days in range(history_days + 1):
+            source = (wall_clock - pd.to_timedelta(days_back + extra_days, unit="D")).tz_localize(
+                tz, ambiguous="NaT", nonexistent="NaT"
+            )
+            values = history.reindex(source, method="nearest", tolerance=tolerance).to_numpy()
+            yhat = np.where(np.isnan(yhat), values, yhat)
+            if not np.isnan(yhat).any():
+                break
+        missing = np.isnan(yhat)
+        if missing.any():
+            if logger:
+                logger.warning(
+                    f"Naive load forecast: no same-time-of-day history for {missing.sum()} of "
+                    f"{len(yhat)} forecast steps, using the nearest available observation."
+                )
+            nearest = history.reindex(
+                forecast_dates - pd.to_timedelta(days_back, unit="D"), method="nearest"
+            )
+            yhat[missing] = nearest.to_numpy()[missing]
+        return pd.Series(yhat, index=forecast_dates)
+
     async def _prepare_hass_load_data(
         self, days_min_load_forecast: int, method: str
     ) -> pd.DataFrame | bool:
@@ -2116,10 +2248,11 @@ class Forecast:
         return forecast_out.rename(columns={"load": "yhat"})
 
     def _get_load_forecast_naive(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Helper for naive forecast."""
-        forecast_horizon = len(self.forecast_dates)
-        historical_values = df.iloc[-forecast_horizon:]
-        return pd.DataFrame(historical_values.values, index=self.forecast_dates, columns=["yhat"])
+        """Helper for naive forecast, see ``get_naive_load_forecast``."""
+        yhat = Forecast.get_naive_load_forecast(
+            df.iloc[:, 0], self.forecast_dates, tolerance=self.freq / 2, logger=self.logger
+        )
+        return yhat.to_frame(name="yhat")
 
     async def _build_weather_future(
         self, data_last_window: pd.DataFrame, mlf
@@ -2395,6 +2528,10 @@ class Forecast:
         # Post-processing (Mix Forecast)
         p_load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
+            # +/-Inf or a non-numeric first value would crash the blend's
+            # round() before the final load check below can report it (#1135).
+            if self._reject_invalid_load(p_load_forecast):
+                return False
             # Load forecasts don't need curtailment protection - always use feedback
             p_load_forecast = Forecast.get_mix_forecast(
                 df_now,
@@ -2406,8 +2543,33 @@ class Forecast:
                 logger=self.logger,
                 configured_col=self.var_load,
             )
+        # Optimizer-facing load contract (#1135), enforced once for every method
+        # and after mixing: P_Load must be finite and >= 0 W. Household
+        # consumption cannot be negative, so a finite negative value (e.g. an
+        # unconstrained regression excursion) is clipped like negative PV;
+        # a non-finite value cannot be repaired and fails the cycle.
+        if self._reject_invalid_load(p_load_forecast):
+            return False
+        negative = p_load_forecast < 0
+        if negative.any():
+            self.logger.warning(
+                "Load forecast contained %d negative value(s); minimum=%g W, first at %s. "
+                "Values were clipped to 0 W before optimization.",
+                int(negative.sum()),
+                p_load_forecast.min(),
+                negative.idxmax(),
+            )
+            p_load_forecast = p_load_forecast.clip(lower=0)
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast
+
+    def _reject_invalid_load(self, p_load_forecast: pd.Series) -> bool:
+        """Log and return True if the load forecast holds a value that is not a finite real number."""
+        invalid = describe_invalid_forecast_value("P_Load", p_load_forecast.items())
+        if invalid is None:
+            return False
+        self.logger.error("Load forecast rejected before optimization: %s", invalid)
+        return True
 
     def get_load_cost_forecast(
         self,
@@ -2439,18 +2601,24 @@ class Forecast:
             df_final.index = df_final.index.astype("datetime64[ns, " + str(self.time_zone) + "]")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
+            # The peak periods are wall-clock times on the tariff schedule clock:
+            # the site time zone unless tariff_schedule_time_zone says otherwise.
+            schedule_tz_name = str(self.optim_conf.get("tariff_schedule_time_zone") or "").strip()
+            try:
+                schedule_tz = pytz.timezone(schedule_tz_name) if schedule_tz_name else None
+            except pytz.UnknownTimeZoneError:
+                self.logger.error(error_msg_tariff_schedule_time_zone, schedule_tz_name)
+                return False
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
-            list_df_hp = []
+            # Same instants re-expressed on the schedule clock. This is only a view
+            # for the wall-clock membership test; df_final keeps its site-time index.
+            schedule_index = df_final.index.tz_convert(schedule_tz or self.time_zone)
+            is_peak = np.zeros(len(df_final), dtype=bool)
             for _key, period_hp in self.optim_conf["load_peak_hour_periods"].items():
-                list_df_hp.append(
-                    df_final[self.var_load_cost].between_time(
-                        period_hp[0]["start"], period_hp[1]["end"]
-                    )
-                )
-            for df_hp in list_df_hp:
-                df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
-                    "load_peak_hours_cost"
-                ]
+                is_peak[
+                    schedule_index.indexer_between_time(period_hp[0]["start"], period_hp[1]["end"])
+                ] = True
+            df_final.loc[is_peak, self.var_load_cost] = self.optim_conf["load_peak_hours_cost"]
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -2467,8 +2635,9 @@ class Forecast:
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
-            # Check if the passed data has the correct length
-            if (
+            # Check if the passed data has the correct length. None means the
+            # runtime value was rejected (#1135): fail rather than crash.
+            if data_list is None or (
                 len(data_list) < len(self.forecast_dates)
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
@@ -2544,8 +2713,9 @@ class Forecast:
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
-            # Check if the passed data has the correct length
-            if (
+            # Check if the passed data has the correct length. None means the
+            # runtime value was rejected (#1135): fail rather than crash.
+            if data_list is None or (
                 len(data_list) < len(self.forecast_dates)
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
@@ -2693,8 +2863,10 @@ class Forecast:
                 self.logger.info("Saved the forecast results to cache, for later reference.")
 
         # Trim cached data to match requested dates
-        end_forecast = (
-            self.start_forecast + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        end_forecast = add_local_calendar_days(
+            self.start_forecast,
+            self.optim_conf["delta_forecast_daily"].days,
+            self.time_zone,
         ).replace(microsecond=0)
         forecast_dates = pd.date_range(
             start=self.start_forecast,
