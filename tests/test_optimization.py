@@ -4368,6 +4368,26 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def test_start_upper_bound_only_with_a_startup_penalty(self):
+        """start <= on only matters where a start is priced: without a startup
+        penalty it adds nothing to the optimum but can slow HiGHS down a lot on
+        problems with many semi-continuous loads, so it is only added for loads
+        with startup_penalty > 0."""
+
+        def has_bound(penalty):
+            self.fcst.params["passed_data"]["load_cost_forecast"] = [1.0] * 10
+            self.optim_conf.update(
+                {
+                    "set_deferrable_startup_penalty": [penalty],
+                    "treat_deferrable_load_as_semi_cont": [True],
+                }
+            )
+            self.run_penalty_test_forecast()
+            return any(str(c) == "p_def_start_0 <= p_def_bin2_0" for c in self.opt.prob.constraints)
+
+        self.assertFalse(has_bound(0.0))
+        self.assertTrue(has_bound(1.0))
+
     def test_startup_penalty_at_negative_prices(self):
         """At a negative price the startup penalty must not become a reward.
         Before, the start indicator (only bounded from below) was set in steps
