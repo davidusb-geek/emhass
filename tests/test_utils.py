@@ -1988,6 +1988,38 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             any("custom_predicted_temperature_id has 1 entries" in m for m in logs.output)
         )
 
+    async def test_runtime_custom_deferrable_state_id_is_applied(self):
+        """custom_deferrable_state_id passed at runtime replaces the default
+        command sensor ids, like custom_deferrable_forecast_id does for the power
+        sensors (docs/publish_data.md)."""
+        params = await TestUtils.get_test_params()
+        self.assertEqual(params["optim_conf"]["number_of_deferrable_loads"], 2)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams = {
+            "custom_deferrable_state_id": [
+                {
+                    "entity_id": f"sensor.my_command{k}",
+                    "device_class": "enum",
+                    "unit_of_measurement": "",
+                    "friendly_name": f"My command {k}",
+                }
+                for k in range(2)
+            ]
+        }
+        out_params, _, _, _ = await treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "publish-data",
+            logger,
+            emhass_conf,
+        )
+        ids = orjson.loads(out_params)["passed_data"]["custom_deferrable_state_id"]
+        self.assertEqual(ids, runtimeparams["custom_deferrable_state_id"])
+
     async def test_build_params_pads_def_minimum_on_off_time(self):
         """def_minimum_on_time / def_minimum_off_time must be padded to
         number_of_deferrable_loads like every sibling per-load array, so every

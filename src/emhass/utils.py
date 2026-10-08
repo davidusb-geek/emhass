@@ -2760,6 +2760,10 @@ async def treat_runtimeparams(
             params["passed_data"]["custom_deferrable_forecast_id"] = runtimeparams[
                 "custom_deferrable_forecast_id"
             ]
+        if "custom_deferrable_state_id" in runtimeparams.keys():
+            params["passed_data"]["custom_deferrable_state_id"] = runtimeparams[
+                "custom_deferrable_state_id"
+            ]
         if "custom_predicted_temperature_id" in runtimeparams.keys():
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
