@@ -615,6 +615,15 @@ def compile_heat_topology(topology: dict) -> dict:
     """
     if not isinstance(topology, dict) or not topology:
         return {}
+    # A missing or null field means "none"; any other value must have the right
+    # type, so a falsey value such as "" or 0 is not silently read as empty.
+    for key in ("sources", "storage", "consumers", "flows", "actuator_groups"):
+        if topology.get(key) is not None and not isinstance(topology[key], list):
+            raise ValueError(f"heat_topology.{key} must be a list")
+    if topology.get("cost_tracks") is not None and not isinstance(topology["cost_tracks"], dict):
+        raise ValueError("heat_topology.cost_tracks must be an object")
+    if not isinstance(topology.get("extend_deferrable_loads", False), bool):
+        raise ValueError("heat_topology.extend_deferrable_loads must be true or false")
     sources = topology.get("sources", []) or []
     storage = topology.get("storage", []) or []
     consumers = topology.get("consumers", []) or []
@@ -1082,6 +1091,166 @@ def compile_heat_topology(topology: dict) -> dict:
         "cost_forecast_per_deferrable_load": cost_per_load,
         "is_electric_load": is_electric_load,
     }
+
+
+def _runtime_shared_tanks_problem(tanks, n_loads: int) -> str | None:
+    """Why a runtime shared_thermal_tanks list cannot be used, or None.
+
+    Each tank's load_ids must be a list of whole numbers (not booleans or
+    strings) within the configured loads, a load may feed only one tank and
+    only once (otherwise its heat is counted twice and its power once), and
+    tank ids must be unique (a start-temperature override would update every
+    tank with that id). A non-list is reported by the caller.
+    """
+    if not isinstance(tanks, list) or not all(isinstance(t, dict) for t in tanks):
+        return None
+    members, ids = [], []
+    for t in tanks:
+        load_ids = t.get("load_ids")
+        if not isinstance(load_ids, list):
+            return f"tank {t.get('id')!r} needs load_ids as a list, got {load_ids!r}"
+        for i in load_ids:
+            # Check ints without converting them to float, which overflows for a
+            # huge integer.
+            whole = (isinstance(i, int) and not isinstance(i, bool)) or (
+                isinstance(i, float) and i.is_integer()
+            )
+            if not whole or not 0 <= int(i) < n_loads:
+                return (
+                    f"tank {t.get('id')!r} has load_ids entry {i!r}; it must be a "
+                    f"whole number from 0 to {n_loads - 1}"
+                )
+            members.append(int(i))
+        ids.append(str(t.get("id")))
+    repeated = sorted({i for i in members if members.count(i) > 1})
+    if repeated:
+        return f"load_ids {repeated} appear more than once; a load can feed only one tank, once"
+    repeated_ids = sorted({i for i in ids if ids.count(i) > 1})
+    if repeated_ids:
+        return f"tank ids {repeated_ids} are used more than once"
+    return None
+
+
+def _per_user_load_list(value, offset: int) -> list:
+    """A per-load value as a list for the user's ``offset`` loads: a list is
+    copied, a scalar (e.g. a runtime override) applies to each of them, and a
+    missing value is empty."""
+    if isinstance(value, list):
+        return list(value)
+    if value is None:
+        return []
+    return [value] * offset
+
+
+def _extend_optim_conf_with_compiled_topology(
+    optim_conf: dict, compiled: dict, logger: logging.Logger
+) -> None:
+    """Append compiled heat_topology loads after the user's configured loads.
+
+    Used when the topology sets ``extend_deferrable_loads: true``. The user's
+    first N deferrable loads stay untouched (short per-load arrays are padded
+    to N with the usual defaults first, longer ones truncated to N so the
+    compiled loads land at deterministic indices), the compiled loads take
+    indices N..N+M-1, and every compiled load reference (shared-tank
+    ``load_ids``, actuator-group ``deferrable<i>`` names) is shifted by N.
+    Existing manual ``shared_thermal_tanks`` / ``deferrable_load_groups``
+    entries are kept; the compiled ones are appended after them.
+    """
+    offset = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    num_compiled = compiled["number_of_deferrable_loads"]
+
+    # Per-load arrays: user's values (normalized to `offset` entries) followed
+    # by the compiled values. Pad defaults match the established per-load
+    # defaults used elsewhere (check_def_loads call sites).
+    pad_defaults = {
+        "nominal_power_of_deferrable_loads": 0.0,
+        "minimum_power_of_deferrable_loads": 0.0,
+        "treat_deferrable_load_as_semi_cont": True,
+        "operating_hours_of_each_deferrable_load": 0,
+        "set_deferrable_load_single_constant": False,
+        "set_deferrable_startup_penalty": 0.0,
+        "deferrable_load_max_cost": 0.0,
+        "set_deferrable_max_startups": 0,
+        "start_timesteps_of_each_deferrable_load": 0,
+        "end_timesteps_of_each_deferrable_load": 0,
+        "cost_forecast_per_deferrable_load": None,
+        "is_electric_load": True,
+    }
+    for key, default in pad_defaults.items():
+        existing = _per_user_load_list(optim_conf.get(key), offset)
+        existing += [default] * (offset - len(existing))
+        optim_conf[key] = existing[:offset] + list(compiled[key])
+    # Minimum on/off times and MPC operating timesteps are not compiled; keep the
+    # user's entries for their own loads and give the topology loads none (a
+    # longer user array must not leak onto the appended loads).
+    n_compiled = len(compiled["def_load_config"])
+    for key in (
+        "def_minimum_on_time",
+        "def_minimum_off_time",
+        "operating_timesteps_of_each_deferrable_load",
+    ):
+        existing = optim_conf.get(key)
+        if existing is not None:
+            existing = _per_user_load_list(existing, offset)[:offset]
+            optim_conf[key] = existing + [0] * (offset - len(existing)) + [0] * n_compiled
+    # Runtime state for the user's loads: the appended topology loads get the
+    # defaults the optimizer would assume (off, no elapsed time, no power), so
+    # every array matches the final load count. An array that already covers
+    # every load is kept, and one of any other length is left to the
+    # optimizer's own length handling.
+    for key, default in (
+        ("def_current_state", False),
+        ("def_current_on_timesteps", 0),
+        ("def_current_off_timesteps", 0),
+        ("def_current_power", 0.0),
+        ("def_current_operating_timesteps", 0),
+    ):
+        existing = optim_conf.get(key)
+        if isinstance(existing, list) and len(existing) == offset:
+            optim_conf[key] = list(existing) + [default] * n_compiled
+    # def_load_config pads with fresh dicts (no shared instance between slots).
+    def_cfgs = optim_conf.get("def_load_config")
+    def_cfgs = list(def_cfgs) if isinstance(def_cfgs, list) else []
+    def_cfgs += [{} for _ in range(offset - len(def_cfgs))]
+    optim_conf["def_load_config"] = def_cfgs[:offset] + list(compiled["def_load_config"])
+
+    # Shift compiled load references by the user's load count.
+    shifted_tanks = []
+    for tank in compiled["shared_thermal_tanks"]:
+        tank = dict(tank)
+        tank["load_ids"] = [int(i) + offset for i in tank.get("load_ids", [])]
+        shifted_tanks.append(tank)
+    shifted_groups = []
+    for group in compiled["deferrable_load_groups"]:
+        group = dict(group)
+        group["names"] = [
+            f"deferrable{int(name.removeprefix('deferrable')) + offset}"
+            for name in group.get("names", [])
+        ]
+        shifted_groups.append(group)
+    kept_tanks = list(optim_conf.get("shared_thermal_tanks") or [])
+    kept_ids = {str(t.get("id")) for t in kept_tanks if isinstance(t, dict)}
+    clashes = sorted(kept_ids & {str(t.get("id")) for t in shifted_tanks})
+    if clashes:
+        raise ValueError(
+            f"heat_topology storage ids {clashes} are also used by the configured "
+            "shared_thermal_tanks; with extend_deferrable_loads both are kept, so "
+            "each tank needs its own id"
+        )
+    optim_conf["shared_thermal_tanks"] = kept_tanks + shifted_tanks
+    optim_conf["deferrable_load_groups"] = (
+        list(optim_conf.get("deferrable_load_groups") or []) + shifted_groups
+    )
+
+    optim_conf["number_of_deferrable_loads"] = offset + num_compiled
+    logger.info(
+        "heat_topology extend_deferrable_loads: %d configured loads kept, "
+        "%d topology loads appended at indices %d..%d",
+        offset,
+        num_compiled,
+        offset,
+        offset + num_compiled - 1,
+    )
 
 
 def calculate_thermal_loss_signed(
@@ -2333,6 +2502,34 @@ async def treat_runtimeparams(
                             "start_temperature"
                         ] = runtimeparams["heater_start_temperatures"][k]
 
+        # Shared thermal tanks (multi-source storage) passed at runtime: the
+        # manual flat alternative to heat_topology (issue #539). Same surface
+        # as def_load_config above - runtime-only, no config-file counterpart.
+        if "shared_thermal_tanks" in runtimeparams:
+            tanks = runtimeparams["shared_thermal_tanks"]
+            problem = _runtime_shared_tanks_problem(
+                tanks, int(params["optim_conf"].get("number_of_deferrable_loads") or 0)
+            )
+            if problem is not None:
+                logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
+            elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
+                params["optim_conf"]["shared_thermal_tanks"] = tanks
+                topology = params["optim_conf"].get("heat_topology")
+                if isinstance(topology, dict) and topology:
+                    logger.warning(
+                        "Both heat_topology and runtime shared_thermal_tanks are "
+                        "set; the compiled topology replaces the runtime tank "
+                        "list (with extend_deferrable_loads: true the runtime "
+                        "tanks are kept and the topology's tanks appended). "
+                        "Pass heat_topology itself at runtime to change tanks "
+                        "per run."
+                    )
+            else:
+                logger.warning(
+                    "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
+                    type(tanks).__name__,
+                )
+
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
         # so they cannot silently drift onto different timelines.
@@ -2829,42 +3026,62 @@ async def treat_runtimeparams(
     # it down to flat optim_conf primitives. Runtime override wins over static
     # config because runtimeparams have already been merged above.
     heat_topology = optim_conf.get("heat_topology")
+    extend_mode = bool(
+        isinstance(heat_topology, dict)
+        and heat_topology
+        and heat_topology.get("extend_deferrable_loads", False)
+    )
     if isinstance(heat_topology, dict) and heat_topology:
         try:
             compiled = compile_heat_topology(heat_topology)
         except ValueError as e:
             logger.error("heat_topology compile failed: %s", e)
             raise
-        # Merge compiled fields into optim_conf, allowing user-set fields to win
-        # for things the compiler always populates (e.g. operating_hours).
-        for key, val in compiled.items():
-            if key not in optim_conf or optim_conf[key] in (None, [], {}):
-                optim_conf[key] = val
-            else:
-                # For the structural fields we ALWAYS want compiled values
-                # (otherwise the compiled def_load_config doesn't match
-                # number_of_deferrable_loads, etc.)
-                if key in {
-                    "number_of_deferrable_loads",
-                    "def_load_config",
-                    "shared_thermal_tanks",
-                    "deferrable_load_groups",
-                    "nominal_power_of_deferrable_loads",
-                    "minimum_power_of_deferrable_loads",
-                    "treat_deferrable_load_as_semi_cont",
-                    "cost_forecast_per_deferrable_load",
-                    # All per-load arrays must match number_of_deferrable_loads,
-                    # which the compiler sets - so override any defaults.
-                    "set_deferrable_load_single_constant",
-                    "set_deferrable_startup_penalty",
-                    "deferrable_load_max_cost",
-                    "set_deferrable_max_startups",
-                    "operating_hours_of_each_deferrable_load",
-                    "start_timesteps_of_each_deferrable_load",
-                    "end_timesteps_of_each_deferrable_load",
-                    "is_electric_load",
-                }:
+        if heat_topology.get("extend_deferrable_loads", False):
+            # Opt-in append mode: keep the user's configured deferrable loads
+            # and add the compiled topology loads AFTER them. Setting the flag
+            # is the user asserting their flat per-load config describes real
+            # loads (the compiler cannot tell configured loads apart from
+            # defaults, which is why replace is the default).
+            _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+            # naive-mpc-optim reads the operating timesteps from passed_data.
+            passed = params.get("passed_data") or {}
+            if passed.get("operating_timesteps_of_each_deferrable_load") is not None:
+                passed["operating_timesteps_of_each_deferrable_load"] = optim_conf[
+                    "operating_timesteps_of_each_deferrable_load"
+                ]
+        else:
+            # Default replace mode: merge compiled fields into optim_conf,
+            # allowing user-set fields to win for things the compiler always
+            # populates (e.g. operating_hours).
+            for key, val in compiled.items():
+                if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
+                else:
+                    # For the structural fields we ALWAYS want compiled values
+                    # (otherwise the compiled def_load_config doesn't match
+                    # number_of_deferrable_loads, etc.)
+                    if key in {
+                        "number_of_deferrable_loads",
+                        "def_load_config",
+                        "shared_thermal_tanks",
+                        "deferrable_load_groups",
+                        "nominal_power_of_deferrable_loads",
+                        "minimum_power_of_deferrable_loads",
+                        "treat_deferrable_load_as_semi_cont",
+                        "cost_forecast_per_deferrable_load",
+                        # All per-load arrays must match number_of_deferrable_loads,
+                        # which the compiler sets - so override any defaults.
+                        "set_deferrable_load_single_constant",
+                        "set_deferrable_startup_penalty",
+                        "deferrable_load_max_cost",
+                        "set_deferrable_max_startups",
+                        "operating_hours_of_each_deferrable_load",
+                        "start_timesteps_of_each_deferrable_load",
+                        "end_timesteps_of_each_deferrable_load",
+                        "is_electric_load",
+                    }:
+                        optim_conf[key] = val
         params["optim_conf"] = optim_conf
         logger.info(
             "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
@@ -2882,6 +3099,47 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
+    # Per-tank start-temperature override (issue #539), keyed by tank id.
+    # Applied AFTER the heat_topology compile so it patches manual and
+    # compiled tanks alike - the per-run analog of soc_init and
+    # heater_start_temperatures for MPC loops feeding live sensor readings.
+    if runtimeparams and "shared_tank_start_temperatures" in runtimeparams:
+        overrides = runtimeparams["shared_tank_start_temperatures"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_start_temperatures must be an object mapping tank "
+                "id to a temperature, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, temp in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_start_temperatures: unknown tank id '%s' "
+                        "(known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                try:
+                    # A boolean is not a temperature (float(True) would be 1.0).
+                    temp_value = None if isinstance(temp, bool) else float(temp)
+                except (TypeError, ValueError, OverflowError):
+                    temp_value = None
+                if temp_value is None or not math.isfinite(temp_value):
+                    logger.warning(
+                        "shared_tank_start_temperatures['%s']=%r is not numeric; ignoring.",
+                        tank_id,
+                        temp,
+                    )
+                    continue
+                for tank in tanks:
+                    if isinstance(tank, dict) and str(tank.get("id")) == tank_id:
+                        tank["start_temperature"] = temp_value
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the
     # association loop above, the def_load_config handling, and the
@@ -2918,6 +3176,16 @@ async def treat_runtimeparams(
                 # array should never be reported as a runtime override.
                 was_provided = runtime_value is not None
 
+                if (
+                    was_provided
+                    and not isinstance(runtime_value, list)
+                    and extend_mode
+                    and isinstance(optim_conf.get(def_array_name), list)
+                    and len(optim_conf[def_array_name]) == final_num_def_loads
+                ):
+                    # Extend mode already applied the scalar to the user's own
+                    # loads and kept the compiled values of the topology loads.
+                    continue
                 if was_provided and not isinstance(runtime_value, list):
                     # A runtime scalar means every load, not "pad with the
                     # default" - mirrors check_batt_params's silent

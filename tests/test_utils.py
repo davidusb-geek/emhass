@@ -1853,6 +1853,508 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optim_conf_out["set_deferrable_startup_penalty"], [0.3])
         self.assertEqual(optim_conf_out["set_deferrable_max_startups"], [2])
 
+    @staticmethod
+    def _hp_booster_extend_topo(extend):
+        """HP + booster feeding one DHW tank, with a mutex actuator group."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 48,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [65] * 48,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+            "actuator_groups": [
+                {"flows": [["hp", "dhw"], ["booster", "dhw"]], "mutual_exclusion": True}
+            ],
+        }
+        if extend:
+            topo["extend_deferrable_loads"] = True
+        return topo
+
+    async def test_treat_runtimeparams_heat_topology_extend_appends_loads(self):
+        """extend_deferrable_loads keeps the configured loads and appends the
+        topology loads after them, shifting tank load_ids and group names."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        original_num = optim_conf["number_of_deferrable_loads"]
+        original_nominal = list(optim_conf["nominal_power_of_deferrable_loads"])
+
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=True)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(out["number_of_deferrable_loads"], original_num + 2)
+        # User loads untouched, topology loads appended
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][:original_num], original_nominal)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][original_num:], [3500.0, 3000.0])
+        # Compiled load references shifted by the user's load count
+        self.assertEqual(
+            out["shared_thermal_tanks"][0]["load_ids"],
+            [original_num, original_num + 1],
+        )
+        self.assertEqual(
+            out["deferrable_load_groups"][0]["names"],
+            [f"deferrable{original_num}", f"deferrable{original_num + 1}"],
+        )
+        # Per-load arrays all sized to the new count; padded slots get defaults
+        for key in (
+            "treat_deferrable_load_as_semi_cont",
+            "set_deferrable_load_single_constant",
+            "cost_forecast_per_deferrable_load",
+            "is_electric_load",
+            "def_load_config",
+        ):
+            self.assertEqual(len(out[key]), original_num + 2, key)
+        self.assertEqual(out["is_electric_load"], [True] * (original_num + 2))
+        self.assertIn("thermal_source", out["def_load_config"][original_num])
+
+    async def test_heat_topology_extend_keeps_compiled_values_under_runtime_scalars(self):
+        """In extend mode a runtime scalar applies to the user's own loads only:
+        the appended topology loads keep their compiled ratings and get no
+        minimum on/off time. Before, the scalar was broadcast over every load,
+        so a 3000 W runtime nominal power overwrote a 3500 W heat pump."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        n_user = optim_conf["number_of_deferrable_loads"]
+        runtimeparams_json = orjson.dumps(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "nominal_power_of_deferrable_loads": 1234,
+                "def_minimum_on_time": 2,
+            }
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][:n_user], [1234] * n_user)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][n_user:], [3500.0, 3000.0])
+        self.assertEqual(out["def_minimum_on_time"][:n_user], [2] * n_user)
+        self.assertEqual(out["def_minimum_on_time"][n_user:], [0, 0])
+
+    async def test_heat_topology_extend_pads_operating_timesteps_for_mpc(self):
+        """A runtime operating_timesteps_of_each_deferrable_load covers the user's
+        loads; extend mode appends 0 for the topology loads in optim_conf and in
+        passed_data, which naive-mpc-optim reads. A short array made the
+        optimizer index past its end."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        n_user = optim_conf["number_of_deferrable_loads"]
+        runtimeparams_json = orjson.dumps(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "prediction_horizon": 10,
+                "operating_timesteps_of_each_deferrable_load": [4] * n_user,
+            }
+        ).decode("utf-8")
+        params_out, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        expected = [4] * n_user + [0, 0]
+        self.assertEqual(out["operating_timesteps_of_each_deferrable_load"], expected)
+        passed = orjson.loads(params_out)["passed_data"]
+        self.assertEqual(passed["operating_timesteps_of_each_deferrable_load"], expected)
+
+    async def test_heat_topology_extend_does_not_leak_minimum_times(self):
+        """A def_minimum_on/off_time array longer than the user's load count must
+        not leak its extra entries onto the appended topology loads."""
+        params = await TestUtils.get_test_params()
+        original_num = params["optim_conf"]["number_of_deferrable_loads"]
+        params["optim_conf"]["def_minimum_on_time"] = [3] * (original_num + 4)
+        params["optim_conf"]["def_minimum_off_time"] = [2] * (original_num + 4)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=True)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(out["def_minimum_on_time"], [3] * original_num + [0, 0])
+        self.assertEqual(out["def_minimum_off_time"], [2] * original_num + [0, 0])
+
+    def test_compile_heat_topology_rejects_wrong_types(self):
+        """Wrong top-level types raise the documented ValueError instead of an
+        AttributeError, and a string extend flag is not treated as true."""
+        for topology, field in (
+            ({"sources": [], "flows": "x"}, "flows"),
+            ({"sources": {"id": "hp"}}, "sources"),
+            ({"sources": [], "cost_tracks": ["gas"]}, "cost_tracks"),
+            ({"sources": [], "extend_deferrable_loads": "false"}, "extend_deferrable_loads"),
+            # A falsey value of the wrong type is still the wrong type.
+            ({"sources": [], "flows": ""}, "flows"),
+            ({"sources": [], "storage": 0}, "storage"),
+            ({"sources": [], "cost_tracks": ""}, "cost_tracks"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, f"heat_topology.{field}"):
+                    utils.compile_heat_topology(topology)
+
+    async def test_treat_runtimeparams_heat_topology_replace_stays_default(self):
+        """Without the flag the compiler keeps today's replace behaviour:
+        the topology defines the whole load set, indices start at 0."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=False)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+        self.assertEqual(out["deferrable_load_groups"][0]["names"], ["deferrable0", "deferrable1"])
+
+    @staticmethod
+    async def _run_treat_runtimeparams(runtimeparams_dict, set_type="naive-mpc-optim"):
+        """Helper: run treat_runtimeparams with default params and the given
+        runtime dict; return the resulting optim_conf."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams_json = orjson.dumps(runtimeparams_dict).decode("utf-8")
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        return optim_conf_out
+
+    @staticmethod
+    def _manual_tank(start_temperature=50.0):
+        return {
+            "id": "dhw",
+            "load_ids": [0, 1],
+            "volume": 0.2,
+            "start_temperature": start_temperature,
+            "min_temperatures": [45.0] * 48,
+            "max_temperatures": [65.0] * 48,
+        }
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_bad_members(self):
+        """Runtime tanks whose load_ids are not a list of whole numbers within the
+        configured loads, or whose ids repeat, are ignored with a warning: a
+        scalar crashed, a string could select the wrong load, and an index past
+        the last load broke the solve."""
+        two_loads = [
+            {"thermal_source": {"efficiency": 1.0}},
+            {"thermal_source": {"efficiency": 1.0}},
+        ]
+        bad_cases = {
+            "scalar": [dict(self._manual_tank(), load_ids=0)],
+            "string": [dict(self._manual_tank(), load_ids=["0"])],
+            "bool": [dict(self._manual_tank(), load_ids=[True])],
+            "out of range": [dict(self._manual_tank(), load_ids=[0, 5])],
+            "duplicate tank id": [
+                dict(self._manual_tank(), load_ids=[0]),
+                dict(self._manual_tank(), load_ids=[1]),
+            ],
+        }
+        for case, tanks in bad_cases.items():
+            with self.subTest(case=case), self.assertLogs(logger, level="WARNING"):
+                out = await self._run_treat_runtimeparams(
+                    {"def_load_config": two_loads, "shared_thermal_tanks": tanks}
+                )
+                self.assertFalse(out.get("shared_thermal_tanks"))
+        out = await self._run_treat_runtimeparams(
+            {"def_load_config": two_loads, "shared_thermal_tanks": [self._manual_tank()]}
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+
+    async def test_treat_runtimeparams_start_temperature_matches_ids_as_text(self):
+        """A JSON object key is always a string, so a tank with a numeric id is
+        matched by its text; a boolean is not a temperature and is ignored."""
+        tank = dict(self._manual_tank(start_temperature=50.0), id=7)
+        out = await self._run_treat_runtimeparams(
+            {"shared_thermal_tanks": [tank], "shared_tank_start_temperatures": {"7": 41.0}}
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 41.0)
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {"dhw": True},
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+    async def _run_treat_runtimeparams_dict(self, runtimeparams, set_type="naive-mpc-optim"):
+        """Like _run_treat_runtimeparams, but passes the dict as is (no JSON
+        round trip), so values JSON cannot carry, like huge integers, reach it."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            runtimeparams,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        return optim_conf_out
+
+    async def test_runtime_tanks_and_start_temperatures_reject_huge_integers(self):
+        """An integer too large for a float is rejected with a warning instead of
+        an OverflowError that aborts the request."""
+        huge = 10**400
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams_dict(
+                {"shared_thermal_tanks": [dict(self._manual_tank(), load_ids=[0, huge])]}
+            )
+        self.assertFalse(out.get("shared_thermal_tanks"))
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams_dict(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {"dhw": huge},
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+    async def test_heat_topology_extend_pads_runtime_state_arrays(self):
+        """Runtime state given for the user's loads gets the defaults for the
+        appended topology loads (off, no elapsed time, no power), so every array
+        matches the final load count; an array that already covers every load is
+        kept as is."""
+        params = await TestUtils.get_test_params()
+        n_user = params["optim_conf"]["number_of_deferrable_loads"]
+        out = await self._run_treat_runtimeparams(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "prediction_horizon": 10,
+                "def_current_state": [True] * n_user,
+                "def_current_on_timesteps": [3] * n_user,
+                "def_current_off_timesteps": [2] * n_user,
+                "def_current_power": [500.0] * n_user,
+                "def_current_operating_timesteps": [1] * n_user,
+            }
+        )
+        self.assertEqual(out["def_current_state"], [True] * n_user + [False, False])
+        self.assertEqual(out["def_current_on_timesteps"], [3] * n_user + [0, 0])
+        self.assertEqual(out["def_current_off_timesteps"], [2] * n_user + [0, 0])
+        self.assertEqual(out["def_current_power"], [500.0] * n_user + [0.0, 0.0])
+        self.assertEqual(out["def_current_operating_timesteps"], [1] * n_user + [0, 0])
+        full = [True] * n_user + [True, False]
+        out = await self._run_treat_runtimeparams(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "prediction_horizon": 10,
+                "def_current_state": full,
+            }
+        )
+        self.assertEqual(out["def_current_state"], full)
+
+    async def test_heat_topology_extend_keeps_compiled_values_under_short_runtime_lists(self):
+        """A runtime per-load list that covers only the user's loads keeps the
+        compiled values of the appended topology loads."""
+        params = await TestUtils.get_test_params()
+        n_user = params["optim_conf"]["number_of_deferrable_loads"]
+        out = await self._run_treat_runtimeparams(
+            {
+                "heat_topology": self._hp_booster_extend_topo(extend=True),
+                "nominal_power_of_deferrable_loads": [1234] * n_user,
+                "def_minimum_on_time": [2] * n_user,
+            },
+            set_type="dayahead-optim",
+        )
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][:n_user], [1234] * n_user)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][n_user:], [3500.0, 3000.0])
+        self.assertEqual(out["def_minimum_on_time"][n_user:], [0, 0])
+
+    async def test_heat_topology_extend_rejects_a_tank_id_used_twice(self):
+        """In extend mode the kept runtime tanks and the compiled ones share one
+        list; two tanks with the same id would both take that id's start
+        temperature, so the combination is rejected."""
+        with self.assertRaisesRegex(ValueError, "dhw"):
+            await self._run_treat_runtimeparams(
+                {
+                    "def_load_config": [
+                        {"thermal_source": {"efficiency": 1.0}},
+                        {"thermal_source": {"efficiency": 1.0}},
+                    ],
+                    "shared_thermal_tanks": [self._manual_tank()],
+                    "heat_topology": self._hp_booster_extend_topo(extend=True),
+                }
+            )
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_runtime(self):
+        """shared_thermal_tanks passed at runtime lands in optim_conf: the
+        manual flat alternative to heat_topology (issue #539), so tanks can be
+        combined with arbitrary other deferrable loads and refreshed per run."""
+        out = await self._run_treat_runtimeparams(
+            {
+                "def_load_config": [
+                    {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.4}},
+                    {"thermal_source": {"efficiency": 1.0}},
+                ],
+                "shared_thermal_tanks": [self._manual_tank()],
+            }
+        )
+        self.assertEqual(len(out["shared_thermal_tanks"]), 1)
+        self.assertEqual(out["shared_thermal_tanks"][0]["id"], "dhw")
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_garbage(self):
+        """A non-list (e.g. an accidentally stringified payload) is ignored
+        with a warning instead of crashing the optimizer later."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams({"shared_thermal_tanks": "[{'id': 'dhw'}]"})
+        self.assertTrue(any("shared_thermal_tanks" in m for m in log_cm.output))
+        self.assertFalse(out.get("shared_thermal_tanks"))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_patch(self):
+        """shared_tank_start_temperatures patches a manual tank by id; unknown
+        ids and non-numeric values warn and are skipped."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {
+                        "dhw": 48.5,
+                        "no_such_tank": 30.0,
+                        # non-numeric for a KNOWN id requires a second tank
+                    },
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 48.5)
+        self.assertTrue(any("no_such_tank" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_non_numeric(self):
+        """A non-numeric override for a known tank id warns and keeps the
+        configured start_temperature."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {"dhw": "warm-ish"},
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        self.assertTrue(any("not numeric" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_non_finite(self):
+        """A non-finite override (e.g. a sensor reading "nan" or "inf") warns
+        and keeps the configured start_temperature: NaN would erase the
+        initial-state constraint."""
+        for bad in ("nan", "inf", float("nan")):
+            with self.subTest(value=bad), self.assertLogs(logger, level="WARNING"):
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                        "shared_tank_start_temperatures": {"dhw": bad},
+                    }
+                )
+                self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_duplicate_members(self):
+        """A runtime tank that lists the same load twice would count that source's
+        heat twice while its electricity is counted once: the tank list is
+        ignored with a warning."""
+        # The optimizer reads members with int(), so 0, 0.0 and "00" are the
+        # same load.
+        for ids in ([0, 0], [0, 0.0], [0, "00"]):
+            tank = self._manual_tank()
+            tank["load_ids"] = ids
+            with self.subTest(load_ids=ids), self.assertLogs(logger, level="WARNING") as log_cm:
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "def_load_config": [{"thermal_source": {"efficiency": 1.0}}],
+                        "shared_thermal_tanks": [tank],
+                    }
+                )
+                self.assertFalse(out.get("shared_thermal_tanks"))
+                self.assertTrue(any("load_ids" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_patches_compiled(self):
+        """The override applies AFTER the heat_topology compile, so a tank that
+        only exists as compiled topology output is patched too."""
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 10000}],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [60] * 48,
+                }
+            ],
+            "flows": [{"from": "boiler", "to": "tank"}],
+        }
+        out = await self._run_treat_runtimeparams(
+            {
+                "heat_topology": topo,
+                "shared_tank_start_temperatures": {"tank": 41.0},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 41.0)
+
     async def test_treat_runtimeparams_bool_coercion(self):
         """_cast_bool None-guard and scalar-padding paths must be covered.
 
