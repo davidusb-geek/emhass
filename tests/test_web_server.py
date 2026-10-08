@@ -812,6 +812,15 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             # Not an object at all: a list, or a JSON topology quoted as a string.
             [{"id": "gas"}],
             '{"sources": []}',
+            # A number too large for a float (OverflowError in the compiler).
+            {
+                "sources": [{**gas, "nominal_power": 10**400}],
+                "storage": storage,
+                "flows": [{"from": "gas", "to": "dhw"}],
+            },
+            # A misspelled top-level key: it would compile to zero loads and
+            # replace the configured ones.
+            {"source": [gas]},
         ):
             with self.subTest(topology=bad):
                 response = await self.client.post("/set-config", json={"heat_topology": bad})

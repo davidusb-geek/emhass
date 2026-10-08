@@ -584,6 +584,21 @@ def calculate_surface_solar_gain(
     return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
 
 
+# The top-level keys compile_heat_topology reads. The compiler ignores any other
+# key; the config page rejects them on save, where an unknown key is a typo.
+HEAT_TOPOLOGY_KEYS = frozenset(
+    {
+        "sources",
+        "storage",
+        "consumers",
+        "flows",
+        "actuator_groups",
+        "cost_tracks",
+        "extend_deferrable_loads",
+    }
+)
+
+
 def compile_heat_topology(topology: dict) -> dict:
     """Compile a heat-topology graph descriptor into flat optim_conf fields.
 
