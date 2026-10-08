@@ -176,9 +176,9 @@ class Forecast:
     data to electrical power. The PVLib module is used to model the PV plant.
 
     The specific methods for the load forecast are a first method (`naive`) that uses
-    a naive approach, also called persistance. It simply assumes that the forecast for
-    a future period will be equal to the observed values in a past period. The past
-    period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
+    a naive approach, also called persistance. It simply assumes that the load at each
+    time of day will be equal to the load observed at the same time of day on the most
+    recent day where it is known (see `get_naive_load_forecast`). A second method (`mlforecaster`)
     uses an internal custom forecasting model using machine learning. There is a section
     in the documentation explaining how to use this method.
 
@@ -2043,6 +2043,73 @@ class Forecast:
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
 
+    @staticmethod
+    def get_naive_load_forecast(
+        history: pd.Series,
+        forecast_dates: pd.DatetimeIndex,
+        tolerance: pd.Timedelta = pd.Timedelta(0),
+        logger: logging.Logger | None = None,
+    ) -> pd.Series:
+        r"""
+        Naive 1-day persistence: forecast each step with the load seen at the same time of day.
+
+        The value for a forecast timestamp ``t`` is the observation at the same local
+        wall-clock time ``n`` calendar days earlier, ``n >= 1`` being the smallest
+        number of days for which that time is already in the history. Any horizon
+        (shorter or longer than one day) thus repeats the most recent day of history
+        aligned on the time of day. When the forecast starts right after the last
+        observation and spans one day, this is the plain "last 24 h carried forward".
+
+        Calendar days are used, like ``delta_forecast_daily``, so across a DST change
+        07:00 is still forecast from 07:00. A wall-clock time that is missing on that
+        day (a gap in the history, or a time that did not exist or occurred twice
+        because of a DST change) is taken from the day before instead. If no earlier
+        day has it either (history too short), the observation nearest to
+        ``t - n * 24h`` is used and a warning is logged, so no NaN is returned.
+
+        :param history: Observed load with a tz-aware DatetimeIndex, oldest first.
+        :type history: pd.Series
+        :param forecast_dates: The tz-aware timestamps to forecast.
+        :type forecast_dates: pd.DatetimeIndex
+        :param tolerance: Maximum distance between a wanted past timestamp and the \
+            history sample used for it, defaults to 0 (exact match only).
+        :type tolerance: pd.Timedelta, optional
+        :param logger: Optional logger for the history-too-short warning.
+        :type logger: logging.Logger, optional
+        :return: The forecast values indexed by ``forecast_dates``.
+        :rtype: pd.Series
+        """
+        history = history.dropna()
+        one_day = pd.Timedelta(days=1)
+        tz = forecast_dates.tz
+        wall_clock = forecast_dates.tz_localize(None)
+        last_wall_clock = history.index[-1].tz_convert(tz).tz_localize(None)
+        days_back = np.maximum(1, np.ceil((wall_clock - last_wall_clock) / one_day))
+        first_wall_clock = history.index[0].tz_convert(tz).tz_localize(None)
+        # Calendar days covered, not 24 h spans: a spring-forward day lasts 23 h.
+        history_days = (last_wall_clock.normalize() - first_wall_clock.normalize()).days + 1
+        yhat = np.full(len(forecast_dates), np.nan)
+        for extra_days in range(history_days + 1):
+            source = (wall_clock - pd.to_timedelta(days_back + extra_days, unit="D")).tz_localize(
+                tz, ambiguous="NaT", nonexistent="NaT"
+            )
+            values = history.reindex(source, method="nearest", tolerance=tolerance).to_numpy()
+            yhat = np.where(np.isnan(yhat), values, yhat)
+            if not np.isnan(yhat).any():
+                break
+        missing = np.isnan(yhat)
+        if missing.any():
+            if logger:
+                logger.warning(
+                    f"Naive load forecast: no same-time-of-day history for {missing.sum()} of "
+                    f"{len(yhat)} forecast steps, using the nearest available observation."
+                )
+            nearest = history.reindex(
+                forecast_dates - pd.to_timedelta(days_back, unit="D"), method="nearest"
+            )
+            yhat[missing] = nearest.to_numpy()[missing]
+        return pd.Series(yhat, index=forecast_dates)
+
     async def _prepare_hass_load_data(
         self, days_min_load_forecast: int, method: str
     ) -> pd.DataFrame | bool:
@@ -2181,10 +2248,11 @@ class Forecast:
         return forecast_out.rename(columns={"load": "yhat"})
 
     def _get_load_forecast_naive(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Helper for naive forecast."""
-        forecast_horizon = len(self.forecast_dates)
-        historical_values = df.iloc[-forecast_horizon:]
-        return pd.DataFrame(historical_values.values, index=self.forecast_dates, columns=["yhat"])
+        """Helper for naive forecast, see ``get_naive_load_forecast``."""
+        yhat = Forecast.get_naive_load_forecast(
+            df.iloc[:, 0], self.forecast_dates, tolerance=self.freq / 2, logger=self.logger
+        )
+        return yhat.to_frame(name="yhat")
 
     async def _build_weather_future(
         self, data_last_window: pd.DataFrame, mlf
