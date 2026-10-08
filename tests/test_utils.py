@@ -4268,6 +4268,17 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
         self.assertTrue(any("dhw" in m and "min_temperatures[2]" in m for m in logs.output))
 
+    def test_null_overshoot_temperature_is_treated_as_unset(self):
+        """overshoot_temperature: null on a source or a storage means "not set":
+        it compiles, and the source block carries no threshold of its own, so it
+        inherits the storage's at solve time."""
+        topo = self._capped_hp_only_topo(53.0, [45.0] * 4)
+        topo["sources"][0]["overshoot_temperature"] = None
+        topo["storage"][0]["overshoot_temperature"] = None
+        out = utils.compile_heat_topology(topo)
+        self.assertNotIn("overshoot_temperature", out["def_load_config"][0]["thermal_source"])
+        self.assertNotIn("overshoot_temperature", out["shared_thermal_tanks"][0])
+
     def test_min_temperatures_above_every_overshoot_warns(self):
         """A continuous source does not heat in a step that would end beyond its
         overshoot_temperature, so a floor above the threshold of every feeding
