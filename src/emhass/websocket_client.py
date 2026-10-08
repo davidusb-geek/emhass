@@ -95,16 +95,20 @@ class AsyncWebSocketClient:
     async def reconnect(self):
         """Force a reconnect."""
         async with self._lock:
-            await self._cleanup()
-            await asyncio.sleep(1)
-            try:
-                await asyncio.wait_for(self._connect(), timeout=10.0)
-            except TimeoutError as e:
-                self.logger.error("Reconnection timed out")
-                raise ConnectionError("Reconnection timed out") from e
-            except Exception as e:
-                self.logger.error(f"Reconnection failed: {e}")
-                raise
+            await self._reconnect_locked()
+
+    async def _reconnect_locked(self):
+        """Reconnect while the caller holds ``_lock``."""
+        await self._cleanup()
+        await asyncio.sleep(1)
+        try:
+            await asyncio.wait_for(self._connect(), timeout=10.0)
+        except TimeoutError as e:
+            self.logger.error("Reconnection timed out")
+            raise ConnectionError("Reconnection timed out") from e
+        except Exception as e:
+            self.logger.error(f"Reconnection failed: {e}")
+            raise
 
     async def _connect(self):
         """Internal connect/authenticate and start background tasks."""
@@ -182,7 +186,7 @@ class AsyncWebSocketClient:
         """Send a command and await response."""
         async with self._lock:
             if not self.connected:
-                await self.reconnect()
+                await self._reconnect_locked()
             mid = self._next_id()
             payload = {"id": mid, "type": msg_type, **kwargs}
             fut = asyncio.get_event_loop().create_future()

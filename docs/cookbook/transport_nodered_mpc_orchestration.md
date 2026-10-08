@@ -75,13 +75,19 @@ const end_step = Math.floor(minutes_until_deadline / timestep_min);
 const soc_percent = flow.get("battery_soc_percent") || 50;
 const soc_init = soc_percent / 100;
 
-// Per-timestep price arrays from your tariff source.
-// Length MUST equal horizon_steps — EMHASS pads / truncates silently otherwise.
-const load_cost = flow.get("load_cost_per_step") || new Array(horizon_steps).fill(0.30);
-const prod_price = flow.get("prod_price_per_step") || new Array(horizon_steps).fill(0.08);
+// Per-timestep price arrays from your tariff source, sent as plain lists: one
+// value per optimization timestep, starting with the current step. EMHASS
+// rejects a list shorter than horizon_steps (never pads it) and ignores extra
+// values. Prices may be negative.
+const load_cost = flow.get("load_cost_per_step");
+const prod_price = flow.get("prod_price_per_step");
 
-if (load_cost.length !== horizon_steps || prod_price.length !== horizon_steps) {
-    node.warn(`Forecast length mismatch: load=${load_cost.length}, prod=${prod_price.length}, expected=${horizon_steps}`);
+// Fail closed: skip this tick instead of sending made-up prices.
+const isValid = (a) => Array.isArray(a) && a.length >= horizon_steps
+    && a.every((v) => typeof v === "number" && Number.isFinite(v));
+if (!isValid(load_cost) || !isValid(prod_price)) {
+    node.warn(`Skipping MPC tick: price forecast missing, shorter than ${horizon_steps} or not finite`);
+    return null;
 }
 
 msg.payload = {
@@ -134,7 +140,7 @@ The following are observed-in-production patterns from running this flow shape f
 - **Hysteresis dead-band.** Add ~50 W (or your inverter's noise floor) of dead-band around charge/discharge mode-transition boundaries so the orchestrator doesn't flap between modes as PV and load wiggle around equilibrium.
 - **Forecast resilience.** Single PV-forecast source is a single point of failure. Production-grade orchestrators run primary (commercial: Solcast, Forecast.Solar, etc.) + physics-fallback (Open-Meteo `global_tilted_irradiance` × DC_kWp × eta, clipped to inverter AC max) + a daily auto-calibration step (EMA-update of a correction factor from real-vs-modeled PV).
 - **State between ticks.** Use `flow.set(...)` / `flow.get(...)` (not `context.set/get`) so the values survive Node-RED redeploys of unrelated tabs.
-- **Length of price arrays.** `load_cost_forecast` and `prod_price_forecast` must have at least `horizon_steps` entries, otherwise EMHASS pads / truncates and you may not notice silent misalignment. Step 3 above includes a runtime length-check.
+- **Price arrays.** As plain lists, `load_cost_forecast` and `prod_price_forecast` must have at least `horizon_steps` entries of finite numbers. EMHASS rejects a shorter list with an error instead of padding it, and fails the cycle on `NaN`, `null`, booleans or strings. Step 3 above checks both and skips the tick rather than sending a fabricated fallback. If your tariff source publishes timestamped prices, you can send them as a timestamped mapping instead and let EMHASS align them. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
 - **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. See [Battery-aware runtime params](battery_aware_runtime_params.md) for the full story.
 
 ## Credits

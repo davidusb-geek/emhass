@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fix
+- fix: resolve forecast calendar-day endpoints that fall inside DST skipped/repeated wall-clock intervals without regressing 23/25-hour civil-day horizons
+
+### Documentation
+- docs: define `delta_forecast_daily` as a local calendar-day horizon and clarify DST endpoint semantics
+
 ## 0.18.4 - 2026-09-27
 
 ### Improvement
