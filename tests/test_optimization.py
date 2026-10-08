@@ -5980,10 +5980,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_shared_tank_null_source_overshoot_inherits_the_storage_threshold(self):
         """overshoot_temperature: null on a source means "not set": the source
-        inherits the storage's threshold instead of losing the gate."""
+        inherits the storage's threshold instead of losing the gate. The tank
+        starts at the threshold, so with the gate the comfort target cannot pull
+        it higher."""
         opt, res = self._run_single_source_tank(
             {"overshoot_temperature": None},
-            {"desired_temperatures": 60.0, "penalty_factor": 50.0, "overshoot_temperature": 55.0},
+            {
+                "start_temperature": 55.0,
+                "desired_temperatures": 60.0,
+                "overshoot_temperature": 55.0,
+            },
         )
         self.assertEqual(opt.optim_status, "Optimal")
         self.assertLessEqual(res["predicted_temp_heater0"].max(), 55.0 + 0.05)
