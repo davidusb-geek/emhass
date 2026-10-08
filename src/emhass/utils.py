@@ -615,10 +615,12 @@ def compile_heat_topology(topology: dict) -> dict:
     """
     if not isinstance(topology, dict) or not topology:
         return {}
+    # A missing or null field means "none"; any other value must have the right
+    # type, so a falsey value such as "" or 0 is not silently read as empty.
     for key in ("sources", "storage", "consumers", "flows", "actuator_groups"):
-        if not isinstance(topology.get(key) or [], list):
+        if topology.get(key) is not None and not isinstance(topology[key], list):
             raise ValueError(f"heat_topology.{key} must be a list")
-    if not isinstance(topology.get("cost_tracks") or {}, dict):
+    if topology.get("cost_tracks") is not None and not isinstance(topology["cost_tracks"], dict):
         raise ValueError("heat_topology.cost_tracks must be an object")
     if not isinstance(topology.get("extend_deferrable_loads", False), bool):
         raise ValueError("heat_topology.extend_deferrable_loads must be true or false")
@@ -1091,6 +1093,40 @@ def compile_heat_topology(topology: dict) -> dict:
     }
 
 
+def _runtime_shared_tanks_problem(tanks, n_loads: int) -> str | None:
+    """Why a runtime shared_thermal_tanks list cannot be used, or None.
+
+    Each tank's load_ids must be a list of whole numbers (not booleans or
+    strings) within the configured loads, a load may feed only one tank and
+    only once (otherwise its heat is counted twice and its power once), and
+    tank ids must be unique (a start-temperature override would update every
+    tank with that id). A non-list is reported by the caller.
+    """
+    if not isinstance(tanks, list) or not all(isinstance(t, dict) for t in tanks):
+        return None
+    members, ids = [], []
+    for t in tanks:
+        load_ids = t.get("load_ids")
+        if not isinstance(load_ids, list):
+            return f"tank {t.get('id')!r} needs load_ids as a list, got {load_ids!r}"
+        for i in load_ids:
+            whole = isinstance(i, int | float) and not isinstance(i, bool) and float(i).is_integer()
+            if not whole or not 0 <= int(i) < n_loads:
+                return (
+                    f"tank {t.get('id')!r} has load_ids entry {i!r}; it must be a "
+                    f"whole number from 0 to {n_loads - 1}"
+                )
+            members.append(int(i))
+        ids.append(str(t.get("id")))
+    repeated = sorted({i for i in members if members.count(i) > 1})
+    if repeated:
+        return f"load_ids {repeated} appear more than once; a load can feed only one tank, once"
+    repeated_ids = sorted({i for i in ids if ids.count(i) > 1})
+    if repeated_ids:
+        return f"tank ids {repeated_ids} are used more than once"
+    return None
+
+
 def _per_user_load_list(value, offset: int) -> list:
     """A per-load value as a list for the user's ``offset`` loads: a list is
     copied, a scalar (e.g. a runtime override) applies to each of them, and a
@@ -1173,9 +1209,16 @@ def _extend_optim_conf_with_compiled_topology(
             for name in group.get("names", [])
         ]
         shifted_groups.append(group)
-    optim_conf["shared_thermal_tanks"] = (
-        list(optim_conf.get("shared_thermal_tanks") or []) + shifted_tanks
-    )
+    kept_tanks = list(optim_conf.get("shared_thermal_tanks") or [])
+    kept_ids = {str(t.get("id")) for t in kept_tanks if isinstance(t, dict)}
+    clashes = sorted(kept_ids & {str(t.get("id")) for t in shifted_tanks})
+    if clashes:
+        raise ValueError(
+            f"heat_topology storage ids {clashes} are also used by the configured "
+            "shared_thermal_tanks; with extend_deferrable_loads both are kept, so "
+            "each tank needs its own id"
+        )
+    optim_conf["shared_thermal_tanks"] = kept_tanks + shifted_tanks
     optim_conf["deferrable_load_groups"] = (
         list(optim_conf.get("deferrable_load_groups") or []) + shifted_groups
     )
@@ -2445,29 +2488,11 @@ async def treat_runtimeparams(
         # as def_load_config above - runtime-only, no config-file counterpart.
         if "shared_thermal_tanks" in runtimeparams:
             tanks = runtimeparams["shared_thermal_tanks"]
-
-            # A load feeds at most one tank, once: listing it twice would count
-            # its heat twice while its electricity is counted once. Compare the
-            # ids as the optimizer reads them (int()), so 0, 0.0 and "00" match.
-            def _member_key(i):
-                try:
-                    return int(i)
-                except (TypeError, ValueError):
-                    return str(i)
-
-            member_ids = [
-                _member_key(i)
-                for t in (tanks if isinstance(tanks, list) else [])
-                if isinstance(t, dict)
-                for i in (t.get("load_ids") or [])
-            ]
-            duplicate_ids = sorted({str(i) for i in member_ids if member_ids.count(i) > 1})
-            if duplicate_ids:
-                logger.warning(
-                    "shared_thermal_tanks lists load_ids %s more than once; a load "
-                    "can feed only one tank, once. Ignoring the runtime tanks.",
-                    duplicate_ids,
-                )
+            problem = _runtime_shared_tanks_problem(
+                tanks, int(params["optim_conf"].get("number_of_deferrable_loads") or 0)
+            )
+            if problem is not None:
+                logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
             elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
                 params["optim_conf"]["shared_thermal_tanks"] = tanks
                 topology = params["optim_conf"].get("heat_topology")
@@ -3069,8 +3094,10 @@ async def treat_runtimeparams(
             )
         else:
             tanks = optim_conf.get("shared_thermal_tanks") or []
-            tank_ids = {t.get("id") for t in tanks if isinstance(t, dict)}
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
             for tank_id, temp in overrides.items():
+                tank_id = str(tank_id)
                 if tank_id not in tank_ids:
                     logger.warning(
                         "shared_tank_start_temperatures: unknown tank id '%s' "
@@ -3080,7 +3107,8 @@ async def treat_runtimeparams(
                     )
                     continue
                 try:
-                    temp_value = float(temp)
+                    # A boolean is not a temperature (float(True) would be 1.0).
+                    temp_value = None if isinstance(temp, bool) else float(temp)
                 except (TypeError, ValueError):
                     temp_value = None
                 if temp_value is None or not math.isfinite(temp_value):
@@ -3091,7 +3119,7 @@ async def treat_runtimeparams(
                     )
                     continue
                 for tank in tanks:
-                    if isinstance(tank, dict) and tank.get("id") == tank_id:
+                    if isinstance(tank, dict) and str(tank.get("id")) == tank_id:
                         tank["start_temperature"] = temp_value
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the
