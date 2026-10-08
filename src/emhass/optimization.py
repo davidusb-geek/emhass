@@ -4919,8 +4919,11 @@ class Optimization:
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
                 # A start also needs the load on: without this upper bound a
                 # negative price turns the startup penalty into a reward for starts
-                # in steps where the load stays off.
-                constraints.append(p_def_start[k] <= p_def_bin2[k])
+                # in steps where the load stays off. Only a priced start needs it:
+                # without a penalty it leaves the optimum unchanged, and on problems
+                # with many semi-continuous loads it can slow the solver down a lot.
+                if has_startup_penalty:
+                    constraints.append(p_def_start[k] <= p_def_bin2[k])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
