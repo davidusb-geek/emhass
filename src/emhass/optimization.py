@@ -270,6 +270,7 @@ class Optimization:
         # price scale; a Parameter (not a baked-in constant) keeps that correct across
         # warm-started re-solves. See SOC_FINAL_DEVIATION_PENALTY_FACTOR.
         self.param_soc_final_penalty = cp.Parameter(nonneg=True, name="soc_final_penalty")
+        self.param_soc_final_reward = cp.Parameter(nonneg=False, name="soc_final_reward")
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
         # Per-deferrable-load cost override parameters. When the user supplies a
@@ -2721,16 +2722,20 @@ class Optimization:
                 )
                 objective_terms.append(-cp.sum(sum(soc_surplus_cost)))
 
-        # Terminal-SoC deviation penalty. param_soc_final_penalty is already in currency
-        # per Wh (it folds in the kWh conversion and the dominance factor), so the slacks
-        # enter the objective directly. Charging both directions keeps the target an
-        # equality rather than a one-sided bound. Summed over the per-battery slack
-        # pairs (#610); every battery's miss is priced at the same rate.
+        # Terminal-SoC deviation
+        # penalty/reward. param_soc_final_penalty/reward are already
+        # in currency per Wh (it folds in the kWh conversion and the
+        # dominance factor), so the slacks enter the objective
+        # directly. Coming in under the target is heavily penalized,
+        # coming in over the target is rewarded by the value of the
+        # energy in the battery at the end of the optimization
+        # period. Summed over the per-battery slack pairs (#610);
+        # every battery's miss is priced at the same rate.
         soc_final_under = self.vars.get("soc_final_under")
         if soc_final_under is not None:
             objective_terms.append(
-                -self.param_soc_final_penalty
-                * (sum(soc_final_under) + sum(self.vars["soc_final_over"]))
+                -self.param_soc_final_penalty * sum(soc_final_under)
+                + self.param_soc_final_reward * sum(self.vars["soc_final_over"])
             )
 
         # Battery-first priority penalty (issue #834/#1002). battery_first_penalty
@@ -5730,6 +5735,21 @@ class Optimization:
             * SOC_FINAL_DEVIATION_PENALTY_FACTOR
             * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
         )
+        # If soc_final_reward_factor is defined, missing the final SOC
+        # with more energy is rewarded by the purchase cost of the
+        # excess final energy multiplied by the reward factor. If not
+        # defined, the same penalty applies.
+        reward_factor = self.optim_conf.get("battery_soc_final_reward_factor", 0.0)
+        if reward_factor > 0.0:
+            self.param_soc_final_reward.value = (
+                0.001 * reward_factor * float(np.asarray(unit_load_cost, dtype=float)[-1])
+            )
+        else:
+            self.param_soc_final_reward.value = (
+                -0.001
+                * SOC_FINAL_DEVIATION_PENALTY_FACTOR
+                * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
+            )
         self.param_prod_price.value = unit_prod_price
 
         # Per-load cost forecast overrides. Default each load's per-timestep cost

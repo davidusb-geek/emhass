@@ -893,6 +893,16 @@
         "set_use_battery": true
     }
     },
+    "battery_soc_final_reward_factor": {
+      "friendly_name": "Battery SOC final reward factor",
+      "Description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both directions.",
+      "input": "float",
+      "default_value": 0.0,
+      "unit": "fraction",
+      "requires": {
+        "set_use_battery": true
+      }
+    },
     "capacity_cost_per_kw": {
       "friendly_name": "Capacity (demand) charge cost",
       "Description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. A list of two or more rates prices that many independent capacity/demand components in one optimisation (see docs/cookbook/tariff_demand_charge.md, issue #540).",
