@@ -200,6 +200,193 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+10:00", actual_dates[2])
         self.assertIn("+11:00", actual_dates[3])
 
+    def test_add_local_calendar_days_sydney_nonexistent_endpoint(self):
+        """Nonexistent spring-forward endpoints move by the actual Sydney gap."""
+        tz = pytz.timezone("Australia/Sydney")
+        for minute in (0, 5, 30, 55):
+            with self.subTest(minute=minute):
+                start = tz.localize(datetime(2026, 10, 3, 2, minute))
+                result = utils.add_local_calendar_days(start, 1, tz)
+                self.assertEqual(
+                    result,
+                    tz.localize(datetime(2026, 10, 4, 3, minute)),
+                )
+                self.assertEqual(
+                    result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+                    pd.Timedelta(hours=24),
+                )
+
+    def test_add_local_calendar_days_accepts_configured_iana_name(self):
+        """Runtime-param paths may still carry the configured timezone as a string."""
+        start = pd.Timestamp("2026-10-03 02:05:00")
+        result = utils.add_local_calendar_days(start, 1, "Australia/Sydney")
+        expected = pytz.timezone("Australia/Sydney").localize(datetime(2026, 10, 4, 3, 5))
+        self.assertEqual(result, expected)
+
+    def test_add_local_calendar_days_preserves_naive_timezone_optional_behavior(self):
+        """No configured timezone keeps the pre-existing naive calendar-day path."""
+        start = pd.Timestamp("2026-10-03 02:05:00")
+        result = utils.add_local_calendar_days(start, 1, None)
+        self.assertEqual(result, pd.Timestamp("2026-10-04 02:05:00"))
+        self.assertIsNone(result.tzinfo)
+
+    def test_add_local_calendar_days_zero_is_identity_in_fall_back_fold(self):
+        """Zero calendar days must not switch between ambiguous fall-back occurrences."""
+        tz = pytz.timezone("Australia/Sydney")
+        first_occurrence = tz.localize(
+            datetime(2027, 4, 4, 2, 30),
+            is_dst=True,
+        )
+        result = utils.add_local_calendar_days(first_occurrence, 0, tz)
+        self.assertEqual(result, pd.Timestamp(first_occurrence))
+
+    def test_add_local_calendar_days_sydney_ambiguous_endpoint(self):
+        """Ambiguous fall-back endpoints select the post-transition occurrence."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2027, 4, 3, 2, 30))
+        result = utils.add_local_calendar_days(start, 1, tz)
+        expected = tz.localize(datetime(2027, 4, 4, 2, 30), is_dst=False)
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+            pd.Timedelta(hours=25),
+        )
+
+    def test_add_local_calendar_days_ambiguous_endpoint_is_chronologically_later(self):
+        """The later UTC instant wins, including zones where is_dst=False is the earlier one.
+
+        Africa/Casablanca and Europe/Dublin use negative DST: their clocks fall back
+        into the "DST" offset, so is_dst=True is the post-transition occurrence there.
+        """
+        cases = (
+            # zone, start (local), repeated wall time, expected later UTC instant
+            (
+                "Australia/Sydney",
+                datetime(2027, 4, 3, 2, 30),
+                "2027-04-04 02:30",
+                "2027-04-03 16:30",
+            ),
+            (
+                "Africa/Casablanca",
+                datetime(2026, 2, 14, 2, 30),
+                "2026-02-15 02:30",
+                "2026-02-15 02:30",
+            ),
+            (
+                "Europe/Dublin",
+                datetime(2026, 10, 24, 1, 30),
+                "2026-10-25 01:30",
+                "2026-10-25 01:30",
+            ),
+        )
+        for zone, start_naive, repeated, expected_utc in cases:
+            with self.subTest(zone=zone):
+                tz = pytz.timezone(zone)
+                start = tz.localize(start_naive)
+                result = utils.add_local_calendar_days(start, 1, tz)
+
+                nominal = datetime.fromisoformat(repeated)
+                earlier, later = sorted(
+                    (tz.localize(nominal, is_dst=True), tz.localize(nominal, is_dst=False)),
+                    key=lambda candidate: candidate.astimezone(UTC),
+                )
+                self.assertLess(earlier.astimezone(UTC), later.astimezone(UTC))
+                self.assertEqual(result, later)
+                self.assertEqual(result.tz_convert("UTC"), pd.Timestamp(expected_utc, tz="UTC"))
+
+    def test_add_local_calendar_days_nonexistent_endpoint_negative_dst(self):
+        """Spring-forward gaps advance by the real gap when the DST flag is negative."""
+        cases = (
+            ("Africa/Casablanca", datetime(2026, 3, 21, 2, 30), datetime(2026, 3, 22, 3, 30)),
+            ("Europe/Dublin", datetime(2026, 3, 28, 1, 30), datetime(2026, 3, 29, 2, 30)),
+        )
+        for zone, start_naive, expected_naive in cases:
+            with self.subTest(zone=zone):
+                tz = pytz.timezone(zone)
+                start = tz.localize(start_naive)
+                result = utils.add_local_calendar_days(start, 1, tz)
+                self.assertEqual(result, tz.localize(expected_naive))
+                self.assertEqual(
+                    result.tz_convert("UTC") - pd.Timestamp(start).tz_convert("UTC"),
+                    pd.Timedelta(hours=24),
+                )
+
+    def test_add_local_calendar_days_lord_howe_half_hour_transitions(self):
+        """DST resolution follows the timezone's 30-minute gap/fold, not a hard-coded hour."""
+        tz = pytz.timezone("Australia/Lord_Howe")
+
+        spring_start = tz.localize(datetime(2026, 10, 3, 2, 15))
+        spring_result = utils.add_local_calendar_days(spring_start, 1, tz)
+        self.assertEqual(
+            spring_result,
+            tz.localize(datetime(2026, 10, 4, 2, 45)),
+        )
+        self.assertEqual(
+            spring_result.tz_convert("UTC") - pd.Timestamp(spring_start).tz_convert("UTC"),
+            pd.Timedelta(hours=24),
+        )
+
+        fall_start = tz.localize(datetime(2026, 4, 4, 1, 45))
+        fall_result = utils.add_local_calendar_days(fall_start, 1, tz)
+        fall_expected = tz.localize(datetime(2026, 4, 5, 1, 45), is_dst=False)
+        self.assertEqual(fall_result, fall_expected)
+        self.assertEqual(
+            fall_result.tz_convert("UTC") - pd.Timestamp(fall_start).tz_convert("UTC"),
+            pd.Timedelta(hours=24, minutes=30),
+        )
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_nonexistent_endpoint(self, mock_ts_now):
+        """Issue #406 reproducer: 02:xx the day before spring-forward must not crash."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2026, 10, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 288)
+        self.assertEqual(dates[0], "2026-10-03T02:05:00+10:00")
+        self.assertEqual(dates[-1], "2026-10-04T03:00:00+11:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_extension_resolves_from_original_start(self, mock_ts_now):
+        """Extra forecast days must not carry a spring-gap shift into later days."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2026, 10, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz, timedelta_days=1)
+
+        self.assertEqual(len(dates), 564)
+        self.assertEqual(dates[0], "2026-10-03T02:05:00+10:00")
+        self.assertEqual(dates[-1], "2026-10-05T02:00:00+11:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_sydney_ambiguous_endpoint(self, mock_ts_now):
+        """Fall-back target inside 02:xx uses the post-transition occurrence."""
+        tz = pytz.timezone("Australia/Sydney")
+        start = tz.localize(datetime(2027, 4, 3, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 300)
+        self.assertEqual(dates[0], "2027-04-03T02:05:00+11:00")
+        self.assertEqual(dates[-1], "2027-04-04T02:00:00+10:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_casablanca_ambiguous_endpoint_negative_dst(self, mock_ts_now):
+        """Negative-DST fall-back endpoint uses the later (+00:00) occurrence: a 25-hour window."""
+        tz = pytz.timezone("Africa/Casablanca")
+        start = tz.localize(datetime(2026, 2, 14, 2, 5))
+        mock_ts_now.return_value = start.astimezone(UTC)
+
+        dates = utils.get_forecast_dates(5, 1, tz)
+
+        self.assertEqual(len(dates), 300)
+        self.assertEqual(dates[0], "2026-02-14T02:05:00+01:00")
+        self.assertEqual(dates[-1], "2026-02-15T02:00:00+00:00")
+
     def test_get_forecast_dates_host_tz_differs_from_config(self):
         """Issue #984: forecast dates must be correct when host clock is UTC but EMHASS tz differs.
 
@@ -593,6 +780,19 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(runtimeparams["load_power_forecast"], list)
         self.assertIsInstance(runtimeparams["load_cost_forecast"], list)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], list)
+        treated = orjson.loads(params)
+        self.assertEqual(
+            treated["passed_data"]["pv_power_forecast"], runtimeparams["pv_power_forecast"]
+        )
+        self.assertEqual(
+            treated["passed_data"]["load_power_forecast"], runtimeparams["load_power_forecast"]
+        )
+        self.assertEqual(
+            treated["passed_data"]["load_cost_forecast"], runtimeparams["load_cost_forecast"]
+        )
+        self.assertEqual(
+            treated["passed_data"]["prod_price_forecast"], runtimeparams["prod_price_forecast"]
+        )
         # Test string of numbers
         params = await TestUtils.get_test_params()
         runtimeparams = {
@@ -1234,6 +1434,45 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("figure_thermal", injection_dict)
         self.assertIn("figure_0", injection_dict)
 
+    def test_get_injection_dict_single_battery_soc(self):
+        # One battery: the bare SOC_opt column gives the SOC plot, as before
+        df = self.df.copy()
+        df["SOC_opt"] = 0.5
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_1", injection_dict, "SOC plot missing")
+        self.assertIn("SOC_opt", injection_dict["figure_1"])
+
+    def test_get_injection_dict_multi_battery_soc(self):
+        # number_of_batteries > 1 (#610): the result frame carries SOC_opt_<k> per battery
+        # and no bare SOC_opt; the SOC plot must still appear, with one trace per battery
+        df = self.df.copy()
+        df["SOC_opt_0"] = 0.5
+        df["SOC_opt_1"] = 0.7
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_1", injection_dict, "SOC plot missing with per-battery columns")
+        self.assertIn("SOC_opt_0", injection_dict["figure_1"])
+        self.assertIn("SOC_opt_1", injection_dict["figure_1"])
+
+    def test_get_injection_dict_no_soc_columns(self):
+        # No battery: no SOC plot, and a column that merely starts with SOC_opt_ but is not a
+        # per-battery index is not mistaken for one
+        df = self.df.copy()
+        df["SOC_opt_target"] = 0.6
+        injection_dict = utils.get_injection_dict(df)
+        self.assertNotIn("figure_1", injection_dict)
+        self.assertIn("figure_0", injection_dict)
+
+    def test_get_injection_dict_multi_battery_soc_traces_get_distinct_colours(self):
+        # The SOC palette is sized to the SOC traces, not to the power columns, so two
+        # batteries do not both land on the first two near-identical samples of the ramp
+        df = self.df.copy()
+        df["SOC_opt_0"] = 0.5
+        df["SOC_opt_1"] = 0.7
+        html = utils.get_injection_dict(df)["figure_1"]
+        # A two-point sample of the jet scale spans both ends of the ramp
+        self.assertIn("rgb(0, 0, 131)", html)
+        self.assertIn("rgb(128, 0, 0)", html)
+
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
@@ -1565,6 +1804,55 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 1)
         self.assertEqual(len(optim_conf_out["def_load_config"]), 1)
 
+    async def test_treat_runtimeparams_heat_topology_startup_penalty_survives(self):
+        """A source's startup_penalty/max_startups survive compilation into
+        optim_conf. The compiler is the authority for these per-load arrays
+        (it always overrides them), so a regression that zeroed them would
+        silently disable anti-short-cycling for every heat_topology user."""
+        params = await TestUtils.get_test_params()
+        topo = {
+            "sources": [
+                {
+                    "id": "boiler",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 38000,
+                    "min_power": 4400,
+                    "startup_penalty": 0.3,
+                    "max_startups": 2,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
+            "flows": [{"from": "boiler", "to": "tank"}],
+        }
+        params["optim_conf"]["heat_topology"] = topo
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        runtimeparams_json = orjson.dumps({}).decode("utf-8")
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(optim_conf_out["set_deferrable_startup_penalty"], [0.3])
+        self.assertEqual(optim_conf_out["set_deferrable_max_startups"], [2])
+
     async def test_treat_runtimeparams_bool_coercion(self):
         """_cast_bool None-guard and scalar-padding paths must be covered.
 
@@ -1861,6 +2149,95 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             f"prediction_horizon is parsed, so the horizon is never extended.",
         )
 
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_horizon_extends_across_sydney_spring_forward(self, mock_now):
+        """A timestep-count MPC horizon must not be silently shortened by a
+        shorter DST local-calendar day.
+
+        Retained production shape from 2026-10-03 23:05 in Australia/Sydney: at a
+        5-minute optimization step, the next local calendar day crosses
+        spring-forward and contains 276 real timesteps (23 h). The retained
+        request used prediction_horizon=287, which therefore does not fit even
+        though the old fixed 288-steps/day proxy said that it did.
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        time_zone = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = time_zone
+        start = time_zone.localize(datetime(2026, 10, 3, 23, 5))
+        mock_now.return_value = start.astimezone(UTC)
+
+        one_day_grid = utils.get_forecast_dates(5, 1, time_zone)
+        self.assertEqual(len(one_day_grid), 276)
+
+        runtimeparams = {
+            "prediction_horizon": 287,
+            "optimization_time_step": 5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        _, _, optim_conf_dst, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(
+            optim_conf_dst["delta_forecast_daily"].days,
+            2,
+            "287 requested 5-minute timesteps do not fit the 276-slot Sydney "
+            "spring-forward calendar day; the forecast window must extend.",
+        )
+        self.assertGreaterEqual(
+            len(utils.get_forecast_dates(5, 2, time_zone)),
+            287,
+        )
+
+    @patch("emhass.utils._get_now")
+    async def test_naive_mpc_horizon_uses_extra_fall_back_capacity(self, mock_now):
+        """A 25-hour local calendar day can satisfy more than the fixed
+        24h/timestep proxy and must not be extended unnecessarily."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        time_zone = pytz.timezone("Australia/Sydney")
+        retrieve_hass_conf["time_zone"] = time_zone
+        start = time_zone.localize(datetime(2027, 4, 3, 20, 15))
+        mock_now.return_value = start.astimezone(UTC)
+
+        one_day_grid = utils.get_forecast_dates(5, 1, time_zone)
+        self.assertEqual(len(one_day_grid), 300)
+
+        runtimeparams = {
+            "prediction_horizon": 295,
+            "optimization_time_step": 5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        _, _, optim_conf_dst, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(
+            optim_conf_dst["delta_forecast_daily"].days,
+            1,
+            "295 requested 5-minute timesteps fit inside the 300-slot Sydney "
+            "fall-back calendar day and must not trigger a spurious extension.",
+        )
+
     async def test_naive_mpc_horizon_unchanged_when_within_one_day(self):
         """Backwards-compat guard (must PASS before AND after the Phase 1 fix):
         a naive-mpc prediction_horizon that fits inside the default 1-day window
@@ -1938,6 +2315,28 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         res = utils.resample_and_filter_data(df_naive, start_dt, end_dt, "30min", logger)
         self.assertIsInstance(res, pd.DataFrame)
         self.assertEqual(res.index.tz, time_zone)
+
+    async def test_compile_heat_topology_missing_fields_raise_valueerror(self):
+        """Missing required fields must raise ValueError naming the field, not a
+        bare KeyError: the documented contract is that an invalid topology
+        raises ValueError."""
+        no_efficiency = {
+            "sources": [{"id": "gas", "type": "gas", "nominal_power": 20000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [{"from": "gas", "to": "dhw"}],
+        }
+        with self.assertRaises(ValueError) as cm:
+            utils.compile_heat_topology(no_efficiency)
+        self.assertIn("efficiency", str(cm.exception))
+        no_profile = {
+            "sources": [{"id": "gas", "type": "gas", "efficiency": 0.9, "nominal_power": 20000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [{"from": "gas", "to": "dhw"}],
+            "consumers": [{"id": "tap", "type": "profile", "target": "dhw"}],
+        }
+        with self.assertRaises(ValueError) as cm:
+            utils.compile_heat_topology(no_profile)
+        self.assertIn("profile", str(cm.exception))
 
 
 class TestHeatingDemand(unittest.TestCase):
@@ -3477,6 +3876,65 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0])
         self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085] * 48)
 
+    def test_fixed_supply_hp_without_cap_warns(self):
+        """A fixed-supply heat pump (supply_temperature, no heating curve) without
+        max_supply_temperature is warned: supply_temperature drives the COP only and
+        is not enforced as a physical ceiling, so the optimiser may plan to heat the
+        tank above it. Setting max_supply_temperature silences the warning (the cap is
+        left opt-in because auto-capping at the supply temperature makes a tank whose
+        min_temperature sits at that temperature infeasible)."""
+
+        def topo(with_cap):
+            src = {
+                "id": "hp",
+                "type": "heatpump",
+                "supply_temperature": 45,
+                "carnot_efficiency": 0.4,
+                "nominal_power": 3000,
+                "cost_track": "e",
+            }
+            if with_cap:
+                src["max_supply_temperature"] = 45
+            return {
+                "sources": [src],
+                "storage": [
+                    {
+                        "id": "buf",
+                        "volume": 0.1,
+                        "start_temperature": 38,
+                        "min_temperature": [30] * 48,
+                        "max_temperature": [60] * 48,
+                        "thermal_loss": 0.08,
+                    }
+                ],
+                "flows": [{"from": "hp", "to": "buf"}],
+                "cost_tracks": {"e": [0.2] * 48},
+            }
+
+        logger = logging.getLogger("emhass.utils")
+        with self.assertLogs(logger, level="WARNING") as cm:
+            utils.compile_heat_topology(topo(with_cap=False))
+        self.assertTrue(
+            any("not enforced as a physical ceiling" in m for m in cm.output),
+            "expected a ceiling warning for a fixed-supply HP without max_supply_temperature",
+        )
+        # With the cap set the warning must not fire.
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(topo(with_cap=True))
+        # Nor when the storage's own ceiling is already at or below the supply
+        # temperature, or for a cooling storage.
+        capped_storage = topo(with_cap=False)
+        capped_storage["storage"][0]["max_temperature"] = [40] * 48
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(capped_storage)
+        cooling = topo(with_cap=False)
+        cooling["sources"][0]["supply_temperature"] = 7
+        cooling["storage"][0].update(
+            {"comfort_sense": "cool", "min_temperature": [16] * 48, "max_temperature": [26] * 48}
+        )
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(cooling)
+
     def test_two_sources_one_storage(self):
         """HP + gas both feed the same DHW tank."""
         topo = {
@@ -3532,6 +3990,282 @@ class TestCompileHeatTopology(unittest.TestCase):
         # Per-source cost tracks
         self.assertEqual(out["cost_forecast_per_deferrable_load"][0][0], 0.25)
         self.assertEqual(out["cost_forecast_per_deferrable_load"][1][0], 0.085)
+
+    def test_startup_penalty_and_max_startups_compiled_per_source(self):
+        """A source's startup_penalty and max_startups compile into the per-load
+        anti-short-cycle arrays, applied to EVERY flow the source drives. Sources
+        that omit them default to 0 (disabled), so existing topologies are
+        unchanged."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.40,
+                    "nominal_power": 3000,
+                    "cost_track": "retail",
+                },
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 38000,
+                    "min_power": 4400,
+                    "startup_penalty": 0.3,
+                    "max_startups": 2,
+                    "cost_track": "gas_flat",
+                },
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.1,
+                    "start_temperature": 38,
+                    "min_temperature": [30] * 48,
+                    "max_temperature": [52] * 48,
+                    "thermal_loss": 0.08,
+                },
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [62] * 48,
+                    "thermal_loss": 0.1,
+                },
+            ],
+            "flows": [
+                {"from": "hp", "to": "buf"},
+                {"from": "gas", "to": "buf"},
+                {"from": "gas", "to": "dhw"},
+            ],
+            "cost_tracks": {"retail": [0.25] * 48, "gas_flat": [0.11] * 48},
+        }
+        out = utils.compile_heat_topology(topo)
+        # Flows compile in order: 0 hp->buf, 1 gas->buf, 2 gas->dhw. The gas
+        # penalty/cap apply to BOTH gas loads (1, 2); the hp load (0) stays 0.
+        self.assertEqual(out["set_deferrable_startup_penalty"], [0.0, 0.3, 0.3])
+        self.assertEqual(out["set_deferrable_max_startups"], [0, 2, 2])
+
+    def test_startup_penalty_and_max_startups_default_zero(self):
+        """A source that omits the fields compiles to disabled (0) controls."""
+        topo = {
+            "sources": [
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "cost_track": "gas",
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.05,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.06,
+                }
+            ],
+            "flows": [{"from": "gas", "to": "buf"}],
+            "cost_tracks": {"gas": [0.085] * 48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["set_deferrable_startup_penalty"], [0.0])
+        self.assertEqual(out["set_deferrable_max_startups"], [0])
+
+    def test_startup_penalty_rejects_negative(self):
+        """A negative startup_penalty or max_startups is rejected at compile."""
+
+        def topo(extra):
+            return {
+                "sources": [
+                    {
+                        "id": "gas",
+                        "type": "gas",
+                        "efficiency": 0.9,
+                        "nominal_power": 25000,
+                        "cost_track": "gas",
+                        **extra,
+                    }
+                ],
+                "storage": [
+                    {
+                        "id": "buf",
+                        "volume": 0.05,
+                        "start_temperature": 35,
+                        "min_temperature": [25] * 48,
+                        "max_temperature": [50] * 48,
+                        "thermal_loss": 0.06,
+                    }
+                ],
+                "flows": [{"from": "gas", "to": "buf"}],
+                "cost_tracks": {"gas": [0.085] * 48},
+            }
+
+        with self.assertRaises(ValueError):
+            utils.compile_heat_topology(topo({"startup_penalty": -0.1}))
+        with self.assertRaises(ValueError):
+            utils.compile_heat_topology(topo({"max_startups": -1}))
+        # A start count is a whole number: -0.9, 0.9 and 1.9 must not be
+        # truncated by int() into a silently different limit.
+        for bad in (-0.9, 0.9, 1.9, "two"):
+            with self.subTest(max_startups=bad), self.assertRaises(ValueError):
+                utils.compile_heat_topology(topo({"max_startups": bad}))
+        out = utils.compile_heat_topology(topo({"max_startups": 2.0}))
+        self.assertEqual(out["set_deferrable_max_startups"], [2])
+
+    def test_max_supply_temperature_passed_through(self):
+        """A source's max_supply_temperature is compiled into its thermal_source
+        block; sources without it omit the key (backward compatible)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": 53,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"], 53.0
+        )
+        # Booster (load 1) has no cap -> key absent
+        self.assertNotIn("max_supply_temperature", out["def_load_config"][1]["thermal_source"])
+
+    def _hp_booster_topo(self, hp_cap):
+        """Minimal HP+booster topology with the given HP max_supply_temperature."""
+        return {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": hp_cap,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+
+    def test_max_supply_temperature_per_step_list_and_ndarray(self):
+        """A per-step cap (weather-compensated supply temperature) compiles to a
+        float list; numpy arrays are accepted and normalized to a plain list."""
+        out = utils.compile_heat_topology(self._hp_booster_topo([53, 53, 46, 46]))
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"],
+            [53.0, 53.0, 46.0, 46.0],
+        )
+        out = utils.compile_heat_topology(self._hp_booster_topo(np.array([53.0, 46.0])))
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"],
+            [53.0, 46.0],
+        )
+
+    def test_max_supply_temperature_rejects_non_positive_and_empty(self):
+        """A cap <= 0 (likely a typo or a mistaken 'disable' sentinel) and an
+        empty list are rejected with a clear error naming the source."""
+        for bad_cap in (0, -5, [53.0, 0.0], []):
+            with self.assertRaises(ValueError, msg=f"cap={bad_cap!r} should raise"):
+                utils.compile_heat_topology(self._hp_booster_topo(bad_cap))
+
+    def _capped_hp_only_topo(self, hp_cap, min_temps):
+        """Single capped heat pump feeding one tank (no uncapped fallback)."""
+        return {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": hp_cap,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": min_temps,
+                    "max_temperature": [65] * len(min_temps),
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}],
+        }
+
+    def test_min_temperatures_above_all_source_ceilings_warns(self):
+        """A static minimum above every feeding source's ceiling is usually
+        unreachable, but not always (the tank can start hot enough): compile
+        warns, naming storage and step, and leaves the verdict to the solver."""
+        with self.assertLogs("emhass.utils", level="WARNING") as logs:
+            out = utils.compile_heat_topology(
+                self._capped_hp_only_topo(53.0, [45.0, 45.0, 60.0, 45.0])
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
+        self.assertTrue(any("dhw" in m and "min_temperatures[2]" in m for m in logs.output))
+
+    def test_min_temperatures_above_cap_ok_with_uncapped_source(self):
+        """The same 60 C band is fine when an uncapped source also feeds the
+        tank (it can serve the band above the heat pump's ceiling)."""
+        topo = self._hp_booster_topo(53.0)
+        topo["storage"][0]["min_temperature"] = [45.0, 45.0, 60.0, 45.0]
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
+
+    def test_min_temperatures_above_cap_ok_on_a_cooling_storage(self):
+        """The ceiling is a heating limit, so a cooling storage is not checked
+        against it: no warning for a minimum above the cap."""
+        topo = self._capped_hp_only_topo(53.0, [45.0, 45.0, 60.0, 45.0])
+        topo["storage"][0]["comfort_sense"] = "cool"
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            utils.compile_heat_topology(topo)
+
+    def test_min_temperatures_vs_padded_per_step_cap(self):
+        """The ceiling check pads a short per-step cap with its last value, and
+        a minimum exactly at the ceiling is allowed (boundary is reachable)."""
+        # Cap list [53, 46] pads to 46 for steps 2-3; min of 50 at step 3 warns.
+        with self.assertLogs("emhass.utils", level="WARNING") as logs:
+            utils.compile_heat_topology(
+                self._capped_hp_only_topo([53.0, 46.0], [45.0, 45.0, 45.0, 50.0])
+            )
+        self.assertTrue(any("min_temperatures[3]" in m for m in logs.output))
+        # min == ceiling everywhere is reachable -> compiles without a warning.
+        with self.assertNoLogs("emhass.utils", level="WARNING"):
+            out = utils.compile_heat_topology(
+                self._capped_hp_only_topo(53.0, [53.0, 53.0, 53.0, 53.0])
+            )
+        self.assertEqual(len(out["shared_thermal_tanks"]), 1)
 
     def test_actuator_group_emits_deferrable_group(self):
         """One physical boiler serving two tanks via mutex."""
@@ -4265,6 +4999,48 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_compile_heat_topology_rejects_empty_dict(self):
         """Empty dict must return {} without raising."""
         self.assertEqual(utils.compile_heat_topology({}), {})
+
+    def test_integer_id_zero_is_a_valid_id(self):
+        """An id of 0 is a valid id, not a missing one."""
+        topo = {
+            "sources": [{"id": 0, "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": 0, "to": "dhw"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        self.assertEqual(compiled["number_of_deferrable_loads"], 1)
+
+    def test_missing_id_raises_value_error_with_field_path(self):
+        """A source/storage entry without an `id` must raise the documented
+        ValueError naming the offending field, not an internal KeyError: the
+        documented contract is that an invalid topology raises ValueError."""
+        no_source_id = {
+            "sources": [{"type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_source_id)
+        self.assertIn("sources[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
+
+        no_storage_id = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 1000}],
+            "storage": [{"volume": 0.2}],
+            "flows": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(no_storage_id)
+        self.assertIn("storage[0]", str(ctx.exception))
+        self.assertIn("id", str(ctx.exception))
 
 
 class TestRuntimeBanner(unittest.TestCase):

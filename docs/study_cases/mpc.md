@@ -2,7 +2,7 @@
 
 > **Type:** How-To Guide — task-oriented, follow when you need a live, continuously-updated optimization plan instead of a static day-ahead schedule.
 
-The `dayahead-optim` action computes a single 24 h schedule once per day. For systems where forecasts and state change throughout the day (especially battery SOC, EV state, dynamic prices), you want **Model Predictive Control**: re-run the optimization on a rolling window every N minutes, using the latest measurements as the new initial state.
+The `dayahead-optim` action normally computes one local calendar-day schedule once per day. Because `delta_forecast_daily` follows the configured timezone, that civil day can contain 23, 24, or 25 elapsed hours across a daylight-saving transition. By contrast, `prediction_horizon` is a timestep count: the 48-step/30-minute examples below are a fixed 24-hour rolling horizon. For systems where forecasts and state change throughout the day (especially battery SOC, EV state, dynamic prices), you want **Model Predictive Control**: re-run the optimization on a rolling window every N minutes, using the latest measurements as the new initial state.
 
 EMHASS implements this with the `naive-mpc-optim` action. This page walks through wiring it up.
 

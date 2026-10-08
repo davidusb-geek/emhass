@@ -93,6 +93,13 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 # whenever that is possible, while a contradictory target relaxes to the closest
 # reachable SoC instead of returning infeasible.
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+# Default big-M (deg C) for the per-source max_supply_temperature gate on
+# shared thermal tanks. When allow_k = 0 the gate must leave the tank
+# temperature unconstrained, so M must be at least (highest feasible tank
+# temperature - lowest source cap). 100 covers domestic hot-water tanks; the
+# gate widens it per tank when a configured max_temperatures says the tank can
+# run hotter (e.g. industrial or glycol systems).
+SHARED_TANK_CAP_BIG_M_TEMP = 100.0
 
 
 class Optimization:
@@ -750,6 +757,10 @@ class Optimization:
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
+        # Effective per-step floor of each shared tank (static list and
+        # min_temperature_curve combined), keyed by tank index; filled when the
+        # tank is built and published as min_temp_heater{k} for its members.
+        self._shared_tank_min_floors = {}
         def_load_config = self.optim_conf.get("def_load_config", []) or []
         for k in range(num_def_loads):
             if k < len(def_load_config) and def_load_config[k]:
@@ -2618,8 +2629,12 @@ class Optimization:
                 penalty = self.optim_conf["set_deferrable_startup_penalty"][k]
                 if penalty > 0:
                     nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    # Vectorized cost calculation for this load's startups
-                    startup_cost_vector = cp.multiply(p_def_start[k], unit_load_cost)
+                    # Vectorized cost calculation for this load's startups. The
+                    # price is clipped to non-negative (param_load_cost_pos, as
+                    # for battery_first): at a negative price the penalty would
+                    # otherwise reward every start and split a run into
+                    # one-step pieces.
+                    startup_cost_vector = cp.multiply(p_def_start[k], self.param_load_cost_pos)
                     total_startup_cost = cp.sum(startup_cost_vector)
 
                     term = -scale * penalty * nominal_power * total_startup_cost
@@ -2848,6 +2863,60 @@ class Optimization:
         # -p_grid_neg <= max_to_grid[t] * (1 - D[t])
         constraints.append(-p_grid_neg <= cp.multiply(max_power_to_grid_arr, (1 - D)))
 
+    def _inverter_power_curve(self, parameter_name: str, direction: str):
+        """Return the validated (ac_points, dc_points) of one inverter curve, or None.
+
+        None (absent parameter or explicit empty list) means the scalar efficiency of
+        that direction applies. Any other value is validated and a malformed one raises
+        ValueError naming the parameter: it is a physical model, so silently falling
+        back to the scalar would hide the error.
+        """
+        raw = self.plant_conf.get(parameter_name, [])
+        if utils.inverter_power_curve_is_unset(raw):
+            return None
+        points = utils.validate_inverter_power_curve(raw, parameter_name, direction)
+        return [p[0] for p in points], [p[1] for p in points]
+
+    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
+        """Exact piecewise-linear transfer dc = f(ac) by the incremental method.
+
+        The curve is indexed on the AC side, the power the user commands and
+        measures; ``dc_var`` (p_dc_ac or p_ac_dc) is the DC-bus flow it implies.
+        Segment k (k = 0..K-1) has width w_k = ac_{k+1} - ac_k and slope
+        s_k = (dc_{k+1} - dc_k) / w_k. With fill fractions u_k in [0, 1]:
+
+            ac = sum_k w_k u_k          dc = sum_k s_k w_k u_k
+
+        and K-1 binaries b_k force the segments to fill in order
+        (u_{k+1} <= b_k <= u_k), so dc is exactly f(ac) on every timestep, convex
+        or not, and a flat segment (zero DC for positive AC) is just s_k = 0. The AC
+        power is an expression of the fill fractions, not a free variable, so every
+        watt of AC is accounted for. ``gate`` (the existing is_dc_sourcing direction
+        binary, or its complement) bounds the first segment, so no extra on/off
+        binary is needed and the direction cannot be active together with the
+        opposite one. The curve's last AC point is the supported power domain: no
+        extrapolation. Returns the AC-side power expression.
+        """
+        ac_pts, dc_pts = curve
+        n = self.num_timesteps
+        n_seg = len(ac_pts) - 1
+        widths = [ac_pts[k + 1] - ac_pts[k] for k in range(n_seg)]
+        slopes = [(dc_pts[k + 1] - dc_pts[k]) / widths[k] for k in range(n_seg)]
+        u = [cp.Variable(n, nonneg=True, name=f"{name}_u{k}") for k in range(n_seg)]
+        b = [cp.Variable(n, boolean=True, name=f"{name}_b{k}") for k in range(n_seg - 1)]
+        for u_k in u:
+            constraints.append(u_k <= 1)
+        constraints.append(
+            dc_var == sum((s * w) * u_k for s, w, u_k in zip(slopes, widths, u, strict=True))
+        )
+        constraints.append(u[0] <= gate)
+        for k in range(n_seg - 1):
+            constraints.append(u[k + 1] <= b[k])
+            constraints.append(b[k] <= u[k])
+        self.vars[f"{name}_u"] = u
+        self.vars[f"{name}_b"] = b
+        return sum(w * u_k for w, u_k in zip(widths, u, strict=True))
+
     def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
         """Add constraints specific to hybrid inverters (Vectorized)."""
         if not self.plant_conf["inverter_is_hybrid"]:
@@ -2901,11 +2970,17 @@ class Optimization:
         if p_nom_inverter_input is None:
             p_nom_inverter_input = p_nom_inverter_output
 
-        eff_dc_ac = self.plant_conf.get("inverter_efficiency_dc_ac", 1.0)
-        eff_ac_dc = self.plant_conf.get("inverter_efficiency_ac_dc", 1.0)
-
-        p_dc_ac_max = p_nom_inverter_output / eff_dc_ac
-        p_ac_dc_max = p_nom_inverter_input * eff_ac_dc
+        # Optional exact piecewise-linear AC<->DC transfer curves (issue #746). A
+        # direction with a curve ignores its scalar efficiency entirely, so the scalar
+        # (and any limit derived from it) is only read for a scalar direction.
+        curve_dc_ac = self._inverter_power_curve("inverter_power_curve_dc_ac", "dc_ac")
+        curve_ac_dc = self._inverter_power_curve("inverter_power_curve_ac_dc", "ac_dc")
+        if curve_dc_ac is None:
+            eff_dc_ac = self.plant_conf.get("inverter_efficiency_dc_ac", 1.0)
+            p_dc_ac_max = p_nom_inverter_output / eff_dc_ac
+        if curve_ac_dc is None:
+            eff_ac_dc = self.plant_conf.get("inverter_efficiency_ac_dc", 1.0)
+            p_ac_dc_max = p_nom_inverter_input * eff_ac_dc
 
         n = self.num_timesteps
 
@@ -2931,15 +3006,42 @@ class Optimization:
 
         constraints.append(e_dc_balance == 0)
 
+        # An empty/absent curve keeps the scalar efficiency of that direction, so
+        # with both curves absent the expressions and constraints below are exactly
+        # the legacy ones. A curve is an EQUALITY between the AC-side power and the
+        # DC-side variable (p_dc_ac / p_ac_dc): never an inequality, which would let
+        # the solver import extra AC that no DC power accounts for. A genuine
+        # dead zone (AC input that reaches the DC bus as 0 W, e.g. 50 W -> 0 W) is a
+        # flat segment of that equality: the AC is consumed as inverter losses.
+        if curve_dc_ac is None:
+            ac_out = p_dc_ac * eff_dc_ac
+        else:
+            ac_out = self._add_inverter_pwl_transfer(
+                constraints, "inv_curve_dc_ac", p_dc_ac, curve_dc_ac, is_dc_sourcing
+            )
+        if curve_ac_dc is None:
+            ac_in = p_ac_dc * (1.0 / eff_ac_dc)
+        else:
+            ac_in = self._add_inverter_pwl_transfer(
+                constraints, "inv_curve_ac_dc", p_ac_dc, curve_ac_dc, 1 - is_dc_sourcing
+            )
+
         # AC Bus Balance
         # p_hybrid == converted_DC_to_AC - converted_AC_to_DC
-        constraints.append(
-            p_hybrid_inverter == (p_dc_ac * eff_dc_ac) - (p_ac_dc * (1.0 / eff_ac_dc))
-        )
+        constraints.append(p_hybrid_inverter == ac_out - ac_in)
 
-        # Enforce Binary Logic (Cannot source and sink DC simultaneously)
-        constraints.append(p_ac_dc <= (1 - is_dc_sourcing) * p_ac_dc_max)
-        constraints.append(p_dc_ac <= is_dc_sourcing * p_dc_ac_max)
+        # Enforce Binary Logic (Cannot source and sink DC simultaneously).
+        # A curved direction is limited on its AC side (the curve's last AC point
+        # is enforced by the transfer segments); a scalar direction keeps the
+        # legacy DC-side bound.
+        if curve_ac_dc is None:
+            constraints.append(p_ac_dc <= (1 - is_dc_sourcing) * p_ac_dc_max)
+        else:
+            constraints.append(ac_in <= (1 - is_dc_sourcing) * p_nom_inverter_input)
+        if curve_dc_ac is None:
+            constraints.append(p_dc_ac <= is_dc_sourcing * p_dc_ac_max)
+        else:
+            constraints.append(ac_out <= is_dc_sourcing * p_nom_inverter_output)
 
         # Stress Cost
         if inv_stress_conf and inv_stress_conf["active"]:
@@ -3476,7 +3578,17 @@ class Optimization:
                     predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
                 )
 
-            constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            # Suppress heating past the overshoot threshold: no heat at step t when
+            # the temperature at t+1 is beyond it. p_def_bin2 only tracks power for
+            # semi-continuous loads; a continuous load's p_def_bin2 is never linked
+            # to its power, so bound the power itself, with the same timing. (Gating
+            # on the temperature at t instead would forbid heating at t=0 whenever
+            # the measured start is above the threshold, even when the floor at t+1
+            # needs heat.)
+            if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            else:
+                constraints.append(p_deferrable[:-1] <= nominal_power * (1 - is_overshoot[1:]))
 
             # Penalty Calculation
             # Filter for valid indices (not None, within bounds, skip index 0)
@@ -4081,6 +4193,7 @@ class Optimization:
                 f"Shared tank {tank_id}: requires non-empty min_temperatures "
                 "or min_temperature_curve"
             )
+        self._shared_tank_min_floors[tank_idx] = list(min_temperatures_list)
 
         # Heating demand resolution: same options as single-source thermal_battery
         # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
@@ -4174,12 +4287,17 @@ class Optimization:
         # Per-source COP arrays (HP uses Carnot, gas / oil / district use flat
         # efficiency). Resolve each source's conversion factor from its config.
         cop_arrays: list[np.ndarray] = []
+        # Optional per-source temperature ceiling (e.g. a heat pump capped at its
+        # supply temperature). None = no cap (e.g. an electric booster).
+        source_caps: list[float | None] = []
         for k in load_ids:
             src_cfg = self._get_load_source_config(k)
             cops = utils.resolve_thermal_battery_cop(
                 src_cfg, outdoor_temp_arr.tolist(), length=required_len
             )
             cop_arrays.append(np.asarray(cops))
+            # scalar, per-step list, or None (uncapped)
+            source_caps.append(src_cfg.get("max_supply_temperature"))
 
         # Comfort sense (heat vs cool). The compiler propagates the destination
         # storage's comfort_sense onto tank["sense"]; default to heat for legacy
@@ -4225,6 +4343,62 @@ class Optimization:
         if max_idx:
             max_vals = np.array([max_temperatures_list[i] for i in max_idx])
             constraints.append(predicted_temp[max_idx] <= max_vals)
+
+        # Per-source temperature ceiling. A source with `max_supply_temperature`
+        # (e.g. a heat pump that cannot raise water above its supply/condenser
+        # temperature) may only inject heat while the tank is at or below that
+        # ceiling; a source without a cap (e.g. an electric booster) can drive the
+        # tank up to the tank's own max_temperatures. Big-M gate: allow_k[t] == 1
+        # permits source k at step t, and is only allowed while temp[t] <= cap.
+        # The gate is a physical limit, so it is kept (booleans included) in the
+        # relaxed-LP fallback rebuild too - same treatment as the tank's hard
+        # min/max temperatures; the fallback must not publish a plan the
+        # hardware cannot execute.
+        finite_max_temps = [v for v in max_temperatures_list if v is not None]
+        tank_temp_ub = max(finite_max_temps) if finite_max_temps else None
+        # The ceiling is a heating limit: on a cooling storage the gate would keep
+        # a capped source off exactly while the storage is warm and needs cooling.
+        if tank_sense == "cool" and any(cap is not None for cap in source_caps):
+            self.logger.warning(
+                "Shared tank %s cools: max_supply_temperature is a heating ceiling "
+                "and is ignored for its sources.",
+                tank_id,
+            )
+            source_caps = [None] * len(source_caps)
+        for k, cap in zip(load_ids, source_caps):
+            if cap is None:
+                continue
+            # cap may be a scalar or a per-step list (e.g. a weather-dependent
+            # supply temperature). Broadcast / pad to the horizon length.
+            if isinstance(cap, list | tuple | np.ndarray):
+                cap_list = [float(x) for x in cap]
+                if len(cap_list) < required_len:
+                    cap_list += [cap_list[-1]] * (required_len - len(cap_list))
+                cap_arr = np.array(cap_list[:required_len])
+            else:
+                cap_arr = np.full(required_len, float(cap))
+            # M must dominate (max feasible tank temperature - cap), otherwise
+            # allow_k = 0 would wrongly bound the tank temperature itself.
+            # The start temperature counts too: index 0 is never bounded by the
+            # tank's own maximum, so it can sit above every configured limit.
+            big_m_temp = SHARED_TANK_CAP_BIG_M_TEMP
+            temp_ub = max(v for v in (tank_temp_ub, float(start_temperature)) if v is not None)
+            big_m_temp = max(big_m_temp, temp_ub - float(cap_arr.min()))
+            nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+            if isinstance(nominal_k, list | np.ndarray):
+                nominal_k = max(nominal_k)
+            allow_k = cp.Variable(required_len, boolean=True, name=f"src_below_cap_{tank_id}_{k}")
+            p_k = self.vars["p_deferrable"][k]
+            # A capped source may only inject heat at step t when the tank stays at or
+            # below its ceiling BOTH at the start of the step (it cannot heat water
+            # already hotter than its supply temperature) AND at t+1 (it must not push
+            # the tank past the cap). Both ends are held to step t's ceiling: the heat
+            # of step t is delivered under cap[t], even when cap[t+1] is higher.
+            # allow_k[t] == 0 forces p_k[t] == 0; an uncapped source (e.g. an
+            # electric booster) has no such gate and can go higher.
+            constraints.append(predicted_temp - cap_arr <= big_m_temp * (1 - allow_k))
+            constraints.append(predicted_temp[1:] - cap_arr[:-1] <= big_m_temp * (1 - allow_k[:-1]))
+            constraints.append(p_k <= nominal_k * allow_k)
 
         # Soft comfort constraints (overshoot/desired/penalty) — same pattern as the
         # per-load thermal_battery path. Without this the hard min/max are the ONLY
@@ -4620,6 +4794,10 @@ class Optimization:
                     p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
                 )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
+                # A start also needs the load on: without this upper bound a
+                # negative price turns the startup penalty into a reward for starts
+                # in steps where the load stays off.
+                constraints.append(p_def_start[k] <= p_def_bin2[k])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
@@ -5062,6 +5240,9 @@ class Optimization:
         opt_tp["optim_status"] = self.optim_status
 
         # Thermal Details
+        # Shared-tank members carry `thermal_source`, not `thermal_config` /
+        # `thermal_battery`, so their comfort bounds live on the owning tank.
+        shared_tank_membership = self._load_shared_tank_membership()
         for k, pred_temp_var in predicted_temps.items():
             temp_values = get_val(pred_temp_var)
             opt_tp[f"predicted_temp_heater{k}"] = np.round(temp_values, 2)
@@ -5070,6 +5251,17 @@ class Optimization:
                 # Robustly get config (support both thermal_config and thermal_battery)
                 load_conf = self.optim_conf["def_load_config"][k]
                 conf = load_conf.get("thermal_config") or load_conf.get("thermal_battery") or {}
+                if not conf and k in shared_tank_membership:
+                    tank = self._get_shared_thermal_tanks()[shared_tank_membership[k]]
+                    desired_raw = tank.get("desired_temperatures")
+                    if isinstance(desired_raw, int | float):
+                        desired_raw = [float(desired_raw)] * self.num_timesteps
+                    conf = {**tank, "desired_temperatures": desired_raw}
+                    # Publish the floor the solver enforced (static list and
+                    # min_temperature_curve combined), not the raw static list.
+                    floor = self._shared_tank_min_floors.get(shared_tank_membership[k])
+                    if floor:
+                        conf["min_temperatures"] = floor
 
                 # Store Target/Desired Temperatures (Legacy behavior)
                 # Only look for 'desired_temperatures'.
@@ -5711,6 +5903,11 @@ class Optimization:
             #      to honour the tail of an in-progress min-on window (issue #952).
             # When both apply to the same k, take the ELEMENTWISE MAX (OR) of the two
             # masks -- the stricter force wins, and neither overwrites the other.
+            # Shared-tank members are exempt from the single-constant pin (A): they are
+            # temperature-driven, and pinning a capped source ON while the tank starts
+            # above its max_supply_temperature would contradict the cap gate
+            # (p[0] >= min_power vs p[0] == 0) and force the relaxed-LP fallback,
+            # silently dropping single_constant for every load.
             if k < len(self.param_running_lb):
                 current_state = (
                     self.param_def_current_state[k].value > 0.5
@@ -5726,6 +5923,7 @@ class Optimization:
                     and constraint_active
                     and required_timesteps > 0
                     and k not in window_empty_loads
+                    and k not in shared_tank_membership
                 ):
                     # Re-derive the configured window end so we respect def_end_timestep.
                     if def_total_timestep and def_total_timestep[k] > 0:
@@ -5943,14 +6141,13 @@ class Optimization:
         # Thermal loads (thermal_config, thermal_battery, and shared-tank sources) are
         # always active since they're driven by temperature constraints, not operating
         # timesteps. Shared-tank members already skip the energy/operating constraints
-        # above (is_thermal_battery), so they must not be deactivated here either —
-        # otherwise a member with operating_hours == 0 (the natural setting for a
-        # temperature-driven source) is pinned to 0 W, the tank cannot hold its
-        # min_temperatures band, and the problem goes infeasible. Sequence loads
-        # (list-valued nominal power) are likewise always active: their runtime is the
-        # length of the sequence and operating_hours is meaningless for them, so a value
-        # of 0 must not deactivate the load (issue #887). The energy constraint already
-        # exempts sequence loads, so this keeps param_load_active consistent with it.
+        # above (is_thermal_battery), so they must not be deactivated here either.
+        # Sequence loads (list-valued nominal power) are likewise always active: their
+        # runtime is the length of the sequence and operating_hours is meaningless for
+        # them, so a value of 0 must not deactivate the load (issue #887). The energy
+        # constraint already exempts sequence loads, so this keeps param_load_active
+        # consistent with it. (shared_tank_membership computed above, before the
+        # energy-parameter loop.)
         nominal_powers = self.optim_conf["nominal_power_of_deferrable_loads"]
         for k in range(min(num_deferrable_loads, len(self.param_load_active))):
             is_thermal = k in self.param_thermal or k in shared_tank_membership
@@ -6194,6 +6391,10 @@ class Optimization:
             self.logger.warning(
                 f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
             )
+            # cvxpy leaves status and value from the PREVIOUS solve in place when
+            # solve() raises, so a reused problem would republish the old plan as
+            # Optimal. Mark the attempt as failed so the rescue path runs.
+            self.prob._status = None
 
         # The problem whose status/value the extraction below reads. Stays
         # self.prob on a clean solve; points at the relaxed problem after a
@@ -6226,7 +6427,15 @@ class Optimization:
             # state must keep pointing at the cached problem's objects, or later
             # cache-hit runs would read variables the solver no longer touches
             # (issue #1048).
-            hybrid_var_keys = ("p_dc_ac", "p_ac_dc", "is_dc_sourcing")
+            hybrid_var_keys = (
+                "p_dc_ac",
+                "p_ac_dc",
+                "is_dc_sourcing",
+                "inv_curve_dc_ac_u",
+                "inv_curve_dc_ac_b",
+                "inv_curve_ac_dc_u",
+                "inv_curve_ac_dc_b",
+            )
             original_hybrid_vars = {
                 key: self.vars[key] for key in hybrid_var_keys if key in self.vars
             }
@@ -6409,6 +6618,14 @@ class Optimization:
         results_list = []
 
         for day in self.days_list_tz:
+            # Shared thermal tanks bake their forecast-dependent physics (COP,
+            # thermal losses, min/max and start temperatures) in as constants when
+            # the problem is built, and there is no refresh path for them. Re-using
+            # the problem here would re-solve every day against the FIRST day's
+            # weather, so force a rebuild - same cache bypass command_line.py
+            # already applies for issue #970.
+            if self.optim_conf.get("shared_thermal_tanks"):
+                self.prob = None
             self.logger.info(
                 "Solving for day: " + str(day.day) + "-" + str(day.month) + "-" + str(day.year)
             )

@@ -348,7 +348,10 @@ function buildParamContainers(
     let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
-      parameter_definition_name !== "battery_charge_power_derating" &&
+      !(
+        parameter_definition_object["input"] === "array.array.float" &&
+        Array.isArray(parameter_definition_object["default_value"])
+      ) &&
       !(section == "Deferrable Loads" && DEFERRABLE_ARRAY_PARAMS.includes(parameter_definition_name)) &&
       !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
@@ -542,10 +545,12 @@ function buildParamElement(
   //check if a param value is saved in the config file (if so overwrite definition default)
   let value = checkConfigParam(placeholder, config, parameter_definition_name);
 
-  // Battery tables use one JSON field. Other nested-array parameters can allow
-  // null entries and follow their existing per-load rendering and save paths.
-  if (parameter_definition_name === "battery_charge_power_derating" &&
-      parameter_definition_object["input"] === "array.array.float") {
+  // A static numeric table (array.array.float with a list default, e.g. the
+  // battery charge derating or the inverter power curves) uses one JSON field.
+  // Per-load nested arrays declare a null default, may hold null entries and
+  // keep their own per-load rendering and save paths.
+  if (parameter_definition_object["input"] === "array.array.float" &&
+      Array.isArray(parameter_definition_object["default_value"])) {
     const json = typeof value === "string" ? value : JSON.stringify(value ?? []);
     const escaped = json.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -940,9 +945,11 @@ async function saveConfiguration(param_definitions) {
 
           //build parameters using values extracted from param_inputs
 
-          // Nested numeric arrays must be saved as JSON, not flattened strings.
-          if (parameter_definition_name === "battery_charge_power_derating" &&
-              parameter_definition_object["input"] === "array.array.float") {
+          // Static numeric tables must be saved as JSON, not flattened strings.
+          // Only the structure is checked here; the physics of each table is
+          // validated authoritatively in Python.
+          if (parameter_definition_object["input"] === "array.array.float" &&
+              Array.isArray(parameter_definition_object["default_value"])) {
             try {
               const value = JSON.parse((param_values[0] ?? "").trim() || "[]");
               const numericRow = (row) => Array.isArray(row) &&

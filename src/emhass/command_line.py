@@ -29,6 +29,7 @@ from emhass.forecast_calibration import (
     CALIBRATION_TEST_DAYS,
     CALIBRATION_VAL_DAYS,
     compute_forecast_calibration,
+    trim_to_first_observation,
 )
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -349,6 +350,13 @@ class OptimizationCache:
                 # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
                 thermal_hash = config_hash(cfg["thermal_battery"], thermal_runtime_keys)
                 load_type = f"thermal_battery:{thermal_hash}"
+            elif "thermal_source" in cfg:
+                # Shared-tank source block (compiled from heat_topology). Its fields
+                # (COP parameters, max_supply_temperature, ...) are baked into the
+                # problem at build time, not parameterized, so any change must miss
+                # the cache and force a rebuild.
+                thermal_hash = config_hash(cfg["thermal_source"], thermal_runtime_keys)
+                load_type = f"thermal_source:{thermal_hash}"
             else:
                 load_type = "standard"
             def_structure.append((i, load_type))
@@ -822,7 +830,8 @@ async def adjust_pv_forecast(
     :type emhass_conf: dict
     :param test_df_literal: DataFrame containing test data for debugging purposes.
     :type test_df_literal: pd.DataFrame
-    :return: The adjusted PV forecast as a pandas Series.
+    :return: The adjusted PV forecast as a pandas Series. On handled model training
+        or loading failures, the original unadjusted PV forecast is returned.
     :rtype: pd.Series
     """
     # Normalize data_path to Path object for safety (handles both str and Path types)
@@ -879,8 +888,10 @@ async def adjust_pv_forecast(
             logger.error(
                 f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
             )
-            logger.error("Cannot recover from this error")
-            return False
+            logger.warning(
+                "Unable to load the adjusted PV model. Falling back to unadjusted PV forecast."
+            )
+            return p_pv_forecast
     # Call the predict method
     p_pv_forecast_in = p_pv_forecast.rename("forecast").to_frame()
     try:
@@ -1954,7 +1965,8 @@ async def _get_dayahead_pv_forecast(ctx: SetupContext):
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
@@ -2069,7 +2081,8 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     # Calculate PV power
     p_pv_forecast = ctx.fcst.get_power_from_weather(
@@ -2319,11 +2332,33 @@ async def set_input_data_dict(
         else:
             # Try to get cached Optimization object for warm-starting
             _num_ts = len(fcst.forecast_dates)
-            opt = OptimizationCache.get(
-                optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+            # Shared thermal tanks bake ALL forecast-dependent state
+            # (start_temperature, heating demand, COP arrays, thermal losses,
+            # min/max temperatures) into the problem as plain constants in
+            # _add_shared_thermal_tank_constraints. The warm-start cache reuses a
+            # built problem (self.prob) and the cache-hit refresh path only
+            # updates thermal_config / thermal_battery CVXPY Parameters, never
+            # shared tanks. Reusing it would therefore re-solve every MPC tick
+            # against the FIRST tick's tank temperature and forecast, silently
+            # discarding the MPC feedback signal (issue #970). Build fresh each
+            # run when shared tanks are present so the live tank state and
+            # forecast are honored. (A future optimization could parameterize
+            # these like thermal_battery to restore warm-starting.)
+            use_optim_cache = not optim_conf.get("shared_thermal_tanks")
+            opt = (
+                OptimizationCache.get(
+                    optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                )
+                if use_optim_cache
+                else None
             )
             if opt is None:
-                # Cache miss - create new Optimization object
+                # Cache miss (or cache bypassed) - create new Optimization object
+                if not use_optim_cache:
+                    logger.debug(
+                        "OptimizationCache bypassed: shared_thermal_tanks present; "
+                        "rebuilding so MPC tank-temperature feedback is honored (#970)"
+                    )
                 opt = Optimization(
                     retrieve_hass_conf,
                     optim_conf,
@@ -2335,10 +2370,11 @@ async def set_input_data_dict(
                     logger,
                     num_timesteps=_num_ts,
                 )
-                # Store in cache for future warm-starts
-                OptimizationCache.put(
-                    opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
-                )
+                # Store in cache for future warm-starts (not for shared tanks)
+                if use_optim_cache:
+                    OptimizationCache.put(
+                        opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                    )
             else:
                 # Cache hit - update references that may have changed
                 # (logger, var names from forecast, and runtime-configurable optim_conf values)
@@ -2636,6 +2672,17 @@ def prepare_forecast_and_weather_data(
     passed_outdoor_temp = input_data_dict["params"]["passed_data"].get(
         "outdoor_temperature_forecast"
     )
+    # Absence and rejection are different contracts. A genuinely omitted
+    # runtime temperature may use the existing weather-temperature fallback;
+    # a supplied value rejected by #1135 must fail closed.
+    if passed_outdoor_temp is None and input_data_dict["params"]["passed_data"].get(
+        "_outdoor_temperature_forecast_rejected", False
+    ):
+        logger.error(
+            "outdoor_temperature_forecast was supplied but rejected; "
+            "not falling back to the weather forecast temperature."
+        )
+        return False
 
     if passed_outdoor_temp is not None:
         forecast_len = len(df_input_data_dayahead)
@@ -3043,6 +3090,13 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
     if not await rh.get_data(days_list, [var_model]):
         logger.error("Forecast calibration: failed to retrieve load history from Home Assistant")
         return None
+    history = trim_to_first_observation(rh.df_final, var_model)
+    if history is None:
+        logger.error(
+            f"Forecast calibration: no observation of {var_model} in the retrieved history"
+        )
+        return None
+    rh.df_final = history
     rh.prepare_data(
         var_model,
         load_negative=retrieve_hass_conf.get("load_negative", False),
@@ -4290,6 +4344,16 @@ async def publish_json(
     return entity_data[metadata[entity_id]["name"]]
 
 
+def _parse_bool_arg(value: str) -> bool:
+    """Parse a boolean command line value; argparse `type=bool` reads any text as True."""
+    value = value.lower()
+    if value in {"true", "1", "yes", "on"}:
+        return True
+    if value in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value!r}")
+
+
 async def main():
     r"""Define the main command line entry function.
 
@@ -4340,7 +4404,7 @@ async def main():
     )
     parser.add_argument(
         "--log2file",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Define if we should log to a file or not",
     )
@@ -4358,7 +4422,7 @@ async def main():
     )
     parser.add_argument(
         "--debug",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Use True for testing purposes",
     )

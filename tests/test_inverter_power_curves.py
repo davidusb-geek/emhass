@@ -1,0 +1,996 @@
+#!/usr/bin/env python
+"""Tests for the optional hybrid-inverter power-dependent efficiency curves (issue #746).
+
+``inverter_power_curve_dc_ac`` / ``inverter_power_curve_ac_dc`` replace the scalar
+``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` of one direction with
+a user-facing [ac_power_w, efficiency] curve (AC side: where inverters are commanded and
+measured) that is converted to the exact piecewise-linear relation between the AC-side power
+and the optimiser's DC-bus power. Layers covered here:
+
+* config layer: ``utils.validate_inverter_power_curve`` / ``check_inverter_power_curves``
+  and the real build_params / runtime entry points;
+* constraint layer: exact curve equality, composition with native features,
+  default-OFF structural parity, and a negative-import-price adversarial case
+  that an inequality relaxation would exploit.
+
+The Optimization builder mirrors test_battery_charge_power_derating.py:
+synthetic and self-contained.
+"""
+
+import asyncio
+import json
+import logging
+import pathlib
+
+import cvxpy as cp
+import numpy as np
+import orjson
+import pandas as pd
+import pytest
+
+from emhass import utils
+from emhass.optimization import Optimization
+
+TEST_ROOT = pathlib.Path(__file__).resolve().parents[1]
+VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
+
+EMHASS_CONF = {
+    "data_path": TEST_ROOT / "data/",
+    "root_path": TEST_ROOT / "src/emhass/",
+    "defaults_path": TEST_ROOT / "src/emhass/data/config_defaults.json",
+    "associations_path": TEST_ROOT / "src/emhass/data/associations.csv",
+}
+
+DC_AC = "inverter_power_curve_dc_ac"
+AC_DC = "inverter_power_curve_ac_dc"
+logger = logging.getLogger("inverter_curve_test")
+
+# Synthetic, illustrative [ac_power_w, efficiency] curves (not any real hardware).
+# charge (AC in -> DC out): (0,0),(1000,700),(4000,3600); discharge (DC in = AC out / eff):
+# (0,0),(1000,1000/0.7),(5000,5000/0.9).
+CHARGE_CURVE = [[1000, 0.7], [4000, 0.9]]
+DISCHARGE_CURVE = [[1000, 0.7], [5000, 0.9]]
+# Measured 0 % charge efficiency at 50 W AC input: 50 W AC in -> 0 W DC out (a flat dead zone),
+# then 700 W DC out for 1 kW AC in.
+DEAD_ZONE_CHARGE_CURVE = [[50, 0.0], [1000, 0.7], [4000, 0.9]]
+
+
+def dc_of_ac(curve, ac_w, direction):
+    """Exact DC-side power for an AC-side power on the piecewise-linear transfer."""
+    pts = np.asarray(utils.validate_inverter_power_curve(curve, "test_curve", direction))
+    return np.interp(ac_w, pts[:, 0], pts[:, 1])
+
+
+# --------------------------------------------------------------------------- #
+# Config layer
+# --------------------------------------------------------------------------- #
+
+
+def test_valid_curves_are_converted_to_internal_transfer_tuples():
+    assert utils.validate_inverter_power_curve(CHARGE_CURVE, AC_DC, "ac_dc") == [
+        (0.0, 0.0),
+        (1000.0, pytest.approx(700.0)),
+        (4000.0, pytest.approx(3600.0)),
+    ]
+    points = utils.validate_inverter_power_curve(DISCHARGE_CURVE, DC_AC, "dc_ac")
+    assert points[1] == (1000.0, pytest.approx(1000 / 0.7))
+    assert points[-1] == (5000.0, pytest.approx(5000 / 0.9))
+
+
+def test_zero_origin_is_inserted_internally():
+    assert utils.validate_inverter_power_curve([[1000, 1.0], [5000, 1.0]], DC_AC, "dc_ac") == [
+        (0.0, 0.0),
+        (1000.0, 1000.0),
+        (5000.0, 5000.0),
+    ]
+
+
+def test_zero_efficiency_at_positive_ac_input_is_valid_for_charging():
+    """Fixed losses eat a small AC input: 50 W AC in reaches the DC bus as 0 W."""
+    assert utils.validate_inverter_power_curve([[50, 0.0], [1000, 0.7]], AC_DC, "ac_dc") == [
+        (0.0, 0.0),
+        (50.0, 0.0),
+        (1000.0, pytest.approx(700.0)),
+    ]
+
+
+def test_zero_efficiency_at_positive_ac_output_is_rejected_for_discharging():
+    with pytest.raises(ValueError, match="infinite DC input"):
+        utils.validate_inverter_power_curve([[50, 0.0], [1000, 0.7]], DC_AC, "dc_ac")
+
+
+@pytest.mark.parametrize(
+    "curve,direction,expected",
+    [
+        ("1000,0.9;5000,0.95", "dc_ac", "at least 2"),
+        ([[1000, 0.9]], "dc_ac", "at least 2"),
+        ([[1000], [5000, 0.95]], "dc_ac", "pair"),
+        ([[1000, 0.9, 5], [5000, 0.95]], "dc_ac", "pair"),
+        ([["1000", 0.9], [5000, 0.95]], "dc_ac", "expected a number"),
+        ([[True, 0.9], [5000, 0.95]], "dc_ac", "expected a number"),
+        ([[float("nan"), 0.9], [5000, 0.95]], "dc_ac", "finite"),
+        ([[0, 0.9], [5000, 0.95]], "dc_ac", "strictly positive"),
+        ([[-10, 0.9], [5000, 0.95]], "dc_ac", "strictly positive"),
+        ([[1000, -0.01], [5000, 0.95]], "dc_ac", "0 <= efficiency <= 1"),
+        ([[1000, 1.01], [5000, 0.95]], "dc_ac", "0 <= efficiency <= 1"),
+        ([[1000, 0.9], [800, 0.95]], "dc_ac", "ascend strictly"),
+        ([[1000, 0.9], [1000, 0.95]], "dc_ac", "ascend strictly"),
+        ([[1000, 0.5], [1500, 1.0]], "dc_ac", "non-decreasing"),  # 2000 W then 1500 W DC in
+        ([[1000, 0.9], [2000, 0.4]], "ac_dc", "non-decreasing"),  # 900 W then 800 W DC out
+        ([[1000, 97], [5000, 0.95]], "dc_ac", "use 0.97 for 97%"),  # percentage, not a fraction
+        ([[1000, 1e-320], [5000, 0.95]], "dc_ac", "non-finite"),
+        ([[1, 1.0], [1 + 2.3e-16, 1e-300]], "dc_ac", "too close"),
+        ([[10**400, 0.9], [5000, 0.95]], "dc_ac", "finite"),  # int too large for a float
+        ([[1000, 10**400], [5000, 0.95]], "ac_dc", "finite"),
+        (
+            [[500 * k, 0.9] for k in range(1, utils.INVERTER_CURVE_MAX_POINTS + 2)],
+            "dc_ac",
+            "at most",
+        ),
+        (None, "dc_ac", "at least 2"),
+        (False, "ac_dc", "at least 2"),
+        (0, "dc_ac", "at least 2"),
+        ("", "ac_dc", "at least 2"),
+        ((), "dc_ac", "at least 2"),
+    ],
+)
+def test_malformed_curve_is_rejected_with_a_named_reason(curve, direction, expected):
+    with pytest.raises(ValueError) as err:
+        utils.validate_inverter_power_curve(curve, "my_param", direction)
+    message = str(err.value)
+    assert "my_param" in message
+    assert expected in message
+
+
+def test_flat_converted_transfer_is_allowed_where_physically_valid():
+    # AC -> DC: 100 W AC -> 50 W DC, 200 W AC -> 50 W DC (efficiency halves as power doubles).
+    assert utils.validate_inverter_power_curve([[100, 0.5], [200, 0.25]], AC_DC, "ac_dc") == [
+        (0.0, 0.0),
+        (100.0, 50.0),
+        (200.0, 50.0),
+    ]
+    # DC -> AC: 100 W AC out needs 200 W DC in, 200 W AC out needs 200 W DC in.
+    assert utils.validate_inverter_power_curve([[100, 0.5], [200, 1.0]], DC_AC, "dc_ac") == [
+        (0.0, 0.0),
+        (100.0, 200.0),
+        (200.0, 200.0),
+    ]
+
+
+def test_point_count_limit_is_exact():
+    at_limit = [[100 * k, 0.9] for k in range(1, utils.INVERTER_CURVE_MAX_POINTS + 1)]
+    assert len(utils.validate_inverter_power_curve(at_limit, AC_DC, "ac_dc")) == len(at_limit) + 1
+    with pytest.raises(ValueError, match="at most"):
+        utils.validate_inverter_power_curve(
+            at_limit + [[100 * (len(at_limit) + 1), 0.9]], AC_DC, "ac_dc"
+        )
+
+
+def test_zero_efficiency_dead_zone_is_valid_in_build_params_for_charging():
+    params = _build_params({"inverter_is_hybrid": True, AC_DC: DEAD_ZONE_CHARGE_CURVE})
+    assert params["plant_conf"][AC_DC] == DEAD_ZONE_CHARGE_CURVE
+
+
+def test_absent_and_empty_curves_are_the_legacy_default(caplog):
+    for conf in ({}, {DC_AC: [], AC_DC: []}):
+        with caplog.at_level(logging.WARNING):
+            utils.check_inverter_power_curves(conf, logger)
+            utils.check_inverter_power_curves(conf, logger, recover=True)
+        assert utils.inverter_power_curve_faults(conf) == []
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.parametrize("bad", [None, False, 0, "", ()])
+def test_falsey_non_empty_list_values_are_malformed_not_unset(bad, caplog):
+    """Only an absent parameter or an explicit [] is the scalar default; every other
+    value is a supplied curve and must fail visibly, never silently fall back."""
+    conf = {"inverter_is_hybrid": True, DC_AC: bad}
+    assert utils.inverter_power_curve_faults(conf)
+    with pytest.raises(ValueError, match=DC_AC):
+        utils.check_inverter_power_curves(conf, logger)
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == []
+    assert any(DC_AC in r.message for r in caplog.records if r.levelno >= logging.ERROR)
+
+
+def test_huge_integer_is_a_value_error_on_every_path(caplog):
+    huge = [[10**400, 0.9], [10**401, 0.9]]
+    conf = {"inverter_is_hybrid": True, AC_DC: huge}
+    assert utils.inverter_power_curve_faults(conf)
+    with pytest.raises(ValueError, match="finite"):
+        utils.check_inverter_power_curves(conf, logger)
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[AC_DC] == []
+
+
+def test_curve_with_a_non_hybrid_inverter_is_dormant_not_an_error(caplog):
+    conf = {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == DISCHARGE_CURVE  # preserved, not cleared
+    assert any("inverter_is_hybrid" in r.message for r in caplog.records)
+
+
+def test_runtime_curve_with_a_non_hybrid_inverter_is_rejected():
+    with pytest.raises(ValueError, match="inverter_is_hybrid"):
+        utils.check_inverter_power_curves(
+            {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}, logger, supplied=(DC_AC,)
+        )
+
+
+def test_curve_ending_below_the_ac_limit_warns(caplog):
+    conf = {
+        "inverter_is_hybrid": True,
+        "inverter_ac_output_max": 15000,
+        DC_AC: DISCHARGE_CURVE,
+    }
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+    assert any("supported power domain" in r.message for r in caplog.records)
+
+
+def _build_params(overrides: dict) -> dict:
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    config.update(overrides)
+
+    async def _build():
+        _, secrets = await utils.build_secrets(EMHASS_CONF, logger, no_response=True)
+        return await utils.build_params(EMHASS_CONF, secrets, config, logger)
+
+    return asyncio.run(_build())
+
+
+def test_default_config_has_empty_curves_and_unchanged_scalars():
+    params = _build_params({})
+    plant_conf = params["plant_conf"]
+    assert plant_conf[DC_AC] == [] and plant_conf[AC_DC] == []
+    assert plant_conf["inverter_efficiency_dc_ac"] == 1.0
+    assert plant_conf["inverter_efficiency_ac_dc"] == 1.0
+
+
+def test_legacy_scalar_only_config_builds_unchanged():
+    params = _build_params(
+        {
+            "inverter_is_hybrid": True,
+            "inverter_efficiency_dc_ac": 0.983,
+            "inverter_efficiency_ac_dc": 0.97,
+        }
+    )
+    assert params["plant_conf"]["inverter_efficiency_dc_ac"] == 0.983
+    assert params["plant_conf"][DC_AC] == []
+
+
+def test_valid_curves_pass_through_build_params():
+    params = _build_params(
+        {"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE}
+    )
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
+    assert params["plant_conf"][AC_DC] == CHARGE_CURVE
+
+
+def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
+    """The curves need no dedicated OptimizationCacheKey field: they are plant_conf
+    keys, so ``plant_conf_hash`` already makes any curve change a cache miss."""
+    from emhass.command_line import OptimizationCache
+
+    rh = {"optimization_time_step": pd.to_timedelta(5, "minutes")}
+
+    def key(**curves):
+        params = _build_params({"inverter_is_hybrid": True, **curves})
+        return OptimizationCache._compute_cache_key(
+            params["optim_conf"], params["plant_conf"], "profit", rh
+        )
+
+    other = [[1000, 0.8], [5000, 0.92]]
+    assert key() == key()  # default (empty) curves: stable
+    assert key(**{DC_AC: DISCHARGE_CURVE}) == key(**{DC_AC: DISCHARGE_CURVE})
+    assert key(**{DC_AC: DISCHARGE_CURVE}) != key()
+    assert key(**{DC_AC: DISCHARGE_CURVE}) != key(**{DC_AC: other})
+    assert key(**{AC_DC: CHARGE_CURVE}) != key()
+    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{DC_AC: DISCHARGE_CURVE})
+    assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: [[1000, 0.75], [4000, 0.90]]})
+
+
+def test_invalid_persisted_curve_is_disabled_by_build_params(caplog):
+    """Static configuration recovers: the bad curve is cleared with an error naming it,
+    the other direction and the scalar efficiencies are untouched."""
+    with caplog.at_level(logging.ERROR):
+        params = _build_params(
+            {
+                "inverter_is_hybrid": True,
+                "inverter_efficiency_ac_dc": 0.97,
+                AC_DC: [[1000, 1.1], [2000, 0.9]],
+                DC_AC: DISCHARGE_CURVE,
+            }
+        )
+    assert params["plant_conf"][AC_DC] == []
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
+    assert params["plant_conf"]["inverter_efficiency_ac_dc"] == 0.97
+    errors = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any(AC_DC in m and "inverter_efficiency_ac_dc" in m for m in errors)
+
+
+def test_non_hybrid_build_params_keeps_a_valid_curve_dormant():
+    params = _build_params({"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE})
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
+
+
+def test_runtime_curve_is_validated_on_the_runtime_path():
+    base = _build_params({"inverter_is_hybrid": True})
+    params_json = orjson.dumps(base).decode("utf-8")
+    rh_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+    async def _treat(runtime):
+        return await utils.treat_runtimeparams(
+            orjson.dumps(runtime).decode("utf-8"),
+            params_json,
+            rh_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            EMHASS_CONF,
+        )
+
+    *_, treated_plant = asyncio.run(_treat({AC_DC: CHARGE_CURVE}))
+    assert treated_plant[AC_DC] == CHARGE_CURVE
+    with pytest.raises(ValueError, match=AC_DC):
+        asyncio.run(_treat({AC_DC: [[1000, 1.1], [2000, 0.9]]}))
+    # Strict also when the persisted config had no curve and hybrid is off.
+    off = _build_params({"inverter_is_hybrid": False})
+    off_json = orjson.dumps(off).decode("utf-8")
+    off_rh, off_optim, off_plant = utils.get_yaml_parse(off_json, logger)
+    with pytest.raises(ValueError, match="inverter_is_hybrid"):
+        asyncio.run(
+            utils.treat_runtimeparams(
+                orjson.dumps({AC_DC: CHARGE_CURVE}).decode("utf-8"),
+                off_json,
+                off_rh,
+                off_optim,
+                off_plant,
+                "dayahead-optim",
+                logger,
+                EMHASS_CONF,
+            )
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Web configuration recovery vs strictness
+# --------------------------------------------------------------------------- #
+
+INVALID_CURVE = [[1000, 1.1], [2000, 0.9]]  # efficiency above 1 is physically impossible
+
+
+@pytest.fixture
+def web(tmp_path, monkeypatch):
+    """The real web_server app on scratch paths (real defaults, associations, build_params)."""
+    from emhass import web_server
+
+    conf = {
+        "data_path": tmp_path,
+        "config_path": tmp_path / "config.json",
+        "defaults_path": EMHASS_CONF["defaults_path"],
+        "associations_path": EMHASS_CONF["associations_path"],
+        "legacy_config_path": tmp_path / "legacy_missing.yaml",
+        "root_path": EMHASS_CONF["root_path"],
+    }
+    _, secrets = asyncio.run(utils.build_secrets(conf, logger, no_response=True))
+    monkeypatch.setattr(web_server, "emhass_conf", conf)
+    monkeypatch.setattr(web_server, "params_secrets", secrets)
+    client = web_server.app.test_client()
+
+    def post(body):
+        async def go():
+            r = await client.post("/set-config", json=body)
+            return r.status_code, await r.get_json()
+
+        return asyncio.run(go())
+
+    def get_config():
+        async def go():
+            r = await client.get("/get-config")
+            return r.status_code, await r.get_json()
+
+        return asyncio.run(go())
+
+    return type(
+        "Web",
+        (),
+        {
+            "conf": conf,
+            "post": staticmethod(post),
+            "get": staticmethod(get_config),
+            "ws": web_server,
+        },
+    )
+
+
+def test_set_config_rejects_an_invalid_active_curve_without_touching_saved_files(web):
+    good = {"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE}
+    assert web.post(good)[0] == 200
+    config_before = web.conf["config_path"].read_bytes()
+    params_before = (web.conf["data_path"] / "params.pkl").read_bytes()
+    status, body = web.post({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE})
+    assert status == 400
+    assert DC_AC in " ".join(body)
+    assert "efficiency" in " ".join(body)
+    assert web.conf["config_path"].read_bytes() == config_before
+    assert (web.conf["data_path"] / "params.pkl").read_bytes() == params_before
+
+
+def test_set_config_rejects_an_invalid_curve_even_while_hybrid_is_off(web):
+    status, body = web.post({"inverter_is_hybrid": False, AC_DC: [[1000, 1.1], [2000, 0.9]]})
+    assert status == 400
+    assert AC_DC in " ".join(body)
+
+
+def test_set_config_with_hybrid_off_keeps_a_valid_curve_dormant(web):
+    """Turning hybrid off in the UI still submits the greyed-out curve: not an error."""
+    assert (
+        web.post({"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE})[0]
+        == 200
+    )
+    status, _ = web.post({"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE})
+    assert status == 200
+    saved = json.loads(web.conf["config_path"].read_text())
+    assert saved["inverter_is_hybrid"] is False
+    assert saved[DC_AC] == DISCHARGE_CURVE and saved[AC_DC] == CHARGE_CURVE
+
+
+def test_get_config_still_serves_a_config_whose_persisted_curve_is_invalid(web):
+    web.conf["config_path"].write_text(
+        json.dumps({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE, AC_DC: CHARGE_CURVE})
+    )
+    status, body = web.get()
+    assert status == 200
+    assert body[DC_AC] == []  # disabled so the page can load and be repaired
+    assert body[AC_DC] == CHARGE_CURVE
+    assert web.post({"inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE})[0] == 200
+
+
+def test_startup_params_survive_an_invalid_persisted_curve(web):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    config.update({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE})
+    params = asyncio.run(
+        web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"])
+    )
+    assert params["plant_conf"][DC_AC] == []
+    assert (web.conf["data_path"] / "params.pkl").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Constraint layer
+# --------------------------------------------------------------------------- #
+
+CHARGE_MAX = 5000
+CAP = 10000
+
+
+def build_optimization(
+    plant_overrides=None, optim_overrides=None, n_batt=1, cls=Optimization
+) -> Optimization:
+    """Self-contained hybrid-inverter Optimization builder (no deferrable loads)."""
+    build_logger = logging.getLogger("inverter_curve_build")
+    build_logger.handlers = []
+    build_logger.addHandler(logging.NullHandler())
+
+    retrieve_hass_conf = {
+        "optimization_time_step": pd.to_timedelta(30, "minutes"),
+        "time_zone": "Europe/Tallinn",
+        "sensor_power_photovoltaics": "pv",
+        "sensor_power_load_no_var_loads": "load",
+    }
+    optim_conf = {
+        "delta_forecast_daily": pd.Timedelta(hours=5),
+        "num_threads": 0,
+        "set_use_battery": True,
+        "set_use_pv": True,
+        "set_total_pv_sell": False,
+        "set_nocharge_from_grid": False,
+        "set_nodischarge_to_grid": False,
+        "set_battery_dynamic": False,
+        "set_battery_first_priority": False,
+        "battery_dynamic_max": 0.9,
+        "battery_dynamic_min": -0.9,
+        "weight_battery_discharge": 0.0,
+        "weight_battery_charge": 0.0,
+        "battery_soc_deficit_threshold": 0.2,
+        "battery_soc_deficit_cost": 0.0,
+        "battery_soc_surplus_threshold": 0.9,
+        "battery_soc_surplus_cost": 0.0,
+        "number_of_deferrable_loads": 0,
+        "nominal_power_of_deferrable_loads": [],
+        "treat_deferrable_load_as_semi_cont": [],
+        "set_deferrable_load_single_constant": [],
+        "set_deferrable_startup_penalty": [],
+        "operating_hours_of_each_deferrable_load": [],
+        "start_timesteps_of_each_deferrable_load": [],
+        "end_timesteps_of_each_deferrable_load": [],
+        "lp_solver_timeout": 45,
+        "lp_solver_mip_rel_gap": 0,
+    }
+    if optim_overrides:
+        optim_conf.update(optim_overrides)
+    plant_conf = {
+        "inverter_is_hybrid": True,
+        "inverter_ac_output_max": 5000,
+        "inverter_ac_input_max": 5000,
+        "inverter_efficiency_dc_ac": 1.0,
+        "inverter_efficiency_ac_dc": 1.0,
+        "compute_curtailment": False,
+        "maximum_power_from_grid": 50000,
+        "maximum_power_to_grid": 50000,
+        "battery_discharge_power_max": CHARGE_MAX,
+        "battery_charge_power_max": CHARGE_MAX,
+        "battery_minimum_state_of_charge": 0.05,
+        "battery_maximum_state_of_charge": 0.95,
+        "battery_target_state_of_charge": 0.5,
+        "battery_nominal_energy_capacity": CAP,
+        "battery_discharge_efficiency": 1.0,
+        "battery_charge_efficiency": 1.0,
+        "battery_stress_cost": 0.0,
+        "battery_stress_segments": 10,
+    }
+    if n_batt > 1:
+        plant_conf["number_of_batteries"] = n_batt
+        for key in (
+            "battery_discharge_power_max",
+            "battery_charge_power_max",
+            "battery_minimum_state_of_charge",
+            "battery_maximum_state_of_charge",
+            "battery_target_state_of_charge",
+            "battery_nominal_energy_capacity",
+            "battery_discharge_efficiency",
+            "battery_charge_efficiency",
+        ):
+            plant_conf[key] = [plant_conf[key]] * n_batt
+    if plant_overrides:
+        plant_conf.update(plant_overrides)
+    return cls(
+        retrieve_hass_conf,
+        optim_conf,
+        plant_conf,
+        "unit_load_cost",
+        "unit_prod_price",
+        "profit",
+        {"root_path": TEST_ROOT / "src" / "emhass", "data_path": TEST_ROOT / "data"},
+        build_logger,
+        opt_time_delta=4,
+    )
+
+
+def _frame(import_price, export_price=0.02, pv=0.0, load=300.0):
+    n = len(import_price)
+    index = pd.date_range("2026-03-04", periods=n, freq="30min", tz="Europe/Tallinn")
+    df_input = pd.DataFrame(index=index)
+    df_input["unit_load_cost"] = import_price
+    df_input["unit_prod_price"] = [export_price] * n
+    return df_input, pd.Series([pv] * n, index=index), pd.Series([load] * n, index=index)
+
+
+CHEAP_THEN_DEAR = [0.05] * 4 + [0.60] * 4
+
+
+def _solve(
+    plant=None, optim=None, frame=None, soc_init=0.1, soc_final=0.1, n_batt=1, cls=Optimization
+):
+    opt = build_optimization(plant, optim, n_batt, cls)
+    df_input, p_pv, p_load = frame if frame is not None else _frame(CHEAP_THEN_DEAR)
+    if n_batt > 1:
+        soc_init, soc_final = [soc_init] * n_batt, [soc_final] * n_batt
+    res = opt.perform_dayahead_forecast_optim(
+        df_input, p_pv, p_load, soc_init=soc_init, soc_final=soc_final
+    )
+    assert opt.optim_status in VALID_OPTIMAL_STATUSES
+    return opt, res
+
+
+def ac_for_dc(curve, dc_w, direction):
+    """Inverse of the (strictly increasing) transfer: the AC power that yields dc_w."""
+    pts = np.asarray(utils.validate_inverter_power_curve(curve, "test_curve", direction))
+    return float(np.interp(dc_w, pts[:, 1], pts[:, 0]))
+
+
+def _assert_curve_equality(res, charge_curve=None, discharge_curve=None, atol=2.0):
+    """With no PV the DC bus is the battery: dc = f(ac) must hold at every step."""
+    batt = res["P_batt"].to_numpy()
+    hybrid = res["P_hybrid_inverter"].to_numpy()
+    charging, discharging = batt < -1.0, batt > 1.0
+    if charge_curve is not None:
+        np.testing.assert_allclose(
+            -batt[charging], dc_of_ac(charge_curve, -hybrid[charging], "ac_dc"), atol=atol
+        )
+    if discharge_curve is not None:
+        np.testing.assert_allclose(
+            batt[discharging], dc_of_ac(discharge_curve, hybrid[discharging], "dc_ac"), atol=atol
+        )
+    return charging.sum(), discharging.sum()
+
+
+def test_curve_adds_configured_points_minus_one_binaries_per_timestep():
+    """The implicit origin adds the first transfer breakpoint.
+
+    A configured P-point efficiency curve therefore has P transfer segments and
+    P-1 ordering binaries per step; the direction binary already exists.
+    """
+    points = 9
+    curve = [[500 * k, 0.90 + 0.005 * k] for k in range(1, points + 1)]
+    opt, _ = _solve({DC_AC: curve})
+    binaries = opt.vars["inv_curve_dc_ac_b"]
+    assert len(binaries) == points - 1
+    assert all(var.attributes["boolean"] and var.size == opt.num_timesteps for var in binaries)
+    assert all(not var.attributes["boolean"] for var in opt.vars["inv_curve_dc_ac_u"])
+    assert "inv_curve_ac_dc_b" not in opt.vars
+
+
+def test_flat_curves_equal_the_scalar_efficiencies():
+    scalar = {"inverter_efficiency_dc_ac": 0.95, "inverter_efficiency_ac_dc": 0.95}
+    # Strictly rising import prices: no tied schedules, so the two models must agree step by step.
+    frame = _frame([0.05, 0.06, 0.07, 0.08, 0.60, 0.61, 0.62, 0.63])
+    _, res_scalar = _solve(scalar, frame=frame)
+    flat = {
+        DC_AC: [[1000, 0.95], [5000, 0.95]],
+        AC_DC: [[1000, 0.95], [5000, 0.95]],
+    }
+    _, res_curve = _solve(flat, frame=frame)
+    for column in ("P_hybrid_inverter", "P_batt", "P_grid", "SOC_opt"):
+        np.testing.assert_allclose(
+            res_curve[column].to_numpy(), res_scalar[column].to_numpy(), atol=1.0
+        )
+
+
+def test_two_segment_charge_curve_is_obeyed_exactly():
+    opt, res = _solve({AC_DC: CHARGE_CURVE})
+    n_charge, _ = _assert_curve_equality(res, charge_curve=CHARGE_CURVE)
+    assert n_charge > 0, "scenario must actually charge"
+    assert opt.vars["inv_curve_ac_dc_u"][0].shape == (8,)
+
+
+def test_two_segment_discharge_curve_is_obeyed_exactly():
+    _, res = _solve({DC_AC: DISCHARGE_CURVE})
+    _, n_discharge = _assert_curve_equality(res, discharge_curve=DISCHARGE_CURVE)
+    assert n_discharge > 0, "scenario must actually discharge"
+
+
+def test_both_directions_enabled_never_flow_together():
+    opt, res = _solve({AC_DC: CHARGE_CURVE, DC_AC: DISCHARGE_CURVE})
+    n_charge, n_discharge = _assert_curve_equality(res, CHARGE_CURVE, DISCHARGE_CURVE)
+    assert n_charge > 0 and n_discharge > 0
+    p_ac_dc = np.asarray(opt.vars["p_ac_dc"].value).ravel()
+    p_dc_ac = np.asarray(opt.vars["p_dc_ac"].value).ravel()
+    assert np.minimum(p_ac_dc, p_dc_ac).max() <= 1e-6  # no new simultaneous charge/discharge
+
+
+# Pinned-power cases. EMHASS needs a multi-step horizon, so the energy is fixed by the final SOC
+# (an equality) and the opposite direction is closed. The AC cost of charging is concave and the
+# AC yield of discharging is convex in these curves, so splitting the energy across steps is
+# strictly worse and the whole amount lands in the single best-priced step 0.
+# The pinned quantity is the DC-bus (battery) power; the expected AC power is the exact
+# inverse of the transfer, which is what the user sees at the plug.
+
+
+@pytest.mark.parametrize("dc_w", [250, 700, 2000, 3600])  # interior, breakpoint, interior, end
+def test_pinned_charge_power_lands_on_the_curve(dc_w):
+    soc_final = 0.1 + dc_w * 0.5 / CAP  # one 30-minute step at battery efficiency 1
+    _, res = _solve(
+        {AC_DC: CHARGE_CURVE, "battery_discharge_power_max": 0},
+        frame=_frame([0.05] + [0.5] * 7),
+        soc_init=0.1,
+        soc_final=soc_final,
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        -ac_for_dc(CHARGE_CURVE, dc_w, "ac_dc"), abs=1.0
+    )
+
+
+@pytest.mark.parametrize("dc_w", [250, 1000 / 0.7, 3000, 5000 / 0.9])  # interior, breakpoint, end
+def test_pinned_discharge_power_lands_on_the_curve(dc_w):
+    soc_final = 0.9 - dc_w * 0.5 / CAP
+    # The load must absorb the largest AC output (5000 W at the end of the curve), otherwise
+    # step 0 would discharge only what the load needs and the energy spills later.
+    _, res = _solve(
+        {
+            DC_AC: DISCHARGE_CURVE,
+            "battery_charge_power_max": 0,
+            "battery_discharge_power_max": 6000,
+        },
+        frame=_frame([0.8] + [0.1] * 7, load=5000.0),
+        soc_init=0.9,
+        soc_final=soc_final,
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(dc_w, abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        ac_for_dc(DISCHARGE_CURVE, dc_w, "dc_ac"), abs=1.0
+    )
+
+
+@pytest.mark.parametrize("dc_w", [300, 700, 2000])  # interior, breakpoint, interior
+def test_dead_zone_charge_curve_is_obeyed_exactly(dc_w):
+    """50 W AC in -> 0 W DC out is a flat segment of the exact transfer, not a defect."""
+    soc_final = 0.1 + dc_w * 0.5 / CAP
+    _, res = _solve(
+        {AC_DC: DEAD_ZONE_CHARGE_CURVE, "battery_discharge_power_max": 0},
+        frame=_frame([0.05] + [0.5] * 7),
+        soc_init=0.1,
+        soc_final=soc_final,
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(-dc_w, abs=1.0)
+    assert res["P_hybrid_inverter"].iloc[0] == pytest.approx(
+        -ac_for_dc(DEAD_ZONE_CHARGE_CURVE, dc_w, "ac_dc"), abs=1.0
+    )
+
+
+def test_dead_zone_charge_never_wastes_ac_in_the_dead_zone_when_import_costs_money():
+    """Unpinned and at a positive price, AC drawn inside the dead zone only loses money."""
+    _, res = _solve({AC_DC: DEAD_ZONE_CHARGE_CURVE, DC_AC: DISCHARGE_CURVE})
+    hybrid = res["P_hybrid_inverter"].to_numpy()
+    assert not ((hybrid < -1.0) & (hybrid > -49.0)).any()
+    _assert_curve_equality(
+        res, charge_curve=DEAD_ZONE_CHARGE_CURVE, discharge_curve=DISCHARGE_CURVE
+    )
+
+
+def test_flat_dc_segment_is_solved_exactly_for_discharge():
+    """[[1000, 0.5], [2000, 1.0]] needs 2000 W DC for both 1000 W and 2000 W AC out: the
+    DC power is pinned at 2000 W, and the AC output must lie on the flat segment."""
+    flat = [[1000, 0.5], [2000, 1.0], [4000, 1.0]]
+    _, res = _solve(
+        {DC_AC: flat, "battery_charge_power_max": 0},
+        frame=_frame([0.8] + [0.1] * 7, load=1500.0),
+        soc_init=0.9,
+        soc_final=0.9 - 2000.0 * 0.5 / CAP,
+    )
+    assert res["P_batt"].iloc[0] == pytest.approx(2000.0, abs=1.0)
+    ac = res["P_hybrid_inverter"].iloc[0]
+    assert 1000.0 - 1.0 <= ac <= 2000.0 + 1.0
+    assert dc_of_ac(flat, ac, "dc_ac") == pytest.approx(2000.0, abs=1.0)
+
+
+def test_idle_has_zero_power_both_sides():
+    """Flat prices: nothing to do, so zero DC <-> zero AC; no standby term exists."""
+    _, res = _solve({AC_DC: CHARGE_CURVE, DC_AC: DISCHARGE_CURVE}, frame=_frame([0.2] * 6))
+    np.testing.assert_allclose(res["P_batt"].to_numpy(), 0.0, atol=1.0)
+    np.testing.assert_allclose(res["P_hybrid_inverter"].to_numpy(), 0.0, atol=1.0)
+
+
+def test_curve_domain_caps_ac_power():
+    """The last curve point is the supported domain: no extrapolation beyond 2000 W AC."""
+    short = [[1000, 0.9], [2000, 0.85]]
+    _, res = _solve({AC_DC: short})
+    assert (-res["P_hybrid_inverter"]).max() <= 2000.0 + 1.0
+    assert (-res["P_batt"]).max() <= 1700.0 + 1.0
+    _assert_curve_equality(res, charge_curve=short)
+
+
+def test_ac_limits_apply_on_the_ac_side_of_a_curved_direction():
+    wide = [[1000, 0.95], [8000, 0.95]]
+    # A load above the AC limit makes the limit bind (discharge is worth more than it costs).
+    _, res = _solve(
+        {DC_AC: wide, "inverter_ac_output_max": 3000, "battery_discharge_power_max": 8000},
+        frame=_frame(CHEAP_THEN_DEAR, load=6000.0),
+    )
+    assert 3000.0 - 1.0 <= res["P_hybrid_inverter"].max() <= 3000.0 + 1.0
+    _, res = _solve(
+        {
+            AC_DC: wide,
+            "inverter_ac_input_max": 2500,
+            "battery_charge_power_max": 8000,
+            "battery_discharge_power_max": 8000,
+        },
+        frame=_frame(CHEAP_THEN_DEAR, load=6000.0),
+    )
+    assert 2500.0 - 1.0 <= (-res["P_hybrid_inverter"]).max() <= 2500.0 + 1.0
+
+
+def test_charge_derating_remains_a_power_ceiling_with_a_curve():
+    derating = [[0.5, 0.4]]  # above 50 % SOC: 40 % of 5000 W
+    _, res = _solve(
+        {AC_DC: CHARGE_CURVE, "battery_charge_power_derating": derating},
+        soc_init=0.6,
+        soc_final=0.6,
+    )
+    assert (-res["P_batt"]).max() <= 0.4 * CHARGE_MAX + 1.0
+    _assert_curve_equality(res, charge_curve=CHARGE_CURVE)
+
+
+def test_soc_and_battery_power_limits_hold_with_curves():
+    plant = {AC_DC: CHARGE_CURVE, DC_AC: DISCHARGE_CURVE}
+    _, res = _solve(plant)
+    assert res["SOC_opt"].max() <= 0.95 + 1e-6 and res["SOC_opt"].min() >= 0.05 - 1e-6
+    assert res["P_batt"].max() <= CHARGE_MAX + 1.0 and (-res["P_batt"]).max() <= CHARGE_MAX + 1.0
+
+
+def test_nodischarge_to_grid_still_binds_with_a_discharge_curve():
+    frame = _frame([0.5] * 6, export_price=0.4, pv=3000.0, load=300.0)
+    _, res = _solve(
+        {DC_AC: DISCHARGE_CURVE},
+        {"set_nodischarge_to_grid": True},
+        frame=frame,
+        soc_init=0.9,
+        soc_final=0.5,
+    )
+    exporting = res["P_grid"].to_numpy() < -1.0
+    assert (res["P_batt"].to_numpy()[exporting] <= 1.0).all()
+
+
+def test_two_batteries_share_one_inverter_curve():
+    """The curve belongs to the single hybrid inverter and acts on the aggregate DC bus."""
+    opt, res = _solve({AC_DC: CHARGE_CURVE}, n_batt=2)
+    n_charge, _ = _assert_curve_equality(res, charge_curve=CHARGE_CURVE)
+    assert n_charge > 0
+    assert len([k for k in opt.vars if k.startswith("inv_curve")]) == 2  # one set, not per battery
+
+
+# ---- default-OFF structural parity ------------------------------------------ #
+
+
+def _structure(opt):
+    return (
+        sorted(v.name() for v in opt.prob.variables()),
+        len(opt.prob.constraints),
+    )
+
+
+def test_default_off_graph_is_identical_for_absent_and_empty():
+    structures, results = [], []
+    for overrides in ({}, {DC_AC: [], AC_DC: []}):
+        scalars = {"inverter_efficiency_dc_ac": 0.983, "inverter_efficiency_ac_dc": 0.97}
+        opt, res = _solve({**scalars, **overrides})
+        structures.append(_structure(opt))
+        results.append(res[["P_hybrid_inverter", "P_batt", "P_grid", "SOC_opt"]].to_numpy())
+        assert not [k for k in opt.vars if k.startswith("inv_curve")]
+    assert structures[0] == structures[1]
+    np.testing.assert_array_equal(results[0], results[1])
+
+
+def test_one_curved_direction_leaves_the_other_scalar():
+    opt, res = _solve({AC_DC: CHARGE_CURVE, "inverter_efficiency_dc_ac": 0.9})
+    assert "inv_curve_dc_ac_u" not in opt.vars and "inv_curve_ac_dc_u" in opt.vars
+    batt = res["P_batt"].to_numpy()
+    discharging = batt > 1.0
+    np.testing.assert_allclose(
+        res["P_hybrid_inverter"].to_numpy()[discharging], 0.9 * batt[discharging], atol=1.0
+    )
+
+
+def test_a_zero_scalar_efficiency_is_ignored_while_its_curve_is_active():
+    """An active curve replaces its scalar for conversion AND bounds: a zero scalar neither
+    divides by zero nor changes the result."""
+    curves = {DC_AC: DISCHARGE_CURVE, AC_DC: CHARGE_CURVE}
+    _, reference = _solve(curves)
+    zeros = {"inverter_efficiency_dc_ac": 0.0, "inverter_efficiency_ac_dc": 0.0}
+    _, res = _solve({**curves, **zeros})
+    np.testing.assert_array_equal(
+        res[["P_hybrid_inverter", "P_batt"]].to_numpy(),
+        reference[["P_hybrid_inverter", "P_batt"]].to_numpy(),
+    )
+    # One direction curved, the other scalar: only the curved direction's scalar is ignored.
+    _, res = _solve({AC_DC: CHARGE_CURVE, "inverter_efficiency_ac_dc": 0.0})
+    assert (-res["P_batt"]).max() > 1.0
+
+
+@pytest.mark.parametrize("bad", [None, False, 0, "", ()])
+def test_falsey_curve_fails_the_model_build_instead_of_using_the_scalar(bad):
+    opt = build_optimization({DC_AC: bad})
+    df_input, p_pv, p_load = _frame(CHEAP_THEN_DEAR)
+    with pytest.raises(ValueError, match=DC_AC):
+        opt.perform_dayahead_forecast_optim(df_input, p_pv, p_load, soc_init=0.1, soc_final=0.1)
+
+
+def test_malformed_curve_fails_the_model_build():
+    opt = build_optimization({DC_AC: [[1000, 1.2], [2000, 0.9]]})
+    df_input, p_pv, p_load = _frame(CHEAP_THEN_DEAR)
+    with pytest.raises(ValueError, match=DC_AC):
+        opt.perform_dayahead_forecast_optim(df_input, p_pv, p_load, soc_init=0.1, soc_final=0.1)
+
+
+# ---- negative-price adversarial test ---------------------------------------- #
+
+
+def _negative_price_frame():
+    # Paid to import, battery already full: the only way to "earn" more is to import
+    # AC that no physical DC power accounts for.
+    return _frame([-0.20] * 6, export_price=0.0, pv=0.0, load=300.0)
+
+
+# Closed loopholes: with export priced at 0 and a negative import price, cycling the battery
+# (discharge, export for free, re-import and be paid) is legitimately profitable in ANY model,
+# legacy scalar included. The adversarial case therefore forbids discharge and export, leaving
+# one way to earn more: import AC power that no DC power accounts for.
+NEGATIVE_PRICE_PLANT = {
+    AC_DC: CHARGE_CURVE,
+    DC_AC: DISCHARGE_CURVE,
+    "inverter_ac_input_max": 4000,
+    "battery_discharge_power_max": 0,
+    "maximum_power_to_grid": 0,
+}
+
+
+class RelaxedOptimization(Optimization):
+    """Control: the real model with the AC->DC equality weakened to ac_in >= curve(dc)."""
+
+    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
+        exact = super()._add_inverter_pwl_transfer(constraints, name, dc_var, curve, gate)
+        if name != "inv_curve_ac_dc":
+            return exact
+        return exact + cp.Variable(self.num_timesteps, nonneg=True, name="relax_slack")
+
+
+def test_negative_import_price_cannot_exploit_the_curve():
+    """PWL_EQUALITY_EXACT / NEGATIVE_PRICE_EXPLOIT = NONE through the real solver."""
+    opt, res = _solve(
+        NEGATIVE_PRICE_PLANT, frame=_negative_price_frame(), soc_init=0.95, soc_final=0.95
+    )
+    # NO_ARTIFICIAL_EXTRA_AC_IMPORT: import equals the load, nothing more.
+    assert res["P_grid_pos"].max() <= 300.0 + 2.0
+    # NO_ARTIFICIAL_DC_POWER: a full battery cannot absorb DC.
+    assert (-res["P_batt"]).max() <= 1.0
+    p_ac_dc = np.asarray(opt.vars["p_ac_dc"].value).ravel()
+    p_dc_ac = np.asarray(opt.vars["p_dc_ac"].value).ravel()
+    assert p_ac_dc.max() <= 1.0
+    # NO_SIMULTANEOUS_INVALID_CONVERSION: never both directions at once.
+    assert np.minimum(p_ac_dc, p_dc_ac).max() <= 1e-6
+    # NO_FREE_ENERGY: stored energy never exceeds what the curve lets in.
+    assert res["SOC_opt"].max() <= 0.95 + 1e-6
+
+
+def test_negative_import_price_charging_pays_the_curve_loss():
+    """With room in the battery, extra import is only possible through real DC power."""
+    plant = {AC_DC: CHARGE_CURVE, "inverter_ac_input_max": 4000}
+    _, res = _solve(plant, frame=_negative_price_frame(), soc_init=0.5, soc_final=0.5)
+    _assert_curve_equality(res, charge_curve=CHARGE_CURVE)
+    assert res["SOC_opt"].iloc[-1] >= 0.5 - 1e-6
+
+
+def test_control_inequality_relaxation_would_be_exploited():
+    """RELAXED_CONTROL_CASE: the same scenario with a one-sided relaxation earns free energy.
+
+    Runs the real EMHASS model with only the AC->DC equality weakened. The relaxed model imports
+    up to the inverter AC input limit that no DC power accounts for, so the exact model's
+    assertions above would detect the defect.
+    """
+    _, exact = _solve(
+        NEGATIVE_PRICE_PLANT, frame=_negative_price_frame(), soc_init=0.95, soc_final=0.95
+    )
+    _, relaxed = _solve(
+        NEGATIVE_PRICE_PLANT,
+        frame=_negative_price_frame(),
+        soc_init=0.95,
+        soc_final=0.95,
+        cls=RelaxedOptimization,
+    )
+    assert exact["P_grid_pos"].max() <= 300.0 + 2.0
+    assert relaxed["P_grid_pos"].max() >= 300.0 + 3000.0
+    assert relaxed["cost_profit"].sum() > exact["cost_profit"].sum() + 0.01
+
+
+def test_negative_price_may_burn_ac_through_a_user_declared_dead_zone():
+    """EXACT-PHYSICS CASE. The user declares 50 W AC in -> 0 W DC out. When import pays enough,
+    consuming that AC purely as inverter losses is the rational plan *given the curve*: the 50 W
+    is accounted for (it leaves as heat), unlike the old one-sided relaxation where AC was simply
+    not accounted for and the import grew to the inverter limit. The legacy scalar model has no
+    such point, so it never imports the extra 50 W. No minimum-power rule hides this on purpose.
+    """
+    plant = {
+        AC_DC: DEAD_ZONE_CHARGE_CURVE,
+        "inverter_ac_input_max": 4000,
+        "battery_discharge_power_max": 0,
+        "maximum_power_to_grid": 0,
+    }
+    frame = _negative_price_frame()
+    _, res = _solve(plant, frame=frame, soc_init=0.95, soc_final=0.95)  # full: no DC absorbed
+    np.testing.assert_allclose(res["P_batt"].to_numpy(), 0.0, atol=1.0)
+    np.testing.assert_allclose(res["P_hybrid_inverter"].to_numpy(), -50.0, atol=1.0)
+    assert res["P_grid_pos"].max() == pytest.approx(300.0 + 50.0, abs=2.0)  # load + dead zone only
+    _, scalar = _solve(
+        {k: v for k, v in plant.items() if k != AC_DC},
+        frame=frame,
+        soc_init=0.95,
+        soc_final=0.95,
+    )
+    assert scalar["P_grid_pos"].max() == pytest.approx(300.0, abs=2.0)
