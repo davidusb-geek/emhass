@@ -141,7 +141,11 @@ class TestForecastCalibration(unittest.TestCase):
             pd.testing.assert_series_equal(p1, p2, check_names=False)
 
     def test_naive_matches_production_persistence_rule(self):
-        """naive walk-forward == last-horizon-block carried forward (forecast.py rule)."""
+        """naive walk-forward on a full day == the previous day carried forward.
+
+        The production rule (same time of day, ``Forecast.get_naive_load_forecast``)
+        equals the last-horizon block when a one-day target starts right after the history.
+        """
         load = build_load(days=80)
         day_list = sorted({ts.normalize() for ts in load.index})
         target_day = day_list[-1]
