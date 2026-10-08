@@ -4143,6 +4143,43 @@ class Optimization:
         cfg = self.optim_conf["def_load_config"][k]
         return cfg.get("thermal_source") or cfg.get("thermal_battery") or {}
 
+    def _warn_bound_beyond_every_overshoot(
+        self, tank_id, load_ids, source_overshoots, sense, min_temperatures, max_temperatures
+    ):
+        """Warn when a resolved bound lies beyond every source's threshold.
+
+        A continuous source does not heat (or cool) in a step that would end
+        beyond its overshoot_temperature, so when every source of the tank is
+        continuous and has one, a floor above all of them (a ceiling below them
+        when cooling) can only be held by a tank that already starts there. The
+        compiler checks the static list; this checks the bound the solver uses,
+        including a weather-resolved min_temperature_curve.
+        """
+        if not source_overshoots or any(o is None for o in source_overshoots):
+            return
+        if any(self.optim_conf["treat_deferrable_load_as_semi_cont"][k] for k in load_ids):
+            return
+        is_cool = sense == "cool"
+        limit = min(source_overshoots) if is_cool else max(source_overshoots)
+        bounds = max_temperatures if is_cool else min_temperatures
+        name = "max_temperatures" if is_cool else "min_temperatures"
+        for t, val in enumerate(bounds):
+            if t == 0 or val is None:
+                continue
+            if (float(val) < limit) if is_cool else (float(val) > limit):
+                self.logger.warning(
+                    "Shared tank %s: %s[%s]=%s lies beyond the overshoot_temperature "
+                    "(%s) of every source feeding it; overshoot_temperature stops a "
+                    "continuous source in any step that would end beyond it, so only "
+                    "a tank that already starts there can hold that bound.",
+                    tank_id,
+                    name,
+                    t,
+                    val,
+                    limit,
+                )
+                return
+
     def _add_shared_thermal_tank_constraints(self, constraints, tank_idx, data_opt, p_load):
         """Build dynamics for ONE shared thermal tank fed by MULTIPLE sources.
 
@@ -4315,7 +4352,9 @@ class Optimization:
             cop_arrays.append(np.asarray(cops))
             # scalar, per-step list, or None (uncapped)
             source_caps.append(src_cfg.get("max_supply_temperature"))
-            source_overshoots.append(src_cfg.get("overshoot_temperature", tank_overshoot))
+            # null on the source means "not set": inherit the storage's threshold.
+            own_overshoot = src_cfg.get("overshoot_temperature")
+            source_overshoots.append(own_overshoot if own_overshoot is not None else tank_overshoot)
 
         # Comfort sense (heat vs cool). The compiler propagates the destination
         # storage's comfort_sense onto tank["sense"]; default to heat for legacy
@@ -4465,6 +4504,14 @@ class Optimization:
                 end_step_span + abs(float(heating_demand[-1])) + abs(float(thermal_losses[-1]))
             )
 
+            self._warn_bound_beyond_every_overshoot(
+                tank_id,
+                load_ids,
+                source_overshoots,
+                sense,
+                min_temperatures_list,
+                max_temperatures_list,
+            )
             for k, overshoot in zip(load_ids, source_overshoots):
                 if overshoot is None:
                     continue

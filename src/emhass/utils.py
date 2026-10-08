@@ -829,12 +829,11 @@ def compile_heat_topology(topology: dict) -> dict:
                     src["id"],
                     float(source_block["supply_temperature"]),
                 )
-        # Optional per-source soft threshold: with the storage's
-        # desired_temperatures set, this source is switched off while the tank
-        # sits above this temperature (a preference, unlike the hard
-        # max_supply_temperature ceiling). Sources without it inherit the
+        # Optional per-source threshold: with the storage's desired_temperatures
+        # set, this source stops beyond it (see the optimizer for the gate per
+        # source mode). Sources without it (or with null) inherit the
         # storage-level overshoot_temperature at solve time.
-        if "overshoot_temperature" in src:
+        if src.get("overshoot_temperature") is not None:
             source_block["overshoot_temperature"] = float(src["overshoot_temperature"])
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
@@ -966,7 +965,10 @@ def compile_heat_topology(topology: dict) -> dict:
         desired = s.get("desired_temperature", s.get("desired_temperatures"))
         feeding_srcs = [src_by_id[f["from"]] for f in flows if f["to"] == sid]
         feeding_overshoots = [
-            src.get("overshoot_temperature", s.get("overshoot_temperature")) for src in feeding_srcs
+            src.get("overshoot_temperature")
+            if src.get("overshoot_temperature") is not None
+            else s.get("overshoot_temperature")
+            for src in feeding_srcs
         ]
         if (
             desired not in (None, [])
@@ -1023,7 +1025,7 @@ def compile_heat_topology(topology: dict) -> dict:
             tank["desired_temperatures"] = (
                 list(desired) if isinstance(desired, list | tuple) else float(desired)
             )
-        if "overshoot_temperature" in s:
+        if s.get("overshoot_temperature") is not None:
             tank["overshoot_temperature"] = float(s["overshoot_temperature"])
         if "penalty_factor" in s:
             tank["penalty_factor"] = float(s["penalty_factor"])
