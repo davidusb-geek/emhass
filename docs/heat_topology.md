@@ -133,7 +133,9 @@ stays within that step's ceiling, even when the next step's ceiling is higher.
 When every source feeding a storage has a ceiling and the storage's
 `min_temperature` lies above all of them at some step, the compiler logs a
 warning: no source can heat the storage that far, so only a storage that is
-already hot enough can hold that minimum.
+already hot enough can hold that minimum. The ceiling is a heating limit: on a
+cooling storage it does not apply, and the optimizer logs a warning when one
+is set.
 
 `supply_temperature` only sets the heat pump's COP; it is not a ceiling. Without
 `max_supply_temperature` the optimizer may plan to heat the storage above the

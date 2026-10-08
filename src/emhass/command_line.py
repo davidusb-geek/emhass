@@ -29,6 +29,7 @@ from emhass.forecast_calibration import (
     CALIBRATION_TEST_DAYS,
     CALIBRATION_VAL_DAYS,
     compute_forecast_calibration,
+    trim_to_first_observation,
 )
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -71,15 +72,15 @@ def _record_optim_snapshot(
             duration_total_seconds=_time.monotonic() - t0_monotonic,
             schema_version=EMHASS_SCHEMA_VERSION,
         )
-        # Publish the structured plan ONLY for a successful (Optimal) run, reusing
+        # Publish the structured plan ONLY for a successful run (OK_OPTIM_STATUSES), reusing
         # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
         # /api/v1/last-run for that run. Only the timestamp is shared, not the
         # verdict: a failed/infeasible run is still recorded by last_run (status
         # error/infeasible) but must not surface on /api/v1/plan as status "ok" —
         # the plan endpoint keeps serving the last VALID plan (or no-run). Gating on
-        # optim_status == "Optimal" mirrors last_run's own "ok" criterion, so the
+        # last_run.OK_OPTIM_STATUSES reuses last_run's own "ok" criterion, so the
         # two endpoints stay consistent (plan published iff last-run is "ok").
-        if optim_status == "Optimal":
+        if optim_status in last_run.OK_OPTIM_STATUSES:
             plan_store.record(
                 input_data_dict["emhass_conf"]["data_path"],
                 plan=plan_store.serialize(opt_res),
@@ -829,7 +830,8 @@ async def adjust_pv_forecast(
     :type emhass_conf: dict
     :param test_df_literal: DataFrame containing test data for debugging purposes.
     :type test_df_literal: pd.DataFrame
-    :return: The adjusted PV forecast as a pandas Series.
+    :return: The adjusted PV forecast as a pandas Series. On handled model training
+        or loading failures, the original unadjusted PV forecast is returned.
     :rtype: pd.Series
     """
     # Normalize data_path to Path object for safety (handles both str and Path types)
@@ -886,8 +888,10 @@ async def adjust_pv_forecast(
             logger.error(
                 f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
             )
-            logger.error("Cannot recover from this error")
-            return False
+            logger.warning(
+                "Unable to load the adjusted PV model. Falling back to unadjusted PV forecast."
+            )
+            return p_pv_forecast
     # Call the predict method
     p_pv_forecast_in = p_pv_forecast.rename("forecast").to_frame()
     try:
@@ -1961,7 +1965,8 @@ async def _get_dayahead_pv_forecast(ctx: SetupContext):
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
@@ -2076,7 +2081,8 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
-    if isinstance(df_weather, bool) and not df_weather:
+    # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
+    if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
         return None, None
     # Calculate PV power
     p_pv_forecast = ctx.fcst.get_power_from_weather(
@@ -2666,6 +2672,17 @@ def prepare_forecast_and_weather_data(
     passed_outdoor_temp = input_data_dict["params"]["passed_data"].get(
         "outdoor_temperature_forecast"
     )
+    # Absence and rejection are different contracts. A genuinely omitted
+    # runtime temperature may use the existing weather-temperature fallback;
+    # a supplied value rejected by #1135 must fail closed.
+    if passed_outdoor_temp is None and input_data_dict["params"]["passed_data"].get(
+        "_outdoor_temperature_forecast_rejected", False
+    ):
+        logger.error(
+            "outdoor_temperature_forecast was supplied but rejected; "
+            "not falling back to the weather forecast temperature."
+        )
+        return False
 
     if passed_outdoor_temp is not None:
         forecast_len = len(df_input_data_dayahead)
@@ -3073,6 +3090,13 @@ async def forecast_calibration(input_data_dict: dict, logger: logging.Logger) ->
     if not await rh.get_data(days_list, [var_model]):
         logger.error("Forecast calibration: failed to retrieve load history from Home Assistant")
         return None
+    history = trim_to_first_observation(rh.df_final, var_model)
+    if history is None:
+        logger.error(
+            f"Forecast calibration: no observation of {var_model} in the retrieved history"
+        )
+        return None
+    rh.df_final = history
     rh.prepare_data(
         var_model,
         load_negative=retrieve_hass_conf.get("load_negative", False),
@@ -3588,17 +3612,23 @@ async def _publish_from_saved_entities(
         logger.warning(f"No saved entity json files in path: {entity_path}")
         logger.warning("Falling back to opt_res_latest")
         return None
-    entity_path_contents = os.listdir(entity_path)
+    # Skip the metadata file and any in-flight atomic-write temp file
+    # ("<name>.json.<pid>.<uuid>.tmp") left by retrieve_hass.post_data -
+    # publishing one derives a bogus entity_id and KeyErrors on the metadata
+    # lookup, aborting the whole publish.
+    entity_path_contents = [
+        entity
+        for entity in os.listdir(entity_path)
+        if entity != default_metadata_json and not entity.endswith(".tmp")
+    ]
     matches_prefix = any(publish_prefix in entity for entity in entity_path_contents)
-    if not (matches_prefix or publish_prefix == "all"):
+    if not entity_path_contents or not (matches_prefix or publish_prefix == "all"):
         logger.warning(f"No saved entity json files that match prefix: {publish_prefix}")
         logger.warning("Falling back to opt_res_latest")
         return None
     opt_res_list = []
     opt_res_list_names = []
     for entity in entity_path_contents:
-        if entity == default_metadata_json:
-            continue
         if publish_prefix == "all" or publish_prefix in entity:
             entity_data = await publish_json(entity, input_data_dict, entity_path, logger)
             if isinstance(entity_data, bool):
@@ -4314,6 +4344,16 @@ async def publish_json(
     return entity_data[metadata[entity_id]["name"]]
 
 
+def _parse_bool_arg(value: str) -> bool:
+    """Parse a boolean command line value; argparse `type=bool` reads any text as True."""
+    value = value.lower()
+    if value in {"true", "1", "yes", "on"}:
+        return True
+    if value in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value!r}")
+
+
 async def main():
     r"""Define the main command line entry function.
 
@@ -4364,7 +4404,7 @@ async def main():
     )
     parser.add_argument(
         "--log2file",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Define if we should log to a file or not",
     )
@@ -4382,7 +4422,7 @@ async def main():
     )
     parser.add_argument(
         "--debug",
-        type=bool,
+        type=_parse_bool_arg,
         default=False,
         help="Use True for testing purposes",
     )
