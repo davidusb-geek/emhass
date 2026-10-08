@@ -4183,6 +4183,40 @@ class TestCompileHeatTopology(unittest.TestCase):
         # Booster (load 1) has no cap -> key absent
         self.assertNotIn("max_supply_temperature", out["def_load_config"][1]["thermal_source"])
 
+    def test_source_overshoot_temperature_passed_through(self):
+        """A source's overshoot_temperature (soft per-source threshold) is
+        compiled into its thermal_source block; sources without it omit the
+        key (they inherit the storage-level value at solve time)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "overshoot_temperature": 55,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                    "desired_temperature": 60,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["overshoot_temperature"], 55.0)
+        self.assertNotIn("overshoot_temperature", out["def_load_config"][1]["thermal_source"])
+        # Storage-level soft target still lands on the tank (scalar broadcast at solve time)
+        self.assertEqual(out["shared_thermal_tanks"][0]["desired_temperatures"], 60.0)
+
     def _hp_booster_topo(self, hp_cap):
         """Minimal HP+booster topology with the given HP max_supply_temperature."""
         return {
@@ -4265,6 +4299,97 @@ class TestCompileHeatTopology(unittest.TestCase):
             )
         self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
         self.assertTrue(any("dhw" in m and "min_temperatures[2]" in m for m in logs.output))
+
+    def test_null_overshoot_temperature_is_treated_as_unset(self):
+        """overshoot_temperature: null on a source or a storage means "not set":
+        it compiles, and the source block carries no threshold of its own, so it
+        inherits the storage's at solve time."""
+        topo = self._capped_hp_only_topo(53.0, [45.0] * 4)
+        topo["sources"][0]["overshoot_temperature"] = None
+        topo["storage"][0]["overshoot_temperature"] = None
+        out = utils.compile_heat_topology(topo)
+        self.assertNotIn("overshoot_temperature", out["def_load_config"][0]["thermal_source"])
+        self.assertNotIn("overshoot_temperature", out["shared_thermal_tanks"][0])
+
+    def test_min_temperatures_above_every_overshoot_warns(self):
+        """A continuous source does not heat in a step that would end beyond its
+        overshoot_temperature, so a floor above the threshold of every feeding
+        source can only be held by a tank that is already hot enough: compile
+        warns. No warning when one source has no threshold, or is
+        semi-continuous (gated at the start of a step, so it can cross it).
+        For cooling the mirror image applies to the maximum."""
+
+        def topo(hp_os, booster_os, semi_cont=False, cool=False):
+            hp = {
+                "id": "hp",
+                "type": "heatpump",
+                "supply_temperature": 55,
+                "carnot_efficiency": 0.4,
+                "nominal_power": 3500,
+                "max_supply_temperature": 60,
+                "treat_as_semi_cont": semi_cont,
+            }
+            booster = {
+                "id": "booster",
+                "type": "electric",
+                "efficiency": 1.0,
+                "nominal_power": 3000,
+                "treat_as_semi_cont": False,
+            }
+            if hp_os is not None:
+                hp["overshoot_temperature"] = hp_os
+            if booster_os is not None:
+                booster["overshoot_temperature"] = booster_os
+            storage = {
+                "id": "dhw",
+                "volume": 0.2,
+                "start_temperature": 50,
+                "min_temperature": [45.0, 45.0, 60.0, 45.0],
+                "max_temperature": [65.0] * 4,
+                "desired_temperature": 55,
+            }
+            if cool:
+                hp = {
+                    "id": "chiller",
+                    "type": "electric",
+                    "efficiency": 3.0,
+                    "nominal_power": 3000,
+                    "treat_as_semi_cont": False,
+                    "overshoot_temperature": 20.0,
+                }
+                storage = {
+                    "id": "room",
+                    "volume": 0.2,
+                    "start_temperature": 30,
+                    "min_temperature": [10.0] * 4,
+                    "max_temperature": [30.0, 30.0, 15.0, 30.0],
+                    "desired_temperature": 22,
+                    "comfort_sense": "cool",
+                }
+                return {
+                    "sources": [hp],
+                    "storage": [storage],
+                    "flows": [{"from": "chiller", "to": "room"}],
+                }
+            return {
+                "sources": [hp, booster],
+                "storage": [storage],
+                "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+            }
+
+        with self.assertLogs("emhass.utils", level="WARNING") as logs:
+            utils.compile_heat_topology(topo(55.0, 58.0))
+        self.assertTrue(
+            any("overshoot_temperature" in m and "min_temperatures[2]" in m for m in logs.output)
+        )
+        with self.assertLogs("emhass.utils", level="WARNING") as logs:
+            utils.compile_heat_topology(topo(None, None, cool=True))
+        self.assertTrue(
+            any("overshoot_temperature" in m and "max_temperatures[2]" in m for m in logs.output)
+        )
+        for quiet in (topo(55.0, None), topo(55.0, 58.0, semi_cont=True)):
+            with self.subTest(topology=quiet), self.assertNoLogs("emhass.utils", level="WARNING"):
+                utils.compile_heat_topology(quiet)
 
     def test_min_temperatures_above_cap_ok_with_uncapped_source(self):
         """The same 60 C band is fine when an uncapped source also feeds the

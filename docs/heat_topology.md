@@ -72,6 +72,7 @@ watts of source input:
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
 | `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
+| `overshoot_temperature` | Optional threshold (degrees Celsius): with the storage's desired temperature set, this source stops beyond it (see below). Overrides the storage-level `overshoot_temperature`. |
 | `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
 | `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
 
@@ -109,10 +110,18 @@ its ceiling, so the booster is scheduled exactly for the band above it.
 ```json
 "sources": [
   {"id": "hp", "type": "heatpump", "nominal_power": 3500,
-   "supply_temperature": 55, "max_supply_temperature": 53},
+   "supply_temperature": 55, "max_supply_temperature": 53,
+   "treat_as_semi_cont": false},
   {"id": "booster", "type": "electric", "nominal_power": 3000, "efficiency": 1.0}
 ]
 ```
+
+A source may not push the storage past its ceiling within a step. A
+semi-continuous source (the default) runs at its full nominal power, so if one
+full-power step heats the storage by more than the gap between its temperature
+and the ceiling, that source never runs and the other source does all the work,
+with no warning. Make a capped source continuous (`"treat_as_semi_cont": false`),
+as above, or use a shorter optimization time step.
 
 This is a physical limit, not a preference: it also holds in the relaxed
 fallback. To stop a source at a lower temperature while it can physically go
@@ -160,6 +169,20 @@ comfort control is available through `desired_temperature` or
 `desired_temperatures`, `overshoot_temperature`, `penalty_factor`, and
 `comfort_sense` (`heat` or `cool`).
 
+The storage's `overshoot_temperature` applies to every source that feeds it,
+unless a source sets its own. That makes a two-stage setup: with
+`desired_temperatures: 60` on the tank, `overshoot_temperature: 55` on the heat
+pump and `75` on the electric element, the heat pump stops at 55 degrees
+Celsius and the element lifts the tank above it only when the comfort penalty
+justifies it. The desired temperature is soft, but the threshold is a hard stop
+for its source. A continuous source does not heat (or cool) in a step that
+would end beyond it, as for `thermal_config`. A semi-continuous source, the
+default, is off while the storage starts a step beyond it, so one full-power
+step can still carry the storage across. When every source feeding a storage
+is continuous and has a threshold, a `min_temperature` above all of them (a
+`max_temperature` below them when cooling) can only be held by a storage that
+already starts there, and the compiler logs a warning for it.
+
 For predictable constraints, make the maximum-temperature array cover the
 optimization horizon. A shorter minimum-temperature array is extended using
 its final value, but a maximum-temperature array is not currently extended.
@@ -183,6 +206,13 @@ Consumers are folded into their target storage:
 
 Only one `building_demand` consumer is allowed per storage. Multiple profile
 consumers targeting one storage are added element by element.
+
+A `profile` and a `building_demand` consumer on the same storage add up, so one
+storage can serve hot water and space heating at once (a combi tank). The
+standing loss is counted once: the flat `thermal_loss` when a draw-off profile
+is present, otherwise the indoor/outdoor loss. Set `indoor_target_temperature`
+on the `building_demand` consumer; without it, a combi tank computes the
+building demand against 20 degrees Celsius.
 
 ### Cost tracks
 
