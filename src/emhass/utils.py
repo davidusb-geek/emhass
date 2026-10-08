@@ -829,6 +829,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     src["id"],
                     float(source_block["supply_temperature"]),
                 )
+        # Optional per-source threshold: with the storage's desired_temperatures
+        # set, this source stops beyond it (see the optimizer for the gate per
+        # source mode). Sources without it (or with null) inherit the
+        # storage-level overshoot_temperature at solve time.
+        if src.get("overshoot_temperature") is not None:
+            source_block["overshoot_temperature"] = float(src["overshoot_temperature"])
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")
@@ -950,6 +956,47 @@ def compile_heat_topology(topology: dict) -> dict:
                         ceiling,
                     )
                     break
+        # The same for overshoot_temperature: with a desired temperature, a
+        # continuous source does not heat in a step that would end beyond it. A
+        # semi-continuous source is gated at the start of a step, so one step can
+        # still cross it, and a source without a threshold (none of its own, none
+        # on the storage) can pass it: the check needs every feeding source to be
+        # continuous and to have one.
+        desired = s.get("desired_temperature", s.get("desired_temperatures"))
+        feeding_srcs = [src_by_id[f["from"]] for f in flows if f["to"] == sid]
+        feeding_overshoots = [
+            src.get("overshoot_temperature")
+            if src.get("overshoot_temperature") is not None
+            else s.get("overshoot_temperature")
+            for src in feeding_srcs
+        ]
+        if (
+            desired not in (None, [])
+            and feeding_overshoots
+            and all(isinstance(o, int | float) for o in feeding_overshoots)
+            and not any(bool(src.get("treat_as_semi_cont", True)) for src in feeding_srcs)
+        ):
+            is_cool = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+            limit = min(feeding_overshoots) if is_cool else max(feeding_overshoots)
+            band_key = "max_temperatures" if is_cool else "min_temperatures"
+            for t, val in enumerate(tank[band_key]):
+                if val is None:
+                    continue
+                if (float(val) < limit) if is_cool else (float(val) > limit):
+                    logging.getLogger(__name__).warning(
+                        "heat_topology.storage[%s].%s[%s]=%s lies beyond the "
+                        "overshoot_temperature (%s) of every source feeding this "
+                        "storage; overshoot_temperature stops a source in any step "
+                        "that would end beyond it, so only a storage that already "
+                        "starts there can hold that bound. Move the threshold past "
+                        "the bound, or add a source without one.",
+                        sid,
+                        band_key,
+                        t,
+                        val,
+                        limit,
+                    )
+                    break
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
         # should track. Same linear law as the source's heating_curve.
@@ -978,7 +1025,7 @@ def compile_heat_topology(topology: dict) -> dict:
             tank["desired_temperatures"] = (
                 list(desired) if isinstance(desired, list | tuple) else float(desired)
             )
-        if "overshoot_temperature" in s:
+        if s.get("overshoot_temperature") is not None:
             tank["overshoot_temperature"] = float(s["overshoot_temperature"])
         if "penalty_factor" in s:
             tank["penalty_factor"] = float(s["penalty_factor"])
