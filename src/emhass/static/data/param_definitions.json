@@ -102,6 +102,20 @@
       },
       "default_value": null
     },
+    "participant_api": {
+      "friendly_name": "Serve this EMHASS to a coordinator",
+      "Description": "Optional: serve this EMHASS's devices to a coordinator elsewhere (another EMHASS whose site names this one as a remote solver) over the participant API at /participant/v1/. Off when empty. An object: publish_prefix prefixes the sensors a committed plan is published to (so two EMHASS on one Home Assistant do not collide); key names it in the coordinator's log. Every call presents the participant_token secret. Needs the federated extra.",
+      "input": "object",
+      "schema": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+          "publish_prefix": {"type": "string", "pattern": "^[a-z0-9_]{0,32}$"},
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}
+        }
+      },
+      "default_value": null
+    },
     "sensor_power_photovoltaics": {
       "friendly_name": "Sensor power photovoltaic",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",

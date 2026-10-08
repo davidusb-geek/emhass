@@ -3,6 +3,7 @@
   "costfun": "profit",
   "optimization_backend": "cvxpy",
   "site": null,
+  "participant_api": null,
   "optimization_time_step": 30,
   "historic_days_to_retrieve": 2,
   "method_ts_round": "nearest",

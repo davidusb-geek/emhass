@@ -175,6 +175,68 @@
         }
       }
     },
+    "/participant/v1/{op}": {
+      "parameters": [
+        {
+          "name": "op",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "describe",
+              "baseline",
+              "query",
+              "commit"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
+        "description": "The participant API (draft), off unless participant_api is set; every call presents the participant_token secret as a bearer token.",
+        "externalDocs": {
+          "url": "https://github.com/ameetdesh/home-energy-optimizer/blob/main/src/home_energy_optimizer/schemas/participant-api.v1.json",
+          "description": "participant-api.v1.json"
+        },
+        "responses": {
+          "200": {
+            "description": "Its description"
+          },
+          "401": {
+            "description": "No or a wrong token"
+          },
+          "404": {
+            "description": "participant_api is not set"
+          }
+        }
+      },
+      "post": {
+        "summary": "baseline, query or commit (participant API, opt-in)",
+        "description": "Queries have no effect; a commit publishes the chosen plan.",
+        "externalDocs": {
+          "url": "https://github.com/ameetdesh/home-energy-optimizer/blob/main/src/home_energy_optimizer/schemas/participant-api.v1.json",
+          "description": "participant-api.v1.json"
+        },
+        "responses": {
+          "200": {
+            "description": "An answer, or whether a commit was accepted"
+          },
+          "400": {
+            "description": "Not a query or commit of this API"
+          },
+          "401": {
+            "description": "No or a wrong token"
+          },
+          "404": {
+            "description": "participant_api is not set"
+          },
+          "409": {
+            "description": "A horizon it cannot plan, or a plan it did not give"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Liveness/readiness probe",
@@ -441,6 +503,25 @@
             },
             "title": "Site",
             "description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). Every element but the main meter and the limits names its parent ('grid', the main meter, or a node). A node (any other id: an inverter, a panel, a breaker) has its parent, a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery, water_heater, hvac, deferrable0, ...) has a parent, a solver (emhass, the default, or home_energy_optimizer), a group (devices in one group are planned together by EMHASS's model), a config (home_energy_optimizer's settings) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"parent\": \"grid\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000, \"efficiency_import\": 0.97, \"efficiency_export\": 0.97}, {\"id\": \"garage\", \"parent\": \"grid\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]"
+          },
+          "participant_api": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "publish_prefix": {
+                "type": "string",
+                "pattern": "^[a-z0-9_]{0,32}$"
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              }
+            },
+            "title": "Serve this EMHASS to a coordinator",
+            "description": "Optional: serve this EMHASS's devices to a coordinator elsewhere (another EMHASS whose site names this one as a remote solver) over the participant API at /participant/v1/. Off when empty. An object: publish_prefix prefixes the sensors a committed plan is published to (so two EMHASS on one Home Assistant do not collide); key names it in the coordinator's log. Every call presents the participant_token secret. Needs the federated extra."
           },
           "sensor_power_photovoltaics": {
             "type": "string",

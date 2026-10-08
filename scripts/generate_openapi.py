@@ -24,6 +24,7 @@ CURATED = {
     "/api/v1/last-run": {"GET"},
     "/api/v1/plan": {"GET"},
     "/healthz": {"GET"},
+    "/participant/v1/{op}": {"GET", "POST"},
 }
 
 _ATOMIC = {
@@ -128,6 +129,10 @@ _PLAN_SCHEMA = _REPO / "docs" / "api" / "v1" / "plan.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
+_PARTICIPANT_API = (
+    "https://github.com/ameetdesh/home-energy-optimizer/blob/main/"
+    "src/home_energy_optimizer/schemas/participant-api.v1.json"
+)
 _PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
@@ -244,6 +249,44 @@ def build_spec(routes: set | None = None) -> dict:
                     }
                 },
             }
+        },
+        "/participant/v1/{op}": {
+            "parameters": [
+                {
+                    "name": "op",
+                    "in": "path",
+                    "required": True,
+                    "schema": {
+                        "type": "string",
+                        "enum": ["describe", "baseline", "query", "commit"],
+                    },
+                }
+            ],
+            "get": {
+                "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
+                "description": (
+                    "The participant API (draft), off unless participant_api is set; every call "
+                    "presents the participant_token secret as a bearer token."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "responses": {
+                    "200": {"description": "Its description"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                },
+            },
+            "post": {
+                "summary": "baseline, query or commit (participant API, opt-in)",
+                "description": "Queries have no effect; a commit publishes the chosen plan.",
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "responses": {
+                    "200": {"description": "An answer, or whether a commit was accepted"},
+                    "400": {"description": "Not a query or commit of this API"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
+                },
+            },
         },
         "/healthz": {
             "get": {

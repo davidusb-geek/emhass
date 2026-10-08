@@ -738,6 +738,58 @@ async def api_v1_plan():
     return response
 
 
+_participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
+
+
+async def _problem(status: int, title: str, detail: str = ""):
+    """An RFC 9457 problem response."""
+    body = {"type": "about:blank", "title": title, "status": status, "detail": detail}
+    response = await make_response(orjson.dumps(body), status)
+    response.headers["Content-Type"] = "application/problem+json"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/participant/v1/<op>", methods=["GET", "POST"])
+async def participant_v1(op: str):
+    """This EMHASS's devices, served to a coordinator elsewhere: the
+    participant API (home-energy-optimizer's participant-api.v1.json) -
+    describe, baseline, query, commit. Off unless `participant_api` is set;
+    every call presents the `participant_token` secret. Only a commit has an
+    effect: the chosen plan is published, under `participant_api.publish_prefix`.
+    """
+    global _participant_service
+    from emhass import participant_api
+
+    params = await participant_api.read_params(emhass_conf)
+    if params is None or not isinstance(params["optim_conf"].get("participant_api"), dict):
+        return await _problem(404, "Not Found", "the participant API is off (set participant_api)")
+    token = params_secrets.get("participant_token")
+    if not token:
+        return await _problem(503, "Service Unavailable", "set participant_token in the secrets")
+    try:
+        import home_energy_optimizer.remote  # noqa: F401
+    except ImportError:
+        return await _problem(
+            501, "Not Implemented", "needs the federated extra (home-energy-optimizer)"
+        )
+    built_from = orjson.dumps([params, token], option=orjson.OPT_SORT_KEYS, default=str)
+    if _participant_service is None or _participant_service[0] != built_from:
+        service = participant_api.make_service(emhass_conf, params, token, app.logger)
+        _participant_service = (built_from, service)
+    service = _participant_service[1]
+    body = await request.get_data()
+    status, out = await asyncio.to_thread(
+        service.handle, request.method, f"/v1/{op}", dict(request.headers), body
+    )
+    response = await make_response(orjson.dumps(out), status)
+    response.headers["Content-Type"] = (
+        "application/problem+json" if status >= 400 else "application/json"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.route("/healthz", methods=["GET"])
 async def healthz():
     """Liveness/readiness probe for container watchdogs.

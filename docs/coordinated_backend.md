@@ -45,6 +45,7 @@ Every device (`battery`, `deferrable0`, `deferrable1`, ...) is then planned on i
 | a node | any other id | an inverter, a panel, a breaker or a meter behind the main meter: `parent` (another node, or `grid`), so nodes nest to any depth; `max_import` / `max_export` (W) on its connection to the parent (`max_export: 0`: no backfeed); `efficiency_import` / `efficiency_export` for a converter (1 by default); `type` (`hybrid_inverter`, `inverter`, `panel`, `breaker`, `meter`) |
 | a limit | `type: "limit"` | `max_import` and/or `max_export` (W) on what the devices tagged with it draw together, wherever they are - a phase, a shared cable, a contract |
 | a device | a device name: `pv`, `battery`, `water_heater`, `hvac`, `deferrable0`, ... | `parent`; `solver`; `group`; `config`; `limits` (the limits it counts against) |
+| a remote solver | `solver: {"url": ..., "token_secret": ...}` | another EMHASS, or any solver serving the participant API, as one participant: `parent`; `limits` (see "Remote solvers") |
 
 **Solvers.** A device is planned by `emhass` (the default: EMHASS's own model, with only that device, or its group, enabled) or by `home_energy_optimizer` (the package's solver for `battery`, `water_heater` and `hvac`, with its settings in `config`). Devices that share a `group` are planned together by EMHASS's model, so a `deferrable_load_groups` budget among them is held exactly; each has its own share of the saving otherwise, the group one. A device `site` leaves out is planned on its own by EMHASS, on the main meter. The PV is a forecast: it has a `parent` and nothing else. A battery planned by `home_energy_optimizer` values the energy it leaves at the end at the average import price, instead of being held to `soc_final`.
 
@@ -57,6 +58,25 @@ The coordinator sees a group only as its total, so a group's devices share one p
 **Prices.** The coordinator holds each node as a balance of its own, so the devices on it are priced at the node's own price (`fed_local_price_<id>`): the parent's price through the connection's efficiency while it has headroom, apart from it while it is at a rating - a hybrid inverter's falls to zero while its PV is being clipped. A limit adds its own premium while it binds (`fed_limit_price_<id>`). `site` needs home-energy-optimizer 0.2.8 or later.
 
 **From a request.** `site` may come with a request, like any runtime parameter; it is checked by shape before anything reads it, and a request's `site` that cannot be used leaves the configured one in place.
+
+## Remote solvers
+
+A part of the house can be planned by a solver elsewhere - another EMHASS, in its own container, planning the garage's EV and battery - as one element of `site`:
+
+```json
+{"id": "garage_emhass", "parent": "garage",
+ "solver": {"url": "http://emhass-garage:5000/participant", "token_secret": "garage_token"}}
+```
+
+The coordinator asks it what it would do at given prices, and, once it has chosen, asks it to run its part (the participant API, home-energy-optimizer's `participant-api.v1.json`). It is never sent the rest of the house's load: it is asked at its connection's marginal prices - what drawing costs and supplying is worth there - which carry the tariff and every rating. `token_secret` names the secret in `secrets_emhass.yaml` that holds the token it expects. A remote solver is accepted from the configuration only: a `site` sent with a request may not name one. If it does not answer, the house is planned without it and the plan says so (`fed_remote_status_<id>`). Needs home-energy-optimizer 0.2.9 or later.
+
+**Serving this EMHASS** to a coordinator elsewhere: set `participant_api` and a `participant_token` secret.
+
+```json
+"participant_api": {"publish_prefix": "garage_"}
+```
+
+It then answers at `/participant/v1/describe`, `baseline`, `query` and `commit`, every call presenting `participant_token` as a bearer token (off, 404, without `participant_api`; 503 without the token). Its answers come from its own model: its battery, starting from its `sensor_battery_state_of_charge`, and its deferrable loads, planned together within its own `maximum_power_from_grid` / `maximum_power_to_grid` - its connection's limits, a panel's rating, no backfeed. Queries have no effect; a commit publishes the chosen plan as a run would, its sensors prefixed by `publish_prefix` so two EMHASS on one Home Assistant do not collide. While it is coordinated it should not run its own optimizations, and `continual_publish` should stay off.
 
 ## What falls back
 
@@ -90,6 +110,8 @@ The usual `opt_res` columns, plus:
 | `fed_local_price_<id>` | the price of one more kWh on a node of `site` (or the hybrid inverter EMHASS's keys describe, `inverter`), per timestep (currency/kWh) |
 | `fed_node_power_<id>` | that node's power to its parent, per timestep (W, + = up the tree) |
 | `fed_limit_price_<id>` | a limit's premium while it binds, per timestep (currency/kWh): a `site` limit's id, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
+| `fed_remote_power_<id>` | a remote solver's planned power, per timestep (W, + = drawn) |
+| `fed_remote_status_<id>` | what became of it: `committed`, `refused: ...`, `unreachable` or `unauthorized` (planned without it), `planned (dry run)` |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
 

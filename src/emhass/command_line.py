@@ -2434,6 +2434,10 @@ async def set_input_data_dict(
             for key in runtime_solver_opts:
                 if key in optim_conf:
                     opt.optim_conf[key] = optim_conf[key]
+        if opt is not None:
+            # A coordinator backend asks remote solvers to run their part of a
+            # live plan only: a dry run has no effect anywhere
+            opt.fed_dry_run = bool((params.get("passed_data") or {}).get("dry_run", False))
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,

@@ -4050,6 +4050,15 @@ async def build_params(
         if params_secrets.get(vm_secret) is not None:
             params["retrieve_hass_conf"][vm_secret] = params_secrets.get(vm_secret)
             params["params_secrets"][vm_secret] = params_secrets.get(vm_secret)
+    # The tokens site's remote solvers are reached with: only the secrets a
+    # remote names (its token_secret), for the coordinator
+    for element in params["optim_conf"].get("site") or []:
+        solver = element.get("solver") if isinstance(element, dict) else None
+        name = solver.get("token_secret") if isinstance(solver, dict) else None
+        if isinstance(name, str) and params_secrets.get(name) is not None:
+            params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[
+                name
+            ]
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
