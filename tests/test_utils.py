@@ -2028,6 +2028,10 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             ({"sources": {"id": "hp"}}, "sources"),
             ({"sources": [], "cost_tracks": ["gas"]}, "cost_tracks"),
             ({"sources": [], "extend_deferrable_loads": "false"}, "extend_deferrable_loads"),
+            # A falsey value of the wrong type is still the wrong type.
+            ({"sources": [], "flows": ""}, "flows"),
+            ({"sources": [], "storage": 0}, "storage"),
+            ({"sources": [], "cost_tracks": ""}, "cost_tracks"),
         ):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, f"heat_topology.{field}"):
@@ -2088,6 +2092,69 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             "min_temperatures": [45.0] * 48,
             "max_temperatures": [65.0] * 48,
         }
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_bad_members(self):
+        """Runtime tanks whose load_ids are not a list of whole numbers within the
+        configured loads, or whose ids repeat, are ignored with a warning: a
+        scalar crashed, a string could select the wrong load, and an index past
+        the last load broke the solve."""
+        two_loads = [
+            {"thermal_source": {"efficiency": 1.0}},
+            {"thermal_source": {"efficiency": 1.0}},
+        ]
+        bad_cases = {
+            "scalar": [dict(self._manual_tank(), load_ids=0)],
+            "string": [dict(self._manual_tank(), load_ids=["0"])],
+            "bool": [dict(self._manual_tank(), load_ids=[True])],
+            "out of range": [dict(self._manual_tank(), load_ids=[0, 5])],
+            "duplicate tank id": [
+                dict(self._manual_tank(), load_ids=[0]),
+                dict(self._manual_tank(), load_ids=[1]),
+            ],
+        }
+        for case, tanks in bad_cases.items():
+            with self.subTest(case=case), self.assertLogs(logger, level="WARNING"):
+                out = await self._run_treat_runtimeparams(
+                    {"def_load_config": two_loads, "shared_thermal_tanks": tanks}
+                )
+                self.assertFalse(out.get("shared_thermal_tanks"))
+        out = await self._run_treat_runtimeparams(
+            {"def_load_config": two_loads, "shared_thermal_tanks": [self._manual_tank()]}
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+
+    async def test_treat_runtimeparams_start_temperature_matches_ids_as_text(self):
+        """A JSON object key is always a string, so a tank with a numeric id is
+        matched by its text; a boolean is not a temperature and is ignored."""
+        tank = dict(self._manual_tank(start_temperature=50.0), id=7)
+        out = await self._run_treat_runtimeparams(
+            {"shared_thermal_tanks": [tank], "shared_tank_start_temperatures": {"7": 41.0}}
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 41.0)
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {"dhw": True},
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+    async def test_heat_topology_extend_rejects_a_tank_id_used_twice(self):
+        """In extend mode the kept runtime tanks and the compiled ones share one
+        list; two tanks with the same id would both take that id's start
+        temperature, so the combination is rejected."""
+        with self.assertRaisesRegex(ValueError, "dhw"):
+            await self._run_treat_runtimeparams(
+                {
+                    "def_load_config": [
+                        {"thermal_source": {"efficiency": 1.0}},
+                        {"thermal_source": {"efficiency": 1.0}},
+                    ],
+                    "shared_thermal_tanks": [self._manual_tank()],
+                    "heat_topology": self._hp_booster_extend_topo(extend=True),
+                }
+            )
 
     async def test_treat_runtimeparams_shared_thermal_tanks_runtime(self):
         """shared_thermal_tanks passed at runtime lands in optim_conf: the

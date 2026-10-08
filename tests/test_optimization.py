@@ -6138,6 +6138,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((temp > 55.05).any(), "the tank never went above 55 C")
         ends_above = (temp.shift(-1) > 55.05).fillna(False)
         self.assertLess(hp[ends_above].max(), 1e-3)
+        # ... and it does heat below the threshold, so the gate is not simply
+        # keeping it off all the time.
+        self.assertGreater(hp[temp < 54.95].max(), 0, "the heat pump never heated below 55 C")
 
     async def test_full_stack_topology_extend_with_other_loads_end_to_end(self):
         """The compiled-topology counterpart of the runtime-tanks test: a
@@ -6251,6 +6254,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             1e-3,
             "Compiled max_supply_temperature must gate the HP at its shifted index",
         )
+        # ... and the HP does heat below its cap, so the gate is not simply
+        # keeping it off all the time.
+        self.assertGreater(hp[temp < 52.95].max(), 0, "the heat pump never heated below its cap")
 
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
@@ -6466,6 +6472,23 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
         tank_total = res["P_deferrable2"].sum() + res["P_deferrable3"].sum()
         self.assertGreater(tank_total, 0, "Tank members must dispatch to hold the band")
+        # Their heat really drives the tank. Without heat the tank only loses
+        # its standing loss (0.05 kW over 30 min in 200 L, about 0.11 K per
+        # step); in every step where the members run without a draw-off it
+        # does better than that, and with them off it does not. The published
+        # temperatures are rounded to 0.01 K, hence the 0.02 K tolerance.
+        temp = res[tank_cols[0]].to_numpy(dtype=float)
+        members = (res["P_deferrable2"] + res["P_deferrable3"]).to_numpy(dtype=float)
+        rise = np.diff(temp)
+        loss_drift = -0.05 * dt * 3600 / (1000 * 4.186 * 0.20)
+        no_draw = np.asarray(draw_off[: len(rise)]) == 0
+        runs = (members[:-1] > 1.0) & no_draw
+        self.assertTrue(runs.any(), "no step with the members running and no draw-off")
+        self.assertTrue(np.all(rise[runs] > loss_drift + 0.02), "their heat did not reach the tank")
+        off = members[:-1] < 1e-6
+        self.assertTrue(
+            np.all(rise[off] <= loss_drift + 0.02), "the tank gained heat with them off"
+        )
 
     def test_is_electric_load_excludes_load_from_grid_balance(self):
         """A load with is_electric_load[k]=False must not appear in p_def_sum
