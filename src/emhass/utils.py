@@ -3722,8 +3722,10 @@ async def treat_runtimeparams(
             )
         else:
             tanks = optim_conf.get("shared_thermal_tanks") or []
-            tank_ids = {t.get("id") for t in tanks if isinstance(t, dict)}
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
             for tank_id, series in overrides.items():
+                tank_id = str(tank_id)
                 if tank_id not in tank_ids:
                     logger.warning(
                         "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
@@ -3739,8 +3741,11 @@ async def treat_runtimeparams(
                     )
                     continue
                 try:
+                    # A boolean is not heat (float(True) would be 1.0).
+                    if any(isinstance(v, bool) for v in series):
+                        raise TypeError("boolean entry")
                     values = [float(v) for v in series]
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     logger.warning(
                         "shared_tank_prior_heat['%s']=%r is not all numeric; ignoring.",
                         tank_id,
@@ -3754,7 +3759,7 @@ async def treat_runtimeparams(
                     )
                     continue
                 for tank in tanks:
-                    if isinstance(tank, dict) and tank.get("id") == tank_id:
+                    if isinstance(tank, dict) and str(tank.get("id")) == tank_id:
                         tank["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
