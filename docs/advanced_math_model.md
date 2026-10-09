@@ -317,13 +317,14 @@ penalty (so the optimizer pulls toward comfort when it is cheap, without renderi
 the problem infeasible when it is not). Index 0 is pinned to the live measured
 temperature, so every re-plan starts from the real sensor value.
 
-**Start-temperature recovery.** If the live temperature starts *below* the hard
-floor (a momentary out-of-band reading on a cold morning), demanding the full floor
-from the next step would be infeasible - a high-mass store cannot jump back into
-band in one step. EMHASS instead ramps the hard floor up from the measured start at
-a conservative rate and prices every degree below the configured floor inside that
-window, so a store recovers as fast as its sources allow and never makes the problem
-infeasible; the configured floor reapplies in full once the ramp has caught up.
+**Start-temperature recovery.** If the live temperature starts *below* a floor
+that applies within the first 6 steps (a momentary out-of-band reading on a cold
+morning), demanding that floor from the next step could be infeasible - a high-mass
+store cannot jump back into band in one step. For that run EMHASS prices every
+degree below the configured floors instead of holding them hard, with a weight that
+dominates energy prices, so a store recovers as fast as its sources allow, then
+holds the floor, and never makes the problem infeasible. A floor that only rises
+later in the horizon does not trigger this, because the plan can heat ahead for it.
 
 **Tank-to-tank transfers.** A store can feed another through an emitter conductance
 (for example a buffer supplying a room or a pool). The transferred heat is a
