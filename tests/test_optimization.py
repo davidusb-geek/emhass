@@ -861,7 +861,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         soc_init = 0.6
         soc_final = 0.5
-        
+
         # Create input data: 4 periods of 30 minutes, constant energy cost
         periods = 4
         dates = pd.date_range(
@@ -909,7 +909,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             opt_res.loc[opt_res.index[-1], "SOC_opt"],
             soc_init,
         )
-        
+
     def test_capacity_charge_shaves_peak_import(self):
         """Issue #623: an opt-in ``capacity_cost_per_kw`` must flatten the peak
         grid import. With the feature off no peak variable is created and the
@@ -6074,6 +6074,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead[opt.var_prod_price].values,
         )
         return opt, res
+
+    def test_zone_overshoot_bounds_the_last_step_with_the_zone_loss(self):
+        """The end-of-horizon temperature that gates the last step uses the same
+        terms as the zone dynamics: its loss is UA*(T - outdoor), not the fixed
+        standing loss. A zone at its threshold may run its source in the final
+        slot only up to what that loss removes (1 kW here)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self._setup_single_hp(nominal=3000)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": 1.0}}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "zone",
+                "load_ids": [0],
+                "thermal_mass": 1.0,
+                "loss_coefficient": 0.1,
+                "start_temperature": 20.0,
+                "min_temperatures": [15.0] * 48,
+                "max_temperatures": [30.0] * 48,
+                "desired_temperatures": 25.0,
+                "overshoot_temperature": 20.0,
+            },
+        ]
+        opt = self.create_optimization()
+        prices = self.df_input_data_dayahead[opt.var_load_cost].to_numpy(dtype=float).copy()
+        prices[:] = 0.30
+        prices[-1] = -0.30
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        # The heat that keeps the zone at its threshold: UA * (T - outdoor).
+        allowed_w = 0.1 * (temp[-1] - 10.0) * 1000
+        self.assertAlmostEqual(res["P_deferrable0"].to_numpy()[-1], allowed_w, delta=20.0)
 
     def test_shared_tank_null_source_overshoot_inherits_the_storage_threshold(self):
         """overshoot_temperature: null on a source means "not set": the source
