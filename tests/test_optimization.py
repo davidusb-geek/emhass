@@ -13964,17 +13964,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """Under thermal_inertia the heat of step t reaches the tank L steps later,
         so max_supply_temperature holds for the tank state when it arrives: heat
         already on its way must not push the zone past the ceiling."""
+        # The comfort target pulls past the ceiling. The zone loses heat, so the
+        # plan that holds the ceiling is unique and the solve stays fast (a
+        # loss-free zone makes many plans tie and the branch-and-bound slow).
         opt, res = self._solve_tanks(
-            [
-                self._zone(
-                    "zone",
-                    20.0,
-                    [0],
-                    thermal_inertia=1.0,
-                    desired_temperatures=25.0,
-                    penalty_factor=10,
-                )
-            ],
+            [self._zone("zone", 20.0, [0], ua=0.2, thermal_inertia=1.0, desired_temperatures=22.0)],
             nominal=4000,
             source={"max_supply_temperature": 21.0},
         )
