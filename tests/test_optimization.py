@@ -6618,9 +6618,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         rise = np.diff(temp)
         loss_drift = -0.05 * dt * 3600 / (1000 * 4.186 * 0.20)
         no_draw = np.asarray(draw_off[: len(rise)]) == 0
-        runs = (members[:-1] > 1.0) & no_draw
+        # A step counts as running only above 50 W: below that its heat can sit
+        # inside the 0.01 K rounding of the published temperatures, and the solver
+        # may pick such a trickle as an equally good plan on another platform.
+        runs = (members[:-1] > 50.0) & no_draw
         self.assertTrue(runs.any(), "no step with the members running and no draw-off")
-        self.assertTrue(np.all(rise[runs] > loss_drift + 0.02), "their heat did not reach the tank")
+        steps = [
+            (int(t), round(float(members[t])), round(float(rise[t]), 3)) for t in np.where(runs)[0]
+        ]
+        self.assertTrue(
+            np.all(rise[runs] > loss_drift + 0.02),
+            f"their heat did not reach the tank: (step, W, rise K) {steps}, drift {loss_drift:.3f}",
+        )
         off = members[:-1] < 1e-6
         self.assertTrue(
             np.all(rise[off] <= loss_drift + 0.02), "the tank gained heat with them off"
