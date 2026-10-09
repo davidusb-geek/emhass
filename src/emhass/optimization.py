@@ -4476,14 +4476,22 @@ class Optimization:
         # Net tank->tank transfer per step (kWh): +inflow (this tank is a 'to'),
         # -outflow (this tank is a 'from'). Length required_len-1; zeros if none.
         xfer_net = np.zeros(required_len - 1)
+        # The same for the last step, whose end lies past the horizon (used only
+        # by the overshoot gate below), and a bound on how far it can move.
+        xfer_last = 0.0
+        xfer_last_span = 0.0
         for tr in self._get_tank_transfers() if transfer_vars else []:
             q_var = transfer_vars.get((tr["from"], tr["to"]))
             if q_var is None:
                 continue
             if tr["to"] == tank_id:
                 xfer_net = xfer_net + q_var[:-1] * self.time_step
+                xfer_last = xfer_last + q_var[-1] * self.time_step
             if tr["from"] == tank_id:
                 xfer_net = xfer_net - q_var[:-1] * self.time_step
+                xfer_last = xfer_last - q_var[-1] * self.time_step
+            if tank_id in (tr["to"], tr["from"]):
+                xfer_last_span += float(tr["max_transfer_power"]) / 1000 * self.time_step
 
         # First-order thermal dynamics: T[t+1] = T[t] + conversion*(heat - demand - loss).
         # sense_coeff flips the SOURCE term so a cool-sense tank's sources remove heat
@@ -4682,19 +4690,45 @@ class Optimization:
                 nom = self.optim_conf["nominal_power_of_deferrable_loads"][j]
                 return max(nom) if isinstance(nom, list | np.ndarray) else nom
 
+            # Same terms as the dynamics above: the source heat that arrives in
+            # the last step (from L steps earlier under thermal_inertia), the
+            # transfers, the demand and the (state-dependent, for a zone) loss.
+            arrive = required_len - 1 - L
             heat_last = 0
             end_step_span = 0.0
             for j, cops in zip(load_ids, cop_arrays):
-                heat_last = (
-                    heat_last
-                    + float(cops[-1]) * self.vars["p_deferrable"][j][-1] / 1000 * self.time_step
-                )
+                if arrive >= 0:
+                    heat_last = (
+                        heat_last
+                        + float(cops[arrive])
+                        * self.vars["p_deferrable"][j][arrive]
+                        / 1000
+                        * self.time_step
+                    )
                 end_step_span += float(_nominal(j)) * float(np.max(cops)) / 1000 * self.time_step
+            if loss_coefficient is not None:
+                loss_last = (
+                    loss_coefficient * (predicted_temp[-1] - outdoor_temp_arr[-1]) * self.time_step
+                )
+                temps = [v for v in (tank_temp_ub, float(start_temperature)) if v is not None]
+                temps += [*finite_min_temps, float(start_temperature)]
+                loss_span = (
+                    loss_coefficient
+                    * max(
+                        abs(t - o)
+                        for t in temps
+                        for o in (min(outdoor_temp_arr), max(outdoor_temp_arr))
+                    )
+                    * self.time_step
+                )
+            else:
+                loss_last = thermal_losses[-1]
+                loss_span = abs(float(thermal_losses[-1]))
             temp_end = predicted_temp[-1] + conversion * (
-                sense_coeff * heat_last - heating_demand[-1] - thermal_losses[-1]
+                sense_coeff * heat_last + xfer_last - heating_demand[-1] - loss_last
             )
             end_step_span = conversion * (
-                end_step_span + abs(float(heating_demand[-1])) + abs(float(thermal_losses[-1]))
+                end_step_span + xfer_last_span + abs(float(heating_demand[-1])) + loss_span
             )
 
             self._warn_bound_beyond_every_overshoot(
