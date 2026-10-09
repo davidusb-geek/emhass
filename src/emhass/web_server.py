@@ -41,10 +41,12 @@ from emhass.command_line import (
 )
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
+    HEAT_TOPOLOGY_KEYS,
     build_config,
     build_legacy_config_params,
     build_params,
     build_secrets,
+    compile_heat_topology,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
     get_injection_dict_forecast_model_fit,
@@ -442,6 +444,47 @@ async def parameter_set():
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # Validate heat_topology at save time instead of at the next optimization
+    # run: the compiler's ValueError names the offending field, so surface it
+    # in the UI alert now rather than failing an unattended run later.
+    heat_topology = request_data.get("heat_topology")
+    # An empty text box arrives as null, "", "null" or {} and means "no
+    # topology". Anything else that is not an object (a list, a JSON topology
+    # quoted as a string) would be saved and then silently ignored at run time.
+    if heat_topology not in (None, "", "null") and not isinstance(heat_topology, dict):
+        app.logger.warning("Rejected config save: heat_topology is not an object")
+        return await make_response(
+            [
+                "heat_topology is invalid: it must be a JSON object, got "
+                f"{type(heat_topology).__name__}"
+            ],
+            400,
+        )
+    if isinstance(heat_topology, dict) and heat_topology:
+        # The compiler ignores keys it does not know, so a misspelled section
+        # (e.g. "source") would compile to zero loads and, in replace mode,
+        # remove the configured ones. At save time that is a typo: reject it.
+        unknown = sorted(set(heat_topology) - HEAT_TOPOLOGY_KEYS)
+        if unknown:
+            app.logger.warning("Rejected config save: heat_topology unknown keys %s", unknown)
+            return await make_response(
+                [
+                    f"heat_topology is invalid: unknown key(s) {unknown}; expected "
+                    f"{sorted(HEAT_TOPOLOGY_KEYS)}"
+                ],
+                400,
+            )
+        try:
+            # Off the event loop: a large topology must not stall other requests.
+            await asyncio.to_thread(compile_heat_topology, heat_topology)
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as e:
+            # The compiler raises ValueError with a field path; the others are a
+            # backstop for malformed entries it does not check explicitly (e.g. a
+            # string where an object is expected), which would otherwise surface
+            # as an unhandled 500.
+            app.logger.warning("Rejected config save: heat_topology invalid: %s", e)
+            return await make_response([f"heat_topology is invalid: {e}"], 400)
 
     # Reject an unusable inverter curve before anything is written: build_params would
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
