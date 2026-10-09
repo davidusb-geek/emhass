@@ -4159,6 +4159,17 @@ class Optimization:
         cfg = self.optim_conf["def_load_config"][k]
         return cfg.get("thermal_source") or cfg.get("thermal_battery") or {}
 
+    def _shared_tank_temp_range(self, tank_id):
+        """(lowest, highest) temperature a shared tank is configured to take: its
+        static bounds and its start temperature. Used to size big-M terms."""
+        for tank in self._get_shared_thermal_tanks():
+            if tank.get("id") == tank_id:
+                start = float(tank.get("start_temperature", 20.0))
+                lows = [float(v) for v in tank.get("min_temperatures") or [] if v is not None]
+                highs = [float(v) for v in tank.get("max_temperatures") or [] if v is not None]
+                return min([start, *lows]), max([start, *highs])
+        return 0.0, SHARED_TANK_CAP_BIG_M_TEMP
+
     def _warn_bound_beyond_every_overshoot(
         self, tank_id, load_ids, source_overshoots, sense, min_temperatures, max_temperatures
     ):
@@ -4557,7 +4568,30 @@ class Optimization:
             rate = min(
                 SHARED_TANK_START_RECOVERY_RATE, max_deficit / SHARED_TANK_START_RECOVERY_STEPS
             )
-            window = int(np.ceil(max_deficit / rate))
+            # The window must also cover what the sources can actually do: their
+            # heat at nominal power minus the drain at the start (demand + loss),
+            # halved as a margin. A tank that cannot gain heat keeps the floor
+            # soft over the whole horizon.
+            heat_max = 0.0
+            for k, cops in zip(load_ids, cop_arrays):
+                nom = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                nom = max(nom) if isinstance(nom, list | np.ndarray) else nom
+                heat_max += float(nom) * float(np.max(cops)) / 1000 * self.time_step
+            if loss_coefficient is not None:
+                loss0 = (
+                    loss_coefficient
+                    * max(start_temperature - float(np.min(outdoor_temp_arr)), 0.0)
+                    * self.time_step
+                )
+            else:
+                loss0 = float(np.max(thermal_losses))
+            drain = float(np.max(heating_demand[: SHARED_TANK_START_RECOVERY_STEPS + 1])) + loss0
+            source_rate = 0.5 * conversion * (heat_max - drain)
+            if source_rate <= 0:
+                window = required_len
+            else:
+                rate = min(rate, source_rate)
+                window = int(np.ceil(max_deficit / rate))
             min_temperatures_list = list(min_temperatures_list)
             for t in range(min(window, len(min_temperatures_list), required_len)):
                 cfg = min_temperatures_list[t]
@@ -4565,9 +4599,12 @@ class Optimization:
                     continue
                 ramp = start_temperature + rate * t
                 if t >= 1 and ramp < cfg:
+                    # Soft inside the window: the shortfall below the floor is
+                    # priced (below), which pulls the tank up as fast as its
+                    # sources allow. A hard ramp could outrun a slow source.
                     recovery_idx.append(t)
                     recovery_floor.append(cfg)
-                min_temperatures_list[t] = min(cfg, ramp)
+                    min_temperatures_list[t] = None
             if recovery_idx:
                 self.logger.info(
                     "Shared tank '%s': start %.1f C below a near-term floor (max shortfall "
@@ -4658,6 +4695,58 @@ class Optimization:
             constraints.append(predicted_temp[1:] - cap_arr[:-1] <= big_m_temp * (1 - allow_k[:-1]))
             constraints.append(p_k <= nominal_k * allow_k)
 
+        # The temperature at the end of the last step lies past the horizon. It is
+        # modelled here for the overshoot gate of continuous sources (their rule is
+        # "no heat in a step that would end beyond the threshold") and for the
+        # last-step bound of tank-to-tank transfers. end_step_span bounds how far
+        # one step can move it.
+        def _nominal(j):
+            nom = self.optim_conf["nominal_power_of_deferrable_loads"][j]
+            return max(nom) if isinstance(nom, list | np.ndarray) else nom
+
+        # Same terms as the dynamics above: the source heat that arrives in
+        # the last step (from L steps earlier under thermal_inertia), the
+        # transfers, the demand and the (state-dependent, for a zone) loss.
+        arrive = required_len - 1 - L
+        heat_last = 0
+        end_step_span = 0.0
+        for j, cops in zip(load_ids, cop_arrays):
+            if arrive >= 0:
+                heat_last = (
+                    heat_last
+                    + float(cops[arrive])
+                    * self.vars["p_deferrable"][j][arrive]
+                    / 1000
+                    * self.time_step
+                )
+            end_step_span += float(_nominal(j)) * float(np.max(cops)) / 1000 * self.time_step
+        if loss_coefficient is not None:
+            loss_last = (
+                loss_coefficient * (predicted_temp[-1] - outdoor_temp_arr[-1]) * self.time_step
+            )
+            temps = [v for v in (tank_temp_ub, float(start_temperature)) if v is not None]
+            temps += [v for v in min_temperatures_list if v is not None]
+            loss_span = (
+                loss_coefficient
+                * max(
+                    abs(t - o)
+                    for t in temps
+                    for o in (min(outdoor_temp_arr), max(outdoor_temp_arr))
+                )
+                * self.time_step
+            )
+        else:
+            loss_last = thermal_losses[-1]
+            loss_span = abs(float(thermal_losses[-1]))
+        temp_end = predicted_temp[-1] + conversion * (
+            sense_coeff * heat_last + xfer_last - heating_demand[-1] - loss_last
+        )
+        end_step_span = conversion * (
+            end_step_span + xfer_last_span + abs(float(heating_demand[-1])) + loss_span
+        )
+
+        self._shared_tank_end[tank_id] = (temp_end, end_step_span)
+
         # Soft comfort constraints (issue #539): the tank's desired_temperatures
         # set a comfort target whose shortfall is penalized in the objective
         # (same pattern as thermal_config / thermal_battery loads), and each
@@ -4681,55 +4770,6 @@ class Optimization:
             )
             sense_coeff = 1 if sense == "heat" else -1
             finite_min_temps = [v for v in min_temperatures_list if v is not None]
-
-            # The temperature at the end of the last step lies past the horizon,
-            # so it is modelled here only for the overshoot gate of continuous
-            # sources (their rule is "no heat in a step that would end beyond the
-            # threshold"). end_step_span bounds how far one step can move it.
-            def _nominal(j):
-                nom = self.optim_conf["nominal_power_of_deferrable_loads"][j]
-                return max(nom) if isinstance(nom, list | np.ndarray) else nom
-
-            # Same terms as the dynamics above: the source heat that arrives in
-            # the last step (from L steps earlier under thermal_inertia), the
-            # transfers, the demand and the (state-dependent, for a zone) loss.
-            arrive = required_len - 1 - L
-            heat_last = 0
-            end_step_span = 0.0
-            for j, cops in zip(load_ids, cop_arrays):
-                if arrive >= 0:
-                    heat_last = (
-                        heat_last
-                        + float(cops[arrive])
-                        * self.vars["p_deferrable"][j][arrive]
-                        / 1000
-                        * self.time_step
-                    )
-                end_step_span += float(_nominal(j)) * float(np.max(cops)) / 1000 * self.time_step
-            if loss_coefficient is not None:
-                loss_last = (
-                    loss_coefficient * (predicted_temp[-1] - outdoor_temp_arr[-1]) * self.time_step
-                )
-                temps = [v for v in (tank_temp_ub, float(start_temperature)) if v is not None]
-                temps += [*finite_min_temps, float(start_temperature)]
-                loss_span = (
-                    loss_coefficient
-                    * max(
-                        abs(t - o)
-                        for t in temps
-                        for o in (min(outdoor_temp_arr), max(outdoor_temp_arr))
-                    )
-                    * self.time_step
-                )
-            else:
-                loss_last = thermal_losses[-1]
-                loss_span = abs(float(thermal_losses[-1]))
-            temp_end = predicted_temp[-1] + conversion * (
-                sense_coeff * heat_last + xfer_last - heating_demand[-1] - loss_last
-            )
-            end_step_span = conversion * (
-                end_step_span + xfer_last_span + abs(float(heating_demand[-1])) + loss_span
-            )
 
             self._warn_bound_beyond_every_overshoot(
                 tank_id,
@@ -4774,19 +4814,28 @@ class Optimization:
                 if isinstance(nominal_k, list | np.ndarray):
                     nominal_k = max(nominal_k)
                 p_k = self.vars["p_deferrable"][k]
+                # Under thermal_inertia the heat of step t reaches the tank at
+                # t+L+1, so each gate looks L steps further ahead.
                 if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
-                    constraints.append(p_k <= nominal_k * (1 - is_overshoot))
+                    if L > 0:
+                        constraints.append(p_k[:-L] <= nominal_k * (1 - is_overshoot[L:]))
+                        constraints.append(p_k[-L:] <= nominal_k * (1 - is_overshoot[-1]))
+                    else:
+                        constraints.append(p_k <= nominal_k * (1 - is_overshoot))
                 else:
-                    constraints.append(p_k[:-1] <= nominal_k * (1 - is_overshoot[1:]))
-                    # The last step ends past the horizon: gate it on the modelled
-                    # end temperature, so its heat cannot cross the threshold.
+                    # Steps whose heat lands inside the horizon are gated on the
+                    # temperature it lands at; the rest on the modelled end
+                    # temperature, so their heat cannot cross the threshold either.
+                    cut = required_len - 1 - L
+                    if cut > 0:
+                        constraints.append(p_k[:cut] <= nominal_k * (1 - is_overshoot[1 + L :]))
                     allow_end = cp.Variable(boolean=True, name=f"os_end_{tank_id}_{k}")
                     big_m_end = big_m_os + end_step_span
                     if sense == "heat":
                         constraints.append(temp_end - overshoot <= big_m_end * (1 - allow_end))
                     else:
                         constraints.append(temp_end - overshoot >= -big_m_end * (1 - allow_end))
-                    constraints.append(p_k[-1] <= nominal_k * allow_end)
+                    constraints.append(p_k[max(cut, 0) :] <= nominal_k * allow_end)
 
             # Comfort-shortfall penalty toward the desired band (shared helper):
             # only deviation below desired (heat) / above (cool) is priced.
@@ -5375,6 +5424,7 @@ class Optimization:
         # shared tank is fed by N >= 0 deferrable loads and/or tank->tank transfers.
         n_loads = self.optim_conf["number_of_deferrable_loads"]
         tank_temp_by_id = {}
+        self._shared_tank_end = {}
         for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
             shared_pred_temp, shared_demand, shared_penalty = (
                 self._add_shared_thermal_tank_constraints(
@@ -5416,7 +5466,11 @@ class Optimization:
                 xfer_on = cp.Variable(
                     self.num_timesteps, boolean=True, name=f"xfer_on_{tr['from']}_{tr['to']}"
                 )
-                big_m_xfer = k_xfer * SHARED_TANK_CAP_BIG_M_TEMP
+                # Off, any gradient is allowed: M covers how much hotter the
+                # receiver can be than the feeder, starts included.
+                lo_from = self._shared_tank_temp_range(tr["from"])[0]
+                hi_to = self._shared_tank_temp_range(tr["to"])[1]
+                big_m_xfer = k_xfer * max(SHARED_TANK_CAP_BIG_M_TEMP, hi_to - lo_from + 1.0)
                 constraints.append(q_var <= k_xfer * (t_from - t_to) + big_m_xfer * (1 - xfer_on))
                 # The same limit at the END of the step: the gradient at the start
                 # alone lets one step move more heat than it takes to equalise the
@@ -5424,6 +5478,16 @@ class Optimization:
                 constraints.append(
                     q_var[:-1] <= k_xfer * (t_from[1:] - t_to[1:]) + big_m_xfer * (1 - xfer_on[:-1])
                 )
+                # The last step ends past the horizon: bound it with both tanks'
+                # modelled end temperatures.
+                end_from = self._shared_tank_end.get(tr["from"])
+                end_to = self._shared_tank_end.get(tr["to"])
+                if end_from is not None and end_to is not None:
+                    big_m_end = big_m_xfer + k_xfer * (end_from[1] + end_to[1])
+                    constraints.append(
+                        q_var[-1]
+                        <= k_xfer * (end_from[0] - end_to[0]) + big_m_end * (1 - xfer_on[-1])
+                    )
                 constraints.append(q_var <= qmax * xfer_on)
             else:
                 # One or both endpoint temperatures are absent (a tank id in

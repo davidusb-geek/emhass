@@ -2128,6 +2128,29 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, field):
                     utils.compile_heat_topology(topo(storage_extra, transfer_extra))
 
+    def test_compile_heat_topology_rejects_a_duplicate_transfer(self):
+        """Two storage-to-storage flows with the same ends would be counted twice
+        in the heat balances but published once."""
+        topo = {
+            "sources": [{"id": "gas", "type": "gas", "efficiency": 0.9, "nominal_power": 20000}],
+            "storage": [
+                {"id": "buffer", "volume": 0.1, "start_temperature": 40},
+                {
+                    "id": "room",
+                    "thermal_mass": 5.0,
+                    "loss_coefficient": 0.2,
+                    "start_temperature": 20,
+                },
+            ],
+            "flows": [
+                {"from": "gas", "to": "buffer"},
+                {"from": "buffer", "to": "room", "transfer_coefficient": 0.3},
+                {"from": "buffer", "to": "room", "transfer_coefficient": 0.3},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "buffer->room"):
+            utils.compile_heat_topology(topo)
+
     def test_compile_heat_topology_rejects_wrong_types(self):
         """Wrong top-level types raise the documented ValueError instead of an
         AttributeError, and a string extend flag is not treated as true."""
