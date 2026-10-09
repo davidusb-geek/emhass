@@ -618,6 +618,31 @@
             "title": "Set compute curtailment (grid export limit)",
             "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon"
           },
+          "cop_solver": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "dp",
+              "static"
+            ],
+            "default": "static",
+            "title": "Heat-pump COP solver",
+            "description": "How the temperature-dependent heat-pump COP is resolved for shared thermal tanks. 'static' (default) keeps the constant heating-curve COP - the pre-existing behavior. 'auto' runs an exact dynamic-programming refinement when the static solve's COP is inconsistent with the achieved tank temperature; 'dp' always runs it. Opt in with 'auto' for tanks whose heat pump banks heat well above its curve supply."
+          },
+          "cop_solver_tolerance": {
+            "type": "number",
+            "default": 0.5,
+            "title": "COP solver trigger tolerance",
+            "x-unit": "COP",
+            "description": "The DP COP refinement engages when the COP used differs from COP(achieved tank temperature) by more than this many COP units. Defaults to 0.5. (unit: COP)"
+          },
+          "cop_hx_approach": {
+            "type": "number",
+            "default": 5.0,
+            "title": "COP heat-exchanger approach",
+            "x-unit": "degC",
+            "description": "Temperature difference (degC) between a thermal store and the heat pump's working fluid used when evaluating the temperature-dependent COP: the condenser runs at store temperature plus this approach (heating), the evaporator at store temperature minus it (cooling). Used by the COP consistency check and the DP refinement. Defaults to 5. (unit: degC)"
+          },
           "load_cost_forecast_method": {
             "type": "string",
             "enum": [
