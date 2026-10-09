@@ -110,7 +110,9 @@ temperatures, for example a DHW tank fed by a heat pump (condenser limit about
 optimizer would otherwise let the cheaper heat pump cover the band above its
 limit too, which it physically cannot deliver. `max_supply_temperature` makes
 that limit hard: the source only injects heat while the storage is at or below
-its ceiling, so the booster is scheduled exactly for the band above it.
+its ceiling, so the booster is scheduled exactly for the band above it. On a
+storage with `thermal_inertia` the ceiling applies when the heat arrives, so heat
+already on its way cannot push the storage past it.
 
 ```json
 "sources": [
