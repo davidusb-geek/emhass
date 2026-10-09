@@ -584,6 +584,26 @@ def calculate_surface_solar_gain(
     return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
 
 
+def _numeric_series(value, path: str) -> list[float]:
+    """A list of finite numbers (not booleans or strings), as floats, or a
+    ValueError naming ``path``. A string is rejected rather than read as a list
+    of characters."""
+    if not isinstance(value, list | tuple):
+        raise ValueError(f"{path} must be a list of numbers, got {type(value).__name__}")
+    out = []
+    for i, v in enumerate(value):
+        if isinstance(v, bool) or not isinstance(v, int | float):
+            raise ValueError(f"{path}[{i}] must be a number, got {v!r}")
+        try:
+            f = float(v)
+        except OverflowError:
+            raise ValueError(f"{path}[{i}] is too large") from None
+        if not math.isfinite(f):
+            raise ValueError(f"{path}[{i}] must be finite, got {v!r}")
+        out.append(f)
+    return out
+
+
 # The top-level keys compile_heat_topology reads. The compiler ignores any other
 # key; the config page rejects them on save, where an unknown key is a typo.
 HEAT_TOPOLOGY_KEYS = frozenset(
@@ -870,7 +890,11 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"heat_topology.sources[{src['id']}].cost_track='{cost_track_id}' "
                     "not found in cost_tracks"
                 )
-            cost_per_load.append(list(cost_tracks[cost_track_id]))
+            cost_per_load.append(
+                _numeric_series(
+                    cost_tracks[cost_track_id], f"heat_topology.cost_tracks.{cost_track_id}"
+                )
+            )
         flow_to_load_idx[(f["from"], f["to"])] = i
 
     # Aggregate consumer demand onto storage
@@ -883,7 +907,7 @@ def compile_heat_topology(topology: dict) -> dict:
         if ctype == "profile":
             if c.get("profile") is None:
                 raise ValueError(f"heat_topology.consumers[{ci}] (type=profile) requires 'profile'")
-            prof = list(c["profile"])
+            prof = _numeric_series(c["profile"], f"heat_topology.consumers[{ci}].profile")
             existing = storage_demand[target]["profile"]
             if existing is None:
                 storage_demand[target]["profile"] = prof
@@ -1073,7 +1097,13 @@ def compile_heat_topology(topology: dict) -> dict:
     def_groups = []
     for gi, g in enumerate(groups):
         names = []
-        for flow_pair in g.get("flows", []):
+        group_flows = g.get("flows")
+        if not isinstance(group_flows, list) or not group_flows:
+            raise ValueError(
+                f"heat_topology.actuator_groups[{gi}].flows must list at least one "
+                "[source_id, storage_id] pair"
+            )
+        for flow_pair in group_flows:
             if not isinstance(flow_pair, list | tuple) or len(flow_pair) != 2:
                 raise ValueError(
                     f"heat_topology.actuator_groups[{gi}].flows entries must be "
@@ -1090,7 +1120,13 @@ def compile_heat_topology(topology: dict) -> dict:
             "mutual_exclusion": bool(g.get("mutual_exclusion", False)),
         }
         if "max_combined_power" in g:
-            def_group["max_power"] = float(g["max_combined_power"])
+            limit = g["max_combined_power"]
+            if isinstance(limit, bool) or not isinstance(limit, int | float) or not limit > 0:
+                raise ValueError(
+                    f"heat_topology.actuator_groups[{gi}].max_combined_power must be a "
+                    f"positive number (W), got {limit!r}"
+                )
+            def_group["max_power"] = float(limit)
         def_groups.append(def_group)
 
     return {

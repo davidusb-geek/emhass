@@ -3,6 +3,7 @@
 import json
 import logging
 import pathlib
+import re
 import unittest
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -2019,6 +2020,70 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(out["def_minimum_on_time"], [3] * original_num + [0, 0])
         self.assertEqual(out["def_minimum_off_time"], [2] * original_num + [0, 0])
+
+    def test_compile_heat_topology_rejects_unusable_series_and_groups(self):
+        """Values the optimizer cannot use are rejected at compile (and so at
+        save) instead of failing the next run: a non-numeric profile or cost
+        track, an actuator group without flows, and a combined power limit that
+        is not positive."""
+
+        def topo(**overrides):
+            base = {
+                "sources": [
+                    {
+                        "id": "gas",
+                        "type": "gas",
+                        "efficiency": 0.9,
+                        "nominal_power": 20000,
+                        "cost_track": "gas",
+                    }
+                ],
+                "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 50}],
+                "flows": [{"from": "gas", "to": "dhw"}],
+                "cost_tracks": {"gas": [0.1] * 4},
+            }
+            base.update(overrides)
+            return base
+
+        for case, topology, field in (
+            (
+                "profile with text",
+                topo(
+                    consumers=[
+                        {"id": "c", "target": "dhw", "type": "profile", "profile": [1.0, "x"]}
+                    ]
+                ),
+                "consumers[0]",
+            ),
+            (
+                "profile as a string",
+                topo(consumers=[{"id": "c", "target": "dhw", "type": "profile", "profile": "12"}]),
+                "consumers[0]",
+            ),
+            ("cost track with text", topo(cost_tracks={"gas": [0.1, "x"]}), "cost_tracks"),
+            (
+                "group without flows",
+                topo(actuator_groups=[{"flows": [], "mutual_exclusion": True}]),
+                "actuator_groups[0]",
+            ),
+            (
+                "zero combined power",
+                topo(actuator_groups=[{"flows": [["gas", "dhw"]], "max_combined_power": 0}]),
+                "max_combined_power",
+            ),
+            (
+                "negative combined power",
+                topo(actuator_groups=[{"flows": [["gas", "dhw"]], "max_combined_power": -5}]),
+                "max_combined_power",
+            ),
+        ):
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, re.escape(field)):
+                utils.compile_heat_topology(topology)
+        # The valid base still compiles, with a positive limit on a real group.
+        out = utils.compile_heat_topology(
+            topo(actuator_groups=[{"flows": [["gas", "dhw"]], "max_combined_power": 15000}])
+        )
+        self.assertEqual(out["deferrable_load_groups"][0]["max_power"], 15000.0)
 
     def test_compile_heat_topology_rejects_wrong_types(self):
         """Wrong top-level types raise the documented ValueError instead of an
