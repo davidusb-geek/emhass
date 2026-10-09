@@ -476,7 +476,8 @@ async def parameter_set():
                 400,
             )
         try:
-            compile_heat_topology(heat_topology)
+            # Off the event loop: a large topology must not stall other requests.
+            await asyncio.to_thread(compile_heat_topology, heat_topology)
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as e:
             # The compiler raises ValueError with a field path; the others are a
             # backstop for malformed entries it does not check explicitly (e.g. a
