@@ -2729,6 +2729,14 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 }
             )
         self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams_dict(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_prior_heat": {"dhw": [huge]},
+                }
+            )
+        self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
 
     async def test_heat_topology_extend_pads_runtime_state_arrays(self):
         """Runtime state given for the user's loads gets the defaults for the
@@ -2884,6 +2892,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertFalse(out.get("shared_thermal_tanks"))
                 self.assertTrue(any("load_ids" in m for m in log_cm.output))
+
     async def test_treat_runtimeparams_shared_tank_prior_heat_patch(self):
         """shared_tank_prior_heat feeds the lag model's initial condition (thermal
         kWh already in flight from previous MPC runs) by tank id."""
@@ -2903,6 +2912,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             ({"dhw": "1.0,2.0"}, "must be a list"),
             ({"dhw": [1.0, "warm"]}, "not all numeric"),
             ({"dhw": [-1.0, 2.0]}, ">= 0"),
+            # A boolean is not heat (float(True) would be 1.0).
+            ({"dhw": [True, 1.0]}, "not all numeric"),
         ):
             with self.assertLogs(logger, level="WARNING") as log_cm:
                 out = await self._run_treat_runtimeparams(
@@ -2913,6 +2924,19 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
             self.assertTrue(any(needle in m for m in log_cm.output), f"expected {needle!r} warning")
+
+    async def test_treat_runtimeparams_shared_tank_prior_heat_matches_ids_as_text(self):
+        """JSON object keys are always strings, so a tank with a numeric id is
+        matched by its text form, as shared_tank_start_temperatures does."""
+        tank = self._manual_tank(start_temperature=50.0)
+        tank["id"] = 0
+        out = await self._run_treat_runtimeparams(
+            {
+                "shared_thermal_tanks": [tank],
+                "shared_tank_prior_heat": {"0": [0.4, 1.2]},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["prior_heat"], [0.4, 1.2])
 
     async def test_compile_heat_topology_passes_prior_heat_through(self):
         """prior_heat is a per-step list, so the compiler must pass it through
