@@ -13777,14 +13777,25 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         return opt, res
 
     def _solve_tanks(
-        self, tanks, transfers=None, nominal=3000, efficiency=1.0, outdoor=10.0, last_price=None
+        self,
+        tanks,
+        transfers=None,
+        nominal=3000,
+        efficiency=1.0,
+        outdoor=10.0,
+        last_price=None,
+        source=None,
+        price=None,
     ):
-        """One continuous source (load 0, efficiency-based) feeding the given shared
-        tanks, optional tank_transfers, and an optional price for the last step."""
+        """One continuous source (load 0, efficiency-based, plus any `source` keys)
+        feeding the given shared tanks, optional tank_transfers, and an optional
+        price for the last step or a flat price for every step."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [outdoor] * 48
         self._setup_single_hp(nominal=nominal)
-        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": efficiency}}]
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"efficiency": efficiency, **(source or {})}}
+        ]
         self.optim_conf["shared_thermal_tanks"] = tanks
         if transfers is not None:
             self.optim_conf["tank_transfers"] = transfers
@@ -13793,6 +13804,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         if last_price is not None:
             prices[:] = 0.30
             prices[-1] = last_price
+        if price is not None:
+            prices[:] = price
         res = opt.perform_optimization(
             self.df_input_data_dayahead,
             self.p_pv_forecast.values.ravel(),
@@ -13923,7 +13936,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         opt, res = self._solve_tanks(
             [
                 self._zone("feeder", 20.0, [0], hi=40.0),
-                self._zone("receiver", 130.0, [], lo=10.0, hi=140.0),
+                # The receiver wants heat, but it is hotter than the feeder can
+                # get, so the transfer must stay off.
+                self._zone(
+                    "receiver",
+                    130.0,
+                    [],
+                    lo=10.0,
+                    hi=140.0,
+                    desired_temperatures=140.0,
+                    penalty_factor=100,
+                ),
             ],
             transfers=[
                 {
@@ -13935,6 +13958,52 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLess(res["P_transfer_feeder_receiver"].abs().max(), 1.0)
+
+    def test_capped_source_gate_follows_the_source_lag(self):
+        """Under thermal_inertia the heat of step t reaches the tank L steps later,
+        so max_supply_temperature holds for the tank state when it arrives: heat
+        already on its way must not push the zone past the ceiling."""
+        opt, res = self._solve_tanks(
+            [
+                self._zone(
+                    "zone",
+                    20.0,
+                    [0],
+                    thermal_inertia=1.0,
+                    desired_temperatures=25.0,
+                    penalty_factor=10,
+                )
+            ],
+            nominal=4000,
+            source={"max_supply_temperature": 21.0},
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 21.0 + 0.05)
+
+    def test_transfer_gate_covers_a_store_beyond_its_short_bound_list(self):
+        """A max_temperatures list shorter than the horizon leaves the later steps
+        open. The idle transfer's big-M must cover how hot the receiver can then
+        physically get, or it caps the receiver at the feeder plus a fixed margin."""
+        receiver = self._zone("receiver", 20.0, [0], mass=1.0)
+        receiver["max_temperatures"] = [30.0] * 4
+        opt, res = self._solve_tanks(
+            [self._zone("feeder", 20.0, [], hi=40.0), receiver],
+            transfers=[
+                {
+                    "from": "feeder",
+                    "to": "receiver",
+                    "transfer_coefficient": 1.0,
+                    "max_transfer_power": 5000,
+                }
+            ],
+            nominal=8000,
+            price=-0.10,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        # 4 K per step once the list ends: about 200 C by the end, far more than
+        # 100 K above the feeder.
+        self.assertGreater(res["predicted_temp_heater0"].max(), 180.0)
 
     def test_zone_with_inertia_on_its_floor_stays_feasible(self):
         """Over the thermal_inertia dead zone no source heat arrives, so a zone that
@@ -13971,7 +14040,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(opt.logger, "info") as info:
             res = self._solve_default_inputs(opt)
         self.assertEqual(opt.optim_status, "Optimal")
-        self.assertFalse(any("floor is soft" in str(c) for c in info.call_args_list))
+        self.assertFalse(any("priced instead of hard" in str(c) for c in info.call_args_list))
         self.assertGreaterEqual(res["predicted_temp_heater0"].to_numpy()[8:].min(), 55.0 - 0.01)
 
     def test_shared_tank_start_below_floor_recovers_gracefully(self):

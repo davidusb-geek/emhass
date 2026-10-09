@@ -4150,27 +4150,76 @@ class Optimization:
         return cfg.get("thermal_source") or cfg.get("thermal_battery") or {}
 
     def _shared_tank_temp_range(self, tank_id):
-        """(lowest, highest) temperature a shared tank is configured to take: its
-        static bounds and its start temperature. Used to size big-M terms."""
-        for tank in self._get_shared_thermal_tanks():
-            if tank.get("id") == tank_id:
-                values = [float(tank.get("start_temperature", 20.0))]
-                for key in ("min_temperatures", "max_temperatures", "desired_temperatures"):
-                    raw = tank.get(key)
-                    raw = raw if isinstance(raw, list | tuple) else [raw]
-                    values += [float(v) for v in raw if isinstance(v, int | float)]
-                if isinstance(tank.get("overshoot_temperature"), int | float):
-                    values.append(float(tank["overshoot_temperature"]))
-                low, high = min(values), max(values)
-                # A missing bound leaves that side open: add a margin there.
-                mins = tank.get("min_temperatures") or [None]
-                maxs = tank.get("max_temperatures") or [None]
-                if any(v is None for v in mins):
-                    low -= SHARED_TANK_CAP_BIG_M_TEMP
-                if any(v is None for v in maxs):
-                    high += SHARED_TANK_CAP_BIG_M_TEMP
-                return low, high
+        """(lowest, highest) temperature a shared tank can reach this run (see
+        _shared_tank_reachable_range). Used to size big-M terms."""
+        reach = getattr(self, "_shared_tank_reach", {}).get(tank_id)
+        if reach is not None:
+            return reach
         return -SHARED_TANK_CAP_BIG_M_TEMP, 2 * SHARED_TANK_CAP_BIG_M_TEMP
+
+    @staticmethod
+    def _shared_tank_reachable_range(
+        start_temperature,
+        conversion,
+        source_heat,
+        sense,
+        lag,
+        transfer_heat,
+        demand,
+        flat_loss,
+        zone_loss,
+        outdoor,
+        min_temperatures,
+        max_temperatures,
+        n,
+    ):
+        """(lowest, highest) temperature a shared tank can physically reach.
+
+        Steps the same dynamics forward with the most heat in and the most heat
+        out each step (sources at full power, every transfer at its maximum, the
+        demand and the loss), and clips to the hard bounds where a step has one.
+        A step without a hard bound (a short or null list, a floor priced for
+        recovery or in the lag dead zone) stays open, so a big-M built from this
+        range is valid at any temperature the plan can produce. Heat quantities
+        are kWh per step; zone_loss is UA * dt (kWh/K per step).
+        """
+
+        def _hard(values, t):
+            if not values or t >= len(values) or values[t] is None:
+                return None
+            v = float(values[t])
+            return None if np.isnan(v) else v
+
+        lo = hi = float(start_temperature)
+        low, high = lo, hi
+        for t in range(n - 1):
+            heat = source_heat if t >= lag else 0.0
+            gain = transfer_heat + max(-float(demand[t]), 0.0)
+            drain = transfer_heat + max(float(demand[t]), 0.0)
+            if sense == "heat":
+                gain += heat
+            else:
+                drain += heat
+            if flat_loss is not None:
+                gain += max(-float(flat_loss[t]), 0.0)
+                drain += max(float(flat_loss[t]), 0.0)
+                next_lo, next_hi = lo, hi
+            else:
+                # T + a * (outdoor - T) is linear in T: its extremes lie at the
+                # ends of the current range (a > 1 flips them).
+                a = conversion * zone_loss
+                ends = [(1 - a) * v + a * float(outdoor[t]) for v in (lo, hi)]
+                next_lo, next_hi = min(ends), max(ends)
+            lo = next_lo - conversion * drain
+            hi = next_hi + conversion * gain
+            floor, ceiling = _hard(min_temperatures, t + 1), _hard(max_temperatures, t + 1)
+            if floor is not None:
+                lo = max(lo, floor)
+            if ceiling is not None:
+                hi = min(hi, ceiling)
+            hi = max(hi, lo)
+            low, high = min(low, lo), max(high, hi)
+        return low, high
 
     def _warn_bound_beyond_every_overshoot(
         self, tank_id, load_ids, source_overshoots, sense, min_temperatures, max_temperatures
@@ -4608,6 +4657,30 @@ class Optimization:
         self._add_temp_bound(
             constraints, predicted_temp, max_temperatures_list, None, required_len, lower=False
         )
+        source_heat = sum(
+            float(np.max(cops))
+            * float(np.max(np.atleast_1d(self.optim_conf["nominal_power_of_deferrable_loads"][k])))
+            / 1000
+            * self.time_step
+            for k, cops in zip(load_ids, cop_arrays)
+        )
+        self._shared_tank_reach[tank_id] = self._shared_tank_reachable_range(
+            start_temperature=start_temperature,
+            conversion=float(conversion),
+            source_heat=source_heat,
+            sense=tank_sense,
+            lag=L,
+            transfer_heat=xfer_last_span,
+            demand=np.asarray(heating_demand, dtype=float),
+            flat_loss=None if loss_coefficient is not None else np.asarray(thermal_losses),
+            zone_loss=None
+            if loss_coefficient is None
+            else float(loss_coefficient) * self.time_step,
+            outdoor=np.asarray(outdoor_temp_arr, dtype=float),
+            min_temperatures=min_temperatures_list,
+            max_temperatures=max_temperatures_list,
+            n=required_len,
+        )
 
         # Per-source temperature ceiling. A source with `max_supply_temperature`
         # (e.g. a heat pump that cannot raise water above its supply/condenser
@@ -4660,9 +4733,19 @@ class Optimization:
             # the tank past the cap). Both ends are held to step t's ceiling: the heat
             # of step t is delivered under cap[t], even when cap[t+1] is higher.
             # allow_k[t] == 0 forces p_k[t] == 0; an uncapped source (e.g. an
-            # electric booster) has no such gate and can go higher.
-            constraints.append(predicted_temp - cap_arr <= big_m_temp * (1 - allow_k))
-            constraints.append(predicted_temp[1:] - cap_arr[:-1] <= big_m_temp * (1 - allow_k[:-1]))
+            # electric booster) has no such gate and can go higher. Under
+            # thermal_inertia the heat of step t reaches the tank L steps later, so
+            # both ends are those of the step it arrives in; heat that arrives
+            # past the horizon is not checked here.
+            n_arrive = required_len - L
+            constraints.append(
+                predicted_temp[L:] - cap_arr[:n_arrive] <= big_m_temp * (1 - allow_k[:n_arrive])
+            )
+            if n_arrive > 1:
+                constraints.append(
+                    predicted_temp[L + 1 :] - cap_arr[: n_arrive - 1]
+                    <= big_m_temp * (1 - allow_k[: n_arrive - 1])
+                )
             constraints.append(p_k <= nominal_k * allow_k)
 
         # The temperature at the end of the last step lies past the horizon. It is
@@ -5395,6 +5478,7 @@ class Optimization:
         n_loads = self.optim_conf["number_of_deferrable_loads"]
         tank_temp_by_id = {}
         self._shared_tank_end = {}
+        self._shared_tank_reach = {}
         for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
             shared_pred_temp, shared_demand, shared_penalty = (
                 self._add_shared_thermal_tank_constraints(
