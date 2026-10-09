@@ -190,16 +190,13 @@ already starts there, and the compiler logs a warning for it.
 
 If the storage starts below a minimum temperature it must meet soon (after a
 cold night, a momentary sensor reading, or a setback floor that rises a few
-steps later), the early minimums become soft over a recovery window: every
-degree below the configured minimum inside it carries a high penalty instead of
-a hard bound. The window is at least 6 timesteps and lasts as long as the
-recovery takes at no more than 0.5 degrees Celsius per step, or at half the
-rate the storage's sources can heat it if that is slower; a storage whose
-sources cannot heat it at all keeps the floor soft over the whole horizon. A
-storage that can recover quickly still does so right away, because of the
-penalty; one that cannot recovers as fast as it can instead of making the
-problem infeasible. Each configured minimum applies in full after the window.
-Only the minimums of the first 6 timesteps trigger this; a minimum
+steps later), its minimums are priced instead of hard for that run: every
+degree below a configured minimum carries a high penalty. How long recovery
+takes depends on the sources, the losses and any heat arriving through
+transfers, so no fixed window is assumed. A storage that can recover quickly
+still does so right away, because of the penalty, and then holds the minimum;
+one that cannot recovers as fast as it can instead of making the problem
+infeasible. Only the minimums of the first 6 timesteps trigger this; a minimum
 that rises later in the horizon (for example a scheduled legionella cycle) stays
 hard, because the plan can heat ahead for it.
 

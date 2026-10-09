@@ -101,29 +101,19 @@ SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
 # run hotter (e.g. industrial or glycol systems).
 SHARED_TANK_CAP_BIG_M_TEMP = 100.0
 
-# Minimum recovery window (in optimization steps) granted to a shared thermal
-# tank that starts below its hard minimum temperature. A momentary out-of-band
-# sensor read (e.g. a heating zone dipping below its comfort floor on a cold
-# morning) would otherwise make the problem infeasible, because a rate-limited
-# tank cannot jump back into band in a single step. Over this window the hard
-# floor is ramped from the live start temperature up to the configured minimum,
-# so the tank is only required to recover at a feasible pace. 6 steps is ~3h on
-# a 30-minute grid - long enough for a slow zone or buffer to climb a few
-# degrees; the configured minimum applies in full once the window closes.
+# Near-term window (in optimization steps) for start-below-floor recovery. A
+# shared thermal tank that starts below a minimum it must meet within this many
+# steps (e.g. a heating zone dipping below its comfort floor on a cold morning)
+# cannot jump back into band in a single step, so a hard floor would make the
+# problem infeasible. Such a tank gets its floors priced instead of hard for the
+# run (see SHARED_TANK_START_RECOVERY_PENALTY). A floor that only rises later
+# than this can be reached by planning ahead and does not trigger it.
 SHARED_TANK_START_RECOVERY_STEPS = 6
 
-# Conservative recovery rate (deg C per optimization step) used to size the
-# grace window when a tank starts further below its floor than the minimum
-# window would cover: window = max(min_steps, ceil(gap / rate)). 0.5 C/step is
-# deliberately slow so the ramp stays feasible for a rate-limited zone; a faster
-# tank simply outruns the floor and reaches band earlier on its own.
-SHARED_TANK_START_RECOVERY_RATE = 0.5
-
-# Objective weight (per degree C per step) on the shortfall below the configured
-# floor inside the recovery window. The ramp above only keeps the problem
-# feasible; this weight dominates energy prices, so a tank whose sources can
-# recover faster than the ramp still does so, and only a tank that physically
-# cannot catch up is allowed to follow the ramp.
+# Objective weight (per degree C per step) on the shortfall below a configured
+# floor once a tank starts below a near-term one. It dominates energy prices, so
+# the tank recovers as fast as its sources allow and then holds the floor, while
+# a tank that physically cannot catch up yet does not make the run infeasible.
 SHARED_TANK_START_RECOVERY_PENALTY = 1000.0
 
 
@@ -4164,11 +4154,23 @@ class Optimization:
         static bounds and its start temperature. Used to size big-M terms."""
         for tank in self._get_shared_thermal_tanks():
             if tank.get("id") == tank_id:
-                start = float(tank.get("start_temperature", 20.0))
-                lows = [float(v) for v in tank.get("min_temperatures") or [] if v is not None]
-                highs = [float(v) for v in tank.get("max_temperatures") or [] if v is not None]
-                return min([start, *lows]), max([start, *highs])
-        return 0.0, SHARED_TANK_CAP_BIG_M_TEMP
+                values = [float(tank.get("start_temperature", 20.0))]
+                for key in ("min_temperatures", "max_temperatures", "desired_temperatures"):
+                    raw = tank.get(key)
+                    raw = raw if isinstance(raw, list | tuple) else [raw]
+                    values += [float(v) for v in raw if isinstance(v, int | float)]
+                if isinstance(tank.get("overshoot_temperature"), int | float):
+                    values.append(float(tank["overshoot_temperature"]))
+                low, high = min(values), max(values)
+                # A missing bound leaves that side open: add a margin there.
+                mins = tank.get("min_temperatures") or [None]
+                maxs = tank.get("max_temperatures") or [None]
+                if any(v is None for v in mins):
+                    low -= SHARED_TANK_CAP_BIG_M_TEMP
+                if any(v is None for v in maxs):
+                    high += SHARED_TANK_CAP_BIG_M_TEMP
+                return low, high
+        return -SHARED_TANK_CAP_BIG_M_TEMP, 2 * SHARED_TANK_CAP_BIG_M_TEMP
 
     def _warn_bound_beyond_every_overshoot(
         self, tank_id, load_ids, source_overshoots, sense, min_temperatures, max_temperatures
@@ -4544,17 +4546,15 @@ class Optimization:
         # soon (a momentary out-of-band sensor read - e.g. a zone dips below its
         # comfort floor on a cold morning), demanding the full min from t=1 is
         # infeasible for a rate-limited tank that cannot jump back into band in one
-        # step, and the relaxed-LP fallback cannot rescue that conflict. Instead,
-        # ramp every early floor up from the live start at a conservative rate, so the
-        # tank is only required to recover at a feasible pace; floors already at or
-        # below the ramp line are untouched, and each configured floor reapplies in
-        # full once the ramp line overtakes it. Index 0 is the pinned live start and
-        # is never bounded (see _add_temp_bound), so only the constrained floors at
-        # t >= 1 drive the trigger - a setback floor that rises only at t >= 1 (where
-        # min_temperatures[0] may sit below the start) is caught too. Only near-term
-        # floors (the first SHARED_TANK_START_RECOVERY_STEPS steps) trigger it: a
-        # floor that steps up later (e.g. a scheduled legionella cycle) can be
-        # reached by planning ahead and stays hard.
+        # step, and the relaxed-LP fallback cannot rescue that conflict. Instead the
+        # tank's floors are priced for this run (see below). Index 0 is the pinned
+        # live start and is never bounded (see _add_temp_bound), so only the
+        # constrained floors at t >= 1 drive the trigger - a setback floor that
+        # rises only at t >= 1 (where min_temperatures[0] may sit below the start)
+        # is caught too. Only near-term floors (the first
+        # SHARED_TANK_START_RECOVERY_STEPS steps) trigger it: a floor that steps up
+        # later (e.g. a scheduled legionella cycle) can be reached by planning
+        # ahead and stays hard.
         constrained_floors = [
             v
             for t, v in enumerate(min_temperatures_list)
@@ -4563,57 +4563,27 @@ class Optimization:
         max_deficit = max((v - start_temperature for v in constrained_floors), default=0.0)
         recovery_idx, recovery_floor = [], []
         if max_deficit > 1e-6:
-            # Never steeper than the conservative rate, and small shortfalls are still
-            # spread over at least the minimum window so recovery stays gentle.
-            rate = min(
-                SHARED_TANK_START_RECOVERY_RATE, max_deficit / SHARED_TANK_START_RECOVERY_STEPS
-            )
-            # The window must also cover what the sources can actually do: their
-            # heat at nominal power minus the drain at the start (demand + loss),
-            # halved as a margin. A tank that cannot gain heat keeps the floor
-            # soft over the whole horizon.
-            heat_max = 0.0
-            for k, cops in zip(load_ids, cop_arrays):
-                nom = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                nom = max(nom) if isinstance(nom, list | np.ndarray) else nom
-                heat_max += float(nom) * float(np.max(cops)) / 1000 * self.time_step
-            if loss_coefficient is not None:
-                loss0 = (
-                    loss_coefficient
-                    * max(start_temperature - float(np.min(outdoor_temp_arr)), 0.0)
-                    * self.time_step
-                )
-            else:
-                loss0 = float(np.max(thermal_losses))
-            drain = float(np.max(heating_demand[: SHARED_TANK_START_RECOVERY_STEPS + 1])) + loss0
-            source_rate = 0.5 * conversion * (heat_max - drain)
-            if source_rate <= 0:
-                window = required_len
-            else:
-                rate = min(rate, source_rate)
-                window = int(np.ceil(max_deficit / rate))
+            # Every floor from t=1 on is priced instead of hard: how long recovery
+            # takes depends on the sources, the losses (which grow as the tank
+            # warms) and any heat arriving through transfers, and no estimate of
+            # that is safe. The penalty dominates energy prices, so the floor is
+            # still met wherever the tank can reach it.
             min_temperatures_list = list(min_temperatures_list)
-            for t in range(min(window, len(min_temperatures_list), required_len)):
+            for t in range(1, min(len(min_temperatures_list), required_len)):
                 cfg = min_temperatures_list[t]
                 if cfg is None:
                     continue
-                ramp = start_temperature + rate * t
-                if t >= 1 and ramp < cfg:
-                    # Soft inside the window: the shortfall below the floor is
-                    # priced (below), which pulls the tank up as fast as its
-                    # sources allow. A hard ramp could outrun a slow source.
-                    recovery_idx.append(t)
-                    recovery_floor.append(cfg)
-                    min_temperatures_list[t] = None
+                recovery_idx.append(t)
+                recovery_floor.append(cfg)
+                min_temperatures_list[t] = None
             if recovery_idx:
                 self.logger.info(
                     "Shared tank '%s': start %.1f C below a near-term floor (max shortfall "
-                    "%.1f C) - the floor is soft over the next %d steps so the tank can "
-                    "recover at a feasible pace",
+                    "%.1f C) - its floors are priced instead of hard this run so it can "
+                    "recover as fast as its sources allow",
                     tank_id,
                     start_temperature,
                     max_deficit,
-                    recovery_idx[-1],
                 )
 
         # Thermal-inertia dead zone: over the first L steps no source heat arrives,
