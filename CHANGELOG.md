@@ -1,12 +1,43 @@
 # Changelog
 
-## Unreleased
+## 0.18.5 - 2026-10-09
+
+This release brings massive upgrades to the thermal modeling engine, advanced hybrid-inverter configurations, and robust fixes for DST transitions and forecasting.
+
+Thanks to @snauwaertc for an incredible overhaul of the thermal engine and heat topology.
+On Batteries & Inverters, You can now define optional power-dependent efficiency curves for hybrid-inverters (AC-side, DC→AC, and AC→DC) for much more accurate modeling (@MMicieli). You now have more control over your battery's target state at the end of the optimization run (@lutorm). The web UI now properly displays the battery SOC chart when using more than one battery (@LesIT1).
+On Timezones, DST & Forecasting, several fixes were proposed to ensure forecasts, endpoints, and naive-MPC horizons behave perfectly across Daylight Saving Time transitions.
+
+A huge thank you to all our contributors for making this release possible!
+
+### Improvement
+- feat: one thermal model in heat_topology - building zones, tank-to-tank transfers, window solar (#539) (@snauwaertc)
+- feat: edit heat_topology in a text box and validate it on save (#539) (@snauwaertc)
+- feat: runtime shared tanks, per-tank start temperatures and extend mode for heat_topology (#539) (@snauwaertc)
+- feat: add battery_soc_final_reward_factor. (@lutorm)
+- feat: per-source overshoot and combi tanks for heat_topology (#539) (@snauwaertc)
+- feat: per-source temperature ceiling and anti-cycling for heat_topology (#539) (@snauwaertc)
+- feat: separate tariff schedule timezone from site timezone (@MMicieli)
+- feat: optional power-dependent hybrid-inverter efficiency curves (AC-side, DC→AC and AC→DC) (@MMicieli)
 
 ### Fix
-- fix: resolve forecast calendar-day endpoints that fall inside DST skipped/repeated wall-clock intervals without regressing 23/25-hour civil-day horizons
-
-### Documentation
-- docs: define `delta_forecast_daily` as a local calendar-day horizon and clarify DST endpoint semantics
+- fix: add the start <= on bound only for loads with a startup penalty (@snauwaertc)
+- fix: apply custom_deferrable_state_id passed at runtime (@Blizzeq)
+- fix: align the naive load forecast on the time of day for any horizon (@martinarva)
+- fix: extend naive-MPC horizon across DST-short calendar days (@MMicieli)
+- fix: resolve forecast endpoints inside DST transitions (@MMicieli)
+- fix: preserve PV forecast on unexpected model load errors (@MMicieli)
+- fix: avoid WebSocket reconnect deadlock (@mikamikasuki)
+- fix: extend VictoriaMetrics FILL(previous) through query end (@MMicieli)
+- fix: parse --debug and --log2file values as booleans (@Blizzeq)
+- fix: show the battery SOC chart in the web UI with more than one battery (@LesIT1)
+- fix: check the PV plant lists against pv_module_model before the plant loop (@LesIT1)
+- fix: enforce forecast validity at optimizer boundaries (@MMicieli)
+- fix: exclude pre-observation history from forecast calibration (@MMicieli)
+- fix: shared thermal tanks - stale plans, missing comfort columns, and validation gaps (@snauwaertc)
+- fix: last-run/plan status for Optimal_Inaccurate runs, and publish-data robustness (@snauwaertc)
+- fix: thermal and heat_topology bugfixes on existing code (@snauwaertc)
+- fix: center Plotly graph wrappers (@WartoWiedziec)
 
 ## 0.18.4 - 2026-09-27
 
