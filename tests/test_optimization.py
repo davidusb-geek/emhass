@@ -13873,6 +13873,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt.optim_status, "Optimal")
         self.assertGreaterEqual(res["predicted_temp_heater0"].to_numpy()[-10:].min(), 19.5 - 0.01)
 
+    def test_recovery_near_equilibrium_stays_feasible(self):
+        """Near thermal equilibrium the loss grows as the zone warms, so recovery
+        takes longer than an estimate from the start would say. The floors stay
+        priced instead of turning hard again too early, and the zone still reaches
+        its floor."""
+        opt, res = self._solve_tanks(
+            [self._zone("zone", 18.0, [0], mass=1.0, ua=1.0, lo=19.99, hi=25.0)],
+            nominal=2000,
+            outdoor=18.0,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertGreaterEqual(res["predicted_temp_heater0"].to_numpy()[-10:].min(), 19.99 - 0.01)
+
+    def test_idle_transfer_does_not_limit_a_cooling_store_without_floors(self):
+        """A store without minimum bounds can go below its start; an idle transfer's
+        big-M must cover that, or it caps the store's temperature."""
+        cooling = self._zone("store", 20.0, [0], hi=30.0, sense="cool")
+        cooling["min_temperatures"] = [None] * 48
+        cooling.update({"desired_temperatures": -10.0})
+        opt, res = self._solve_tanks(
+            [cooling, self._zone("receiver", 130.0, [], lo=10.0, hi=140.0)],
+            transfers=[
+                {
+                    "from": "store",
+                    "to": "receiver",
+                    "transfer_coefficient": 1.0,
+                    "max_transfer_power": 5000,
+                }
+            ],
+            nominal=4000,
+            efficiency=3.0,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLessEqual(res["predicted_temp_heater0"].min(), -10.0 + 0.1)
+
     def test_transfer_off_state_covers_any_gradient(self):
         """With the transfer off, any temperature difference between the two stores
         is allowed; the gate's big-M covers their real range instead of 100 K."""
