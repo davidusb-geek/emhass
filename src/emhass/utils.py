@@ -699,6 +699,9 @@ def compile_heat_topology(topology: dict) -> dict:
     # emitters). Both must point at a real storage; the source side differs.
     source_flows = []
     transfer_flows = []
+    transfer_pairs = set()
+    # Each transfer publishes its schedule as P_transfer_<from>_<to>.
+    transfer_columns = {}
     for i, f in enumerate(flows):
         if f.get("to") not in sto_by_id:
             raise ValueError(
@@ -711,11 +714,21 @@ def compile_heat_topology(topology: dict) -> dict:
                 raise ValueError(
                     f"heat_topology.flows[{i}] is a self-transfer ('{f['from']}' -> itself)"
                 )
-            if any((t["from"], t["to"]) == (f["from"], f["to"]) for t in transfer_flows):
+            if (f["from"], f["to"]) in transfer_pairs:
                 raise ValueError(
                     f"heat_topology.flows[{i}] repeats the transfer {f['from']}->{f['to']}; "
                     "one flow per pair of storages"
                 )
+            column = f"P_transfer_{f['from']}_{f['to']}"
+            if column in transfer_columns:
+                other = transfer_columns[column]
+                raise ValueError(
+                    f"heat_topology.flows[{i}] ({f['from']}->{f['to']}) and the transfer "
+                    f"{other[0]}->{other[1]} would both publish as {column}; rename a "
+                    "storage so the two schedules stay apart"
+                )
+            transfer_pairs.add((f["from"], f["to"]))
+            transfer_columns[column] = (f["from"], f["to"])
             transfer_flows.append(f)
         else:
             raise ValueError(
@@ -1144,15 +1157,28 @@ def compile_heat_topology(topology: dict) -> dict:
         #   loss_coefficient (kW/K)  - state-dependent loss UA*(T-outdoor)
         #   thermal_inertia  (h)     - lag between heat input and temperature
         #   window_area (m2) + shgc - solar gain through glazing (offsets heating)
-        for _zone_key in (
-            "thermal_mass",
-            "loss_coefficient",
-            "thermal_inertia",
-            "window_area",
-            "shgc",
+        # Each field must be a finite number in its physical range: a bad value
+        # would otherwise pass the save and fail every optimization run.
+        for _zone_key, _is_valid, _range in (
+            ("thermal_mass", lambda v: v > 0, "> 0 kWh/K"),
+            ("loss_coefficient", lambda v: v >= 0, ">= 0 kW/K"),
+            ("thermal_inertia", lambda v: v >= 0, ">= 0 h"),
+            ("window_area", lambda v: v >= 0, ">= 0 m2"),
+            ("shgc", lambda v: 0 <= v <= 1, "between 0 and 1"),
         ):
-            if s.get(_zone_key) is not None:
-                tank[_zone_key] = float(s[_zone_key])
+            raw = s.get(_zone_key)
+            if raw is None:
+                continue
+            try:
+                value = None if isinstance(raw, bool) else float(raw)
+            except (TypeError, ValueError, OverflowError):
+                value = None
+            if value is None or not math.isfinite(value) or not _is_valid(value):
+                raise ValueError(
+                    f"heat_topology.storage[{sid}].{_zone_key} must be a number "
+                    f"{_range}, got {raw!r}"
+                )
+            tank[_zone_key] = value
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
