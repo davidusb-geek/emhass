@@ -2203,6 +2203,22 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "buffer->room"):
             utils.compile_heat_topology(topo)
 
+    def test_cool_source_with_heating_curve_keeps_working(self):
+        """A sense='cool' source configured with heating_curve (the only curve key
+        before cooling_curve existed) must keep using it."""
+        curve = {"slope": 0.5, "offset": 20, "min_supply": 7, "max_supply": 18}
+        outdoor = np.array([25.0, 30.0, 35.0])
+        cops = utils.resolve_thermal_battery_cop(
+            {"sense": "cool", "heating_curve": curve, "carnot_efficiency": 0.4}, outdoor
+        )
+        expected = utils.calculate_cop_heatpump(
+            supply_temperature=utils.apply_heating_curve(curve, outdoor),
+            carnot_efficiency=0.4,
+            outdoor_temperature_forecast=outdoor,
+            mode="cool",
+        )
+        np.testing.assert_allclose(cops, expected)
+
     def test_compile_heat_topology_rejects_wrong_types(self):
         """Wrong top-level types raise the documented ValueError instead of an
         AttributeError, and a string extend flag is not treated as true."""
@@ -2717,6 +2733,33 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertEqual(params["optim_conf"]["def_minimum_on_time"], [3, 0, 0])
         self.assertEqual(params["optim_conf"]["def_minimum_off_time"], [2, 0, 0])
+
+    async def test_cop_hx_approach_wired_through_config(self):
+        """cop_hx_approach must follow the four-step add-parameter workflow like
+        its cop_solver siblings: present in the canonical defaults + schema, and
+        a user-configured value must reach optim_conf (it was previously read
+        only via an inline .get() default, unreachable from any config file)."""
+        import csv as csv_mod
+
+        import orjson as _orjson
+
+        defaults = _orjson.loads(open(emhass_conf["defaults_path"], "rb").read())
+        self.assertIn("cop_hx_approach", defaults)
+        self.assertEqual(defaults["cop_hx_approach"], 5.0)
+        definitions = _orjson.loads(
+            open(
+                emhass_conf["root_path"] / "static" / "data" / "param_definitions.json", "rb"
+            ).read()
+        )
+        self.assertIn("cop_hx_approach", definitions["System"])
+        with open(emhass_conf["associations_path"]) as f:
+            assoc_params = [row[2] for row in csv_mod.reader(f) if len(row) > 2]
+        self.assertIn("cop_hx_approach", assoc_params)
+        # A configured value flows into optim_conf
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config["cop_hx_approach"] = 3.5
+        params = await utils.build_params(emhass_conf, {}, config, logger)
+        self.assertEqual(params["optim_conf"]["cop_hx_approach"], 3.5)
 
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
@@ -4646,6 +4689,59 @@ class TestResolveThermalBatteryCopHeatingCurve(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("supply_temperature", msg)
         self.assertIn("heating_curve", msg)
+
+    def test_cooling_curve_gives_per_slot_cooling_cop(self):
+        """A cool source with a cooling_curve gets a weather-compensated chilled supply
+        and the cooling Carnot lift (T_outdoor - T_supply), so the COP varies per slot
+        and is higher when it is cooler outside."""
+        hc = {
+            "carnot_efficiency": 0.35,
+            "sense": "cool",
+            "cooling_curve": {"slope": 0.3, "offset": 20, "min_supply": 8, "max_supply": 18},
+        }
+        # outdoor 35 -> supply clip(20 - 0.3*35, 8, 18) = 9.5; outdoor 25 -> 12.5
+        cops = utils.resolve_thermal_battery_cop(hc, np.array([35.0, 25.0]))
+        # cooling COP = carnot * T_supply_K / (T_outdoor - T_supply); higher when cooler out
+        self.assertGreater(cops[1], cops[0])
+
+    def test_cooling_curve_compiles_through_topology(self):
+        """A heatpump source with a cooling_curve compiles into its thermal_source block
+        (mirroring heating_curve), so a chiller can be weather-compensated and DP-refined
+        via heat_topology - not only via def_load_config."""
+        topo = {
+            "sources": [
+                {
+                    "id": "chiller",
+                    "type": "heatpump",
+                    "carnot_efficiency": 0.35,
+                    "nominal_power": 2100,
+                    "cooling_curve": {
+                        "slope": 0.3,
+                        "offset": 20,
+                        "min_supply": 8,
+                        "max_supply": 18,
+                    },
+                }
+            ],
+            "storage": [
+                {
+                    "id": "zone",
+                    "thermal_mass": 5.0,
+                    "loss_coefficient": 0.2,
+                    "comfort_sense": "cool",
+                    "start_temperature": 24,
+                    "min_temperature": [10] * 48,
+                    "max_temperature": [28] * 48,
+                }
+            ],
+            "flows": [{"from": "chiller", "to": "zone"}],
+        }
+        src = utils.compile_heat_topology(topo)["def_load_config"][0]["thermal_source"]
+        self.assertEqual(
+            src["cooling_curve"],
+            {"slope": 0.3, "offset": 20.0, "min_supply": 8.0, "max_supply": 18.0},
+        )
+        self.assertEqual(src["sense"], "cool")
 
 
 class TestCompileHeatTopology(unittest.TestCase):
