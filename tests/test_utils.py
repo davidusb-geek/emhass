@@ -2128,6 +2128,58 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, field):
                     utils.compile_heat_topology(topo(storage_extra, transfer_extra))
 
+    def test_compile_heat_topology_rejects_bad_zone_values(self):
+        """Zone physics fields must be finite numbers in their physical range, or
+        the topology fails at save time instead of in every optimization run."""
+
+        def topo(**zone):
+            return {
+                "sources": [
+                    {"id": "gas", "type": "gas", "efficiency": 0.9, "nominal_power": 20000}
+                ],
+                "storage": [{"id": "room", "start_temperature": 20, "thermal_mass": 5.0, **zone}],
+                "flows": [{"from": "gas", "to": "room"}],
+            }
+
+        for field, value in (
+            ("thermal_mass", float("nan")),
+            ("thermal_mass", 0.0),
+            ("loss_coefficient", -0.1),
+            ("loss_coefficient", float("inf")),
+            ("thermal_inertia", -1.0),
+            ("window_area", -2.0),
+            ("shgc", 1.5),
+            ("shgc", True),
+            ("window_area", "big"),
+        ):
+            with (
+                self.subTest(field=field, value=value),
+                self.assertRaisesRegex(ValueError, field),
+            ):
+                utils.compile_heat_topology(topo(**{field: value}))
+        compiled = utils.compile_heat_topology(
+            topo(loss_coefficient=0.2, thermal_inertia=0.0, window_area=4.0, shgc=0.6)
+        )
+        self.assertEqual(compiled["shared_thermal_tanks"][0]["shgc"], 0.6)
+
+    def test_compile_heat_topology_rejects_colliding_transfer_columns(self):
+        """Each transfer publishes P_transfer_<from>_<to>; two pairs that give the
+        same column name would overwrite each other's schedule."""
+        storage = [
+            {"id": sid, "volume": 0.1, "start_temperature": 40} for sid in ("a", "a_b", "b_c", "c")
+        ]
+        topo = {
+            "sources": [{"id": "gas", "type": "gas", "efficiency": 0.9, "nominal_power": 20000}],
+            "storage": storage,
+            "flows": [
+                {"from": "gas", "to": "a"},
+                {"from": "a_b", "to": "c", "transfer_coefficient": 0.3},
+                {"from": "a", "to": "b_c", "transfer_coefficient": 0.3},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "P_transfer_a_b_c"):
+            utils.compile_heat_topology(topo)
+
     def test_compile_heat_topology_rejects_a_duplicate_transfer(self):
         """Two storage-to-storage flows with the same ends would be counted twice
         in the heat balances but published once."""
