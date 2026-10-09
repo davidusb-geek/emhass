@@ -13767,6 +13767,131 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         res = self._solve_default_inputs(opt)
         return opt, res
 
+    def _solve_tanks(
+        self, tanks, transfers=None, nominal=3000, efficiency=1.0, outdoor=10.0, last_price=None
+    ):
+        """One continuous source (load 0, efficiency-based) feeding the given shared
+        tanks, optional tank_transfers, and an optional price for the last step."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [outdoor] * 48
+        self._setup_single_hp(nominal=nominal)
+        self.optim_conf["def_load_config"] = [{"thermal_source": {"efficiency": efficiency}}]
+        self.optim_conf["shared_thermal_tanks"] = tanks
+        if transfers is not None:
+            self.optim_conf["tank_transfers"] = transfers
+        opt = self.create_optimization()
+        prices = self.df_input_data_dayahead[opt.var_load_cost].to_numpy(dtype=float).copy()
+        if last_price is not None:
+            prices[:] = 0.30
+            prices[-1] = last_price
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res
+
+    @staticmethod
+    def _zone(tid, start, load_ids, mass=1.0, ua=0.0, lo=10.0, hi=90.0, **extra):
+        return {
+            "id": tid,
+            "load_ids": load_ids,
+            "thermal_mass": mass,
+            "loss_coefficient": ua,
+            "start_temperature": start,
+            "min_temperatures": [lo] * 48,
+            "max_temperatures": [hi] * 48,
+            **extra,
+        }
+
+    def test_last_step_transfer_never_inverts_the_two_stores(self):
+        """The transfer in the last step is bounded by the temperatures at the end
+        of that step too: draining the feeder to make room for its source under the
+        overshoot gate must not leave the receiver hotter than the feeder."""
+        opt, res = self._solve_tanks(
+            [
+                self._zone(
+                    "buffer",
+                    40.0,
+                    [0],
+                    mass=0.2,
+                    desired_temperatures=40.0,
+                    overshoot_temperature=40.0,
+                ),
+                self._zone("room", 20.0, [], mass=0.2),
+            ],
+            transfers=[
+                {
+                    "from": "buffer",
+                    "to": "room",
+                    "transfer_coefficient": 5.0,
+                    "max_transfer_power": 100000,
+                }
+            ],
+            nominal=50000,
+            last_price=-0.30,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        dt = 0.5
+        p = res["P_deferrable0"].to_numpy()[-1] / 1000 * dt
+        q = res["P_transfer_buffer_room"].to_numpy()[-1] / 1000 * dt
+        buffer_end = res["predicted_temp_heater0"].to_numpy()[-1] + (p - q) / 0.2
+        room_end = res["predicted_temp_heater2"].to_numpy()[-1] + q / 0.2
+        self.assertGreaterEqual(buffer_end, room_end - 0.01)
+
+    def test_overshoot_gate_follows_the_source_lag(self):
+        """Under thermal_inertia the heat of step t arrives at t+L+1, so a
+        continuous source is gated on that temperature: a comfort target above the
+        threshold must not pull the zone past it with heat already on its way."""
+        opt, res = self._solve_tanks(
+            [
+                self._zone(
+                    "zone",
+                    20.0,
+                    [0],
+                    thermal_inertia=1.0,
+                    desired_temperatures=25.0,
+                    overshoot_temperature=21.0,
+                )
+            ],
+            nominal=4000,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 21.0 + 0.05)
+
+    def test_start_below_floor_recovers_at_the_pace_the_source_allows(self):
+        """The recovery window prices the shortfall instead of forcing a ramp: a
+        large zone whose source can only lift it slowly stays feasible and still
+        reaches its floor."""
+        opt, res = self._solve_tanks(
+            [self._zone("zone", 18.0, [0], mass=18.0, ua=0.3, lo=19.5, hi=23.0)],
+            nominal=8000,
+            outdoor=2.0,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertGreaterEqual(res["predicted_temp_heater0"].to_numpy()[-10:].min(), 19.5 - 0.01)
+
+    def test_transfer_off_state_covers_any_gradient(self):
+        """With the transfer off, any temperature difference between the two stores
+        is allowed; the gate's big-M covers their real range instead of 100 K."""
+        opt, res = self._solve_tanks(
+            [
+                self._zone("feeder", 20.0, [0], hi=40.0),
+                self._zone("receiver", 130.0, [], lo=10.0, hi=140.0),
+            ],
+            transfers=[
+                {
+                    "from": "feeder",
+                    "to": "receiver",
+                    "transfer_coefficient": 1.0,
+                    "max_transfer_power": 5000,
+                }
+            ],
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+
     def test_zone_with_inertia_on_its_floor_stays_feasible(self):
         """Over the thermal_inertia dead zone no source heat arrives, so a zone that
         sits on (or just below) its floor cools below it whatever the plan does. A

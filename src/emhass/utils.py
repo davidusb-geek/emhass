@@ -711,6 +711,11 @@ def compile_heat_topology(topology: dict) -> dict:
                 raise ValueError(
                     f"heat_topology.flows[{i}] is a self-transfer ('{f['from']}' -> itself)"
                 )
+            if any((t["from"], t["to"]) == (f["from"], f["to"]) for t in transfer_flows):
+                raise ValueError(
+                    f"heat_topology.flows[{i}] repeats the transfer {f['from']}->{f['to']}; "
+                    "one flow per pair of storages"
+                )
             transfer_flows.append(f)
         else:
             raise ValueError(
