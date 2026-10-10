@@ -23,6 +23,7 @@ from emhass.command_line import (
     OptimizationCacheKey,
     SetupContext,
     _apply_df_freq_horizon,
+    _get_closest_index,
     _load_opt_res_latest,
     _prepare_dayahead_optim,
     _publish_and_update_freq,
@@ -3701,6 +3702,31 @@ class TestLoadOptResLatestFreqInference(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 1)
+
+
+class TestGetClosestIndex(unittest.TestCase):
+    """Unit tests for #1142: _get_closest_index must not return -1 when
+    timestamps fall outside the DatetimeIndex range under ffill ('first')
+    or bfill ('last') rounding methods.
+    """
+
+    def test_out_of_range_ffill_first_fallback(self):
+        # Index in the future relative to now_ts
+        idx = pd.date_range("2026-10-10 12:00", periods=5, freq="15min", tz="UTC")
+        conf = {"time_zone": pytz.UTC, "method_ts_round": "first"}
+        with patch("emhass.command_line.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 10, 10, 11, 0, tzinfo=pytz.UTC)
+            res = _get_closest_index(conf, idx)
+            self.assertEqual(res, 0)
+
+    def test_out_of_range_bfill_last_fallback(self):
+        # Index in the past relative to now_ts
+        idx = pd.date_range("2026-10-10 12:00", periods=5, freq="15min", tz="UTC")
+        conf = {"time_zone": pytz.UTC, "method_ts_round": "last"}
+        with patch("emhass.command_line.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 10, 10, 14, 0, tzinfo=pytz.UTC)
+            res = _get_closest_index(conf, idx)
+            self.assertEqual(res, 4)
 
 
 class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
