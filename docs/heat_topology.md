@@ -66,7 +66,7 @@ watts of source input:
 | Field | Description |
 | --- | --- |
 | `id` | Unique source ID. |
-| `type` | `heatpump`, `heat_pump`, `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
+| `type` | `heatpump` (`heat_pump` is accepted as the same type), `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
 | `nominal_power` | Maximum source input power in W. |
 | `min_power` | Optional minimum input power in W; default `0`. Must not exceed `nominal_power`. |
 | `treat_as_semi_cont` | Optional on/off-at-nominal behavior; default `true`. |
@@ -95,7 +95,7 @@ constant-efficiency source requires `efficiency`.
 
 Source type controls electric-balance membership by default:
 
-- `heatpump`, `heat_pump`, and `electric` are electric loads;
+- `heatpump` and `electric` are electric loads;
 - `gas`, `oil`, and `district` are non-electric loads; and
 - `constant_efficiency` defaults to electric because its fuel is ambiguous.
 
