@@ -3677,13 +3677,15 @@ def _get_closest_index(retrieve_hass_conf: dict, index: pd.DatetimeIndex) -> int
     elif index.tz is not None and now_ts.tz is None:
         now_ts = now_ts.tz_localize(index.tz)
     method = retrieve_hass_conf.get("method_ts_round", "nearest")
-    if method == "nearest":
-        return index.get_indexer([now_ts], method="nearest")[0]
-    elif method == "first":
-        return index.get_indexer([now_ts], method="ffill")[0]
+    if method == "first":
+        idx_closest = index.get_indexer([now_ts], method="ffill")[0]
     elif method == "last":
-        return index.get_indexer([now_ts], method="bfill")[0]
-    return index.get_indexer([now_ts], method="nearest")[0]
+        idx_closest = index.get_indexer([now_ts], method="bfill")[0]
+    else:
+        idx_closest = index.get_indexer([now_ts], method="nearest")[0]
+    if idx_closest == -1:
+        idx_closest = index.get_indexer([now_ts], method="nearest")[0]
+    return idx_closest
 
 
 async def _publish_standard_forecasts(
