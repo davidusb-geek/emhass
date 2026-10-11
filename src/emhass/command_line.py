@@ -2732,9 +2732,7 @@ def prepare_forecast_and_weather_data(
         # Final safety fill (forward/backward) for any remaining gaps
         if df_input_data_dayahead["outdoor_temperature_forecast"].isnull().any():
             df_input_data_dayahead["outdoor_temperature_forecast"] = (
-                df_input_data_dayahead["outdoor_temperature_forecast"]
-                .fillna(method="ffill")
-                .fillna(method="bfill")
+                df_input_data_dayahead["outdoor_temperature_forecast"].ffill().bfill()
             )
 
     # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
@@ -2774,9 +2772,7 @@ def prepare_forecast_and_weather_data(
 
         # Final safety fill
         if df_input_data_dayahead["ghi"].isnull().any():
-            df_input_data_dayahead["ghi"] = (
-                df_input_data_dayahead["ghi"].fillna(method="ffill").fillna(method="bfill")
-            )
+            df_input_data_dayahead["ghi"] = df_input_data_dayahead["ghi"].ffill().bfill()
 
         logger.debug(
             "Merged GHI data into optimization input: mean=%.1f W/m², max=%.1f W/m²",

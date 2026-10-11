@@ -2189,6 +2189,47 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Result index should remain naive
         self.assertIsNone(res_df.index.tz)
 
+    def test_prepare_forecast_and_weather_data_fills_weather_gap(self):
+        """
+        Weather samples that leave a gap wider than the 1h reindex tolerance must be
+        filled by the final forward/backward safety fill, without raising on pandas 3.
+        """
+        dayahead_idx = pd.date_range("2025-01-01", periods=10, freq="30min", tz="UTC")
+        df_input_data_dayahead = pd.DataFrame({"P_PV": [0.0] * 10}, index=dayahead_idx)
+        fcst = MagicMock()
+        fcst.get_load_cost_forecast.return_value = df_input_data_dayahead.copy()
+        fcst.get_prod_price_forecast.return_value = df_input_data_dayahead.copy()
+        fcst.optim_conf = {
+            "load_cost_forecast_method": "list",
+            "production_price_forecast_method": "list",
+            "outdoor_temperature_forecast_method": "list",
+        }
+        # Samples at 02:30 and 03:00 are more than 1h away from both neighbours,
+        # so the reindex leaves NaN there while the rest of the horizon is filled.
+        weather_idx = pd.DatetimeIndex(
+            ["2025-01-01 00:00", "2025-01-01 00:30", "2025-01-01 01:00", "2025-01-01 04:30"],
+            tz="UTC",
+        )
+        df_weather = pd.DataFrame(
+            {"temp_air": [10.0, 11.0, 12.0, 14.0], "ghi": [100, 200, 300, 500]},
+            index=weather_idx,
+        )
+        reindexed_temp = df_weather["temp_air"].reindex(
+            dayahead_idx, method="nearest", tolerance=pd.Timedelta("1h")
+        )
+        self.assertGreater(reindexed_temp.isnull().sum(), 0, "Test must produce a weather gap")
+        self.assertLess(reindexed_temp.isnull().sum(), len(dayahead_idx))
+        input_data_dict = {
+            "fcst": fcst,
+            "df_input_data_dayahead": df_input_data_dayahead,
+            "df_weather": df_weather,
+            "params": {"passed_data": {}},
+        }
+        res_df = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIsInstance(res_df, pd.DataFrame)
+        self.assertEqual(res_df["outdoor_temperature_forecast"].isnull().sum(), 0)
+        self.assertEqual(res_df["ghi"].isnull().sum(), 0)
+
     async def test_weather_forecast_methods(self):
         """
         Test logic in _get_dayahead_pv_forecast regarding weather method switching.
