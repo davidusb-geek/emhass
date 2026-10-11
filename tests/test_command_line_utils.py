@@ -2189,6 +2189,38 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Result index should remain naive
         self.assertIsNone(res_df.index.tz)
 
+    async def test_prepare_forecast_and_weather_data_fills_uncovered_horizon(self):
+        """
+        Weather data that covers only the start of the horizon leaves NaNs after
+        the tolerant reindex; the safety fill must fill them (also on pandas 3,
+        where fillna(method=...) was removed).
+        """
+        dayahead_idx = pd.date_range("2025-01-01", periods=10, freq="30min", tz="UTC")
+        df_input_data_dayahead = pd.DataFrame({"P_PV": [0.0] * 10}, index=dayahead_idx)
+        weather_idx = pd.date_range("2025-01-01", periods=2, freq="30min", tz="UTC")
+        input_data_dict = {
+            "fcst": MagicMock(),
+            "df_input_data_dayahead": df_input_data_dayahead,
+            "params": {"passed_data": {}},
+            "df_weather": pd.DataFrame(
+                {"temp_air": [10.0, 11.0], "ghi": [100.0, 200.0]}, index=weather_idx
+            ),
+        }
+        input_data_dict["fcst"].get_load_cost_forecast.return_value = df_input_data_dayahead.copy()
+        input_data_dict["fcst"].get_prod_price_forecast.return_value = df_input_data_dayahead.copy()
+        input_data_dict["fcst"].optim_conf = {
+            "load_cost_forecast_method": "list",
+            "production_price_forecast_method": "list",
+            "outdoor_temperature_forecast_method": "list",
+        }
+        res_df = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIsInstance(res_df, pd.DataFrame)
+        self.assertEqual(res_df["outdoor_temperature_forecast"].isnull().sum(), 0)
+        self.assertEqual(res_df["ghi"].isnull().sum(), 0)
+        # Points beyond the 1h tolerance are forward-filled from the last value
+        self.assertEqual(res_df["outdoor_temperature_forecast"].iloc[-1], 11.0)
+        self.assertEqual(res_df["ghi"].iloc[-1], 200.0)
+
     async def test_weather_forecast_methods(self):
         """
         Test logic in _get_dayahead_pv_forecast regarding weather method switching.
