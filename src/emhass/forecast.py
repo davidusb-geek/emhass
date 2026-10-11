@@ -1144,12 +1144,8 @@ class Forecast:
                 data, self.lat, self.lon
             ):
                 self.logger.warning(
-                    "Cached covariate data is for a different location than configured "
-                    "(cache: %s, %s; configured: %s, %s); refetching a fresh response",
-                    data.get("latitude"),
-                    data.get("longitude"),
-                    self.lat,
-                    self.lon,
+                    "Cached covariate data is for a different location than the configured "
+                    "site; refetching a fresh response"
                 )
                 data = None
                 use_cache = False
