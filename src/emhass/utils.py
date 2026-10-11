@@ -1549,7 +1549,7 @@ def calculate_heating_demand(
     return specific_heating_demand * floor_area * (hdd_per_timestep_scaled / annual_reference_hdd)
 
 
-def calculate_heating_demand_physics(
+def calculate_thermal_balance_physics(
     u_value: float,
     envelope_area: float,
     ventilation_rate: float,
@@ -1565,11 +1565,10 @@ def calculate_heating_demand_physics(
     sense: str = "heat",
 ) -> np.ndarray:
     """
-    Calculate heating or cooling demand per timestep based on building physics heat loss model.
+    Calculate the signed physics-based thermal balance per timestep.
 
-    More accurate than HDD method as it directly calculates transmission and ventilation
-    losses based on building thermal properties. Optionally accounts for solar gains
-    through windows to reduce heating demand.
+    Positive values mean the building loses heat and cools down. Negative values mean
+    solar/internal gains exceed losses and the building warms up.
 
     :param u_value: Overall thermal transmittance (U-value) in W/(m²·K). Typical values:
         - 0.2-0.3: Well-insulated modern building
@@ -1617,22 +1616,21 @@ def calculate_heating_demand_physics(
         Default: 0.0
     :type internal_gains_factor: float, optional
     :param sense: Thermal mode, ``"heat"`` (default) or ``"cool"``. In heating mode the
-        result is the positive heat the building loses (and must be replaced) when it is
+        result is the heat the building loses (and must be replaced) when it is
         colder outside than the target, with solar and internal gains subtracted. In
         cooling mode the result is the heat the building gains when it is hotter outside
         than the target, with solar and internal gains added, returned as a SIGNED
         negative value (heat gain) to match the sign convention of
-        :func:`calculate_thermal_loss_signed`. Default ``"heat"`` is byte-identical to the
-        previous behaviour.
+        :func:`calculate_thermal_loss_signed`.
     :type sense: str, optional
-    :return: Array of demand values (kWh) per timestep. Positive for heating (heat to
-        supply), zero or negative for cooling (heat gain to remove).
+    :return: Array of signed thermal balance values (kWh) per timestep. Positive values
+        are heat losses; negative values are net heat gains.
     :rtype: np.ndarray
 
     Example:
         >>> outdoor_temps = np.array([5, 8, 12, 15])
         >>> ghi = np.array([0, 100, 400, 600])  # W/m²
-        >>> demand = calculate_heating_demand_physics(
+        >>> balance = calculate_thermal_balance_physics(
         ...     u_value=0.3,
         ...     envelope_area=400,
         ...     ventilation_rate=0.5,
@@ -1695,12 +1693,10 @@ def calculate_heating_demand_physics(
         # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
         solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
 
-        # Heating: subtract solar gains from heat loss (but never go negative).
+        # Heating: subtract solar gains from heat loss.
         # Cooling: gain_sign flips this so solar gains ADD to the cooling load, which
         # is left unfloored because gains only ever deepen it.
         total_loss_kw = total_loss_kw - gain_sign * solar_gains_kw
-        if sense != "cool":
-            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
     # Validate internal_gains_factor is in expected range [0, 1]
     if internal_gains_factor < 0 or internal_gains_factor > 1:
@@ -1744,20 +1740,61 @@ def calculate_heating_demand_physics(
         # load_power is in W, convert to kW; factor is dimensionless (0-1)
         internal_gains_kw = internal_gains * internal_gains_factor / W_TO_KW
 
-        # Heating: subtract internal gains from heat loss (never go negative).
+        # Heating: subtract internal gains from heat loss.
         # Cooling: gain_sign flips this so internal gains ADD to the cooling load.
         total_loss_kw = total_loss_kw - gain_sign * internal_gains_kw
-        if sense != "cool":
-            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
-    # Convert to kWh for the timestep. Cooling demand is returned as a signed heat
+    # Convert to kWh for the timestep. Cooling balance is returned as a signed heat
     # gain (<= 0) so the shared thermal state equation (which subtracts the demand
     # term) raises indoor temperature when it is hot, matching calculate_thermal_loss_signed.
     hours_per_timestep = optimization_time_step / 60.0
-    demand = total_loss_kw * hours_per_timestep
+    balance = total_loss_kw * hours_per_timestep
     if sense == "cool":
-        demand = -demand
-    return demand
+        balance = -balance
+    return balance
+
+
+def calculate_heating_demand_physics(
+    u_value: float,
+    envelope_area: float,
+    ventilation_rate: float,
+    heated_volume: float,
+    indoor_target_temperature: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    optimization_time_step: int,
+    solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
+    window_area: float | None = None,
+    shgc: float = 0.6,
+    internal_gains_forecast: np.ndarray | pd.Series | None = None,
+    internal_gains_factor: float = 0.0,
+    sense: str = "heat",
+) -> np.ndarray:
+    """
+    Calculate heating or cooling demand per timestep based on building physics heat loss model.
+
+    This public demand helper preserves the historical reporting contract: heating
+    demand is never negative. Use :func:`calculate_thermal_balance_physics` when the
+    signed net balance is needed for indoor-temperature dynamics.
+    """
+    balance = calculate_thermal_balance_physics(
+        u_value=u_value,
+        envelope_area=envelope_area,
+        ventilation_rate=ventilation_rate,
+        heated_volume=heated_volume,
+        indoor_target_temperature=indoor_target_temperature,
+        outdoor_temperature_forecast=outdoor_temperature_forecast,
+        optimization_time_step=optimization_time_step,
+        solar_irradiance_forecast=solar_irradiance_forecast,
+        window_area=window_area,
+        shgc=shgc,
+        internal_gains_forecast=internal_gains_forecast,
+        internal_gains_factor=internal_gains_factor,
+        sense=sense,
+    )
+    sense = normalize_heat_cool_mode(sense, field_name="sense", context="thermal demand")
+    if sense == "cool":
+        return balance
+    return np.maximum(balance, 0.0)
 
 
 def update_params_with_ha_config(
