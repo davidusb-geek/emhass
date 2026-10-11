@@ -574,6 +574,101 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.fcst.get_weather_covariates(self.fcst.forecast_dates, ["not_a_real_column"])
 
+    def test_covariate_cache_covers(self):
+        """_covariate_cache_covers accepts a cache only when it spans the requested window."""
+        now = int(pd.Timestamp.now().timestamp())
+        day = 86400
+        full_span = list(range(now - 58 * day, now + 3 * day, 900))
+        mpc_span = list(range(now - day, now + 3 * day, 900))
+        cases = [
+            # The production poisoning: an MPC-shaped cache (≈1 past day + forecast days)
+            # must not satisfy a fit that asked for the full training window.
+            ({"minutely_15": {"time": mpc_span}}, 58, 3, False),
+            ({"minutely_15": {"time": full_span}}, 58, 3, True),
+            ({"minutely_15": {"time": mpc_span}}, 1, 3, True),
+            ({"minutely_15": {"time": full_span}}, 1, 3, True),
+            ({}, 58, 3, False),
+            ({"minutely_15": {}}, 58, 3, False),
+            ({"minutely_15": {"time": []}}, 58, 3, False),
+        ]
+        for data, past_days, forecast_days, expected in cases:
+            with self.subTest(past_days=past_days, forecast_days=forecast_days):
+                self.assertEqual(
+                    Forecast._covariate_cache_covers(data, past_days, forecast_days),
+                    expected,
+                )
+
+    async def test_covariate_cache_span_poisoning_refetches(self):
+        """A fresh short-span cache must not be served for a longer request, nor kept as fallback.
+
+        The MPC path rewrites the covariate cache future-only every run; without a span check
+        a fit trains on constant gap-filled weather. A failed refetch must return None, not
+        the poisoned cache.
+        """
+        from unittest.mock import patch
+
+        now = int(pd.Timestamp.now().timestamp())
+        day = 86400
+        mpc_times = list(range(now - day, now + 3 * day, 900))
+        poisoned = {
+            "minutely_15": {
+                "time": mpc_times,
+                "temperature_2m": [17.4] * len(mpc_times),
+                "relative_humidity_2m": [55.0] * len(mpc_times),
+                "cloud_cover": [40.0] * len(mpc_times),
+                "wind_speed_10m": [10.0] * len(mpc_times),
+                "shortwave_radiation": [100.0] * len(mpc_times),
+                "direct_radiation": [60.0] * len(mpc_times),
+                "diffuse_radiation": [40.0] * len(mpc_times),
+                "precipitation": [0.0] * len(mpc_times),
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Redirect only this instance's data_path so no repo file is touched.
+            with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
+                with open(cache_path, "wb") as f:
+                    f.write(orjson.dumps(poisoned))
+                with patch("emhass.forecast.aiohttp.ClientSession") as session_cls:
+                    session_cls.side_effect = aiohttp.ClientError("network down")
+                    with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                        result = await self.fcst._fetch_open_meteo_covariates_json(58, 3)
+        self.assertIsNone(result, "a non-covering cache must not be served or kept as fallback")
+        self.assertTrue(
+            any("does not cover the requested span" in line for line in logs.output),
+            f"expected the span warning in logs, got: {logs.output}",
+        )
+
+    async def test_covariate_cache_full_span_is_served(self):
+        """A fresh cache that does cover the requested span is still served without refetch."""
+        from unittest.mock import patch
+
+        now = int(pd.Timestamp.now().timestamp())
+        day = 86400
+        full_times = list(range(now - 58 * day, now + 3 * day, 900))
+        full = {
+            "minutely_15": {
+                "time": full_times,
+                "temperature_2m": [17.4] * len(full_times),
+                "relative_humidity_2m": [55.0] * len(full_times),
+                "cloud_cover": [40.0] * len(full_times),
+                "wind_speed_10m": [10.0] * len(full_times),
+                "shortwave_radiation": [100.0] * len(full_times),
+                "direct_radiation": [60.0] * len(full_times),
+                "diffuse_radiation": [40.0] * len(full_times),
+                "precipitation": [0.0] * len(full_times),
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
+                with open(cache_path, "wb") as f:
+                    f.write(orjson.dumps(full))
+                with patch("emhass.forecast.aiohttp.ClientSession") as session_cls:
+                    result = await self.fcst._fetch_open_meteo_covariates_json(58, 3)
+        session_cls.assert_not_called()
+        self.assertEqual(result, full)
+
     async def test_build_weather_future_returns_none_without_weather_features(self):
         """_build_weather_future returns None when the model has no weather_features."""
         from unittest.mock import MagicMock

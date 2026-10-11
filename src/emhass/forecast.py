@@ -1066,6 +1066,23 @@ class Forecast:
         self.logger.debug("get_weather_forecast returning:\n%s", data)
         return data
 
+    @staticmethod
+    def _covariate_cache_covers(data: dict, past_days: int, forecast_days: int) -> bool:
+        """Return True when a cached Open-Meteo response covers the requested span.
+
+        Open-Meteo truncates ``past_days``/``forecast_days`` windows to local midnight, so the
+        comparison is deliberately generous (±1 day): it needs to catch serving a future-only
+        MPC cache (≈1 past day) to a fit that requested 58 past days, not exact boundaries.
+        """
+        times = (data.get("minutely_15") or {}).get("time")
+        if not times:
+            return False
+        now = datetime.now().timestamp()
+        day = 86400
+        req_start = now - max(past_days - 1, 0) * day + day
+        req_end = now + max(forecast_days - 1, 0) * day - day
+        return times[0] <= req_start and times[-1] >= req_end
+
     async def _fetch_open_meteo_covariates_json(self, past_days: int, forecast_days: int) -> dict:
         """Fetch (and cache) an Open-Meteo ``minutely_15`` response spanning past + future days.
 
@@ -1091,6 +1108,19 @@ class Forecast:
             except (orjson.JSONDecodeError, OSError):
                 # A corrupted/truncated cache must not block the fallback fetch: treat it as a miss.
                 self.logger.warning("Open-Meteo covariate cache is unreadable; refetching")
+                data = None
+                use_cache = False
+            if data is not None and not self._covariate_cache_covers(
+                data, past_days, forecast_days
+            ):
+                self.logger.warning(
+                    "Cached covariate data does not cover the requested span (past_days=%s, "
+                    "forecast_days=%s); refetching a fresh response",
+                    past_days,
+                    forecast_days,
+                )
+                # Drop it as the fetch-failure fallback too: gap-filled near-constant covariates
+                # are worse for callers that train models on them than failing the request.
                 data = None
                 use_cache = False
         if not use_cache:
