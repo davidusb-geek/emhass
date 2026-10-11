@@ -598,6 +598,22 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     expected,
                 )
 
+    def test_covariate_cache_matches_location(self):
+        """_covariate_cache_matches_location accepts only caches from the configured site."""
+        base = {"latitude": 42.07, "longitude": -87.71}
+        cases = [
+            (base, 42.07, -87.71, True),
+            (base, 42.09, -87.71, True),  # within Open-Meteo grid resolution
+            (base, 43.5, -87.71, False),  # latitude moved
+            (base, 42.07, -88.5, False),  # longitude moved
+            ({}, 42.07, -87.71, True),  # no coordinates: cannot validate
+        ]
+        for data, lat, lon, expected in cases:
+            with self.subTest(lat=lat, lon=lon):
+                self.assertEqual(
+                    Forecast._covariate_cache_matches_location(data, lat, lon), expected
+                )
+
     async def test_covariate_cache_span_poisoning_refetches(self):
         """A fresh short-span cache must not be served for a longer request, nor kept as fallback.
 
@@ -611,6 +627,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         day = 86400
         mpc_times = list(range(now - day, now + 3 * day, 900))
         poisoned = {
+            "latitude": self.fcst.lat,
+            "longitude": self.fcst.lon,
             "minutely_15": {
                 "time": mpc_times,
                 "temperature_2m": [17.4] * len(mpc_times),
@@ -621,7 +639,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 "direct_radiation": [60.0] * len(mpc_times),
                 "diffuse_radiation": [40.0] * len(mpc_times),
                 "precipitation": [0.0] * len(mpc_times),
-            }
+            },
         }
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Redirect only this instance's data_path so no repo file is touched.
@@ -638,6 +656,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             any("does not cover the requested span" in line for line in logs.output),
             f"expected the span warning in logs, got: {logs.output}",
         )
+        session_cls.assert_called_once()  # the poisoned cache must trigger a refetch attempt
 
     async def test_covariate_cache_full_span_is_served(self):
         """A fresh cache that does cover the requested span is still served without refetch."""
@@ -647,6 +666,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         day = 86400
         full_times = list(range(now - 58 * day, now + 3 * day, 900))
         full = {
+            "latitude": self.fcst.lat,
+            "longitude": self.fcst.lon,
             "minutely_15": {
                 "time": full_times,
                 "temperature_2m": [17.4] * len(full_times),
@@ -657,7 +678,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 "direct_radiation": [60.0] * len(full_times),
                 "diffuse_radiation": [40.0] * len(full_times),
                 "precipitation": [0.0] * len(full_times),
-            }
+            },
         }
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):

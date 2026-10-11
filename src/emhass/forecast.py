@@ -1070,18 +1070,35 @@ class Forecast:
     def _covariate_cache_covers(data: dict, past_days: int, forecast_days: int) -> bool:
         """Return True when a cached Open-Meteo response covers the requested span.
 
-        Open-Meteo truncates ``past_days``/``forecast_days`` windows to local midnight, so the
-        comparison is deliberately generous (±1 day): it needs to catch serving a future-only
-        MPC cache (≈1 past day) to a fit that requested 58 past days, not exact boundaries.
+        Open-Meteo truncates ``past_days``/``forecast_days`` windows to local midnight, so
+        the bounds derived from the requested span are given ±1 day of tolerance at each
+        boundary: the goal is to catch serving a future-only MPC cache (≈1 past day) to a
+        fit that requested 58 past days, not to enforce exact window boundaries.
         """
         times = (data.get("minutely_15") or {}).get("time")
         if not times:
             return False
         now = datetime.now().timestamp()
         day = 86400
-        req_start = now - max(past_days - 1, 0) * day + day
-        req_end = now + max(forecast_days - 1, 0) * day - day
-        return times[0] <= req_start and times[-1] >= req_end
+        req_start = now - max(past_days - 1, 0) * day
+        req_end = now + max(forecast_days - 1, 0) * day
+        return times[0] <= req_start + day and times[-1] >= req_end - day
+
+    @staticmethod
+    def _covariate_cache_matches_location(data: dict, lat: float, lon: float) -> bool:
+        """Return True when a cached Open-Meteo response matches the configured site.
+
+        Responses carry the coordinates Open-Meteo resolved for the request, which differ
+        from the requested ones by up to the model-grid resolution, so the comparison
+        allows a small tolerance. A cache without coordinates cannot be validated and is
+        accepted.
+        """
+        cached_lat = data.get("latitude")
+        cached_lon = data.get("longitude")
+        if cached_lat is None or cached_lon is None:
+            return True
+        tolerance = 0.1  # ~11 km: absorbs grid resolution, still catches a real site change
+        return abs(cached_lat - lat) <= tolerance and abs(cached_lon - lon) <= tolerance
 
     async def _fetch_open_meteo_covariates_json(self, past_days: int, forecast_days: int) -> dict:
         """Fetch (and cache) an Open-Meteo ``minutely_15`` response spanning past + future days.
@@ -1089,8 +1106,8 @@ class Forecast:
         This is kept separate from :meth:`get_cached_open_meteo_forecast_json` (which serves the PV
         path and is future-only) so the weather-covariate feature is fully self-contained and the
         existing weather/PV behaviour is untouched. The cache is reused until it is older than the
-        configured ``open_meteo_cache_max_age`` and, as with the PV cache, a stale cache is still
-        returned as a fallback if a fresh fetch fails.
+        configured ``open_meteo_cache_max_age`` and, as with the PV cache, a stale cache that
+        still covers the requested span is returned as a fallback if a fresh fetch fails.
         """
         cache_path = os.path.abspath(
             self.emhass_conf["data_path"] / "cached-open-meteo-covariates.json"
@@ -1121,6 +1138,19 @@ class Forecast:
                 )
                 # Drop it as the fetch-failure fallback too: gap-filled near-constant covariates
                 # are worse for callers that train models on them than failing the request.
+                data = None
+                use_cache = False
+            if data is not None and not self._covariate_cache_matches_location(
+                data, self.lat, self.lon
+            ):
+                self.logger.warning(
+                    "Cached covariate data is for a different location than configured "
+                    "(cache: %s, %s; configured: %s, %s); refetching a fresh response",
+                    data.get("latitude"),
+                    data.get("longitude"),
+                    self.lat,
+                    self.lon,
+                )
                 data = None
                 use_cache = False
         if not use_cache:
