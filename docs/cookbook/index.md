@@ -23,11 +23,15 @@ More HA-flavored EV recipes are welcome. See the [Discussion #824](https://githu
 
 ### Domestic hot water (DHW)
 
-No recipes yet. See `docs/study_cases/dhw_walkthrough.md` for the long-form walkthrough. Contributions welcome.
+- [DHW tank with a heat pump and an electric booster](dhw_heat_pump_with_booster.md): one tank, a heat pump up to its condenser limit and an element above it, a scheduled legionella cycle, and the measured tank temperature fed in on every MPC run.
+
+See the [DHW walkthrough](../study_cases/dhw_walkthrough.md) for the long-form walkthrough. More DHW recipes are welcome: a gas boiler as the second source, a combi tank that also serves space heating, PV-surplus-only heating.
 
 ### Heat pump
 
-No recipes yet. See `docs/study_cases/heat_pump_walkthrough.md` for the long-form walkthrough. Contributions welcome.
+- [Pre-heat the house with a heat pump on cheap power](heatpump_preheat_house.md): model the house as a thermal mass, so the plan heats ahead of a price peak and coasts through it inside the comfort band.
+
+See the [heat-pump walkthrough](../study_cases/heat_pump_walkthrough.md) for the long-form walkthrough. More heat-pump recipes are welcome: a hybrid heat pump and gas boiler on a buffer, underfloor heating with thermal inertia, air-to-air units per zone.
 
 ### Battery
 
