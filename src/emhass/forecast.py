@@ -854,7 +854,7 @@ class Forecast:
                     mask_down = data_tmp.copy(deep=True).bfill().isnull()
                     data_tmp.loc[mask_up["yhat"], :] = 0.0
                     data_tmp.loc[mask_down["yhat"], :] = 0.0
-                    data_tmp.interpolate(inplace=True, limit=1)
+                    data_tmp.interpolate(inplace=True, limit_area="inside")
                     data_tmp = data_tmp.fillna(0.0)
                     if len(data) == 0:
                         data = copy.deepcopy(data_tmp)
