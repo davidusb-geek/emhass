@@ -112,7 +112,7 @@ Expected: the two plan sensors and the predicted temperature update on every MPC
 ## Caveats
 
 - `supply_temperature` only sets the heat pump's COP. Without `max_supply_temperature` the plan may heat the tank above it with the heat pump alone.
-- The heat pump's COP is computed from `supply_temperature` and the outdoor forecast. An exhaust-air or ground-source unit needs its own source temperature in `outdoor_temperature_forecast`.
+- The heat pump's COP is computed from `supply_temperature` and the outdoor air temperature forecast, which fits an air-source unit. That forecast is shared by every thermal load, so do not replace it with a brine or exhaust-air temperature. Give a ground-source or exhaust-air unit its COP directly instead: `"type": "constant_efficiency"` with `"efficiency"` set to that COP, keeping `max_supply_temperature`.
 - A minimum above every source's reach makes the run infeasible: with only the capped heat pump, a 60 degree minimum cannot be met.
 - The temperature after the last step of the horizon is not constrained, so the last steps of a plan are not representative. Act on the first step and re-plan (rolling MPC).
 - Results for a tank are in the result table and `/api/v1/plan` as `predicted_temp_heater{k}`, `min_temp_heater{k}` and `max_temp_heater{k}`.
