@@ -1575,6 +1575,39 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
 
+    async def test_solar_forecast_15min_step_interpolates_interior_slots(self):
+        """Hourly Forecast.Solar points on a 15-minute grid: the interior slots of each source
+        hour are interpolated, not zero-filled (issue #1137). Slots outside the source horizon
+        stay at zero."""
+        self.fcst.freq = pd.Timedelta("15min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("15min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-08-22 00:00:00", tz=self.fcst.time_zone),
+            periods=96,
+            freq="15min",
+        )
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        # Linear ramp: 100 W at 05:00 up to 1600 W at 20:00. A 15-minute slot between two
+        # source hours must sit on the straight line between them.
+        watts = {f"2026-08-22 {h:02d}:00:00": 100.0 * (h - 4) for h in range(5, 21)}
+        with aioresponses() as mocked:
+            for _ in range(len(self.plant_conf["pv_module_model"])):
+                mocked.get(
+                    re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                    payload={"result": {"watts": watts}},
+                    repeat=True,
+                )
+            df_weather = await self.fcst.get_weather_forecast(method="solar.forecast")
+        p_pv = self.fcst.get_power_from_weather(df_weather)
+        for h in range(5, 20):
+            for minutes, frac in ((15, 0.25), (30, 0.5), (45, 0.75)):
+                ts = pd.Timestamp(f"2026-08-22 {h:02d}:{minutes:02d}:00", tz=self.fcst.time_zone)
+                self.assertAlmostEqual(p_pv.loc[ts], 100.0 * (h - 4) + 100.0 * frac, places=6)
+        self.assertTrue((p_pv.between_time("00:00", "04:45") == 0.0).all())
+        self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
+
     #  Test output weather forecast using passed runtime lists
     async def test_get_forecasts_with_lists(self):
         # Load default params
