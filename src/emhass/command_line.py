@@ -4209,8 +4209,8 @@ async def continual_publish(
     while True:
         # Sleep for x seconds (using current time as a reference for time left)
         time_zone = input_data_dict["retrieve_hass_conf"]["time_zone"]
-        timestamp_diff = freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60)
-        sleep_seconds = max(0.0, min(timestamp_diff, 60.0))
+        period = freq.total_seconds()
+        sleep_seconds = period - (datetime.now(time_zone).timestamp() % period)
         await asyncio.sleep(sleep_seconds)
         # Delegate processing to helper function to reduce complexity. A
         # transient failure in a single cycle (e.g. a half-written entity file
