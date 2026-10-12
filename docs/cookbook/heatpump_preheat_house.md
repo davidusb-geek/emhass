@@ -57,6 +57,15 @@ Set this as `heat_topology` in the configuration:
 }
 ```
 
+`outdoor_temperature_forecast` is the outdoor air temperature, and this recipe uses it three times: for the house's heat loss, for the heating curve, and as the heat pump's source temperature in the COP. That fits an air-source unit. A ground-source or exhaust-air unit draws from a different temperature, and there is no separate input for it: do not put the brine temperature in `outdoor_temperature_forecast`, because that would also change the heat loss and the curve. Give such a unit its COP directly instead, as a `constant_efficiency` source (electric by default), which ignores the outdoor forecast:
+
+```json
+{"id": "hp", "type": "constant_efficiency", "efficiency": 4.2,
+ "nominal_power": 3000, "min_power": 900, "treat_as_semi_cont": false}
+```
+
+Here `efficiency` is the COP at your brine and supply temperatures, from the datasheet or your own measurements. The house's heat loss still follows the outdoor air temperature.
+
 `min_temperatures` and `max_temperatures` are the hard comfort band; the gap between them is the room the optimizer has to shift heat in time. `desired_temperatures` is a soft target: the plan returns to it when deviating does not pay. A short `min_temperatures` list is extended with its last value; `max_temperatures` needs one value per step. `nominal_power` and `min_power` are electrical watts. The types `heatpump` and `heat_pump` are the same.
 
 Expected: saving succeeds, and the log of the next run shows `heat_topology compiled: 1 sources, 1 storage, 1 flows, 0 groups`.
@@ -95,15 +104,15 @@ steps 29-33   3000 W again before the price peak, up to 21.45
 steps 34-40   heat pump off through the peak, the house coasts back to 20.5
 ```
 
-`sensor.p_deferrable0` carries the planned electrical power and `sensor.temp_predicted0` the planned room temperature after `publish-data`. Give the heat pump the planned power if it accepts one; otherwise use the planned temperature as its room setpoint, which makes it heat when the plan heats.
+`sensor.p_deferrable0` carries the planned electrical power and `sensor.temp_predicted0` the planned room temperature after `publish-data`. Give the heat pump the planned power if it accepts one. Otherwise the planned temperature can serve as its room setpoint, so that it heats when the plan heats; the unit's own controller then decides the power, so the real power and temperature will follow the plan only roughly. Either way, leave the unit's own protections in charge (minimum run and off times, defrost, flow and pressure limits) and re-plan from the measured temperature on every run.
 
 Expected: the heat pump runs hardest in the cheapest steps before an expensive period and is off during the expensive period, while the planned temperature stays between 19.5 and 21.5 degrees.
 
 ## Caveats
 
 - A wider comfort band shifts more energy and costs more losses. With equal minimum and maximum there is nothing to shift.
-- Underfloor heating responds slowly: add `thermal_inertia` (hours) on the storage so the plan knows the heat arrives later.
-- Sun through the windows: add `window_area` (m2) and optionally `shgc` on the storage; this needs a GHI forecast (open-meteo).
+- Underfloor heating responds slowly: add `thermal_inertia` (hours) on the storage so the plan knows the heat arrives later. This is the delay between the heat pump running and the room warming, not the cool-down time constant of Step 1 (`thermal_mass / loss_coefficient`, 72 hours in the example). The two are different quantities: do not give them the same value.
+- Sun through the windows: add `window_area` (m2) and optionally `shgc` on the storage; this needs a GHI forecast (open-meteo). For example, with `"window_area": 8, "shgc": 0.6`, a flat tariff and a sunny day (2.5 kWh/m2 of horizontal irradiance over the horizon), the example's planned electricity falls from 28.5 to 25.4 kWh, and the heat pump throttles to its minimum or switches off around midday while the room stays at its target.
 - The COP comes from the heating curve, not from the temperature the plan actually reaches; on a house that stays within a degree or two this difference is small.
 - `startup_penalty` discourages short cycling but can lengthen the solve considerably; check your solve times before relying on it.
 - The temperature after the last step of the horizon is not constrained, so the last steps of a plan are not representative. Act on the first step and re-plan (rolling MPC).
