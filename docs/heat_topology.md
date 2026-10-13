@@ -202,6 +202,21 @@ infeasible. Only the minimums of the first 6 timesteps trigger this; a minimum
 that rises later in the horizon (for example a scheduled legionella cycle) stays
 hard, because the plan can heat ahead for it.
 
+The same happens to a maximum that free heat alone breaks. Sun through the
+windows (or a warm day) can carry a heated storage past its maximum with every
+source off, and no plan can prevent that. Before each run EMHASS follows the
+storage with its sources off, held up only by its minimums; if that path lies
+above a maximum, the maximums of that storage are priced for that run instead
+of making it infeasible, and the log says so. The penalty is the one used for a
+storage that starts below its minimum, so no source heats into the excess. On a
+run where a plan can keep the maximum, it is a hard limit as before. A cooling
+storage mirrors this for its minimum on a cold night. Two cases are left
+unchanged, because the check cannot be sure there: a storage that a transfer
+could still take heat from (or give heat to, when cooling), and a zone whose
+`loss_coefficient` times the timestep exceeds its `thermal_mass`. The
+predicted temperature then shows the excess; `max_temp_heater{k}` keeps showing
+the configured maximum.
+
 #### Building-zone storage
 
 A storage can also model a building zone (a house or a room) as a thermal mass
