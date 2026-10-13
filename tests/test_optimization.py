@@ -13786,12 +13786,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         last_price=None,
         source=None,
         price=None,
+        ghi=None,
     ):
         """One continuous source (load 0, efficiency-based, plus any `source` keys)
-        feeding the given shared tanks, optional tank_transfers, and an optional
-        price for the last step or a flat price for every step."""
+        feeding the given shared tanks, optional tank_transfers, an optional price
+        for the last step or a flat price for every step, and an optional GHI
+        series (W/m2)."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [outdoor] * 48
+        if ghi is not None:
+            self.df_input_data_dayahead["ghi"] = ghi
         self._setup_single_hp(nominal=nominal)
         self.optim_conf["def_load_config"] = [
             {"thermal_source": {"efficiency": efficiency, **(source or {})}}
@@ -13827,6 +13831,258 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "max_temperatures": [hi] * 48,
             **extra,
         }
+
+    @staticmethod
+    def _sunny_day(peak=600.0):
+        """GHI (W/m2) as a half sine over steps 16 to 32 of 48."""
+        return [
+            round(peak * np.sin(np.pi * (i - 16) / 16), 1) if 16 <= i <= 32 else 0.0
+            for i in range(48)
+        ]
+
+    def test_free_gains_past_the_maximum_are_priced_instead_of_failing(self):
+        """Sun through the windows can push a zone past its maximum with the heater
+        off. No plan can then keep the maximum, so it is priced for that run
+        instead of making the whole run infeasible, and the heater never adds to
+        the excess."""
+        zone = self._zone(
+            "house", 21.0, [0], mass=6.0, ua=0.25, lo=19.5, hi=21.5, window_area=25, shgc=0.6
+        )
+        with self.assertLogs(logger, level="INFO") as logs:
+            opt, res = self._solve_tanks([zone], outdoor=5.0, price=0.25, ghi=self._sunny_day())
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("free gains" in line for line in logs.output))
+        temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        power = res["P_deferrable0"].to_numpy(dtype=float)
+        self.assertGreater(temp.max(), 21.5 + 0.1)
+        # A step that ends above the maximum had no heating.
+        ends_above = np.where(temp[1:] > 21.5 + 0.01)[0]
+        self.assertLess(power[ends_above].max(), 1.0)
+        # Once the sun is gone the zone is back inside its band and held there.
+        self.assertGreaterEqual(temp[1:].min(), 19.5 - 0.01)
+        self.assertLessEqual(temp[-1], 21.5 + 0.01)
+
+    def test_a_maximum_the_plan_can_keep_stays_hard(self):
+        """The same house with less glass stays inside its band: nothing is priced
+        and the maximum holds exactly as before."""
+        zone = self._zone(
+            "house", 21.0, [0], mass=18.0, ua=0.25, lo=19.5, hi=21.5, window_area=8, shgc=0.6
+        )
+        with mock.patch.object(logger, "info") as info:
+            opt, res = self._solve_tanks([zone], outdoor=5.0, price=0.25, ghi=self._sunny_day())
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertFalse(any("free gains" in str(c) for c in info.call_args_list))
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 21.5 + 0.01)
+
+    def test_a_store_that_can_shed_heat_through_a_transfer_keeps_its_maximum(self):
+        """With a transfer out, the sources-off path is not the lowest the store
+        can follow, so the check stays out: the same sunny house keeps its hard
+        maximum by moving the surplus to a cooler store."""
+        house = self._zone(
+            "house", 21.0, [0], mass=6.0, ua=0.25, lo=19.5, hi=21.5, window_area=25, shgc=0.6
+        )
+        with mock.patch.object(logger, "info") as info:
+            opt, res = self._solve_tanks(
+                [house, self._zone("cellar", 12.0, [], mass=50.0, lo=5.0, hi=30.0)],
+                transfers=[
+                    {
+                        "from": "house",
+                        "to": "cellar",
+                        "transfer_coefficient": 2.0,
+                        "max_transfer_power": 8000,
+                    }
+                ],
+                outdoor=5.0,
+                price=0.25,
+                ghi=self._sunny_day(),
+            )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertFalse(any("free gains" in str(c) for c in info.call_args_list))
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 21.5 + 0.01)
+        self.assertGreater(res["P_transfer_house_cellar"].max(), 100.0)
+
+    def test_a_cooling_store_that_cannot_stay_above_its_minimum_is_priced(self):
+        """The mirror case: a store that is only cooled loses heat to a cold night
+        and falls below its minimum whatever the plan does."""
+        store = self._zone("room", 20.0, [0], mass=2.0, ua=0.3, lo=19.0, hi=25.0, sense="cool")
+        with self.assertLogs(logger, level="INFO") as logs:
+            opt, res = self._solve_tanks([store], outdoor=0.0, price=0.25)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("free gains" in line or "losses" in line for line in logs.output))
+        self.assertLess(res["predicted_temp_heater0"].min(), 19.0 - 0.1)
+        self.assertLess(res["P_deferrable0"].max(), 1.0)
+
+    def test_thermal_battery_free_gains_past_the_maximum_are_priced(self):
+        """A thermal_battery whose solar gain alone exceeds its maximum is priced
+        too, and the bound is hard again on the next run of the cached problem."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        self.df_input_data_dayahead["ghi"] = self._sunny_day(800.0)
+        battery = {
+            "start_temperature": 22.0,
+            "supply_temperature": 35.0,
+            "volume": 20.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [24.0] * 48,
+            "solar_absorption_area": 30.0,
+            "solar_absorption_factor": 0.7,
+        }
+        res = self.run_optimization_with_config([{"thermal_battery": battery}])
+        opt = self.opt
+        self.assertEqual(opt.optim_status, "Optimal")
+        temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        power = res["P_deferrable0"].to_numpy(dtype=float)
+        self.assertGreater(temp.max(), 24.0 + 0.1)
+        self.assertLess(power[np.where(temp[1:] > 24.0 + 0.01)[0]].max(), 1.0)
+
+        # Same problem object, a day without sun: the maximum holds again.
+        cached = opt.prob
+        self.df_input_data_dayahead["ghi"] = [0.0] * 48
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertIs(opt.prob, cached)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertLessEqual(res["predicted_temp_heater0"].max(), 24.0 + 0.01)
+
+    def test_thermal_battery_bound_relief_follows_each_run_of_a_cached_problem(self):
+        """The relief is a Parameter: a cached problem gives way on the run whose
+        forecast forces it and is hard again on the next, for heating (the
+        maximum, on a hot day) and for cooling (the minimum, on a cold night)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        for sense, normal, forcing in (("heat", 5.0, 40.0), ("cool", 30.0, -10.0)):
+            with self.subTest(sense=sense):
+                battery = {
+                    "sense": sense,
+                    "start_temperature": 22.0,
+                    "supply_temperature": 35.0 if sense == "heat" else 12.0,
+                    "volume": 5.0,
+                    "thermal_loss": 0.3,
+                    "u_value": 0.35,
+                    "envelope_area": 380.0,
+                    "ventilation_rate": 0.4,
+                    "heated_volume": 240.0,
+                    "indoor_target_temperature": 22.0,
+                    "min_temperatures": [20.0] * 48,
+                    "max_temperatures": [24.0] * 48,
+                }
+                self.optim_conf["def_load_config"] = [{"thermal_battery": battery}]
+                opt = self.create_optimization()
+                cached = None
+                for outdoor, forced in ((normal, False), (forcing, True), (normal, False)):
+                    self.df_input_data_dayahead["outdoor_temperature_forecast"] = [outdoor] * 48
+                    res = opt.perform_optimization(
+                        self.df_input_data_dayahead,
+                        self.p_pv_forecast.values.ravel(),
+                        self.p_load_forecast.values.ravel(),
+                        self.df_input_data_dayahead[opt.var_load_cost].values,
+                        self.df_input_data_dayahead[opt.var_prod_price].values,
+                    )
+                    # The first forced run rebuilds the problem once, with the
+                    # priced form; after that the same problem follows each run.
+                    if forced:
+                        self.assertIsNot(opt.prob, cached)
+                        cached = opt.prob
+                    cached = cached or opt.prob
+                    self.assertIs(opt.prob, cached)
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+                    relief = opt.param_thermal[0]["bound_relief"].value
+                    if forced:
+                        self.assertTrue(np.all(relief > 0))
+                        self.assertLess(res["P_deferrable0"].max(), 1.0)
+                        beyond = temp.max() - 24.0 if sense == "heat" else 20.0 - temp.min()
+                        self.assertGreater(beyond, 0.1)
+                    else:
+                        np.testing.assert_array_equal(relief, 0.0)
+                        self.assertLessEqual(temp[1:].max(), 24.0 + 0.01)
+                        self.assertGreaterEqual(temp[1:].min(), 20.0 - 0.01)
+
+    def test_free_gain_breach(self):
+        """The sources-off path: held up by the minimums when heating, held down
+        by the maximums when cooling, with a flat or a state-dependent loss."""
+        breach = Optimization._free_gain_breach
+        flat = {"conversion": 0.5, "zone_loss": None, "outdoor": None, "n": 5}
+        # Heating, a gain of 1 kWh per step: 20 -> 20.5 -> 21 -> 21.5 -> 22.
+        self.assertAlmostEqual(
+            breach(
+                20.0, net_out=[-1.0] * 5, hold=[19.0] * 5, limit=[21.0] * 5, sense="heat", **flat
+            ),
+            1.0,
+        )
+        # A loss instead: the minimum holds the path up, the maximum is never met.
+        self.assertEqual(
+            breach(
+                20.0, net_out=[1.0] * 5, hold=[19.8] * 5, limit=[21.0] * 5, sense="heat", **flat
+            ),
+            0.0,
+        )
+        # A minimum that steps up lifts the path past a lower maximum later on.
+        self.assertAlmostEqual(
+            breach(
+                20.0,
+                net_out=[0.0] * 5,
+                hold=[19, 19, 23, 19, 19],
+                limit=[25, 25, 25, 22, 25],
+                sense="heat",
+                **flat,
+            ),
+            1.0,
+        )
+        # Cooling mirrors it: a loss of 1 kWh per step takes it below the minimum.
+        self.assertAlmostEqual(
+            breach(
+                20.0, net_out=[1.0] * 5, hold=[25.0] * 5, limit=[19.0] * 5, sense="cool", **flat
+            ),
+            1.0,
+        )
+        # Heat already on its way counts (a cooling source's tail removes heat).
+        self.assertAlmostEqual(
+            breach(
+                20.0,
+                net_out=[0.0] * 5,
+                hold=[19.0] * 5,
+                limit=[21.0] * 5,
+                sense="heat",
+                source_tail=[4.0, 0, 0, 0, 0],
+                **flat,
+            ),
+            1.0,
+        )
+        # A state-dependent loss pulls the path toward outdoor, here 30 degrees:
+        # 20 -> 25 -> 27.5, past a maximum of 26 by 1.5.
+        self.assertAlmostEqual(
+            breach(
+                20.0,
+                conversion=0.5,
+                net_out=[0.0] * 3,
+                zone_loss=1.0,
+                outdoor=[30.0] * 3,
+                hold=[10.0] * 3,
+                limit=[26.0] * 3,
+                n=3,
+                sense="heat",
+            ),
+            1.5,
+        )
+        # Open steps (None, NaN, or past the end of a short list) are no bound.
+        self.assertEqual(
+            breach(
+                20.0,
+                net_out=[-1.0] * 5,
+                hold=None,
+                limit=[21.0, None, float("nan")],
+                sense="heat",
+                **flat,
+            ),
+            0.0,
+        )
 
     def test_last_step_transfer_never_inverts_the_two_stores(self):
         """The transfer in the last step is bounded by the temperatures at the end
