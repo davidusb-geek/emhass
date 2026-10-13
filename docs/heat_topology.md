@@ -72,6 +72,7 @@ watts of source input:
 | `treat_as_semi_cont` | Optional on/off-at-nominal behavior; default `true`. |
 | `supply_temperature` | Fixed heat-pump supply temperature in degrees Celsius. |
 | `heating_curve` | Alternative heat-pump supply-temperature curve. |
+| `cooling_curve` | For a `cool` storage: the same shape as `heating_curve` (defaults `min_supply` 5, `max_supply` 18), giving a weather-compensated chilled supply temperature. The cooling Carnot lift (outdoor minus supply) is applied automatically. |
 | `carnot_efficiency` | Heat-pump Carnot efficiency; default `0.4`. |
 | `efficiency` | Required constant conversion efficiency for gas, oil, district, electric, and constant-efficiency sources. |
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
@@ -90,7 +91,8 @@ per flow, and each load counts its own starts. A source that switches from one
 storage to the other therefore starts the second flow, and its `max_startups`
 limits each flow separately, not the unit as a whole.
 
-A heat pump requires either `supply_temperature` or a `heating_curve`. A
+A heat pump requires `supply_temperature`, a `heating_curve`, or a
+`cooling_curve`. A
 constant-efficiency source requires `efficiency`.
 
 Source type controls electric-balance membership by default:
@@ -101,6 +103,25 @@ Source type controls electric-balance membership by default:
 
 An explicit `electric: true` or `electric: false` overrides the default. This
 keeps a gas boiler's fuel input out of the household electric power balance.
+
+#### Temperature-dependent COP refinement (`cop_solver`)
+
+A heat pump's COP falls as it heats the storage hotter, but the optimizer
+plans against a COP evaluated at an assumed temperature. When banking heat is
+profitable, for example super-heating a buffer into surplus PV, the plan can
+rely on a COP the unit cannot reach at that temperature. With
+`cop_solver: auto`, EMHASS checks each curve-driven heat pump (`heating_curve`
+or `cooling_curve`) after the solve and, only when the COP it used disagrees
+with the temperature it planned, refines the storage's trajectory with an exact
+dynamic program and solves once more. A constant `supply_temperature` source
+has a fixed COP and is not refined.
+
+The default is `static`: no refinement, exactly the previous behaviour. Turn it
+on for a buffer or tank that a heat pump regularly charges well above its curve
+supply temperature, and compare it with `static` on your own system: with
+several coupled stores the refined plan is not always cheaper. A run where it
+engages takes longer, because of the second solve. See
+[the mathematical model](advanced_math_model.md) for the details.
 
 #### Per-source temperature ceiling
 
