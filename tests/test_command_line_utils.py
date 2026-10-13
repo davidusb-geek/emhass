@@ -5009,6 +5009,44 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(float(opt_2.param_battery_discharge_power_max[0].value), 9999.0)
 
 
+class _StopContinualPublish(BaseException):
+    """Raised by the patched asyncio.sleep to end the continual_publish loop after one sleep."""
+
+
+class TestContinualPublishSleep(unittest.IsolatedAsyncioTestCase):
+    """continual_publish sleeps until the next boundary of the configured period."""
+
+    async def _first_sleep(self, period: pd.Timedelta, now_ts: float) -> float:
+        """Return the duration of the first sleep when the wall clock reads now_ts."""
+        input_data_dict = {
+            "retrieve_hass_conf": {"optimization_time_step": period, "time_zone": UTC}
+        }
+        fixed_now = datetime.fromtimestamp(now_ts, UTC)
+        sleep_mock = AsyncMock(side_effect=_StopContinualPublish)
+        with patch("emhass.command_line.asyncio.sleep", sleep_mock):
+            with patch("emhass.command_line.datetime") as mock_datetime:
+                mock_datetime.now.return_value = fixed_now
+                with self.assertRaises(_StopContinualPublish):
+                    await continual_publish(
+                        input_data_dict, pathlib.Path("/mock/entities"), MagicMock()
+                    )
+        return sleep_mock.call_args.args[0]
+
+    async def test_one_minute_period_sleeps_to_next_minute(self):
+        """A 60 s period keeps the existing behaviour: sleep to the next full minute."""
+        midnight = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+        sleep = await self._first_sleep(pd.Timedelta(minutes=1), midnight + 15.5)
+        self.assertAlmostEqual(sleep, 44.5)
+
+    async def test_thirty_minute_period_sleeps_to_next_half_hour(self):
+        """A 1800 s period sleeps to the next 30-minute boundary, not every 60 s."""
+        midnight = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+        sleep = await self._first_sleep(pd.Timedelta(minutes=30), midnight + 600)
+        self.assertAlmostEqual(sleep, 1200.0)
+        sleep = await self._first_sleep(pd.Timedelta(minutes=30), midnight + 1799.5)
+        self.assertAlmostEqual(sleep, 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
