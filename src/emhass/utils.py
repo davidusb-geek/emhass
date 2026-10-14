@@ -987,6 +987,9 @@ def compile_heat_topology(topology: dict) -> dict:
                     "key to leave the source uncapped."
                 )
             source_block["max_thermal_power"] = thermal_cap_value
+            # A source feeding several storages compiles into one load per flow;
+            # the optimizer caps those loads together by this id.
+            source_block["source_id"] = src["id"]
         # Optional per-source threshold: with the storage's desired_temperatures
         # set, this source stops beyond it (see the optimizer for the gate per
         # source mode). Sources without it (or with null) inherit the

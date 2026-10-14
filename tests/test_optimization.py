@@ -15477,6 +15477,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self._solve_default_inputs(opt)
         self.assertEqual(calls, [])
 
+    def test_a_failed_relaxed_rebuild_restores_the_configuration(self):
+        """The relaxed rescue switches semi-continuous loads off and repoints
+        instance state at its throwaway build. If building the relaxed problem
+        raises, both must still be restored for the next run."""
+        opt = self._dp_refinable_setup()
+        opt.optim_conf["treat_deferrable_load_as_semi_cont"] = [True]
+
+        def fail_when_relaxed(*args, relaxed=False, **kwargs):
+            if relaxed:
+                raise RuntimeError("relaxed rebuild failed")
+
+        with (
+            mock.patch.object(opt, "_needs_relaxed_retry", return_value=True),
+            mock.patch.object(
+                opt, "_add_deferrable_group_constraints", side_effect=fail_when_relaxed
+            ),
+            self.assertRaisesRegex(RuntimeError, "relaxed rebuild failed"),
+        ):
+            self._solve_default_inputs(opt)
+        self.assertFalse(opt._relaxed_rebuild)
+        self.assertEqual(opt.optim_conf["treat_deferrable_load_as_semi_cont"], [True])
+
+    def test_rejected_dp_resolve_restores_the_static_cop(self):
+        """A rejected re-solve keeps the static plan, and the problem's Parameters
+        go back to the values that plan was solved with: the refined COP must not
+        stay behind in the problem."""
+        opt = self._dp_refinable_setup()
+        with mock.patch.object(opt, "_accept_dp_resolve", return_value=False):
+            self._solve_default_inputs(opt)
+        hp = opt._dp_tank_entries[0]["hp"]
+        np.testing.assert_allclose(hp["cop_param"].value, hp["cop_static"])
+
+        # The same setup with the re-solve accepted does refine the COP, so the
+        # assertion above is not vacuous.
+        opt = self._dp_refinable_setup()
+        self._solve_default_inputs(opt)
+        hp = opt._dp_tank_entries[0]["hp"]
+        self.assertFalse(np.allclose(hp["cop_param"].value, hp["cop_static"]))
+
     def test_dp_resolve_rejection_preserves_static_plan(self):
         """Coverage for the rejected-DP-re-solve path: the published plan must stay
         valid (not nulled) when the refinement re-solve is rejected. prob2 shares the
@@ -15870,6 +15909,57 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "max_thermal_power must cap delivered heat (cop * electrical) at every step",
         )
 
+    def test_max_thermal_power_caps_all_flows_of_a_source_together(self):
+        """A source that feeds two storages compiles into one load per flow. Its
+        rated thermal output limits the two flows together, not each of them: at
+        the one cheap step, heating both storages at once may not exceed it."""
+        cap = 6000.0
+        min_t = [30.0] * 48
+        for i in range(30, 36):
+            min_t[i] = 45.0
+        storage = [
+            {
+                "id": sid,
+                "volume": 0.3,
+                "start_temperature": 30.0,
+                "thermal_loss": 0.0,
+                "min_temperature": min_t,
+                "max_temperature": [65.0] * 48,
+            }
+            for sid in ("dhw", "buffer")
+        ]
+        topo = {
+            "sources": [
+                {
+                    "id": "unit",
+                    "type": "constant_efficiency",
+                    "efficiency": 3.0,
+                    "nominal_power": 4000,
+                    "treat_as_semi_cont": False,
+                    "max_thermal_power": cap,
+                }
+            ],
+            "storage": storage,
+            "flows": [{"from": "unit", "to": "dhw"}, {"from": "unit", "to": "buffer"}],
+        }
+        for key, val in utils.compile_heat_topology(topo).items():
+            self.optim_conf[key] = val
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        prices = np.full(48, 0.40)
+        prices[20] = 0.05
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            np.zeros(48),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        heat = 3.0 * (res["P_deferrable0"].to_numpy() + res["P_deferrable1"].to_numpy())
+        self.assertLessEqual(float(heat.max()), cap + 1.0)
+
     def _run_hp_thermal_cap(self, max_thermal_power, nominal=5000):
         """One shared tank fed by a single heat pump running at a HIGH COP (warm
         20 C outdoor + low 30 C supply -> small Carnot lift). A single strictly
@@ -15972,7 +16062,12 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     def _run_hp_curve_soft_comfort(
-        self, max_thermal_power, min_power=None, cop_solver="static", semi_cont=None
+        self,
+        max_thermal_power,
+        min_power=None,
+        cop_solver="static",
+        semi_cont=None,
+        call_min_power=None,
     ):
         """A heating_curve HP (Parameter COP) feeding a tank with a SOFT comfort
         target (desired_temperature). Warm 20 C outdoor -> curve supply 28 C ->
@@ -16025,8 +16120,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.p_load_forecast.values.ravel(),
             ulc,
             upp,
+            min_power_of_deferrable_loads=call_min_power,
         )
         return opt, res
+
+    def test_min_power_collision_uses_the_min_power_of_the_call(self):
+        """perform_optimization can be given its own minimum powers; the warning
+        counts the steps from those, the values the constraints are built with,
+        not from the configuration."""
+        with self.assertLogs(level="WARNING") as logs:
+            self._run_hp_curve_soft_comfort(
+                max_thermal_power=15000, semi_cont=False, call_min_power=[2000]
+            )
+        matching = [m for m in logs.output if "load 0" in m and "min_power" in m]
+        self.assertEqual(len(matching), 1, logs.output)
 
     def test_relaxed_rescue_restores_semi_cont_on_level_registry(self):
         """The binary-relaxed LP rescue rebuilds the deferrable-load constraints a
@@ -16222,7 +16329,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt.optim_status, "Optimal")
         power = res["P_deferrable0"].to_numpy()
         self.assertGreater(power.sum(), 0.0, "the capped heat pump was abandoned")
-        cop = np.asarray(opt._dp_tank_entries[0]["hp"]["cop_param"].value, dtype=float)
+        hp = opt._dp_tank_entries[0]["hp"]
+        cop = np.asarray(hp["cop_param"].value, dtype=float)
+        # The refinement must have run and changed the COP, or the ON-level check
+        # below would pass on the static values alone.
+        self.assertFalse(np.allclose(cop, hp["cop_static"]))
         self.assertLessEqual(float(np.max(cop[: len(power)] * power)), cap + 1.0)
         on_level = opt._semi_cont_on_level[0].value
         np.testing.assert_allclose(
@@ -16247,10 +16358,12 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         the collision again. When the number of affected steps is unchanged (here
         the COP clamps to 8 before and after), the build-time warning is not
         repeated on every run."""
-        with self.assertLogs(level="WARNING") as logs:
+        with self.assertLogs(level="INFO") as logs:
             self._run_hp_curve_soft_comfort(
                 max_thermal_power=15000, min_power=2000, cop_solver="dp"
             )
+        # The refinement ran (else one warning would be expected anyway).
+        self.assertTrue(any("DP COP refinement on tank" in m for m in logs.output), logs.output)
         matching = [m for m in logs.output if "min_power" in m and "load 0" in m]
         self.assertEqual(len(matching), 1, logs.output)
 
