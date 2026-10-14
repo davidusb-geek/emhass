@@ -133,7 +133,9 @@ pump at COP 8 would "deliver" about 46 kW, well above its rated 15 kW. Set
 `max_thermal_power` to the unit's rated thermal output to cap the delivered heat
 directly. The optimizer then also draws less electrical power when the unit is
 thermally limited. Unlike `nominal_power`, which bounds electrical input, this
-bounds thermal output, which is what the compressor actually limits.
+bounds thermal output, which is what the compressor actually limits. A source
+that feeds several storages compiles into one load per flow; the cap applies to
+those flows together, so their combined delivered heat stays within it.
 
 ```json
 "sources": [

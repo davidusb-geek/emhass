@@ -67,11 +67,6 @@ class ThermalDPParams:
     hx_approach: float = 5.0  # condenser runs at store_temp + approach
     cop_bounds: tuple[float, float] = (1.0, 8.0)
     hp_max_power: float = 3.0  # kW electric
-    # Optional rated thermal-output ceiling (kW thermal). hp_max_power * COP is
-    # electrical headroom, not what the compressor can physically move: on a
-    # mild day a high COP would otherwise let the DP plan deliveries far above
-    # the unit's rating (mirrors the LP's per-source max_thermal_power cap).
-    max_thermal_power: float | None = None
     backup_price: float = 0.10  # commodity price of the backup per kWh input
     backup_efficiency: float = 0.95
     backup_max_power: float = 0.0  # kW input; 0 disables the backup
@@ -103,6 +98,13 @@ class ThermalDPParams:
     # (a net solar/window gain): free heat that warms the store; any surplus the
     # discretized state cannot absorb is shed at zero cost, never purchased away.
     demand_kw: float | np.ndarray = 0.0
+
+    # Optional rated thermal-output ceiling (kW thermal), last so positional
+    # construction of the fields above is unchanged. hp_max_power * COP is
+    # electrical headroom, not what the compressor can physically move: on a
+    # mild day a high COP would otherwise let the DP plan deliveries far above
+    # the unit's rating (mirrors the LP's per-source max_thermal_power cap).
+    max_thermal_power: float | None = None
 
 
 @dataclass

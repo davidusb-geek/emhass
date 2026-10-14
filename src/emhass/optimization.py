@@ -4463,7 +4463,9 @@ class Optimization:
         number.
         """
         cap_over_cop = float(thermal_cap) / np.maximum(np.asarray(cop_vals, dtype=float), 1e-9)
-        min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
+        min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
+        if min_powers is None:
+            min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
         min_power_k = float(min_powers[k]) if k < len(min_powers) and min_powers[k] else 0.0
         below_min = int(np.count_nonzero(cap_over_cop < min_power_k)) if min_power_k > 0 else 0
         counts = self.__dict__.setdefault("_capped_below_min_counts", {})
@@ -5154,6 +5156,11 @@ class Optimization:
                 continue
             p_k = self.vars["p_deferrable"][k]
             constraints.append(cp.multiply(cops, p_k) <= float(thermal_cap))
+            source_id = self._get_load_source_config(k).get("source_id")
+            if source_id is not None:
+                self._thermal_cap_flows.setdefault(source_id, (float(thermal_cap), []))[1].append(
+                    cp.multiply(cops, p_k)
+                )
             # A semi-continuous member's ON level must come down with the cap:
             # its convention is the strict p == ON_level * bin equality, so with
             # the plain nominal a binding cap (cap/COP < nominal) leaves OFF as
@@ -5501,6 +5508,19 @@ class Optimization:
             return  # a failed or timed-out solve has no plan to refine
         from emhass.thermal_dp import ThermalDPParams, solve_thermal_dp
 
+        # The refinement re-values Parameters of the cached problem (the heat
+        # pump's COP, a capped source's ON level). Keep the static values, so a
+        # rejected re-solve leaves the problem exactly as the static solve had it.
+        saved_params = [
+            (p, None if p.value is None else np.copy(p.value)) for p in self.prob.parameters()
+        ]
+
+        def _restore_static_solve(saved_values):
+            for v, val in saved_values:
+                v.value = val
+            for p, val in saved_params:
+                p.value = val
+
         tol = float(self.optim_conf.get("cop_solver_tolerance", 0.5))
         dt = self.time_step
         n = self.num_timesteps
@@ -5771,14 +5791,12 @@ class Optimization:
             if self._accept_dp_resolve(prob2.status, prob2.value):
                 return prob2  # hand it to the caller; never replace the cached self.prob (#1048)
             else:
-                for v, val in saved_values:
-                    v.value = val
+                _restore_static_solve(saved_values)
                 self.logger.warning(
                     "DP COP refinement re-solve status %s; keeping static solve", prob2.status
                 )
         except Exception as exc:
-            for v, val in saved_values:
-                v.value = val
+            _restore_static_solve(saved_values)
             self.logger.warning("DP COP refinement re-solve failed (%s); keeping static solve", exc)
 
     def _add_deferrable_load_constraints(
@@ -6370,6 +6388,8 @@ class Optimization:
         tank_temp_by_id = {}
         self._shared_tank_end = {}
         self._shared_tank_reach = {}
+        # Delivered-heat terms of the capped flows, by source (see the joint cap below).
+        self._thermal_cap_flows = {}
         self._dp_tank_entries = []  # reset the DP COP-refinement registry for this build
         for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
             shared_pred_temp, shared_demand, shared_penalty = (
@@ -6393,6 +6413,12 @@ class Optimization:
                     # Transfer-only tank (e.g. the room): no member load, so surface
                     # under a synthetic index beyond the real loads to get a column.
                     predicted_temps[n_loads + tank_idx] = shared_pred_temp
+
+        # A source that feeds several storages compiles into one load per flow,
+        # each capped above; its rated thermal output caps them together too.
+        for thermal_cap, heat_terms in self._thermal_cap_flows.values():
+            if len(heat_terms) > 1:
+                constraints.append(sum(heat_terms) <= thermal_cap)
 
         # Couple each transfer to the temperature gradient: a pumped emitter can only
         # move heat from the hotter tank to the cooler one, at a rate bounded by the
@@ -7071,6 +7097,9 @@ class Optimization:
         min_power_of_deferrable_loads = pad_list(
             min_power_of_deferrable_loads, num_deferrable_loads
         )
+        # The per-call values the constraints are built with (read by
+        # _warn_capped_level_below_min_power).
+        self._min_power_of_deferrable_loads = list(min_power_of_deferrable_loads)
         def_total_hours = pad_list(def_total_hours, num_deferrable_loads)
         def_start_timestep = pad_list(def_start_timestep, num_deferrable_loads)
         def_end_timestep = pad_list(def_end_timestep, num_deferrable_loads)
@@ -7964,100 +7993,107 @@ class Optimization:
             original_dp_tank_entries = self._dp_tank_entries
             original_semi_cont_on_level = self._semi_cont_on_level
 
-            # Relax Configuration: Disable Binary Logic
-            n_def = self.optim_conf["number_of_deferrable_loads"]
-            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * n_def
-            self.optim_conf["set_deferrable_load_single_constant"] = [False] * n_def
-
-            # Re-build Constraints (Clean Slate)
-            constraints_relaxed = self.constraints[:]  # Start with base bound constraints
-
-            # Re-apply main constraints
-            self._add_main_power_balance_constraints(constraints_relaxed)
-            # (Note: We reuse previous stress configs as they don't change with relaxation.
-            # On a cached-problem retry they come from self._*_stress_conf, the configs
-            # the cached problem was built with, see issue #1048.)
-            # Guard on feature flags, matching the build block's own gating: these
-            # builders also add the non-stress battery/inverter constraints, so they
-            # must run whenever the feature is on, stress cost or not.
-            if self.plant_conf.get("inverter_is_hybrid", False):
-                self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
-            if self.optim_conf.get("set_use_battery", False):
-                self._add_battery_constraints(constraints_relaxed, batt_stress_conf)
-
-            if self.plant_conf["compute_curtailment"]:
-                constraints_relaxed.append(self.vars["p_pv_curtailment"] <= self.param_pv_forecast)
-            if self.costfun == "self-consumption" and "SC" in self.vars:
-                constraints_relaxed.append(self.vars["SC"] <= self.param_pv_forecast)
-                constraints_relaxed.append(
-                    self.vars["SC"] <= self.param_load_forecast + self.vars["p_def_sum"]
-                )
-
-            # Re-call deferrable load constraints (Skipping binary logic due to
-            # config change). The rebuilt thermal artifacts go into the LOCALS
-            # used by this run's extraction; the instance attributes keep the
-            # build-time artifacts paired with the cached problem (issue #1048).
-            self._relaxed_rebuild = True
-            predicted_temps, heating_demands, penalty_terms_total, q_inputs = (
-                self._add_deferrable_load_constraints(
-                    constraints_relaxed,
-                    data_opt,
-                    def_total_hours,
-                    def_total_timestep,
-                    def_start_timestep,
-                    def_end_timestep,
-                    def_init_temp,
-                    min_power_of_deferrable_loads,
-                    p_load,
-                )
-            )
-
-            # Deferrable Load Group Constraints (shared power budget only in relaxed mode)
-            self._add_deferrable_group_constraints(constraints_relaxed, relaxed=True)
-
-            # Re-build Objective
-            objective_expr = self._build_objective_function(batt_stress_conf, inv_stress_conf)
-            if not isinstance(penalty_terms_total, int) or penalty_terms_total != 0:
-                objective_expr.args[0] += penalty_terms_total
-
-            # Solve Relaxed Problem
-            prob_relaxed = cp.Problem(objective_expr, constraints_relaxed)
+            # The rebuild switches the configuration to the relaxed form and
+            # repoints instance state at the relaxed build; restore both even
+            # when building or solving the relaxed problem raises.
             try:
-                self.logger.info("Solving relaxed problem (LP)...")
-                prob_relaxed.solve(solver=selected_solver, **solver_opts)
+                # Relax Configuration: Disable Binary Logic
+                n_def = self.optim_conf["number_of_deferrable_loads"]
+                self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * n_def
+                self.optim_conf["set_deferrable_load_single_constant"] = [False] * n_def
 
-                if prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                    self.logger.info("Relaxed optimization successful!")
-                    # Mark status so user knows it was relaxed
-                    prob_relaxed._status = "Optimal (Relaxed)"
-                else:
-                    self.logger.error(
-                        f"Relaxed optimization also failed with status: {prob_relaxed.status}"
+                # Re-build Constraints (Clean Slate)
+                constraints_relaxed = self.constraints[:]  # Start with base bound constraints
+
+                # Re-apply main constraints
+                self._add_main_power_balance_constraints(constraints_relaxed)
+                # (Note: We reuse previous stress configs as they don't change with relaxation.
+                # On a cached-problem retry they come from self._*_stress_conf, the configs
+                # the cached problem was built with, see issue #1048.)
+                # Guard on feature flags, matching the build block's own gating: these
+                # builders also add the non-stress battery/inverter constraints, so they
+                # must run whenever the feature is on, stress cost or not.
+                if self.plant_conf.get("inverter_is_hybrid", False):
+                    self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
+                if self.optim_conf.get("set_use_battery", False):
+                    self._add_battery_constraints(constraints_relaxed, batt_stress_conf)
+
+                if self.plant_conf["compute_curtailment"]:
+                    constraints_relaxed.append(
+                        self.vars["p_pv_curtailment"] <= self.param_pv_forecast
                     )
-                # Use the relaxed result for this run only. self.prob keeps
-                # pointing at the clean cached problem: the relaxed solve is a
-                # one-shot rescue, never a permanent replacement (issue #1048).
-                solved_prob = prob_relaxed
-                solved_transfer_vars = self.transfer_vars
-            except Exception as e:
-                self.logger.error(f"Relaxed optimization crashed: {e}")
+                if self.costfun == "self-consumption" and "SC" in self.vars:
+                    constraints_relaxed.append(self.vars["SC"] <= self.param_pv_forecast)
+                    constraints_relaxed.append(
+                        self.vars["SC"] <= self.param_load_forecast + self.vars["p_def_sum"]
+                    )
 
-            # 5. Restore Configuration
-            self._relaxed_rebuild = False
-            self.optim_conf["treat_deferrable_load_as_semi_cont"] = original_semi_cont
-            self.optim_conf["set_deferrable_load_single_constant"] = original_single_const
+                # Re-call deferrable load constraints (Skipping binary logic due to
+                # config change). The rebuilt thermal artifacts go into the LOCALS
+                # used by this run's extraction; the instance attributes keep the
+                # build-time artifacts paired with the cached problem (issue #1048).
+                self._relaxed_rebuild = True
+                predicted_temps, heating_demands, penalty_terms_total, q_inputs = (
+                    self._add_deferrable_load_constraints(
+                        constraints_relaxed,
+                        data_opt,
+                        def_total_hours,
+                        def_total_timestep,
+                        def_start_timestep,
+                        def_end_timestep,
+                        def_init_temp,
+                        min_power_of_deferrable_loads,
+                        p_load,
+                    )
+                )
 
-            # Restore the instance-held references the rebuild replaced, so the
-            # next run reads the cached problem's own objects (issue #1048).
-            self.vars.update(original_hybrid_vars)
-            self.transfer_vars = original_transfer_vars
-            self._dp_tank_entries = original_dp_tank_entries
-            self._semi_cont_on_level = original_semi_cont_on_level
-            for k, params in self.param_thermal.items():
-                if k in original_q_input_vars:
-                    params["q_input_var"] = original_q_input_vars[k]
-                else:
-                    params.pop("q_input_var", None)
+                # Deferrable Load Group Constraints (shared power budget only in relaxed mode)
+                self._add_deferrable_group_constraints(constraints_relaxed, relaxed=True)
+
+                # Re-build Objective
+                objective_expr = self._build_objective_function(batt_stress_conf, inv_stress_conf)
+                if not isinstance(penalty_terms_total, int) or penalty_terms_total != 0:
+                    objective_expr.args[0] += penalty_terms_total
+
+                # Solve Relaxed Problem
+                prob_relaxed = cp.Problem(objective_expr, constraints_relaxed)
+                try:
+                    self.logger.info("Solving relaxed problem (LP)...")
+                    prob_relaxed.solve(solver=selected_solver, **solver_opts)
+
+                    if prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                        self.logger.info("Relaxed optimization successful!")
+                        # Mark status so user knows it was relaxed
+                        prob_relaxed._status = "Optimal (Relaxed)"
+                    else:
+                        self.logger.error(
+                            f"Relaxed optimization also failed with status: {prob_relaxed.status}"
+                        )
+                    # Use the relaxed result for this run only. self.prob keeps
+                    # pointing at the clean cached problem: the relaxed solve is a
+                    # one-shot rescue, never a permanent replacement (issue #1048).
+                    solved_prob = prob_relaxed
+                    solved_transfer_vars = self.transfer_vars
+                except Exception as e:
+                    self.logger.error(f"Relaxed optimization crashed: {e}")
+
+            finally:
+                # 5. Restore Configuration
+                self._relaxed_rebuild = False
+                self.optim_conf["treat_deferrable_load_as_semi_cont"] = original_semi_cont
+                self.optim_conf["set_deferrable_load_single_constant"] = original_single_const
+
+                # Restore the instance-held references the rebuild replaced, so the
+                # next run reads the cached problem's own objects (issue #1048).
+                self.vars.update(original_hybrid_vars)
+                self.transfer_vars = original_transfer_vars
+                self._dp_tank_entries = original_dp_tank_entries
+                self._semi_cont_on_level = original_semi_cont_on_level
+                for k, params in self.param_thermal.items():
+                    if k in original_q_input_vars:
+                        params["q_input_var"] = original_q_input_vars[k]
+                    else:
+                        params.pop("q_input_var", None)
 
         # Stage-timer breadcrumb: end of solve phase, start of extract phase.
         _extract_start_perf = time.perf_counter() if stage_times is not None else 0.0
