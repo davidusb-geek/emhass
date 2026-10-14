@@ -487,7 +487,9 @@ resending the topology. The solve takes a few seconds longer than a warm start.
 
 By default the compiler replaces the whole deferrable-load set with the
 topology's flows, because it cannot tell configured loads apart from the
-shipped defaults. If you also have ordinary deferrable loads (washing machine,
+shipped defaults. When more loads are configured than the topology compiles to,
+and they are not the two shipped example loads, the log warns which load
+indices are dropped. If you also have ordinary deferrable loads (washing machine,
 EV charger, ...) in the per-load arrays, set `extend_deferrable_loads` at the
 top level of the topology:
 
