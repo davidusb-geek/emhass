@@ -1376,6 +1376,55 @@ def _per_user_load_list(value, offset: int) -> list:
     return [value] * offset
 
 
+def _restore_configured_shared_tanks(params: dict, configured) -> None:
+    """Undo the unchecked association copy of a rejected runtime tank list."""
+    if configured is None:
+        params["optim_conf"].pop("shared_thermal_tanks", None)
+    else:
+        params["optim_conf"]["shared_thermal_tanks"] = configured
+
+
+def _warn_replaced_deferrable_loads(
+    optim_conf: dict, compiled: dict, emhass_conf: dict, logger: logging.Logger
+) -> None:
+    """Warn when a heat_topology in replace mode drops configured deferrable loads.
+
+    Without extend_deferrable_loads the compiled flows replace the whole load
+    set, so loads configured beyond them (a dishwasher, a pool pump) are not
+    optimized. The shipped defaults configure two example loads; a load set that
+    still equals them is taken as untouched and replaced without a word.
+    """
+    try:
+        configured = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        return
+    compiled_count = int(compiled.get("number_of_deferrable_loads") or 0)
+    if configured <= compiled_count:
+        return
+    defaults_path = (emhass_conf or {}).get("defaults_path")
+    try:
+        defaults = orjson.loads(pathlib.Path(defaults_path).read_bytes()) if defaults_path else {}
+    except (OSError, orjson.JSONDecodeError):
+        defaults = {}
+    load_keys = (
+        "number_of_deferrable_loads",
+        "nominal_power_of_deferrable_loads",
+        "operating_hours_of_each_deferrable_load",
+    )
+    if defaults and all(optim_conf.get(key) == defaults.get(key) for key in load_keys):
+        return
+    logger.warning(
+        "heat_topology replaces the deferrable loads: %d are configured but its flows "
+        "compile to %d, so loads %d..%d are not optimized. Set extend_deferrable_loads: "
+        "true in heat_topology to keep the configured loads and add the topology's "
+        "after them.",
+        configured,
+        compiled_count,
+        compiled_count,
+        configured - 1,
+    )
+
+
 def _extend_optim_conf_with_compiled_topology(
     optim_conf: dict, compiled: dict, logger: logging.Logger
 ) -> None:
@@ -2261,6 +2310,10 @@ async def treat_runtimeparams(
                 ):
                     batt_distinct_config_lists[batt_param_name] = list(configured)
 
+        # The configured shared tanks, before the association loop below copies a
+        # runtime list over them unchecked: a runtime list that the shared-tank
+        # validation further down rejects falls back to these.
+        configured_shared_tanks = params["optim_conf"].get("shared_thermal_tanks")
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
@@ -2749,6 +2802,7 @@ async def treat_runtimeparams(
             )
             if problem is not None:
                 logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
             elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
                 params["optim_conf"]["shared_thermal_tanks"] = tanks
                 topology = params["optim_conf"].get("heat_topology")
@@ -2766,6 +2820,7 @@ async def treat_runtimeparams(
                     "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
                     type(tanks).__name__,
                 )
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
 
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
@@ -3291,6 +3346,7 @@ async def treat_runtimeparams(
             # Default replace mode: merge compiled fields into optim_conf,
             # allowing user-set fields to win for things the compiler always
             # populates (e.g. operating_hours).
+            _warn_replaced_deferrable_loads(optim_conf, compiled, emhass_conf, logger)
             for key, val in compiled.items():
                 if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
