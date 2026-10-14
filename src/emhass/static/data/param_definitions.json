@@ -404,6 +404,32 @@
       "input": "boolean",
       "default_value": false,
       "unit": "none"
+    },
+    "cop_solver": {
+      "friendly_name": "Heat-pump COP solver",
+      "Description": "How the temperature-dependent heat-pump COP is resolved for shared thermal tanks. 'static' (default) keeps the constant heating-curve COP - the pre-existing behavior. 'auto' runs an exact dynamic-programming refinement when the static solve's COP is inconsistent with the achieved tank temperature; 'dp' always runs it. Opt in with 'auto' for tanks whose heat pump banks heat well above its curve supply.",
+      "input": "select",
+      "select_options": [
+        "auto",
+        "dp",
+        "static"
+      ],
+      "default_value": "static",
+      "unit": "none"
+    },
+    "cop_solver_tolerance": {
+      "friendly_name": "COP solver trigger tolerance",
+      "Description": "The DP COP refinement engages when the COP used differs from COP(achieved tank temperature) by more than this many COP units. Defaults to 0.5.",
+      "input": "float",
+      "default_value": 0.5,
+      "unit": "COP"
+    },
+    "cop_hx_approach": {
+      "friendly_name": "COP heat-exchanger approach",
+      "Description": "Temperature difference (degC) between a thermal store and the heat pump's working fluid used when evaluating the temperature-dependent COP: the condenser runs at store temperature plus this approach (heating), the evaporator at store temperature minus it (cooling). Used by the COP consistency check and the DP refinement. Defaults to 5.",
+      "input": "float",
+      "default_value": 5.0,
+      "unit": "degC"
     }
   },
   "Tariff": {
