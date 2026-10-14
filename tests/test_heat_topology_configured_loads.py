@@ -134,8 +134,45 @@ def test_the_shipped_example_loads_are_replaced_without_a_warning(tmp_path, capl
     """The defaults ship two example loads; a user who never touched them gets
     no warning when the topology replaces them."""
     caplog.set_level(logging.WARNING)
-    _optim_conf_from(_write(tmp_path, {"heat_topology": TOPOLOGY}))
+    optim_conf = _optim_conf_from(_write(tmp_path, {"heat_topology": TOPOLOGY}))
+    assert optim_conf["number_of_deferrable_loads"] == 1
     assert _replace_warnings(caplog) == []
+
+
+def test_a_customised_example_load_is_named_in_the_warning(tmp_path, caplog):
+    """The example loads count as untouched only if every setting the topology
+    overwrites is still the shipped one: a changed minimum power is a
+    configured load."""
+    caplog.set_level(logging.WARNING)
+    _optim_conf_from(
+        _write(
+            tmp_path,
+            {"minimum_power_of_deferrable_loads": [0.0, 300.0], "heat_topology": TOPOLOGY},
+        )
+    )
+    warnings = _replace_warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "1..1" in warnings[0]
+
+
+def test_invalid_shared_thermal_tanks_from_config_file_are_ignored(tmp_path, caplog):
+    """Tanks from config.json get the same check as runtime ones: a tank whose
+    load_ids point past the configured loads is reported and ignored instead
+    of failing inside the optimizer."""
+    caplog.set_level(logging.WARNING)
+    optim_conf = _optim_conf_from(
+        _write(
+            tmp_path,
+            {
+                "number_of_deferrable_loads": 1,
+                "shared_thermal_tanks": [{"id": "dhw", "load_ids": [0, 5], "volume": 0.2}],
+            },
+        )
+    )
+    assert not optim_conf.get("shared_thermal_tanks")
+    assert any(
+        "shared_thermal_tanks in the configuration" in r.getMessage() for r in caplog.records
+    )
 
 
 def test_extend_mode_keeps_the_loads_without_a_warning(tmp_path, caplog):
