@@ -2141,6 +2141,10 @@ class Optimization:
         and every multi-component (issue #540 Part B) component; ``warn_prefix``
         (``"capacity_cost_per_kw[k]: "``) attributes a bad value to its
         component."""
+        # A one-entry list is one value (the runtime parameter is declared as an
+        # array, so a single-component tariff may receive [7000]).
+        if isinstance(value, list | tuple) and len(value) == 1:
+            value = value[0]
         try:
             peak_floor_w = float(value)
         except (TypeError, ValueError):
@@ -8081,8 +8085,8 @@ class Optimization:
         p_load: pd.Series,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
-        current_period_peak: float | list | None = None,
         stage_times: dict[str, float] | None = None,
+        current_period_peak: float | list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a day-ahead optimization task using real forecast data. \
@@ -8112,6 +8116,9 @@ class Optimization:
             ``set_battery_first_priority`` is enabled and the horizon starts \
             at a high SOC.
         :type soc_final: float | list, optional
+        :param stage_times: Optional dict to record nested sub-stage timings
+            (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
+        :type stage_times: dict, optional
         :param current_period_peak: Optional peak grid import (in Watts) already \
             incurred in the current billing period. When the capacity tariff \
             (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
@@ -8121,9 +8128,6 @@ class Optimization:
             With several capacity components (a list ``capacity_cost_per_kw``), \
             one value per component.
         :type current_period_peak: float | list, optional
-        :param stage_times: Optional dict to record nested sub-stage timings
-            (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
-        :type stage_times: dict, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 

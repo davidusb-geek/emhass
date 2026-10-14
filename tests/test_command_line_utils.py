@@ -497,6 +497,26 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         with_peak = await solve(8000)
         self.assertLess(without, 8000)
         self.assertGreaterEqual(with_peak, 8000 - 1e-6)
+        # The runtime parameter is declared as an array: a one-entry list is the
+        # same single value for a one-component tariff.
+        self.assertGreaterEqual(await solve([8000]), 8000 - 1e-6)
+        # A value cannot add lines to the log: it is logged in its repr, so a
+        # newline in a string stays escaped, and the bad value is ignored.
+        with self.assertLogs(logger, level="INFO") as logs:
+            forged = await solve("8000\nERROR forged entry")
+        self.assertLess(forged, 8000)
+        self.assertFalse(any("\nERROR" in line for line in logs.output), logs.output)
+
+    async def test_dayahead_forecast_optim_keeps_stage_times_positional(self):
+        """stage_times keeps its positional slot after soc_final; the new
+        current_period_peak argument comes after it."""
+        import inspect
+
+        from emhass.optimization import Optimization
+
+        names = list(inspect.signature(Optimization.perform_dayahead_forecast_optim).parameters)
+        self.assertEqual(names.index("stage_times"), names.index("soc_final") + 1)
+        self.assertGreater(names.index("current_period_peak"), names.index("stage_times"))
 
     # Test dataframe output of perfect forecast optimization
     async def test_perfect_forecast_optim(self):
