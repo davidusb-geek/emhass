@@ -281,7 +281,7 @@ For underfloor / slab systems the same idea applies but with a lower band (e.g.,
 
 ### Soft constraints (desired temperature / overshoot)
 
-By default, `min_temperatures` and `max_temperatures` are enforced as hard constraints — the optimizer must keep the storage temperature strictly within bounds. You can optionally add soft constraints using desired temperatures and overshoot detection, following the same pattern as `thermal_config`.
+By default, `min_temperatures` and `max_temperatures` are enforced as hard constraints — the optimizer must keep the storage temperature strictly within bounds. There is one exception: when free gains alone carry the storage past its maximum with the heat source off (solar gain, or an outdoor temperature above the storage), no plan can keep that maximum. For such a run the maximum is priced instead of making the optimization infeasible, and the log says so; the heat source does not heat into the excess. A cooling storage (`sense: cool`) mirrors this for its minimum. You can optionally add soft constraints using desired temperatures and overshoot detection, following the same pattern as `thermal_config`.
 
 When configured, the optimizer penalizes deviations from the desired temperature and suppresses heating when the storage temperature overshoots:
 

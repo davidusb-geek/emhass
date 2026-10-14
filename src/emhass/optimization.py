@@ -116,6 +116,12 @@ SHARED_TANK_START_RECOVERY_STEPS = 6
 # a tank that physically cannot catch up yet does not make the run infeasible.
 SHARED_TANK_START_RECOVERY_PENALTY = 1000.0
 
+# How far (deg C) a thermal_battery bound may give way when free gains or losses
+# alone carry the store past it (see _free_gain_breach). The excess is priced
+# at SHARED_TANK_START_RECOVERY_PENALTY, so this only has to be large enough
+# never to bind.
+THERMAL_FREE_GAIN_RELIEF = 100.0
+
 # Highest COP a heat pump is given: utils.calculate_cop_heatpump and
 # utils.cop_from_tank_temperature both clip to it. Bounds a DP-refinable COP,
 # whose value is only known after the refinement.
@@ -403,6 +409,11 @@ class Optimization:
 
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
+        # thermal_battery loads whose built problem prices a bound instead of
+        # holding it hard (see _thermal_battery_bound_relief). A load enters the
+        # set the first time free gains force its bound and stays in it, so a
+        # load that never needs it keeps exactly the problem it had before.
+        self._thermal_relief_loads: set[int] = set()
 
         # Stress configs built alongside self.prob, kept for the relaxed-retry
         # path: a solve failure on a cached problem rebuilds constraints and
@@ -872,6 +883,12 @@ class Optimization:
                         ),
                         "heatpump_cops": cp.Parameter(n, name=f"thermal_battery_cops_{k}"),
                         "desired_temps": cp.Parameter(n, name=f"thermal_battery_desired_temps_{k}"),
+                        # Room a bound gets when free gains alone carry the store
+                        # past it (zero: the bound is hard). A Parameter, so a
+                        # cached problem follows the forecast of each run.
+                        "bound_relief": cp.Parameter(
+                            n, nonneg=True, name=f"thermal_battery_bound_relief_{k}"
+                        ),
                     }
                     # Initialize with default values
                     self.param_thermal[k]["outdoor_temp"].value = np.full(n, 15.0)
@@ -883,6 +900,7 @@ class Optimization:
                     )
                     self.param_thermal[k]["thermal_losses"].value = np.zeros(n)
                     self.param_thermal[k]["heating_demand"].value = np.zeros(n)
+                    self.param_thermal[k]["bound_relief"].value = np.zeros(n)
                     self.param_thermal[k]["heatpump_cops"].value = np.full(n, 3.0)
                     self.param_thermal[k]["desired_temps"].value = self._pad_temp_array(
                         desired_temps, n, 22.0
@@ -1653,6 +1671,22 @@ class Optimization:
                         params["heating_demand"].value = np.zeros(n)
 
                 self._persist_q_input(k, params, hc)
+                relief = self._thermal_battery_bound_relief(
+                    k,
+                    hc,
+                    new_start_temp,
+                    params["heating_demand"].value,
+                    params["thermal_losses"].value,
+                    params["min_temps"].value,
+                    params["max_temps"].value,
+                    n,
+                )
+                params["bound_relief"].value = np.full(n, relief)
+                if relief > 0 and k not in self._thermal_relief_loads:
+                    # The cached problem holds this bound hard: rebuild it once
+                    # with the priced form (the constraint builder adds the load
+                    # to the set).
+                    self.prob = None
 
     def _get_clean_outdoor_temp(self, data_opt: pd.DataFrame, n: int) -> np.ndarray:
         """Extract and clean outdoor temperature from data_opt."""
@@ -3709,6 +3743,49 @@ class Optimization:
             return heating_demand
         return heating_demand - solar_gain
 
+    def _thermal_battery_bound_relief(
+        self, k, hc, start_temperature, heating_demand, thermal_losses, min_temps, max_temps, n
+    ):
+        """Room (deg C) the bound of a thermal_battery gets this run: 0.0 when a
+        plan can keep it, THERMAL_FREE_GAIN_RELIEF when free gains or losses alone
+        carry the store past it (the maximum when heating, the minimum when
+        cooling). See _free_gain_breach."""
+        sense = utils.normalize_heat_cool_mode(
+            hc.get("sense") or "heat", field_name="sense", context=f"Load {k} thermal_battery"
+        )
+        conversion = 3600 / (hc.get("density", 2400) * hc.get("heat_capacity", 0.88) * hc["volume"])
+        # Heat already in the inertia filter keeps arriving whatever the plan does.
+        tail = None
+        tau_hours = float(hc.get("thermal_inertia_time_constant", 0.0) or 0.0)
+        if tau_hours > 0:
+            q_start = self.param_thermal.get(k, {}).get("q_input_start", 0.0)
+            q_start = float(getattr(q_start, "value", q_start) or 0.0)
+            tail = q_start * (1.0 - min(self.time_step / tau_hours, 1.0)) ** np.arange(n)
+        is_cool = sense == "cool"
+        breach = self._free_gain_breach(
+            start_temperature=start_temperature,
+            conversion=conversion,
+            net_out=np.asarray(heating_demand, dtype=float)
+            + np.asarray(thermal_losses, dtype=float),
+            zone_loss=None,
+            outdoor=None,
+            hold=max_temps if is_cool else min_temps,
+            limit=min_temps if is_cool else max_temps,
+            n=n,
+            sense=sense,
+            source_tail=tail,
+        )
+        if breach <= 1e-6:
+            return 0.0
+        self.logger.info(
+            "Load %s: free gains or losses alone carry the thermal_battery %.1f C past its "
+            "%s - that bound is priced instead of hard this run",
+            k,
+            breach,
+            "minimum" if is_cool else "maximum",
+        )
+        return THERMAL_FREE_GAIN_RELIEF
+
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
         Handle constraints for thermal battery loads (Vectorized, Legacy Match).
@@ -3898,6 +3975,22 @@ class Optimization:
             params["max_temps"].value = self._pad_temp_array(
                 max_temperatures_list, required_len, 26.0
             )
+            bound_relief = params["bound_relief"]
+            bound_relief.value = np.full(
+                required_len,
+                self._thermal_battery_bound_relief(
+                    k,
+                    hc,
+                    start_temp_float,
+                    params["heating_demand"].value,
+                    params["thermal_losses"].value,
+                    params["min_temps"].value,
+                    params["max_temps"].value,
+                    required_len,
+                ),
+            )
+            if bound_relief.value[0] > 0:
+                self._thermal_relief_loads.add(k)
 
         else:
             # Fallback for loads not in param dict (shouldn't happen normally)
@@ -3969,6 +4062,16 @@ class Optimization:
             )
             min_temps_param = None
             max_temps_param = None
+            bound_relief = self._thermal_battery_bound_relief(
+                k,
+                hc,
+                start_temp_float,
+                heating_demand,
+                thermal_losses,
+                min_temperatures_list,
+                max_temperatures_list,
+                required_len,
+            )
 
         # Build constraints using parameters
         predicted_temp_thermal = cp.Variable(required_len, name=f"temp_thermal_batt_{k}")
@@ -4073,26 +4176,36 @@ class Optimization:
                 )
             )
 
-        # Min/Max Temperature Constraints using parameters
-        if min_temps_param is not None:
-            constraints.append(predicted_temp_thermal[1:] >= min_temps_param[1:])
-        elif valid_indices := [
-            i
-            for i, v in enumerate(min_temperatures_list)
-            if v is not None and i < required_len and i > 0
-        ]:
-            limit_vals = np.array([min_temperatures_list[i] for i in valid_indices])
-            constraints.append(predicted_temp_thermal[valid_indices] >= limit_vals)
-
-        if max_temps_param is not None:
-            constraints.append(predicted_temp_thermal[1:] <= max_temps_param[1:])
-        elif valid_indices := [
-            i
-            for i, v in enumerate(max_temperatures_list)
-            if v is not None and i < required_len and i > 0
-        ]:
-            limit_vals = np.array([max_temperatures_list[i] for i in valid_indices])
-            constraints.append(predicted_temp_thermal[valid_indices] <= limit_vals)
+        # Min/Max Temperature Constraints using parameters. Free gains or losses
+        # can force one of them (the maximum when heating, the minimum when
+        # cooling); for a load where that has happened, that bound gives way by
+        # `bound_relief` (zero on a run where a plan can keep it) and what lies
+        # beyond it is priced. Every other bound keeps its hard form.
+        relieved = k in self._thermal_relief_loads if k in self.param_thermal else bound_relief > 0
+        relief_term = None
+        for lower, param, values in (
+            (True, min_temps_param, min_temperatures_list),
+            (False, max_temps_param, max_temperatures_list),
+        ):
+            if param is not None:
+                temp, limit = predicted_temp_thermal[1:], param[1:]
+            else:
+                valid_indices = [
+                    i for i, v in enumerate(values) if v is not None and i < required_len and i > 0
+                ]
+                if not valid_indices:
+                    continue
+                temp = predicted_temp_thermal[valid_indices]
+                limit = np.array([values[i] for i in valid_indices])
+            if relieved and lower == (sense == "cool"):
+                beyond = (limit - temp) if lower else (temp - limit)
+                relief_term = cp.sum(cp.pos(beyond))
+                # A cached problem keeps the bound, with room that follows each
+                # run; the uncached form is rebuilt every run and needs none.
+                if param is not None:
+                    constraints.append(beyond <= bound_relief[1:])
+            else:
+                constraints.append(temp >= limit if lower else temp <= limit)
 
         # Return heating_demand array for result building
         heating_demand_arr = (
@@ -4143,6 +4256,9 @@ class Optimization:
             penalty_expr = pen if pen is not None else 0
 
         penalty_term = None if isinstance(penalty_expr, int) else cp.sum(penalty_expr)
+        if relief_term is not None:
+            relief_term = -SHARED_TANK_START_RECOVERY_PENALTY * relief_term
+            penalty_term = relief_term if penalty_term is None else penalty_term + relief_term
         return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
 
     def _get_shared_thermal_tanks(self) -> list[dict]:
@@ -4170,6 +4286,58 @@ class Optimization:
         """
         cfg = self.optim_conf["def_load_config"][k]
         return cfg.get("thermal_source") or cfg.get("thermal_battery") or {}
+
+    @staticmethod
+    def _free_gain_breach(
+        start_temperature,
+        conversion,
+        net_out,
+        zone_loss,
+        outdoor,
+        hold,
+        limit,
+        n,
+        sense,
+        source_tail=None,
+    ):
+        """How far (deg C) free gains or losses alone carry a store past a hard bound.
+
+        Steps the store forward with every source off. When heating, that is the
+        lowest path any plan can follow, held up only by the hard minimums
+        (`hold`): where it lies above a hard maximum (`limit`), no plan can keep
+        that maximum. When cooling it is the highest path, held down by the hard
+        maximums (`hold`) and compared with the hard minimums (`limit`).
+
+        `net_out` is the heat leaving the store per step with the sources off
+        (demand plus flat loss, kWh, negative for a net gain); `zone_loss` is
+        UA * dt (kWh/K per step) for a state-dependent loss, else None;
+        `source_tail` is source heat already on its way (kWh per step). Returns
+        the largest excess, 0.0 when the bound can be kept.
+        """
+
+        def _hard(values, t):
+            if values is None or t >= len(values) or values[t] is None:
+                return None
+            v = float(values[t])
+            return None if np.isnan(v) else v
+
+        is_cool = sense == "cool"
+        temp = float(start_temperature)
+        breach = 0.0
+        for t in range(n - 1):
+            heat = -float(net_out[t])
+            if zone_loss is not None:
+                heat -= zone_loss * (temp - float(outdoor[t]))
+            if source_tail is not None:
+                heat += (-1.0 if is_cool else 1.0) * float(source_tail[t])
+            temp += conversion * heat
+            held = _hard(hold, t + 1)
+            if held is not None:
+                temp = min(temp, held) if is_cool else max(temp, held)
+            bound = _hard(limit, t + 1)
+            if bound is not None:
+                breach = max(breach, (bound - temp) if is_cool else (temp - bound))
+        return breach
 
     def _shared_tank_temp_range(self, tank_id):
         """(lowest, highest) temperature a shared tank can reach this run (see
@@ -4722,6 +4890,56 @@ class Optimization:
                         recovery_floor.append(min_temperatures_list[t])
                     min_temperatures_list[t] = None
 
+        # Free gains or losses past a bound: sun through the windows can carry a
+        # heated zone past its maximum with every source off (a cold night does
+        # the same to a cooled store and its minimum). No plan can then keep that
+        # bound, so the run would be infeasible; it is priced for this run
+        # instead, like a store that starts below its minimum. The check only
+        # fires on a store no plan could keep in band: a transfer that could
+        # carry the heat away, or a zone whose loss per step exceeds its
+        # capacity (where the stepped path is not monotone), is left alone.
+        relief_idx, relief_limit = [], []
+        is_cool = tank_sense == "cool"
+        transfers = self._get_tank_transfers() if transfer_vars else []
+        sheds_by_transfer = any(tr["to" if is_cool else "from"] == tank_id for tr in transfers)
+        zone_step = None if loss_coefficient is None else loss_coefficient * self.time_step
+        if not sheds_by_transfer and (zone_step is None or conversion * zone_step <= 1.0):
+            breach = self._free_gain_breach(
+                start_temperature=start_temperature,
+                conversion=float(conversion),
+                net_out=np.asarray(heating_demand, dtype=float)
+                + (0.0 if loss_coefficient is not None else np.asarray(thermal_losses)),
+                zone_loss=zone_step,
+                outdoor=outdoor_temp_arr,
+                hold=max_temperatures_list if is_cool else min_temperatures_list,
+                limit=min_temperatures_list if is_cool else max_temperatures_list,
+                n=required_len,
+                sense=tank_sense,
+            )
+            if breach > 1e-6:
+                if is_cool:
+                    min_temperatures_list = list(min_temperatures_list)
+                    priced = set(recovery_idx)
+                    for t in range(1, min(len(min_temperatures_list), required_len)):
+                        if min_temperatures_list[t] is not None and t not in priced:
+                            recovery_idx.append(t)
+                            recovery_floor.append(min_temperatures_list[t])
+                        min_temperatures_list[t] = None
+                else:
+                    max_temperatures_list = list(max_temperatures_list)
+                    for t in range(1, min(len(max_temperatures_list), required_len)):
+                        if max_temperatures_list[t] is not None:
+                            relief_idx.append(t)
+                            relief_limit.append(max_temperatures_list[t])
+                            max_temperatures_list[t] = None
+                self.logger.info(
+                    "Shared tank '%s': free gains or losses alone carry it %.1f C past its "
+                    "%s - that bound is priced instead of hard this run",
+                    tank_id,
+                    breach,
+                    "minimum" if is_cool else "maximum",
+                )
+
         # Hard min/max temperature bounds (shared helper; index 0 already pinned).
         self._add_temp_bound(
             constraints, predicted_temp, min_temperatures_list, None, required_len, lower=True
@@ -4766,6 +4984,10 @@ class Optimization:
         # hardware cannot execute.
         finite_max_temps = [v for v in max_temperatures_list if v is not None]
         tank_temp_ub = max(finite_max_temps) if finite_max_temps else None
+        if relief_idx:
+            # The maximum is priced this run: size big-M terms from what the
+            # store can physically reach instead.
+            tank_temp_ub = self._shared_tank_reach[tank_id][1]
         # The ceiling is a heating limit: on a cooling storage the gate would keep
         # a capped source off exactly while the storage is warm and needs cooling.
         if tank_sense == "cool" and any(cap is not None for cap in source_caps):
@@ -4978,6 +5200,10 @@ class Optimization:
             shortfall = cp.pos(np.array(recovery_floor) - predicted_temp[recovery_idx])
             recovery_term = -SHARED_TANK_START_RECOVERY_PENALTY * cp.sum(shortfall)
             penalty_term = recovery_term if penalty_term is None else penalty_term + recovery_term
+        if relief_idx:
+            excess = cp.pos(predicted_temp[relief_idx] - np.array(relief_limit))
+            relief_term = -SHARED_TANK_START_RECOVERY_PENALTY * cp.sum(excess)
+            penalty_term = relief_term if penalty_term is None else penalty_term + relief_term
 
         # Register a heat-pump tank for the post-solve DP COP refinement. We capture
         # the handles needed to (a) test COP consistency after the solve and (b) run
