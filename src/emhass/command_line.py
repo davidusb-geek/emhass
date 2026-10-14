@@ -2814,7 +2814,7 @@ async def dayahead_forecast_optim(
     logger.info(
         f"Performing day-ahead forecast optimization with soc_init: {soc_init}, soc_final: {soc_final}"
         + (
-            f", current_period_peak: {current_period_peak}"
+            f", current_period_peak: {current_period_peak!r}"
             if current_period_peak is not None
             else ""
         )
