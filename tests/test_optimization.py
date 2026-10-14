@@ -5338,6 +5338,80 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW",
             )
 
+    def test_thermal_battery_excess_gains_raise_predicted_temperature(self):
+        """Free gains warm an idle building, including inertia and cached forecast updates."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+
+        thermal_config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "thermal_loss": 0.0,
+            "min_temperatures": [0.0] * 48,
+            "max_temperatures": [35.0] * 48,
+            "u_value": 0.35,
+            "envelope_area": 380.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 240.0,
+            "indoor_target_temperature": 21.0,
+            "window_area": 80.0,
+            "shgc": 0.8,
+        }
+
+        for solar, internal in [(True, False), (False, True), (True, True)]:
+            for tau in [0.0, 2.0]:
+                with self.subTest(solar=solar, internal=internal, inertia=tau):
+                    config = dict(thermal_config)
+                    config["internal_gains_factor"] = 0.8 if internal else 0.0
+                    config["thermal_inertia_time_constant"] = tau
+                    self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+                    df = self.prepare_forecast_data()
+                    df["outdoor_temperature_forecast"] = 5.0
+                    df["ghi"] = 0.0
+                    df.loc[df.index[0], "ghi"] = 1000.0 if solar else 0.0
+                    p_load = np.zeros(48)
+                    p_load[0] = 5000.0 if internal else 0.0
+                    opt = self.create_optimization()
+                    load_cost = df[opt.var_load_cost].values
+                    prod_price = df[opt.var_prod_price].values
+                    res = opt.perform_optimization(
+                        df, self.p_pv_forecast.values.ravel(), p_load, load_cost, prod_price
+                    )
+                    self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+                    np.testing.assert_allclose(res["P_deferrable0"], 0.0, atol=1e-6)
+                    temps = res["predicted_temp_heater0"].to_numpy(dtype=float)
+                    demand = res["heating_demand_heater0"].to_numpy(dtype=float)
+                    self.assertGreater(temps[1], temps[0])
+                    # The 16 K difference gives 2.64256 kW transmission/ventilation loss.
+                    gains_kw = (64.0 if solar else 0.0) + (4.0 if internal else 0.0)
+                    expected_rise = (gains_kw - 2.64256) * opt.time_step * 3600 / (2400 * 0.88 * 50)
+                    self.assertAlmostEqual(temps[1], round(20.0 + expected_rise, 2), places=6)
+                    self.assertAlmostEqual(demand[0], 0.0, places=8)
+                    self.assertTrue(np.all(demand >= -1e-8))
+
+                    cached_problem = opt.prob
+                    df["outdoor_temperature_forecast"] = 21.0
+                    df["ghi"] = 0.0
+                    res = opt.perform_optimization(
+                        df, self.p_pv_forecast.values.ravel(), np.zeros(48), load_cost, prod_price
+                    )
+                    self.assertIs(opt.prob, cached_problem)
+                    self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+                    np.testing.assert_allclose(res["predicted_temp_heater0"], 20.0, atol=1e-6)
+                    np.testing.assert_allclose(res["heating_demand_heater0"], 0.0, atol=1e-8)
+                    np.testing.assert_allclose(
+                        opt.param_thermal[0]["thermal_balance"].value, 0.0, atol=1e-8
+                    )
+
     def test_thermal_battery_variable_temperature_bounds(self):
         """Test thermal battery with non-uniform per-timestep temperature bounds.
 
