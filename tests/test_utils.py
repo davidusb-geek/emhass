@@ -1690,6 +1690,86 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_init"], 0.95)
         self.assertEqual(params_out["passed_data"]["soc_final"], 0.6)
 
+    async def _treat_soc_runtime(self, runtimeparams, set_type="naive-mpc-optim"):
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        return await treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+
+    async def test_treat_runtimeparams_rejects_soc_above_one(self):
+        """A percentage fails before the solver, and the error names the field (#935)."""
+        cases = (
+            (
+                {"prediction_horizon": 10, "soc_init": 65, "soc_final": 0.6},
+                "soc_init=65",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "soc_init": 0.5, "soc_final": 65},
+                "soc_final=65",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "soc_init": 0.5, "soc_target": 80},
+                "soc_target=80",
+                "naive-mpc-optim",
+            ),
+            ({"soc_init": 65}, "soc_init=65", "dayahead-optim"),
+            (
+                {"prediction_horizon": 10, "battery_minimum_state_of_charge": 10},
+                "battery_minimum_state_of_charge=10",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_maximum_state_of_charge": 90},
+                "battery_maximum_state_of_charge=90",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_target_state_of_charge": 60},
+                "battery_target_state_of_charge=60",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "number_of_batteries": 2, "soc_init": [0.4, 65]},
+                "soc_init[1]=65",
+                "naive-mpc-optim",
+            ),
+        )
+        for runtimeparams, expected, set_type in cases:
+            with self.subTest(expected=expected):
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    with self.assertRaises(utils.SocFractionError) as ctx:
+                        await self._treat_soc_runtime(runtimeparams, set_type)
+                message = str(ctx.exception)
+                self.assertIn(expected, message)
+                self.assertIn("not a percentage", message)
+                self.assertTrue(any(message in line for line in logs.output))
+
+    async def test_treat_runtimeparams_accepts_full_soc_fraction(self):
+        """1 is a full battery and must still be accepted."""
+        params_out, _, _, plant_conf_out = await self._treat_soc_runtime(
+            {
+                "prediction_horizon": 10,
+                "soc_init": 1.0,
+                "soc_final": 1,
+                "battery_maximum_state_of_charge": 1.0,
+            }
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["soc_init"], 1.0)
+        self.assertEqual(params_out["passed_data"]["soc_final"], 1.0)
+        self.assertEqual(plant_conf_out["battery_maximum_state_of_charge"], 1.0)
+
     async def test_treat_runtimeparams_ignore_pv_feedback_during_curtailment(self):
         """Wiring for ignore_pv_feedback_during_curtailment runtime flag (#818).
 
