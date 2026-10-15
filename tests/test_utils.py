@@ -172,6 +172,33 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                             else:
                                 self.assertLessEqual(abs(delta), step / 2)
 
+    def test_get_forecast_start_nearest_exact_midpoint_goes_to_the_even_step(self):
+        """docs/config.md: an exact midpoint under nearest goes to the even-numbered step counted
+        from the UTC epoch, whatever the zone and the fractional seconds (#1189)."""
+        hour = pd.Timedelta("60min")
+        for zone in ("UTC", "Europe/Berlin", "Australia/Sydney", "Asia/Kathmandu"):
+            tz = pytz.timezone(zone)
+            for now, expected in (
+                ("2026-10-14T08:30:00Z", "2026-10-14T08:00:00Z"),
+                ("2026-10-14T09:30:00Z", "2026-10-14T10:00:00Z"),
+                ("2026-10-14T09:30:00.900Z", "2026-10-14T10:00:00Z"),  # whole seconds
+            ):
+                with self.subTest(zone=zone, now=now):
+                    start = utils.get_forecast_start(pd.Timestamp(now), hour, tz, "nearest")
+                    self.assertEqual(start, pd.Timestamp(expected))
+
+    def test_timestamped_mapping_holds_the_bucket_mean_until_the_next_bucket_with_a_point(self):
+        """Points in one step are averaged and that mean is what is held (docs/passing_data.md)."""
+        tz = pytz.timezone("Australia/Sydney")
+        grid = [t.isoformat() for t in pd.date_range("2026-10-16T00:00Z", periods=6, freq="30min")]
+        mapping = {
+            "2026-10-16T00:00:00Z": 0.0,
+            "2026-10-16T00:10:00Z": 10.0,
+            "2026-10-16T02:00:00Z": 99.0,
+        }
+        got = utils._align_runtime_forecast_mapping(mapping, grid, 30, tz)
+        self.assertEqual(got, [5.0, 5.0, 5.0, 5.0, 99.0, 99.0])
+
     def test_timestamped_mapping_buckets_are_one_grid_step_wide_in_any_zone(self):
         """In Asia/Kathmandu (+05:45) a 'nearest' grid sits on UTC hours; buckets must follow it."""
         tz = pytz.timezone("Asia/Kathmandu")
