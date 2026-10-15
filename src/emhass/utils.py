@@ -2093,7 +2093,7 @@ def _align_runtime_forecast_mapping(
     forecast_data_df = forecast_data_df.resample(
         pd.to_timedelta(optimization_time_step, "minutes"),
         on="time",
-        origin=target_dates[0] if len(target_dates) else "start_day",
+        origin=target_dates[0].tz_convert(time_zone) if len(target_dates) else "start_day",
     ).aggregate({"value": "mean"})
 
     # Align by instant in UTC across DST boundaries.
