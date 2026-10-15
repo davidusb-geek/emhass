@@ -435,6 +435,27 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # Same correct local start expected
         self.assertEqual(dates_local[0], "2026-06-15T21:15:00+10:00")
 
+    async def test_dayahead_forwards_current_period_peak(self):
+        """The capacity-tariff peak floor (current_period_peak) must reach
+        passed_data in the DAYAHEAD path, not only MPC. The dayahead branch
+        previously hardcoded it to None, silently dropping the floor so the
+        solver minimised the absolute import peak (flat grid) instead of
+        honouring the already-incurred billing-period peak."""
+        runtimeparams = orjson.loads(self.runtimeparams_json)
+        runtimeparams["current_period_peak"] = 3790
+        rp_json = orjson.dumps(runtimeparams).decode("utf-8")
+        for set_type in ("dayahead-optim", "naive-mpc-optim"):
+            rhc, oc, pc = utils.get_yaml_parse(self.params_json, logger)
+            params, *_ = await utils.treat_runtimeparams(
+                rp_json, self.params_json, rhc, oc, pc, set_type, logger, emhass_conf
+            )
+            params = orjson.loads(params)
+            self.assertEqual(
+                params["passed_data"]["current_period_peak"],
+                3790,
+                f"current_period_peak dropped in {set_type}",
+            )
+
     async def test_treat_runtimeparams(self):
         # Test dayahead runtime params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
