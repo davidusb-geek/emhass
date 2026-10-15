@@ -5115,3 +5115,221 @@ if __name__ == "__main__":
     unittest.main()
     ch.close()
     logger.removeHandler(ch)
+
+
+class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
+    """Forecast values stay on their UTC instants across a DST change (#1189).
+
+    Each source value encodes its own UTC instant, so a value on the wrong step names its source.
+    """
+
+    asyncSetUp = TestForecastDatesTieAlignment.asyncSetUp
+
+    _build_forecast = TestForecastDatesTieAlignment._build_forecast
+
+    @staticmethod
+    def _marker(ts: pd.Timestamp) -> float:
+        return float(pd.Timestamp(ts).tz_convert("UTC").value // 60_000_000_000)
+
+    def test_list_values_stay_on_their_instants_across_the_repeated_hour(self):
+        """A list is mapped onto a grid that contains both passes of the repeated hour."""
+        import pytz
+
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-14T08:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=30),
+        )
+        for zone, first_utc in (
+            ("Europe/Berlin", "2026-10-24T22:00:00Z"),  # grid runs through 02:00-03:00 CEST/CET
+            ("Europe/Dublin", "2026-10-24T22:00:00Z"),  # negative DST
+            ("Australia/Sydney", "2027-04-03T13:00:00Z"),
+        ):
+            with self.subTest(zone=zone):
+                grid = pd.date_range(
+                    pd.Timestamp(first_utc).tz_convert(pytz.timezone(zone)),
+                    periods=96,
+                    freq="30min",
+                )
+                self.assertGreater(len({t.utcoffset() for t in grid}), 1)  # the day has the change
+                values = [self._marker(t) for t in grid]
+                with self.assertNoLogs(logger, level="WARNING"):  # fully covered: no warning
+                    out = fcst.get_forecast_out_from_csv_or_list(
+                        pd.DataFrame(index=grid), grid, None, data_list=values
+                    )
+                self.assertEqual(out.to_numpy(dtype=float).ravel().tolist(), values)
+
+    async def test_open_meteo_index_is_not_rounded_again(self):
+        """A grid that is not UTC-aligned (Asia/Kathmandu, +05:45) keeps one row per step."""
+        from unittest.mock import AsyncMock
+
+        for method in ("first", "last"):
+            with self.subTest(method=method):
+                fcst = self._build_forecast(
+                    pd.Timestamp("2026-10-14T04:40:00"),
+                    method,
+                    tz_name="Asia/Kathmandu",
+                    step=pd.Timedelta(minutes=30),
+                )
+                times = pd.date_range("2026-10-13", periods=6 * 96, freq="15min", tz="UTC")
+                marker = [float(t.value // 60_000_000_000) for t in times]
+                n = len(times)
+                raw = {
+                    "minutely_15": {
+                        "time": [int(t.timestamp()) for t in times],
+                        "temperature_2m": marker,
+                        "relative_humidity_2m": [50.0] * n,
+                        "rain": [0.0] * n,
+                        "cloud_cover": [0.0] * n,
+                        "wind_speed_10m": [1.0] * n,
+                        "shortwave_radiation_instant": [0.0] * n,
+                        "diffuse_radiation_instant": [0.0] * n,
+                        "direct_normal_irradiance_instant": [0.0] * n,
+                    }
+                }
+                fcst.get_cached_open_meteo_forecast_json = AsyncMock(return_value=raw)
+                data = await fcst._get_weather_open_meteo("no-such-cache.json", False)
+                self.assertEqual(list(data.index), list(fcst.forecast_dates))
+                self.assertTrue(data.index.is_unique)
+                expected = [float(t.tz_convert("UTC").value // 60_000_000_000) for t in data.index]
+                self.assertEqual(data["temp_air"].tolist(), expected)
+
+    def test_csv_not_covering_the_horizon_warns(self):
+        """Steps after the last row keep taking the closest row, and say so in the log."""
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-14T08:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=30),
+        )
+        csv_rows = pd.date_range("2026-10-14 10:00", periods=4, freq="30min", tz=tz)
+        csv_path = emhass_conf["data_path"] / "tmp_short_forecast.csv"
+        try:
+            pd.DataFrame(
+                {"ts": [t.isoformat() for t in csv_rows], "v": [1.0, 2.0, 3.0, 4.0]}
+            ).to_csv(csv_path, header=False, index=False)
+            grid = pd.date_range("2026-10-14 10:00", periods=8, freq="30min", tz=tz)
+            with self.assertLogs(logger, level="WARNING") as captured:
+                out = fcst.get_forecast_out_from_csv_or_list(
+                    pd.DataFrame(index=grid), grid, str(csv_path)
+                )
+        finally:
+            csv_path.unlink(missing_ok=True)
+        self.assertEqual(out.iloc[:, 0].tolist(), [1.0, 2.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0])
+        self.assertTrue(any("does not cover 3 of 8" in m for m in captured.output))
+
+    def test_coverage_warning_is_quiet_for_coarser_or_offset_sources(self):
+        """Only steps beyond the source's span warn; a coarser or slightly off-grid source is fine."""
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-14T08:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=30),
+        )
+        grid = pd.date_range("2026-10-14 10:00", periods=48, freq="30min", tz=tz)
+        csv_path = emhass_conf["data_path"] / "tmp_quiet_forecast.csv"
+        try:
+            for label, rows in (
+                (
+                    "hourly source on a 30-minute grid",
+                    pd.date_range("2026-10-14 09:00", periods=30, freq="60min", tz=tz),
+                ),
+                (
+                    "source 3 minutes off the grid",
+                    pd.date_range("2026-10-14 09:57", periods=60, freq="30min", tz=tz),
+                ),
+            ):
+                with self.subTest(source=label):
+                    pd.DataFrame(
+                        {"ts": [t.isoformat() for t in rows], "v": range(len(rows))}
+                    ).to_csv(csv_path, header=False, index=False)
+                    with self.assertNoLogs(logger, level="WARNING"):
+                        fcst.get_forecast_out_from_csv_or_list(
+                            pd.DataFrame(index=grid), grid, str(csv_path)
+                        )
+        finally:
+            csv_path.unlink(missing_ok=True)
+
+    def test_perfect_forecast_profile_starting_mid_day_is_matched_by_wall_time(self):
+        """A profile whose first item is 10:00 puts item 0 on every 10:00, not on midnight."""
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-14T08:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=30),
+        )
+        profile_grid = pd.date_range("2026-10-14 10:00", periods=48, freq="30min", tz=tz)
+        profile = [float(i) for i in range(48)]  # item 0 = 10:00
+        history = pd.date_range("2026-10-01 00:00", periods=96, freq="30min", tz=tz)  # two days
+        out = fcst.get_forecast_out_from_csv_or_list(
+            pd.DataFrame(index=history),
+            profile_grid,
+            None,
+            data_list=profile,
+            list_and_perfect=True,
+        )
+        expected = [float(((t.hour * 60 + t.minute) // 30 - 20) % 48) for t in history]
+        self.assertEqual(out.iloc[:, 0].tolist(), expected)
+
+    def test_perfect_forecast_profile_follows_time_of_day_on_23_and_25_hour_days(self):
+        """A daily list profile applied to historical days keeps its time-of-day meaning."""
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-14T00:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=30),
+        )
+        profile_grid = pd.date_range("2026-10-14 00:00", periods=48, freq="30min", tz=tz)
+        profile = [float(i) for i in range(48)]  # value = slot of the day
+        for first_day, last_day in (("2026-03-28", "2026-03-30"), ("2026-10-24", "2026-10-26")):
+            with self.subTest(days=(first_day, last_day)):
+                history = pd.date_range(
+                    pd.Timestamp(first_day, tz=tz),
+                    pd.Timestamp(last_day, tz=tz) + pd.Timedelta(hours=23, minutes=30),
+                    freq="30min",
+                )
+                out = fcst.get_forecast_out_from_csv_or_list(
+                    pd.DataFrame(index=history),
+                    profile_grid,
+                    None,
+                    data_list=profile,
+                    list_and_perfect=True,
+                )
+                expected = [float((t.hour * 60 + t.minute) // 30) for t in history]
+                self.assertEqual(out.iloc[:, 0].tolist(), expected)
+
+    def test_csv_with_local_iso_timestamps_across_a_dst_change(self):
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        fcst = self._build_forecast(
+            pd.Timestamp("2026-10-24T20:00:00"),
+            "first",
+            tz_name="Europe/Berlin",
+            step=pd.Timedelta(minutes=60),
+        )
+        index = pd.date_range("2026-10-25 00:00", "2026-10-25 05:00", freq="60min", tz=tz)
+        csv_path = emhass_conf["data_path"] / "tmp_dst_local_iso_forecast.csv"
+        try:
+            pd.DataFrame(
+                {"ts": [t.isoformat() for t in index], "v": [self._marker(t) for t in index]}
+            ).to_csv(csv_path, header=False, index=False)
+            self.assertGreater(len({t.utcoffset() for t in index}), 1)
+            df = fcst._load_forecast_data(str(csv_path), None, index)
+        finally:
+            csv_path.unlink(missing_ok=True)
+        self.assertEqual(list(df.index.tz_convert("UTC")), list(index.tz_convert("UTC")))
+        self.assertEqual(df["yhat"].tolist(), [self._marker(t) for t in index])
