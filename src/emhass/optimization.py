@@ -93,6 +93,9 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 # whenever that is possible, while a contradictory target relaxes to the closest
 # reachable SoC instead of returning infeasible.
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+# Big-M factor on grid import under costfun "self-consumption" (see
+# _build_objective_function). The terminal-SoC penalty is scaled by the same factor.
+SELF_CONSUMPTION_BIGM = 1e3
 # Default big-M (deg C) for the per-source max_supply_temperature gate on
 # shared thermal tanks. When allow_k = 0 the gate must leave the tank
 # temperature unconstrained, so M must be at least (highest feasible tank
@@ -2642,7 +2645,7 @@ class Optimization:
 
         elif self.costfun == "self-consumption":
             if type_self_conso == "bigm":
-                bigm = 1e3
+                bigm = SELF_CONSUMPTION_BIGM
                 cost_term = bigm * cp.multiply(unit_load_cost, p_grid_pos)
                 prod_term = cp.multiply(unit_prod_price, p_grid_neg)
                 objective_terms.append(-scale * cp.sum(cost_term + prod_term))
@@ -7124,9 +7127,13 @@ class Optimization:
         # Price the terminal-SoC miss well above the dearest import slot so the target is
         # never traded away for energy cost; the 0.001 converts the Wh slacks to kWh. The
         # floor keeps the penalty meaningful when every tariff is zero or negative.
+        # Under self-consumption grid import costs SELF_CONSUMPTION_BIGM times the tariff,
+        # so the miss is scaled by the same factor to stay above the import it would save.
+        penalty_scale = SELF_CONSUMPTION_BIGM if self.costfun == "self-consumption" else 1.0
         self.param_soc_final_penalty.value = (
             0.001
             * SOC_FINAL_DEVIATION_PENALTY_FACTOR
+            * penalty_scale
             * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
         )
         # If soc_final_reward_factor is defined, missing the final SOC
