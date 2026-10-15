@@ -3213,6 +3213,51 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # runtime soc_final actually reached the constraint.
         self.assertLess(res_lo["SOC_opt"].iloc[-1], res_hi["SOC_opt"].iloc[-1] - 0.05)
 
+    def test_self_consumption_meets_reachable_soc_final(self):
+        """Issue #1154: under ``self-consumption`` grid import is priced by a big-M
+        factor, so the terminal-SoC penalty must carry the same factor. Otherwise a
+        discharge into the evening load saves more than missing ``soc_final`` costs
+        and a reachable target is ignored (final SoC 0.716 against 0.725).
+        """
+        df = self.prepare_forecast_data()
+        hours = df.index.hour + df.index.minute / 60.0
+        # PV bell between 07:00 and 17:00 peaking at 6 kW
+        df["p_pv_forecast"] = np.where(
+            (hours >= 7) & (hours <= 17), 6000 * np.sin(np.pi * (hours - 7) / 10) ** 2, 0.0
+        )
+        # 500 W base load, 1.5 kW from 18:00 to 23:00
+        df["p_load_forecast"] = np.where((hours >= 18) & (hours < 23), 1500.0, 500.0)
+        # Dear import 17:00-23:00, cheap otherwise
+        df["unit_load_cost"] = np.where((hours >= 17) & (hours < 23), 0.30, 0.10)
+        df["unit_prod_price"] = 0.08
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": False,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 23500,
+                "battery_discharge_power_max": 5000,
+                "battery_charge_power_max": 5000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization(costfun="self-consumption")
+        res = self.opt.perform_dayahead_forecast_optim(
+            df, pv, load, soc_init=0.139, soc_final=0.725
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(res["SOC_opt"].iloc[-1], 0.725, delta=0.002)
+
     def test_sequence_load_runs_with_zero_operating_hours(self):
         """Issue #887: a sequence (list-valued power) deferrable load runs for
         the length of its sequence and ignores operating_hours, which is
@@ -15477,6 +15522,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self._solve_default_inputs(opt)
         self.assertEqual(calls, [])
 
+    def test_a_failed_relaxed_rebuild_restores_the_configuration(self):
+        """The relaxed rescue switches semi-continuous loads off and repoints
+        instance state at its throwaway build. If building the relaxed problem
+        raises, both must still be restored for the next run."""
+        opt = self._dp_refinable_setup()
+        opt.optim_conf["treat_deferrable_load_as_semi_cont"] = [True]
+
+        def fail_when_relaxed(*args, relaxed=False, **kwargs):
+            if relaxed:
+                raise RuntimeError("relaxed rebuild failed")
+
+        with (
+            mock.patch.object(opt, "_needs_relaxed_retry", return_value=True),
+            mock.patch.object(
+                opt, "_add_deferrable_group_constraints", side_effect=fail_when_relaxed
+            ),
+            self.assertRaisesRegex(RuntimeError, "relaxed rebuild failed"),
+        ):
+            self._solve_default_inputs(opt)
+        self.assertFalse(opt._relaxed_rebuild)
+        self.assertEqual(opt.optim_conf["treat_deferrable_load_as_semi_cont"], [True])
+
+    def test_rejected_dp_resolve_restores_the_static_cop(self):
+        """A rejected re-solve keeps the static plan, and the problem's Parameters
+        go back to the values that plan was solved with: the refined COP must not
+        stay behind in the problem."""
+        opt = self._dp_refinable_setup()
+        with mock.patch.object(opt, "_accept_dp_resolve", return_value=False):
+            self._solve_default_inputs(opt)
+        hp = opt._dp_tank_entries[0]["hp"]
+        np.testing.assert_allclose(hp["cop_param"].value, hp["cop_static"])
+
+        # The same setup with the re-solve accepted does refine the COP, so the
+        # assertion above is not vacuous.
+        opt = self._dp_refinable_setup()
+        self._solve_default_inputs(opt)
+        hp = opt._dp_tank_entries[0]["hp"]
+        self.assertFalse(np.allclose(hp["cop_param"].value, hp["cop_static"]))
+
     def test_dp_resolve_rejection_preserves_static_plan(self):
         """Coverage for the rejected-DP-re-solve path: the published plan must stay
         valid (not nulled) when the refinement re-solve is rejected. prob2 shares the
@@ -15837,6 +15921,529 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "the COP Parameter a later DP refinement mutates must be one the cached "
             "problem actually solves, not an orphan from the abandoned relaxed rebuild",
         )
+
+    def test_max_thermal_power_caps_heat_pump_under_high_cop(self):
+        """A per-source max_thermal_power bounds delivered heat (cop * electrical)
+        so a high summer COP cannot make the model deliver more than the unit's
+        rated thermal output - and it stays feasible by spreading the load."""
+        cap = 10000.0  # W thermal
+        cop = np.asarray(
+            utils.resolve_thermal_battery_cop(
+                {"supply_temperature": 30.0, "carnot_efficiency": 0.5},
+                [20.0] * 48,
+                length=48,
+            )
+        )
+        # Load-bearing: without the cap the HP concentrates its heat and delivers
+        # well above the cap at the cheapest slot (else the test proves nothing).
+        opt0, res0 = self._run_hp_thermal_cap(max_thermal_power=None)
+        self.assertEqual(opt0.optim_status, "Optimal")
+        thermal0 = cop * res0["P_deferrable0"].reset_index(drop=True).to_numpy()
+        self.assertGreater(
+            thermal0.max(),
+            cap,
+            "Uncapped scenario must exceed the cap somewhere, else the test is vacuous",
+        )
+        # With the cap, delivered heat stays at or below it at every step.
+        opt1, res1 = self._run_hp_thermal_cap(max_thermal_power=cap)
+        self.assertEqual(opt1.optim_status, "Optimal")
+        thermal1 = cop * res1["P_deferrable0"].reset_index(drop=True).to_numpy()
+        self.assertLessEqual(
+            thermal1.max(),
+            cap + 1e-3,
+            "max_thermal_power must cap delivered heat (cop * electrical) at every step",
+        )
+
+    def test_max_thermal_power_caps_all_flows_of_a_source_together(self):
+        """A source that feeds two storages compiles into one load per flow. Its
+        rated thermal output limits the two flows together, not each of them: at
+        the one cheap step, heating both storages at once may not exceed it."""
+        cap = 6000.0
+        min_t = [30.0] * 48
+        for i in range(30, 36):
+            min_t[i] = 45.0
+        storage = [
+            {
+                "id": sid,
+                "volume": 0.3,
+                "start_temperature": 30.0,
+                "thermal_loss": 0.0,
+                "min_temperature": min_t,
+                "max_temperature": [65.0] * 48,
+            }
+            for sid in ("dhw", "buffer")
+        ]
+        topo = {
+            "sources": [
+                {
+                    "id": "unit",
+                    "type": "constant_efficiency",
+                    "efficiency": 3.0,
+                    "nominal_power": 4000,
+                    "treat_as_semi_cont": False,
+                    "max_thermal_power": cap,
+                }
+            ],
+            "storage": storage,
+            "flows": [{"from": "unit", "to": "dhw"}, {"from": "unit", "to": "buffer"}],
+        }
+        for key, val in utils.compile_heat_topology(topo).items():
+            self.optim_conf[key] = val
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        prices = np.full(48, 0.40)
+        prices[20] = 0.05
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            np.zeros(48),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        heat = 3.0 * (res["P_deferrable0"].to_numpy() + res["P_deferrable1"].to_numpy())
+        self.assertLessEqual(float(heat.max()), cap + 1.0)
+
+    def _run_hp_thermal_cap(self, max_thermal_power, nominal=5000):
+        """One shared tank fed by a single heat pump running at a HIGH COP (warm
+        20 C outdoor + low 30 C supply -> small Carnot lift). A single strictly
+        cheapest price slot makes the uncapped HP concentrate all its banking
+        there, delivering far more heat (cop * electrical) than a real unit
+        could. A mid-horizon min_temperature of 50 C creates the demand.
+        `max_thermal_power` (W thermal, or None) caps cop * electrical."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [20.0] * 48
+        hp_source = {"supply_temperature": 30.0, "carnot_efficiency": 0.5}
+        if max_thermal_power is not None:
+            hp_source["max_thermal_power"] = max_thermal_power
+        min_t = [30.0] * 48
+        for i in range(30, 36):
+            min_t[i] = 50.0  # demand: tank must reach 50 C mid-horizon
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [nominal]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [{"thermal_source": hp_source}]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "tank",
+                "load_ids": [0],
+                "volume": 1.0,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 40.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        # One strictly-cheapest slot (10) forces the uncapped HP to concentrate
+        # its banking there rather than spreading it thin.
+        ulc = np.full(48, 0.30)
+        ulc[8:12] = 0.05
+        ulc[10] = 0.01
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        return opt, res
+
+    def test_repro_max_thermal_power_hp_not_abandoned(self):
+        """Regression (max_thermal_power x semi-continuous load): EMHASS's
+        semi-continuous convention is the strict equality p == nominal * bin -
+        ON means EXACTLY nominal power. A binding max_thermal_power forces
+        p <= cap/COP < nominal at high-COP steps, which made OFF the only
+        feasible state: the solver returned an 'Optimal' plan that abandoned a
+        cheap high-COP heat pump entirely (objective ~50x worse than the
+        feasible heating plan) rather than throttle it.
+
+        The fix keeps the on/off convention but caps the ON level itself:
+        p == bin * min(nominal, cap/COP) per step - a real heat pump at its
+        thermal ceiling runs flat-out against whichever limit binds. The
+        capped semi-continuous HP must therefore RUN (not be abandoned) and
+        its delivered heat must respect the cap at every step."""
+        _, res0 = self._run_hp_curve_soft_comfort(max_thermal_power=None)
+        _, res1 = self._run_hp_curve_soft_comfort(max_thermal_power=15000)
+        self.assertGreater(
+            res0["P_deferrable0"].sum(), 0, "control: uncapped HP heats toward the soft target"
+        )
+        self.assertGreater(
+            res1["P_deferrable0"].sum(), 0, "capped HP abandoned despite cheap COP-8 slots"
+        )
+        # Delivered heat respects the cap at every step (COP 8 at 20 C outdoor
+        # with the 28 C curve supply; 15 kW cap -> at most 1875 W electrical ON).
+        cop = np.asarray(
+            utils.resolve_thermal_battery_cop(
+                {
+                    "heating_curve": {
+                        "slope": 0.7,
+                        "offset": 38,
+                        "min_supply": 28,
+                        "max_supply": 70,
+                    },
+                    "carnot_efficiency": 0.46,
+                },
+                [20.0] * 48,
+                length=48,
+            )
+        )
+        thermal = cop * res1["P_deferrable0"].reset_index(drop=True).to_numpy()
+        self.assertLessEqual(
+            thermal.max(),
+            15000.0 + 1e-3,
+            "ON-state delivered heat must respect max_thermal_power",
+        )
+
+    def _run_hp_curve_soft_comfort(
+        self,
+        max_thermal_power,
+        min_power=None,
+        cop_solver="static",
+        semi_cont=None,
+        call_min_power=None,
+    ):
+        """A heating_curve HP (Parameter COP) feeding a tank with a SOFT comfort
+        target (desired_temperature). Warm 20 C outdoor -> curve supply 28 C ->
+        COP clamps to 8, so the cap (if set) binds. Cheap flat price. The HP
+        should heat toward the target whether or not the cap binds; abandoning it
+        to the soft penalty when cheap COP-8 slots exist is the bug."""
+        from emhass import utils
+
+        hp = {
+            "id": "hp",
+            "type": "heatpump",
+            "heating_curve": {"slope": 0.7, "offset": 38, "min_supply": 28, "max_supply": 70},
+            "carnot_efficiency": 0.46,
+            "nominal_power": 5700,
+        }
+        if max_thermal_power is not None:
+            hp["max_thermal_power"] = max_thermal_power
+        if min_power is not None:
+            hp["min_power"] = min_power
+        if semi_cont is not None:
+            hp["treat_as_semi_cont"] = semi_cont
+        topo = {
+            "sources": [hp],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 1.0,
+                    "start_temperature": 30.0,
+                    "thermal_loss": 0.0,
+                    "min_temperature": [20.0] * 48,
+                    "max_temperature": [65.0] * 48,
+                    "desired_temperature": 50,
+                    "penalty_factor": 50,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "tank"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [20.0] * 48
+        for key, val in compiled.items():
+            self.optim_conf[key] = val
+        self.optim_conf["cop_solver"] = cop_solver
+        opt = self.create_optimization()
+        ulc = np.full(48, 0.10)
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+            min_power_of_deferrable_loads=call_min_power,
+        )
+        return opt, res
+
+    def test_min_power_collision_uses_the_min_power_of_the_call(self):
+        """perform_optimization can be given its own minimum powers; the warning
+        counts the steps from those, the values the constraints are built with,
+        not from the configuration."""
+        with self.assertLogs(level="WARNING") as logs:
+            self._run_hp_curve_soft_comfort(
+                max_thermal_power=15000, semi_cont=False, call_min_power=[2000]
+            )
+        matching = [m for m in logs.output if "load 0" in m and "min_power" in m]
+        self.assertEqual(len(matching), 1, logs.output)
+
+    def test_relaxed_rescue_restores_semi_cont_on_level_registry(self):
+        """The binary-relaxed LP rescue rebuilds the deferrable-load constraints a
+        second time, which resets and repopulates `_dp_tank_entries` and
+        `_semi_cont_on_level` from that throwaway build. self.prob is deliberately
+        left untouched (#1048), so the registries must be restored to the cached
+        problem's own objects - otherwise every later run's DP COP refinement reads
+        a Variable and mutates a Parameter that the solved problem never sees, and a
+        semi-continuous load loses its on-level Parameter outright (the rescue forces
+        treat_deferrable_load_as_semi_cont to all-False before rebuilding)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [0.0] * 48
+        self._setup_single_hp(nominal=6000)
+        # A heating-curve HP: only a curve-driven source registers a DP tank entry.
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "heating_curve": {
+                        "slope": 0.7,
+                        "offset": 30,
+                        "min_supply": 25,
+                        "max_supply": 40,
+                    },
+                    "carnot_efficiency": 0.45,
+                    "max_supply_temperature": 62,
+                }
+            },
+        ]
+        # Semi-continuous so the original build registers an on-level Parameter.
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "buffer",
+                "load_ids": [0],
+                "thermal_mass": 3.0,
+                "loss_coefficient": 0.2,
+                "start_temperature": 35.0,
+                "min_temperatures": [30.0] * 48,
+                "max_temperatures": [60.0] * 48,
+                "draw_off_demand": [2.0] * 48,
+            }
+        ]
+        self.optim_conf["cop_solver"] = "auto"
+        opt = self.create_optimization()
+        unit_load_cost = np.array([0.05] * 24 + [0.40] * 24)
+        unit_prod_price = np.full(48, 0.02)
+        args = (
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Call 1: an ordinary solve; it builds and caches self.prob plus both registries.
+        res1 = opt.perform_optimization(*args)
+        self.assertIn("Optimal", str(res1["optim_status"].iloc[0]))
+        prob_id = id(opt.prob)
+        entry1 = opt._dp_tank_entries[0]
+        cop_param1 = entry1["hp"]["cop_param"]
+        on_level1 = opt._semi_cont_on_level.get(0)
+        self.assertIsNotNone(on_level1, "load 0 must be semi-continuous in the first build")
+        self.assertTrue(
+            any(entry1["predicted_temp"] is v for v in opt.prob.variables()),
+            "the registered DP temperature Variable must belong to the cached problem",
+        )
+        self.assertTrue(
+            any(cop_param1 is p for p in opt.prob.parameters()),
+            "the registered COP Parameter must belong to the cached problem",
+        )
+
+        # Call 2: force the relaxed-LP rescue on the cached problem. The DP refinement
+        # is stubbed out because a successful refinement short-circuits the retry test.
+        opt._refine_cop_with_dp = lambda *a, **k: None
+        opt._needs_relaxed_retry = lambda *a, **k: True
+        res2 = opt.perform_optimization(*args)
+        self.assertEqual(str(res2["optim_status"].iloc[0]), "Optimal (Relaxed)")
+        self.assertEqual(id(opt.prob), prob_id, "the cached problem must not be replaced")
+        self.assertIs(
+            opt._dp_tank_entries[0]["predicted_temp"],
+            entry1["predicted_temp"],
+            "the DP registry must point back at the cached problem's temperature Variable",
+        )
+        self.assertIs(
+            opt._dp_tank_entries[0]["hp"]["cop_param"],
+            cop_param1,
+            "the DP registry must point back at the cached problem's COP Parameter",
+        )
+        self.assertIs(
+            opt._semi_cont_on_level.get(0),
+            on_level1,
+            "the semi-continuous on-level Parameter for load 0 must survive the rescue",
+        )
+        self.assertTrue(
+            any(opt._dp_tank_entries[0]["hp"]["cop_param"] is p for p in opt.prob.parameters()),
+            "the COP Parameter a later DP refinement mutates must be one the cached "
+            "problem actually solves, not an orphan from the abandoned relaxed rebuild",
+        )
+
+    def test_min_power_below_capped_on_level_does_not_warn(self):
+        """Control for the collision warning above: with min_power 1500 W the
+        lowered ON level (cap/COP = 1875 W) clears the modulation floor at every
+        step, so the capped HP runs normally and nothing must be logged."""
+        with self.assertNoLogs(level="WARNING"):
+            opt, res = self._run_hp_curve_soft_comfort(max_thermal_power=15000, min_power=1500)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 7500.0, places=3)
+        self.assertAlmostEqual(res["P_deferrable0"].max(), 1875.0, places=3)
+
+    def test_min_power_above_capped_on_level_warns(self):
+        """Regression (min_power x max_thermal_power): lowering a capped source's
+        semi-continuous ON level to cap/COP does not touch the separate
+        `p >= min_power * bin` constraint. When cap/COP < min_power the two
+        collide on the same binary, OFF becomes the only feasible state and the
+        source is abandoned for the whole horizon - silently, with an 'Optimal'
+        status. The unit really cannot run there (lowering min_power would let
+        the model modulate below the hardware's floor), so the fix is to say so:
+        exactly one warning naming the source, the affected step count and the
+        two colliding config keys."""
+        with self.assertLogs(level="WARNING") as logs:
+            opt, res = self._run_hp_curve_soft_comfort(max_thermal_power=15000, min_power=2000)
+        # COP 8 at every step -> cap/COP = 1875 W < min_power 2000 W everywhere.
+        matching = [
+            m
+            for m in logs.output
+            if "load 0" in m and "min_power" in m and "max_thermal_power" in m
+        ]
+        self.assertEqual(
+            len(matching), 1, f"expected exactly one collision warning, got {logs.output}"
+        )
+        self.assertGreaterEqual(
+            matching[0].count("48"), 2, f"warning must state 48 affected steps of 48: {matching[0]}"
+        )
+        # Warning only: the solve is unchanged (the source stays abandoned).
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 0.0, places=3)
+        self.assertAlmostEqual(res["P_deferrable0"].max(), 0.0, places=3)
+
+    def test_dp_rederives_capped_on_level_from_the_refined_cop(self):
+        """With cop_solver 'dp' the refinement changes a capped heat pump's COP. Its
+        semi-continuous ON level (min(nominal, cap/COP)) must follow the refined
+        COP; otherwise, where the refined COP is higher than the static one, the
+        strict p == ON_level * bin equality exceeds the thermal cap and OFF is the
+        only feasible state: the heat pump is abandoned with an Optimal status.
+        A low target keeps the tank cool, so the refined COP (3.4-3.7) stays above
+        the static one (3.1, at the curve's 55.5 C supply) at every step."""
+        from emhass import utils
+
+        cap = 8000
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "heating_curve": {
+                        "slope": 0.7,
+                        "offset": 38,
+                        "min_supply": 28,
+                        "max_supply": 70,
+                    },
+                    "carnot_efficiency": 0.46,
+                    "nominal_power": 5700,
+                    "max_thermal_power": cap,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 1.0,
+                    "start_temperature": 25.0,
+                    "thermal_loss": 0.0,
+                    "min_temperature": [20.0] * 48,
+                    "max_temperature": [65.0] * 48,
+                    "desired_temperature": 32,
+                    "penalty_factor": 50,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "tank"}],
+        }
+        for key, val in utils.compile_heat_topology(topo).items():
+            self.optim_conf[key] = val
+        self.optim_conf["cop_solver"] = "dp"
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [-5.0] * 48
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            np.full(48, 0.10),
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        power = res["P_deferrable0"].to_numpy()
+        self.assertGreater(power.sum(), 0.0, "the capped heat pump was abandoned")
+        hp = opt._dp_tank_entries[0]["hp"]
+        cop = np.asarray(hp["cop_param"].value, dtype=float)
+        # The refinement must have run and changed the COP, or the ON-level check
+        # below would pass on the static values alone.
+        self.assertFalse(np.allclose(cop, hp["cop_static"]))
+        self.assertLessEqual(float(np.max(cop[: len(power)] * power)), cap + 1.0)
+        on_level = opt._semi_cont_on_level[0].value
+        np.testing.assert_allclose(
+            on_level, np.minimum(5700.0, cap / cop[: len(on_level)]), rtol=1e-6
+        )
+
+    def test_min_power_collision_warns_for_continuous_source(self):
+        """A continuous capped source collides the same way: cop * p <= cap and
+        p >= min_power * bin leave OFF as the only feasible state where
+        cap/COP < min_power. That must warn too, not only for semi-continuous
+        sources."""
+        with self.assertLogs(level="WARNING") as logs:
+            opt, res = self._run_hp_curve_soft_comfort(
+                max_thermal_power=15000, min_power=2000, semi_cont=False
+            )
+        matching = [m for m in logs.output if "load 0" in m and "min_power" in m]
+        self.assertEqual(len(matching), 1, logs.output)
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 0.0, places=3)
+
+    def test_min_power_collision_not_repeated_after_dp_refinement(self):
+        """The DP refinement re-derives the ON level from the refined COP and checks
+        the collision again. When the number of affected steps is unchanged (here
+        the COP clamps to 8 before and after), the build-time warning is not
+        repeated on every run."""
+        with self.assertLogs(level="INFO") as logs:
+            self._run_hp_curve_soft_comfort(
+                max_thermal_power=15000, min_power=2000, cop_solver="dp"
+            )
+        # The refinement ran (else one warning would be expected anyway).
+        self.assertTrue(any("DP COP refinement on tank" in m for m in logs.output), logs.output)
+        matching = [m for m in logs.output if "min_power" in m and "load 0" in m]
+        self.assertEqual(len(matching), 1, logs.output)
+
+    def test_min_power_collision_not_repeated_by_relaxed_rescue(self):
+        """The relaxed-LP rescue rebuilds the thermal constraints; with the same
+        number of affected steps it must not repeat the build-time warning."""
+        from emhass.optimization import Optimization
+
+        with (
+            mock.patch.object(Optimization, "_needs_relaxed_retry", return_value=True),
+            self.assertLogs(level="WARNING") as logs,
+        ):
+            self._run_hp_curve_soft_comfort(max_thermal_power=15000, min_power=2000)
+        self.assertTrue(any("Optimization failed with status" in m for m in logs.output))
+        matching = [m for m in logs.output if "min_power" in m and "load 0" in m]
+        self.assertEqual(len(matching), 1, logs.output)
+
+    def test_min_power_collision_rewarned_when_dp_changes_it(self):
+        """After the DP, a changed number of affected steps is warned again, naming
+        the refinement."""
+        opt = self.create_optimization()
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [2000]
+        opt.optim_conf["minimum_power_of_deferrable_loads"] = [2000]
+        cop = np.full(4, 8.0)  # cap/COP = 1875 W < 2000 W at every step
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertEqual(opt._warn_capped_level_below_min_power("t", 0, cop, 15000, 4), 4)
+        self.assertEqual(len(logs.output), 1)
+        with self.assertNoLogs(level="WARNING"):
+            opt._warn_capped_level_below_min_power("t", 0, cop, 15000, 4, after_dp=True)
+        cop[:2] = 5.0  # cap/COP = 3000 W at two steps: only two collide now
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertEqual(
+                opt._warn_capped_level_below_min_power("t", 0, cop, 15000, 4, after_dp=True), 2
+            )
+        self.assertIn("after the DP COP refinement", logs.output[0])
 
 
 if __name__ == "__main__":

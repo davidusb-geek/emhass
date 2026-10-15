@@ -410,6 +410,8 @@ For the `csv` method you should push a csv file to the `data` folder. The CSV fi
     2021-04-29 01:00:00+00:00,243.38
     ...
 
+Each timestamp is read as an absolute instant: include the UTC offset (a timestamp without one is read as UTC). A file written in local time may therefore change offset in the middle, for example `+01:00` and `+02:00` across a daylight saving change, and both occurrences of a repeated local hour stay distinct. The rows should cover the whole optimization horizon at the `optimization_time_step`. For a step more than one source step (the median row spacing) after the last row or before the first, EMHASS keeps using the closest row and logs a warning (not checked for a file with a single row) with the number of uncovered steps and the first and last of them.
+
 For the list method, you just have to add the data as a list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option.
 
 The possible dictionary keys to pass data are:
@@ -429,7 +431,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
-You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list length should be 24 data points.
+You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list should contain one value per step: 24 hourly values, or 23 or 25 across a daylight saving change.
 
 ### Understanding forecast data formats: List vs Dictionary
 
@@ -446,7 +448,7 @@ The list format passes forecast values as a simple array. This is the most compa
 attention to timing and data length.
 
 **Requirements:**
-- The list must contain values for the **current time period first**, followed by future values
+- The list must start with the value for the **first step of the optimization grid** (set by `method_ts_round`; with `first` it is the step that contains now), followed by future values
 - The list must contain at least one value per horizon step based on `optimization_time_step`. Extra values are
 ignored, and a shorter list is rejected with an error rather than padded
 - Values must be in the correct order (chronological)
@@ -459,7 +461,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 	"optimization_time_step": 60
 }' http://localhost:5000/action/dayahead-optim
 ```
-For a 24-hour forecast with 1-hour intervals, you need exactly 24 values starting from the current hour.
+For a 24-hour forecast with 1-hour intervals, you need one value per grid step, 24 hourly values (23 or 25 across a daylight saving change), starting at the first grid step.
 
 When to use list format:
 - Your forecast data is already aligned with EMHASS intervals
@@ -504,15 +506,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
-What happens internally:
-1. Every value is checked against the [numerical contract](passing_data.md#forecast-input-contract), so an invalid value
-is reported with its source timestamp and the action fails
-2. Timestamps are parsed as ISO8601 and converted to your configured timezone
-3. Points that fall inside the same `optimization_time_step` are averaged (e.g., four 15-minute values become one hourly
-value); coarser data is not interpolated
-4. Values are matched to the forecast grid by UTC instant and each value holds until the next point (step semantics)
-5. Horizon steps before the first supplied point take the first supplied value (backfill)
-6. The result is converted to a list for the optimizer
+What happens internally: the values are validated, aggregated to the optimization step and matched to the grid by UTC instant, exactly as described under [Timestamped mappings](passing_data.md#timestamped-mappings).
 
 When to use dictionary format:
 - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
@@ -548,7 +542,7 @@ shell_command:
 
 Notice how the list format requires:
 - Extracting values from dictionaries `map(attribute="value")`
-- Slicing from current hour `[now().hour:]`
+- Slicing from current hour `[now().hour:]`. With a 60-minute step this is the first grid step only for `method_ts_round: first`. With the default `nearest` from about :30 on (an exact :30 goes to the even UTC hour), and with `last` (a time that is not exactly on a step), the grid starts one hour later, so every value is applied one hour too late
 - Limiting to the correct length `[:24]`
 
 `raw_today` already starts with the first hour of the local day, so `[now().hour:]` alone selects the current hour;
@@ -573,8 +567,8 @@ Data resolution:
 - Each hourly price is held constant for all 15-minute intervals within that hour (step semantics, no interpolation)
 
 Current values:
-- When using list format, the first value in the list must be the current period
-- Example: If it's 14:30 and your intervals are 30 minutes, the first value should be for 14:30-15:00
+- When using list format, the first value in the list must be for the first grid step: with `method_ts_round: first` the step that contains now, with `last` the first step boundary not before now, with `nearest` (default) the closest boundary
+- Example: at 14:50 with 30-minute intervals, `nearest` starts the grid at 15:00
 - Dictionary format automatically handles this by using timestamps
 
 Mixing formats:
@@ -743,6 +737,8 @@ The subsequent shell command to concatenate `today` and `tomorrow` values can be
 shell_command:
   trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
+
+This command assumes a 60-minute `optimization_time_step` and `method_ts_round: first`, so that the list starts at the current hour (see [the list format](#understanding-forecast-data-formats-list-vs-dictionary)). With another step or rounding mode, prefer the dictionary format.
 
 ## Now/current values in forecasts
 
