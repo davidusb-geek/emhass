@@ -741,6 +741,45 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt_res.isnull().sum().sum(), 0)
         self.assertEqual(len(opt_res), 10)
 
+    async def test_forecast_model_predict_with_model_trained_on_another_sensor(self):
+        # A model fitted on the stock sensor, then predicted after var_model switched to a
+        # custom load sensor, gets the custom sensor's history as its last window (#1208).
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        runtimeparams = {
+            "historic_days_to_retrieve": 20,
+            "model_type": "long_train_data",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48,
+            "split_date_delta": "48h",
+            "perform_backtest": False,
+        }
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            orjson.dumps(params).decode("utf-8"),
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            "forecast-model-fit",
+            logger,
+            get_data_from_file=True,
+        )
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=48 * 10, freq="30min")
+        df_stock = utils.set_df_index_freq(
+            pd.DataFrame({"sensor.power_load_no_var_loads": rng.random(len(idx)) * 100}, index=idx)
+        )
+        input_data_dict["df_input_data"] = df_stock
+        _, _, mlf = await forecast_model_fit(input_data_dict, logger, debug=True)
+        self.assertEqual(mlf.var_model, "sensor.power_load_no_var_loads")
+        input_data_dict["params"]["passed_data"]["var_model"] = "sensor.custom_load"
+        input_data_dict["df_input_data"] = df_stock.rename(
+            columns={"sensor.power_load_no_var_loads": "sensor.custom_load"}
+        )
+        with self.assertLogs(logger, level="WARNING") as logs:
+            df_pred = await forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
+        self.assertEqual(len(df_pred), mlf.num_lags)
+        self.assertTrue(any("forecast-model-fit" in m for m in logs.output))
+
     # Test outputs of fit, predict and tune
     async def test_forecast_model_fit_predict_tune(self):
         costfun = "profit"
