@@ -313,7 +313,10 @@ class Forecast:
         frozen_start = (self.params.get("passed_data") or {}).pop("forecast_start", None)
         if frozen_start:
             try:
-                captured_start = pd.Timestamp(frozen_start).tz_convert(self.time_zone)
+                parsed_start = pd.Timestamp(frozen_start).tz_convert(self.time_zone)
+                if pd.isna(parsed_start):  # "NaT" parses without raising
+                    raise ValueError("NaT")
+                captured_start = parsed_start
             except (ValueError, TypeError):
                 self.logger.warning("Ignoring malformed forecast_start %r", frozen_start)
             else:
