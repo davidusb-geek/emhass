@@ -33,7 +33,7 @@ If your `prediction_horizon` is `N` and `optimization_time_step` is 30 minutes, 
 
 If your source data is hourly or finer than the timestep, pass it as a timestamped mapping instead: EMHASS averages points within each timestep and holds each value until the next point. The [Forecast input contract](../passing_data.md#forecast-input-contract) describes both representations.
 
-Concrete example: a 24-hour horizon at 30-minute step = 48 items per list; at 15-minute step = 96 items.
+Concrete example: a 24-hour horizon at 30-minute step = 48 items per list; at 15-minute step = 96 items. The first item belongs to the first optimization step, which `method_ts_round` derives from the request time and is not always the step containing "now" (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 
 ## 3. SOC convention: fraction of nominal capacity
 
