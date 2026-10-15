@@ -110,7 +110,7 @@ Example:
 
 ```{note} 
 
-Since `end_timesteps` are relative indexes starting from 0 (the first optimization step, which `method_ts_round` derives from the request time), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window, counted in elapsed time. A value of `0` disables the limit; see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs).
+Since `end_timesteps` are relative indexes starting from 0 (the first optimization step, which `method_ts_round` derives from the request time), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window, counted in elapsed time. A value of `0` disables the limit, but with a positive `start_timesteps` it also drops the start restriction, so give the end explicitly; see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs).
 Example: 
 - Launch at 7:00 AM, must finish by 6:00 PM (18:00).
 - Duration = 11 hours.

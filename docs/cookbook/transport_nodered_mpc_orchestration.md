@@ -70,7 +70,11 @@ const horizon_steps = 48;         // 48 × 30min = 24 elapsed hours (a fixed ste
 const ev_remaining_kwh = flow.get("ev_remaining_kwh") || 0;
 const ev_hours = Math.ceil(ev_remaining_kwh / charger_kw);
 const minutes_until_deadline = flow.get("minutes_until_deadline") || 480;
-const end_step = Math.floor(minutes_until_deadline / timestep_min);
+// Step indices count from the first optimization step, which with method_ts_round "first" started
+// minutes_into_step minutes ago (epoch based: assumes a UTC offset that is a whole number of steps).
+// An end of 0 means "no limit", so a deadline inside the first step needs handling by your flow.
+const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
+const end_step = Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min);
 
 // Battery SOC from your battery monitor, normalized to fraction 0..1
 const soc_percent = flow.get("battery_soc_percent") || 50;
