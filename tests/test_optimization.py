@@ -3213,6 +3213,51 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # runtime soc_final actually reached the constraint.
         self.assertLess(res_lo["SOC_opt"].iloc[-1], res_hi["SOC_opt"].iloc[-1] - 0.05)
 
+    def test_self_consumption_meets_reachable_soc_final(self):
+        """Issue #1154: under ``self-consumption`` grid import is priced by a big-M
+        factor, so the terminal-SoC penalty must carry the same factor. Otherwise a
+        discharge into the evening load saves more than missing ``soc_final`` costs
+        and a reachable target is ignored (final SoC 0.716 against 0.725).
+        """
+        df = self.prepare_forecast_data()
+        hours = df.index.hour + df.index.minute / 60.0
+        # PV bell between 07:00 and 17:00 peaking at 6 kW
+        df["p_pv_forecast"] = np.where(
+            (hours >= 7) & (hours <= 17), 6000 * np.sin(np.pi * (hours - 7) / 10) ** 2, 0.0
+        )
+        # 500 W base load, 1.5 kW from 18:00 to 23:00
+        df["p_load_forecast"] = np.where((hours >= 18) & (hours < 23), 1500.0, 500.0)
+        # Dear import 17:00-23:00, cheap otherwise
+        df["unit_load_cost"] = np.where((hours >= 17) & (hours < 23), 0.30, 0.10)
+        df["unit_prod_price"] = 0.08
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": False,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 23500,
+                "battery_discharge_power_max": 5000,
+                "battery_charge_power_max": 5000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization(costfun="self-consumption")
+        res = self.opt.perform_dayahead_forecast_optim(
+            df, pv, load, soc_init=0.139, soc_final=0.725
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertAlmostEqual(res["SOC_opt"].iloc[-1], 0.725, delta=0.002)
+
     def test_sequence_load_runs_with_zero_operating_hours(self):
         """Issue #887: a sequence (list-valued power) deferrable load runs for
         the length of its sequence and ignores operating_hours, which is
