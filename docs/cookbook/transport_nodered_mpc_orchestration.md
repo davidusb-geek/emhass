@@ -47,7 +47,7 @@ Expected: EMHASS restarts cleanly with the static keys; `GET /api/get-config` re
 Drag an `inject` node into your Node-RED tab. Configure:
 
 - Payload: `{}` (empty object, type `JSON`)
-- Repeat: `interval`, every 5 min (or whatever cadence you want; 5-15 min is typical in production). Plain price lists are positional from the first optimization step, which `method_ts_round` derives from the request time (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)). Set `method_ts_round` to `first` so that the first step is the step containing the tick, and build the lists from that step. If you prefer not to track it, send the prices as a timestamped mapping instead.
+- Repeat: `interval`, every 5 min (or whatever cadence you want; 5-15 min is typical in production). Plain price lists are positional from the first optimization step, which `method_ts_round` derives from the request time (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)). Set `method_ts_round` to `first` so that the first step is the step containing the tick, and build the lists from that step. This does not synchronise the two clocks: this flow builds the payload before EMHASS reads the request time, so a tick close to a step boundary can give EMHASS a first step one step later than the one the lists assume. Prefer sending the prices as a timestamped mapping when your source has timestamps, and check the first timestamp of the returned plan against the assumed first step before acting on it.
 - Inject once after deploy: optional, useful for testing
 
 This is the heartbeat that will drive every MPC call. Wire its output to the next node (Step 3).
