@@ -520,12 +520,15 @@ Dictionary format with Nordpool (Simple - Recommended!):
 ```bash
 shell_command:
 	emhass_dayahead_nordpool: >
+		{% set prices = state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") + state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") %}
 		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }},
-			"prod_price_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }}
+			"load_cost_forecast": {{ dict(prices | map(attribute="start") | map("string") | zip(prices | map(attribute="value"))) | tojson }},
+			"prod_price_forecast": {{ dict(prices | map(attribute="start") | map("string") | zip(prices | map(attribute="value"))) | tojson }}
 		}' http://localhost:5000/action/dayahead-optim
 ```
-The Nordpool integration already provides data in dictionary format with timestamps, so you can pass it directly using `| tojson`!
+`raw_today` is a list of `{start, end, value}` objects, not the `{timestamp: value}` mapping EMHASS expects (passing it with `| tojson` as is makes the optimisation fail), so the template pairs each `start` with its `value`. Prices are placed by timestamp, so this is correct for hourly and 15-minute prices and on daylight saving days. `raw_today + raw_tomorrow` covers the whole day-ahead horizon. The `value` must be in currency per kWh, as for every EMHASS price (divide a per-MWh sensor by 1000).
+
+Run it when tomorrow's prices are published: while `raw_tomorrow` is empty, the steps after midnight hold the last price of today (hold-last), and an `unavailable` sensor can keep its old attributes, so the template alone would still send stale prices. Guard the trigger or automation with a condition such as `{{ states('sensor.nordpool_kwh_be_eur_3_10_025') not in ['unknown', 'unavailable'] and (state_attr('sensor.nordpool_kwh_be_eur_3_10_025', 'raw_tomorrow') or []) | length > 0 }}`.
 
 List format with Nordpool (Traditional - More Complex):
 ```bash
@@ -533,8 +536,7 @@ shell_command:
 	emhass_dayahead_nordpool_list: >
 		curl -i -H "Content-Type: application/json" -X POST -d '{
 			"load_cost_forecast": {{(
-				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float] +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
+				(state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
 				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
 				[now().hour:][:24]
 			)}}
@@ -542,11 +544,15 @@ shell_command:
 ```
 
 Notice how the list format requires:
-- Adding the current hour value first `[states("sensor.nordpool...")]`. `| float` has no default on purpose: if the
-sensor is unavailable the template fails and the call is skipped, instead of sending a price of 0
 - Extracting values from dictionaries `map(attribute="value")`
 - Slicing from current hour `[now().hour:]`. With a 60-minute step this is the first grid step only for `method_ts_round: first`. With the default `nearest` from about :30 on (an exact :30 goes to the even UTC hour), and with `last` (a time that is not exactly on a step), the grid starts one hour later, so every value is applied one hour too late
 - Limiting to the correct length `[:24]`
+
+`raw_today` already starts with the first hour of the local day, so `[now().hour:]` alone selects the current hour;
+do not prepend another value, which would shift every price one hour early. This positional list is right only for
+hourly prices on a day with 24 entries: with 15-minute prices (96 entries) or on a daylight saving day (23 or 25
+entries, one hour off after the change) it selects the wrong prices, so use the dictionary format there (or always).
+Before tomorrow's prices are published the list has fewer than 24 values and EMHASS rejects it (the optimisation does not run); use the same condition as for the dictionary format.
 
 Dictionary format handles all of this automatically!
 
