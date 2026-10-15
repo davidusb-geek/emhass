@@ -72,6 +72,7 @@ from emhass.utils import (
     add_local_calendar_days,
     describe_invalid_forecast_value,
     get_days_list,
+    get_forecast_start,
     set_df_index_freq,
 )
 
@@ -290,29 +291,42 @@ class Forecast:
         else:
             self.params = orjson.loads(params)
 
-        if self.method_ts_round == "nearest":
-            # Round the start once, in UTC (no DST ambiguity there). A range built
-            # from an aligned start at a fixed freq is aligned by construction;
-            # rounding the built index stamp-by-stamp instead lets round-half-to-even
-            # collapse neighbouring stamps into duplicates whenever now() falls
-            # exactly on a half-interval boundary (HH:15:00 / HH:45:00 at 30 min).
-            self.start_forecast = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .tz_convert("utc")
-                .round(self.freq)
-                .tz_convert(self.time_zone)
-            )
-        elif self.method_ts_round == "first":
-            self.start_forecast = (
-                pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
-            )
-        elif self.method_ts_round == "last":
-            self.start_forecast = (
-                pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
-            )
-        else:
+        # The start is rounded once, on the UTC clock (see get_forecast_start). A range built
+        # from an aligned start at a fixed freq is aligned by construction; rounding the
+        # built index stamp-by-stamp instead lets round-half-to-even collapse neighbouring
+        # stamps into duplicates whenever now() falls exactly on a half-interval boundary
+        # (HH:15:00 / HH:45:00 at 30 min).
+        now = pd.Timestamp.now(tz=self.time_zone)
+        # A request that went through treat_runtimeparams carries the start it captured
+        # ("forecast_start", ISO 8601 with offset); reuse it so the runtime forecasts and this
+        # object share one grid. It is consumed here (single use), so a params dict that is
+        # reused for another request cannot pin an old grid. A value that is malformed or more
+        # than one step plus ten minutes from now is ignored with a warning.
+        if self.method_ts_round not in ("nearest", "first", "last"):
             self.logger.error("Wrong method_ts_round passed parameter")
+            raise ValueError(
+                f"method_ts_round must be 'nearest', 'first' or 'last', got {self.method_ts_round!r}"
+            )
+        captured_start = None
+        frozen_start = (self.params.get("passed_data") or {}).pop("forecast_start", None)
+        if frozen_start:
+            try:
+                captured_start = pd.Timestamp(frozen_start).tz_convert(self.time_zone)
+            except (ValueError, TypeError):
+                self.logger.warning("Ignoring malformed forecast_start %r", frozen_start)
+            else:
+                if abs(captured_start - now) > self.freq + pd.Timedelta(minutes=10):
+                    self.logger.warning(
+                        "Ignoring forecast_start %s: it is not from the current request",
+                        frozen_start,
+                    )
+                    captured_start = None
+        if captured_start is not None:
+            self.start_forecast = captured_start
+        else:
+            self.start_forecast = get_forecast_start(
+                now, self.freq, self.time_zone, self.method_ts_round
+            )
         # check if weather_forecast_cache, if so get 2x the amount of forecast
         _delta_days = self.optim_conf["delta_forecast_daily"].days
         if self.optim_conf["delta_forecast_daily"] != pd.Timedelta(days=_delta_days):
@@ -324,11 +338,11 @@ class Forecast:
         if self.params["passed_data"].get("weather_forecast_cache", False):
             self.end_forecast = add_local_calendar_days(
                 self.start_forecast, _delta_days * 2, self.time_zone
-            ).replace(microsecond=0)
+            )
         else:
             self.end_forecast = add_local_calendar_days(
                 self.start_forecast, _delta_days, self.time_zone
-            ).replace(microsecond=0)
+            )
         self.forecast_dates = pd.date_range(
             start=self.start_forecast,
             end=self.end_forecast - self.freq,
@@ -1871,14 +1885,15 @@ class Forecast:
         # lands the other side of a rounding boundary builds a grid one step off
         # from the one df_final is indexed on, and the strict lookup in
         # _extract_daily_forecast then raises KeyError (issue #1076). The
-        # rounding itself still happens exactly once, in __init__.
+        # start itself is rounded once per request (get_forecast_start), by
+        # treat_runtimeparams or, without it, in __init__.
         start_forecast_csv = self.start_forecast
         total_days = self.optim_conf["delta_forecast_daily"].days + int(timedelta_days or 0)
         end_forecast_csv = add_local_calendar_days(
             start_forecast_csv,
             total_days,
             self.time_zone,
-        ).replace(microsecond=0)
+        )
         forecast_dates_csv = pd.date_range(
             start=start_forecast_csv,
             end=end_forecast_csv - self.freq,
@@ -2923,7 +2938,7 @@ class Forecast:
             self.start_forecast,
             self.optim_conf["delta_forecast_daily"].days,
             self.time_zone,
-        ).replace(microsecond=0)
+        )
         forecast_dates = pd.date_range(
             start=self.start_forecast,
             end=end_forecast - self.freq,

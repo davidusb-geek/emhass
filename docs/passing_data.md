@@ -130,7 +130,7 @@ For compatibility with existing runtime callers, a forecast value that is a stri
 
 #### Plain lists
 
-A plain list is already expressed in optimization timesteps. The first value is the current timestep and each following value is one `optimization_time_step` later. EMHASS does not resample a list.
+A plain list is positional: the first value is the first step of the optimization grid (set by `method_ts_round`, from the clock read once at the start of the request) and each following value is one `optimization_time_step` later. The grid is regular in elapsed time, so a daylight saving day needs 23 or 25 hourly values. EMHASS does not resample a list.
 
 - A list must contain at least as many values as the forecast horizon. A shorter list is rejected with an error and ignored, so the action uses the configured forecast method instead. It is never padded.
 - A longer list is accepted, and EMHASS uses its first horizon-length values.
@@ -141,7 +141,7 @@ A mapping of ISO 8601 timestamps to values is aligned onto the optimization grid
 
 1. The supplied values are checked against the numerical contract before any aggregation, so an error reports the source timestamp.
 2. Timestamps are normalized by instant. Always include a UTC offset: a timestamp without an offset is read as UTC, not as local time.
-3. Points are converted to the configured `time_zone` and aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value.
+3. Points are aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value. The buckets are anchored on the first step of the optimization grid (set by `method_ts_round`), so each bucket coincides with one grid step in every time zone.
 4. The aggregated points are matched to the forecast grid by UTC instant, so DST transitions do not shift values.
 5. Each value holds until the next supplied point (step, hold-last semantics). A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
 

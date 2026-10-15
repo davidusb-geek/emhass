@@ -436,7 +436,7 @@
             ],
             "default": "nearest",
             "title": "Timestamp rounding method",
-            "description": "Set the method for timestamp rounding, options are: first, last and nearest."
+            "description": "Rounding of the first optimization step, applied once per request: first = round down, last = round up, nearest = closest step (on the UTC clock)."
           },
           "delta_forecast_daily": {
             "type": "integer",

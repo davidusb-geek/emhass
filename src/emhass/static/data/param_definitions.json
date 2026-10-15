@@ -230,7 +230,7 @@
     },
     "method_ts_round": {
       "friendly_name": "Timestamp rounding method",
-      "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
+      "Description": "Rounding of the first optimization step, applied once per request: first = round down, last = round up, nearest = closest step (on the UTC clock).",
       "input": "select",
       "select_options": ["nearest", "first", "last"],
       "default_value": "nearest",
