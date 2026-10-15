@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import pathlib
 import tempfile
 from unittest import mock
@@ -33,8 +32,6 @@ ROOT = pathlib.Path(emhass.__file__).resolve().parent
 LOG = logging.getLogger("emhass-dst-tests")
 LOG.addHandler(logging.NullHandler())
 LOG.propagate = False
-
-os.environ.pop("SUPERVISOR_TOKEN", None)  # would make get_ha_config() call the supervisor
 
 
 _LOOP: asyncio.AbstractEventLoop | None = None

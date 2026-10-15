@@ -31,6 +31,10 @@ REF_1189 = "davidusb-geek/emhass#1189"
 
 
 def xfail(request, *reasons):
+    """Mark the case as an expected failure when a reason applies. Only an AssertionError counts
+    as the expected outcome; any other exception is a real failure, not a masked one."""
     reasons = [r for r in reasons if r]
     if reasons:
-        request.applymarker(pytest.mark.xfail(reason=" | ".join(reasons), strict=True))
+        request.applymarker(
+            pytest.mark.xfail(reason=" | ".join(reasons), strict=True, raises=AssertionError)
+        )
