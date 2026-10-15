@@ -965,6 +965,31 @@ def compile_heat_topology(topology: dict) -> dict:
                     src["id"],
                     float(source_block["supply_temperature"]),
                 )
+        # Optional per-source thermal-output ceiling (W): caps cop * p_deferrable
+        # so a high COP (e.g. a small mild-weather Carnot lift) cannot make the
+        # model deliver more heat than the physical unit's rated thermal output.
+        # Unlike max_supply_temperature this is a straight power bound, not a
+        # temperature-gated switch, and is scalar-only: a unit's rated thermal
+        # output is a fixed hardware spec, not weather-dependent like condenser
+        # temperature.
+        _thermal_cap = src.get("max_thermal_power")
+        if _thermal_cap is not None:
+            if isinstance(_thermal_cap, bool) or not isinstance(_thermal_cap, int | float):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power must be a "
+                    f"number of W, got {_thermal_cap!r}"
+                )
+            thermal_cap_value = float(_thermal_cap)
+            if not np.isfinite(thermal_cap_value) or thermal_cap_value <= 0:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power "
+                    f"must be a finite number > 0 W, got {_thermal_cap!r}; omit the "
+                    "key to leave the source uncapped."
+                )
+            source_block["max_thermal_power"] = thermal_cap_value
+            # A source feeding several storages compiles into one load per flow;
+            # the optimizer caps those loads together by this id.
+            source_block["source_id"] = src["id"]
         # Optional per-source threshold: with the storage's desired_temperatures
         # set, this source stops beyond it (see the optimizer for the gate per
         # source mode). Sources without it (or with null) inherit the

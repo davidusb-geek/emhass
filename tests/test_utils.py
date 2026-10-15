@@ -6072,6 +6072,67 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertIn("storage[0]", str(ctx.exception))
         self.assertIn("id", str(ctx.exception))
 
+    def test_max_thermal_power_rejects_non_positive(self):
+        """A non-positive, non-finite or non-numeric max_thermal_power is rejected:
+        a zero/negative ceiling would permanently disable the source, and NaN, inf
+        or a boolean is not a power."""
+        for bad in (0, -100, float("nan"), float("inf"), True, "15000"):
+            topo = {
+                "sources": [
+                    {
+                        "id": "hp",
+                        "type": "heatpump",
+                        "supply_temperature": 55,
+                        "carnot_efficiency": 0.4,
+                        "nominal_power": 3500,
+                        "max_thermal_power": bad,
+                    },
+                ],
+                "storage": [
+                    {
+                        "id": "dhw",
+                        "volume": 0.2,
+                        "start_temperature": 50,
+                        "min_temperature": [45] * 4,
+                        "max_temperature": [65] * 4,
+                    }
+                ],
+                "flows": [{"from": "hp", "to": "dhw"}],
+            }
+            with self.assertRaises(ValueError):
+                utils.compile_heat_topology(topo)
+
+    def test_max_thermal_power_passed_through(self):
+        """A source's max_thermal_power is compiled into its thermal_source block;
+        sources without it omit the key (backward compatible)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_thermal_power": 4000,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["max_thermal_power"], 4000.0)
+        # Booster (load 1) has no cap -> key absent
+        self.assertNotIn("max_thermal_power", out["def_load_config"][1]["thermal_source"])
+
 
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
