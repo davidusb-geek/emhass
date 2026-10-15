@@ -142,6 +142,107 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         self.assertEqual(retrieve_hass_conf["Altitude"], 8000.0)
 
+    def test_get_forecast_start_inside_repeated_hour(self):
+        """The start is rounded on the UTC clock, so both passes of a repeated hour work (#1189)."""
+        # (zone, first UTC instant of the repeated local interval, its length in minutes)
+        folds = [
+            ("Europe/Berlin", "2026-10-25T00:00Z", 60),
+            ("Australia/Sydney", "2027-04-03T15:00Z", 60),
+            ("Europe/Dublin", "2026-10-25T00:00Z", 60),
+            ("Africa/Casablanca", "2026-02-15T01:00Z", 60),
+            ("Australia/Lord_Howe", "2027-04-03T14:30Z", 30),
+        ]
+        for zone, fold_start, length in folds:
+            tz = pytz.timezone(zone)
+            for offset_min in range(-30, length * 2 + 31, 7):
+                # includes seconds and sub-second parts: whole seconds are kept in UTC
+                now = pd.Timestamp(fold_start) + pd.Timedelta(minutes=offset_min, seconds=13.7)
+                for freq in (5, 15, 30, 60):
+                    step = pd.Timedelta(minutes=freq)
+                    for method in ("first", "nearest", "last"):
+                        with self.subTest(zone=zone, now=now, freq=freq, method=method):
+                            start = utils.get_forecast_start(now, step, tz, method)
+                            self.assertEqual(str(start.tz), str(tz))
+                            delta = start.tz_convert("UTC") - now.floor("s")  # whole seconds
+                            if method == "first":
+                                self.assertTrue(-step < delta <= pd.Timedelta(0))
+                            elif method == "last":
+                                self.assertTrue(pd.Timedelta(0) <= delta < step)
+                            else:
+                                self.assertLessEqual(abs(delta), step / 2)
+
+    def test_timestamped_mapping_buckets_are_one_grid_step_wide_in_any_zone(self):
+        """In Asia/Kathmandu (+05:45) a 'nearest' grid sits on UTC hours; buckets must follow it."""
+        tz = pytz.timezone("Asia/Kathmandu")
+        grid = pd.date_range("2026-10-14T05:00Z", periods=6, freq="60min").tz_convert(tz)
+        points = pd.date_range("2026-10-14T04:00Z", periods=48, freq="15min")
+        mapping = {t.isoformat(): float(i) for i, t in enumerate(points)}  # value = point number
+        got = utils._align_runtime_forecast_mapping(mapping, [t.isoformat() for t in grid], 60, tz)
+        # independent expectation: the mean of the points inside [grid step, grid step + 60 min)
+        expected = [
+            np.mean([i for i, p in enumerate(points) if g <= p < g + pd.Timedelta("60min")])
+            for g in grid
+        ]
+        self.assertEqual(got, expected)
+
+    def test_get_forecast_dates_default_is_the_configuration_default(self):
+        """Omitting method_ts_round gives the grid of a default-configured run (nearest)."""
+        tz = pytz.timezone("Europe/Berlin")
+        now = tz.localize(datetime(2026, 10, 12, 10, 20, 0)).astimezone(UTC)
+        with patch("emhass.utils._get_now", return_value=now):
+            self.assertEqual(utils.get_forecast_dates(30, 1, tz)[0], "2026-10-12T10:30:00+02:00")
+
+    async def test_unknown_method_ts_round_does_not_break_actions_without_a_grid(self):
+        """publish-data and friends never needed the rounding; they must not start failing."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        params = orjson.loads(self.params_json)
+        params["retrieve_hass_conf"]["method_ts_round"] = "Nearest"
+        retrieve_hass_conf["method_ts_round"] = "Nearest"
+        with self.assertLogs(logger, level="ERROR"):
+            await utils.treat_runtimeparams(
+                self.runtimeparams_json,
+                orjson.dumps(params).decode(),
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "publish-data",
+                logger,
+                emhass_conf,
+            )
+
+    def test_get_forecast_start_rejects_unknown_method(self):
+        with self.assertRaises(ValueError):
+            utils.get_forecast_start(
+                pd.Timestamp("2026-10-12T08:20Z"), pd.Timedelta("30min"), pytz.UTC, "middle"
+            )
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_follows_method_ts_round(self, mock_ts_now):
+        """Runtime grid and Forecast use one start: 10:20 Berlin, 30 min steps (#1189)."""
+        tz = pytz.timezone("Europe/Berlin")
+        mock_ts_now.return_value = tz.localize(datetime(2026, 10, 12, 10, 20, 0)).astimezone(UTC)
+        starts = {
+            method: utils.get_forecast_dates(30, 1, tz, method_ts_round=method)[0]
+            for method in ("first", "nearest", "last")
+        }
+        self.assertEqual(starts["first"], "2026-10-12T10:00:00+02:00")
+        self.assertEqual(starts["nearest"], "2026-10-12T10:30:00+02:00")
+        self.assertEqual(starts["last"], "2026-10-12T10:30:00+02:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_second_pass_of_repeated_hour(self, mock_ts_now):
+        """02:20 CET (second pass) must start in the second pass, not at the first (#1189)."""
+        tz = pytz.timezone("Europe/Berlin")
+        mock_ts_now.return_value = pd.Timestamp("2026-10-25T01:20:00Z").to_pydatetime()
+        dates = utils.get_forecast_dates(60, 1, tz, method_ts_round="first")
+        self.assertEqual(dates[0], "2026-10-25T02:00:00+01:00")
+        self.assertEqual(len(dates), 24)
+        # First pass (02:20 CEST) starts 02:00 CEST; the local day then lasts 25 hours.
+        mock_ts_now.return_value = pd.Timestamp("2026-10-25T00:20:00Z").to_pydatetime()
+        dates = utils.get_forecast_dates(60, 1, tz, method_ts_round="first")
+        self.assertEqual(dates[0], "2026-10-25T02:00:00+02:00")
+        self.assertEqual(len(dates), 25)
+
     @patch("emhass.utils._get_now")
     def test_get_forecast_dates_standard_day(self, mock_ts_now):
         """
@@ -434,6 +535,31 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             dates_local = utils.get_forecast_dates(5, 2, brisbane)
         # Same correct local start expected
         self.assertEqual(dates_local[0], "2026-06-15T21:15:00+10:00")
+
+    async def test_treat_runtimeparams_captures_the_request_start_once(self):
+        """The first grid step is stored in passed_data so Forecast does not read the clock again."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        now = pd.Timestamp("2026-10-25T00:20:13Z").to_pydatetime()  # 02:20 CEST, repeated hour
+        with patch("emhass.utils._get_now", return_value=now):
+            params, retrieve_hass_conf, *_ = await utils.treat_runtimeparams(
+                self.runtimeparams_json,
+                self.params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+            grid = utils.get_forecast_dates(
+                retrieve_hass_conf["optimization_time_step"].total_seconds() / 60,
+                1,
+                retrieve_hass_conf["time_zone"],
+                method_ts_round=retrieve_hass_conf["method_ts_round"],
+            )
+        start = orjson.loads(params)["passed_data"]["forecast_start"]
+        self.assertEqual(pd.Timestamp(start), pd.Timestamp(grid[0]))
+        self.assertEqual(pd.Timestamp(start).tz_convert("UTC").second, 0)
 
     async def test_dayahead_forwards_current_period_peak(self):
         """The capacity-tariff peak floor (current_period_peak) must reach

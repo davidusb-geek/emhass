@@ -4094,6 +4094,192 @@ class TestForecastDatesTieAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fcst.forecast_dates.is_unique)
 
 
+class TestRepeatedHourForecastGrid(unittest.IsolatedAsyncioTestCase):
+    """One UTC-safe grid per run, also inside the repeated hour of a fall-back day (#1189).
+
+    A fixed (not "now"-based) marker per instant lets every test check that each value
+    sits on the UTC instant it belongs to, not only that the lengths agree.
+    """
+
+    FOLD_RUNS = (  # (zone, UTC instants inside and around the repeated local hour)
+        ("Europe/Berlin", "2026-10-25T00:20:13Z"),  # 02:20 CEST, first pass
+        ("Europe/Berlin", "2026-10-25T01:20:13Z"),  # 02:20 CET, second pass
+        ("Europe/Dublin", "2026-10-25T01:20:13Z"),  # 01:20 GMT, second pass (negative DST)
+        ("Australia/Sydney", "2027-04-03T16:20:13Z"),  # 02:20 AEST, second pass
+    )
+
+    asyncSetUp = TestForecastDatesTieAlignment.asyncSetUp
+
+    _build_forecast = TestForecastDatesTieAlignment._build_forecast
+
+    @staticmethod
+    def _marker(ts: pd.Timestamp) -> float:
+        return float(pd.Timestamp(ts).tz_convert("UTC").value // 60_000_000_000)
+
+    def test_grid_is_unique_regular_and_matches_runtime_grid(self):
+        for zone, now in self.FOLD_RUNS:
+            for method in ("first", "nearest", "last"):
+                with self.subTest(zone=zone, now=now, method=method):
+                    fcst = self._build_forecast(
+                        pd.Timestamp(now).tz_localize(None),
+                        method,
+                        tz_name=zone,
+                        step=pd.Timedelta(minutes=30),
+                    )
+                    idx = fcst.forecast_dates
+                    self.assertTrue(idx.is_unique)
+                    self.assertEqual(set(idx.to_series().diff().dropna()), {pd.Timedelta("30min")})
+                    with unittest.mock.patch(
+                        "emhass.utils._get_now", return_value=pd.Timestamp(now).to_pydatetime()
+                    ):
+                        runtime = utils.get_forecast_dates(
+                            30, 1, fcst.time_zone, method_ts_round=method
+                        )
+                    self.assertEqual([ts.isoformat() for ts in idx][: len(runtime)], runtime)
+
+    def test_forecast_refuses_a_start_from_another_request(self):
+        """A start too far from the clock is never used to pin a grid, and never replaced by
+        another grid either (runtime forecasts may already be aligned to it): fail closed.
+        Covers a stale dict (two days) and a delayed request (30 min step: 08:00Z grid,
+        Forecast built at 08:45Z, 45 min > step + 10 min)."""
+        real_timestamp = pd.Timestamp
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = "first"
+        conf["optimization_time_step"] = pd.Timedelta(minutes=30)
+        for start, now_utc in (
+            ("2026-10-12T10:00:00+02:00", "2026-10-14T08:20:00"),
+            ("2026-10-14T10:00:00+02:00", "2026-10-14T08:45:00"),
+        ):
+            with self.subTest(start=start, now=now_utc):
+                params = copy.deepcopy(self.params)
+                params["passed_data"]["forecast_start"] = start
+
+                def _pinned_now(tz=None, _ts=real_timestamp(now_utc, tz="UTC")):
+                    return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
+
+                with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+                    with self.assertRaisesRegex(ValueError, "not from the current request"):
+                        Forecast(
+                            conf,
+                            self.optim_conf,
+                            self.plant_conf,
+                            params,
+                            emhass_conf,
+                            logger,
+                            get_data_from_file=True,
+                        )
+
+    def test_forecast_start_is_single_use_and_malformed_values_are_ignored(self):
+        """The captured start is consumed once; a bad value falls back to the clock."""
+        real_timestamp = pd.Timestamp
+
+        def _pinned_now(tz=None, _ts=real_timestamp("2026-10-14T08:20:00", tz="UTC")):
+            return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
+
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = "first"
+        conf["optimization_time_step"] = pd.Timedelta(minutes=30)
+        for bad in (
+            "garbage",
+            "2026-10-14T08:00:00",
+            12345,
+            "NaT",
+        ):  # not ISO, naive, not a string, NaT
+            with self.subTest(forecast_start=bad):
+                params = copy.deepcopy(self.params)
+                params["passed_data"]["forecast_start"] = bad
+                with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+                    with self.assertLogs(logger, level="WARNING") as captured:
+                        fcst = Forecast(
+                            conf,
+                            self.optim_conf,
+                            self.plant_conf,
+                            params,
+                            emhass_conf,
+                            logger,
+                            get_data_from_file=True,
+                        )
+                self.assertEqual(
+                    fcst.forecast_dates[0].tz_convert("UTC"),
+                    real_timestamp("2026-10-14T08:00:00", tz="UTC"),
+                )
+                self.assertTrue(any("forecast_start" in m for m in captured.output))
+                self.assertNotIn("forecast_start", params["passed_data"])  # consumed
+
+    def test_forecast_rejects_an_unknown_method_even_with_a_captured_start(self):
+        params = copy.deepcopy(self.params)
+        params["passed_data"]["forecast_start"] = "2026-10-14T10:00:00+02:00"
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = "Nearest"
+        conf["optimization_time_step"] = pd.Timedelta(minutes=30)
+        with self.assertLogs(logger, level="ERROR"), self.assertRaises(ValueError):
+            Forecast(
+                conf,
+                self.optim_conf,
+                self.plant_conf,
+                params,
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+
+    def test_forecast_reuses_the_start_captured_for_the_request(self):
+        """A request that crosses a step boundary keeps the start from treat_runtimeparams."""
+        import pytz
+
+        tz = pytz.timezone("Europe/Berlin")
+        real_timestamp = pd.Timestamp
+        for method in ("first", "nearest", "last"):
+            with self.subTest(method=method):
+                params = copy.deepcopy(self.params)
+                # The request captured 10:00 just before a step boundary ...
+                params["passed_data"]["forecast_start"] = "2026-10-14T10:00:00+02:00"
+
+                # ... and the clock now reads 10:31:01, which no method rounds to 10:00.
+                def _pinned_now(tz=None, _ts=real_timestamp("2026-10-14T08:31:01", tz="UTC")):
+                    return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
+
+                conf = copy.deepcopy(self.retrieve_hass_conf)
+                conf["method_ts_round"] = method
+                conf["time_zone"] = tz
+                conf["optimization_time_step"] = pd.Timedelta(minutes=30)
+                with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+                    fcst = Forecast(
+                        conf,
+                        self.optim_conf,
+                        self.plant_conf,
+                        params,
+                        emhass_conf,
+                        logger,
+                        get_data_from_file=True,
+                    )
+                self.assertEqual(
+                    fcst.forecast_dates[0], real_timestamp("2026-10-14T10:00:00+02:00")
+                )
+                self.assertEqual(str(fcst.forecast_dates.tz), str(tz))
+
+    def test_window_ending_in_the_repeated_hour_keeps_the_later_occurrence(self):
+        """A one-day window that ends inside the repeated hour lasts 25 h, as get_forecast_dates."""
+        for zone, now, step, steps in (
+            ("Europe/Berlin", "2026-10-24T00:30:00", 30, 50),  # 02:30 CEST -> 02:30 CET
+            ("Europe/Berlin", "2026-10-24T00:00:00", 60, 25),
+            ("Europe/Dublin", "2026-10-24T00:30:00", 30, 50),
+        ):
+            with self.subTest(zone=zone, now=now, step=step):
+                fcst = self._build_forecast(
+                    pd.Timestamp(now), "first", tz_name=zone, step=pd.Timedelta(minutes=step)
+                )
+                self.assertEqual(len(fcst.forecast_dates), steps)
+                with unittest.mock.patch(
+                    "emhass.utils._get_now",
+                    return_value=pd.Timestamp(now, tz="UTC").to_pydatetime(),
+                ):
+                    runtime = utils.get_forecast_dates(
+                        step, 1, fcst.time_zone, method_ts_round="first"
+                    )
+                self.assertEqual(len(runtime), steps)
+
+
 class TestForecastDaysCsvStartAlignment(unittest.IsolatedAsyncioTestCase):
     """The csv/list forecast grid must match the one the input data is indexed on.
 
