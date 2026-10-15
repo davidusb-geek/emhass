@@ -3161,6 +3161,15 @@ async def treat_runtimeparams(
                 default=default,
                 cast=caster,
             )
+        # config_defaults.json always supplies var_model, and a GUI save writes that stock
+        # value back to config.json. An unset or stock var_model follows the configured
+        # load sensor, so a custom sensor_power_load_no_var_loads is the forecaster input (#1208).
+        if (
+            "var_model" not in runtimeparams
+            and default_var_model
+            and params["passed_data"]["var_model"] in (None, "sensor.power_load_no_var_loads")
+        ):
+            params["passed_data"]["var_model"] = default_var_model
 
         # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():

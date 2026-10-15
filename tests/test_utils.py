@@ -4,6 +4,7 @@ import json
 import logging
 import pathlib
 import re
+import tempfile
 import unittest
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -779,6 +780,60 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             "calibration_val_days",
         ):
             self.assertNotIn(key, passed)
+
+    async def test_treat_runtimeparams_var_model_follows_custom_load_sensor(self):
+        """Regression for issue #1208.
+
+        config_defaults.json always supplies var_model, and the GUI save rewrites the stock
+        value, so a custom sensor_power_load_no_var_loads must still be the forecaster input
+        unless the user set a different var_model on purpose.
+        """
+        stock = "sensor.power_load_no_var_loads"
+        load = "sensor.house_load"
+        other = "sensor.other_model_input"
+        cases = {
+            "no var_model in config.json": ({"sensor_power_load_no_var_loads": load}, {}, load),
+            "stock var_model left by GUI save": (
+                {"sensor_power_load_no_var_loads": load, "var_model": stock},
+                {},
+                load,
+            ),
+            "deliberate var_model kept": (
+                {"sensor_power_load_no_var_loads": load, "var_model": other},
+                {},
+                other,
+            ),
+            "runtime var_model wins": (
+                {"sensor_power_load_no_var_loads": load},
+                {"var_model": other},
+                other,
+            ),
+            "stock load sensor unchanged": ({}, {}, stock),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (config_json, runtime, expected) in cases.items():
+                with self.subTest(case=label):
+                    conf = {**emhass_conf, "config_path": pathlib.Path(tmp) / "config.json"}
+                    conf["config_path"].write_text(orjson.dumps(config_json).decode("utf-8"))
+                    config = await utils.build_config(
+                        conf, logger, str(conf["defaults_path"]), str(conf["config_path"])
+                    )
+                    params = await utils.build_params(conf, {}, config, logger)
+                    params_json = orjson.dumps(params).decode("utf-8")
+                    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+                        params_json, logger
+                    )
+                    out, _, _, _ = await utils.treat_runtimeparams(
+                        orjson.dumps(runtime).decode("utf-8"),
+                        params_json,
+                        retrieve_hass_conf,
+                        optim_conf,
+                        plant_conf,
+                        "forecast-model-fit",
+                        logger,
+                        conf,
+                    )
+                    self.assertEqual(orjson.loads(out)["passed_data"]["var_model"], expected)
 
     @patch("emhass.utils._get_now")
     async def test_treat_runtimeparams_dict_forecast_holds_last_value(self, mock_now):
