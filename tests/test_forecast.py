@@ -4179,7 +4179,7 @@ class TestRepeatedHourForecastGrid(unittest.IsolatedAsyncioTestCase):
         conf = copy.deepcopy(self.retrieve_hass_conf)
         conf["method_ts_round"] = "first"
         conf["optimization_time_step"] = pd.Timedelta(minutes=30)
-        for bad in ("garbage", "2026-10-14T08:00:00", 12345):  # not ISO, naive, not a string
+        for bad in ("garbage", "2026-10-14T08:00:00", 12345, "NaT"):  # not ISO, naive, not a string, NaT
             with self.subTest(forecast_start=bad):
                 params = copy.deepcopy(self.params)
                 params["passed_data"]["forecast_start"] = bad
