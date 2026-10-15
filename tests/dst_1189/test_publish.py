@@ -19,7 +19,6 @@ import pandas as pd
 import pytest
 from cases import MODES
 from harness import Env, list_runtimeparams, utc_list
-from known import neg_dst_fold_in_horizon, start_floor_fails, xfail
 
 STEP = 30
 
@@ -99,21 +98,6 @@ def _expected_row(plan_index, now, mode):
 
 @pytest.mark.parametrize(("zone", "mode", "plan_at", "pub_at"), list(_cases()))
 def test_p5_publish_uses_the_plan_instants(request, zone, mode, plan_at, pub_at):
-    reason = start_floor_fails(zone, STEP, mode, pub_at)
-    if reason:
-        reason = (
-            "K1 in publish-data: set_input_data_dict runs treat_runtimeparams -> "
-            "get_forecast_dates although publish only reads the saved plan; " + reason
-        )
-    plan_reason = start_floor_fails(zone, STEP, mode, plan_at)
-    if plan_reason:
-        plan_reason = "plan itself: " + plan_reason
-    xfail(
-        request,
-        reason,
-        plan_reason,
-        neg_dst_fold_in_horizon(zone, STEP, mode, plan_at, 1440 // STEP),
-    )
     env, plan_index, err = _plan(zone, mode, plan_at)
     assert err is None, f"plan at {plan_at}: {err}"
     res, err = env.publish(pub_at)

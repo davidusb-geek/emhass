@@ -10,6 +10,9 @@ P3  the requested horizon is delivered in full, or the run fails explicitly - ne
     silently shorter plan.
 P6  the first step obeys method_ts_round on the real timeline: "first" may contain the
     running step, "nearest" is at most half a step away, "last" is not in the past.
+P7  the first step is exactly the one an independent oracle gives (cases.expected_start: the
+    previous/next wall-clock aligned instant found by scanning real time, "nearest" rounded on
+    the UTC clock), not merely within the P6 bounds.
 """
 
 from __future__ import annotations
@@ -18,15 +21,8 @@ import functools
 
 import pandas as pd
 import pytest
-from cases import MODES, STEPS, TRANSITIONS, instants_for
+from cases import MODES, STEPS, TRANSITIONS, expected_start, instants_for
 from harness import Env, list_runtimeparams, utc_list
-from known import (
-    extension_counts_other_grid,
-    start_breaks_rule,
-    start_floor_fails,
-    two_grids,
-    xfail,
-)
 
 
 def _matrix():
@@ -64,11 +60,6 @@ def _run(zone, step, mode, utc):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
 def test_p1_one_grid(request, zone, step, mode, inst):
-    xfail(
-        request,
-        start_floor_fails(zone, step, mode, inst.utc),
-        two_grids(zone, step, mode, inst.utc),
-    )
     r = _run(zone, step, mode, inst.utc)
     assert r["error"] is None, r["error"]
     assert r["runtime"] == r["forecast"], (
@@ -79,7 +70,6 @@ def test_p1_one_grid(request, zone, step, mode, inst):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
 def test_p2_grid_well_formed(request, zone, step, mode, inst):
-    xfail(request, start_floor_fails(zone, step, mode, inst.utc))
     r = _run(zone, step, mode, inst.utc)
     assert r["error"] is None, r["error"]
     idx = pd.DatetimeIndex(r["optim"])
@@ -90,7 +80,6 @@ def test_p2_grid_well_formed(request, zone, step, mode, inst):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
 def test_p3_horizon_complete_or_explicit_error(request, zone, step, mode, inst):
-    xfail(request, extension_counts_other_grid(zone, step, mode, inst.utc, 1440 // step))
     r = _run(zone, step, mode, inst.utc)
     if r["error"] is not None:
         return  # an explicit failure satisfies P3 (P1/P2/P6 report it)
@@ -99,11 +88,6 @@ def test_p3_horizon_complete_or_explicit_error(request, zone, step, mode, inst):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
 def test_p6_first_step_follows_rounding_rule(request, zone, step, mode, inst):
-    xfail(
-        request,
-        start_floor_fails(zone, step, mode, inst.utc),
-        start_breaks_rule(zone, step, mode, inst.utc),
-    )
     r = _run(zone, step, mode, inst.utc)
     assert r["error"] is None, r["error"]
     start, now, s = r["optim"][0], inst.utc, pd.Timedelta(minutes=step)
@@ -113,3 +97,16 @@ def test_p6_first_step_follows_rounding_rule(request, zone, step, mode, inst):
         assert start - s < now <= start
     else:
         assert abs(start - now) <= s / 2
+
+
+@pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
+def test_p7_first_step_is_the_independent_expectation(zone, step, mode, inst):
+    if zone == "Australia/Lord_Howe" and step == 60:
+        pytest.skip(
+            "K3 (design question): around its 30-minute DST change the wall-clock aligned hours "
+            "are not one real hour apart, so first/last have two defensible neighbours; the "
+            "P6 bounds still apply"
+        )
+    r = _run(zone, step, mode, inst.utc)
+    assert r["error"] is None, r["error"]
+    assert r["optim"][0] == expected_start(inst.utc, zone, step, mode)

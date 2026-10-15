@@ -120,8 +120,15 @@ def is_aligned(utc: pd.Timestamp, zone: str, step: int) -> bool:
     return loc.second == 0 and (loc.hour * 60 + loc.minute) % step == 0
 
 
+# ---------------------------------------------------------------------------------------
+# Known failure classes on v0.18.5 (= master 2f3dc75d). Predicates only describe the
+# condition under which the failure is expected; they never feed into the assertions.
+# ---------------------------------------------------------------------------------------
+
+
 def aligned_neighbours(now_utc: pd.Timestamp, zone: str, step: int):
-    """(previous-or-equal, next-or-equal) aligned instants on the real timeline."""
+    """(previous-or-equal, next-or-equal) wall-clock aligned instants on the real timeline,
+    found by scanning minute by minute (independent of EMHASS' rounding code)."""
     minute = pd.Timedelta(minutes=1)
     t0 = now_utc.floor("min")
     prev = t0
@@ -134,103 +141,25 @@ def aligned_neighbours(now_utc: pd.Timestamp, zone: str, step: int):
 
 
 def expected_start(now_utc: pd.Timestamp, zone: str, step: int, mode: str) -> pd.Timestamp:
-    """Start of the plan per method_ts_round, on the local wall-clock grid, by real time."""
+    """Independent oracle of the first step per method_ts_round: ``first``/``last`` are the
+    previous/next wall-clock aligned instant by real time, ``nearest`` rounds on the UTC clock
+    (the established contract; the matrix avoids exact ties)."""
+    if mode == "nearest":
+        return now_utc.floor("s").round(f"{step}min")
     prev, nxt = aligned_neighbours(now_utc, zone, step)
-    if mode == "first":
-        return prev
-    if mode == "last":
-        return nxt
-    # nearest; the matrix avoids exact ties
-    return prev if (now_utc - prev) <= (nxt - now_utc) else nxt
-
-
-# ---------------------------------------------------------------------------------------
-# Known failure classes on v0.18.5 (= master 2f3dc75d). Predicates only describe the
-# condition under which the failure is expected; they never feed into the assertions.
-# ---------------------------------------------------------------------------------------
-
-
-def _wall_time_problem(local_wall: pd.Timestamp, zone: str) -> str | None:
-    tz = pytz.timezone(zone)
-    try:
-        tz.localize(local_wall.to_pydatetime(), is_dst=None)
-    except pytz.AmbiguousTimeError:
-        return "ambiguous"
-    except pytz.NonExistentTimeError:
-        return "nonexistent"
-    return None
-
-
-def wall_clock_floor_problem(now_utc: pd.Timestamp, zone: str, step: int) -> str | None:
-    """Does flooring the *local wall time* (what get_forecast_dates does) land on an
-    ambiguous or nonexistent wall time? Then pandas re-localizes with ambiguous='raise'."""
-    loc = _emhass_local_now(now_utc, zone, "convert").tz_localize(None)
-    return _wall_time_problem(loc.floor(f"{step}min"), zone)
-
-
-def wall_clock_ceil_problem(now_utc: pd.Timestamp, zone: str, step: int) -> str | None:
-    loc = _emhass_local_now(now_utc, zone, "now").tz_localize(None)
-    return _wall_time_problem(loc.ceil(f"{step}min"), zone)
-
-
-def _emhass_local_now(now_utc: pd.Timestamp, zone: str, source: str = "convert") -> pd.Timestamp:
-    """Local "now" with microseconds stripped, the way EMHASS builds it.
-
-    source="convert": pd.Timestamp(utc).tz_convert(tz).replace(microsecond=0)
-                      (utils.get_forecast_dates)
-    source="now":     pd.Timestamp.now(tz=tz).replace(microsecond=0)  (Forecast.__init__);
-                      datetime.now(pytz_tz) always carries fold=0.
-    Timestamp.replace() re-localizes the wall time using the fold attribute; inside a
-    repeated interval it can therefore land on the other occurrence (pandas 3.0.6,
-    pytz 2026.5): "now" loses the second occurrence in positive-DST zones, "convert" swaps
-    occurrences in negative-DST zones (Europe/Dublin, Africa/Casablanca)."""
-    tz = pytz.timezone(zone)
-    if source == "now":
-        d = tz.fromutc(now_utc.tz_localize(None).to_pydatetime().replace(tzinfo=tz))
-        return pd.Timestamp(d).replace(microsecond=0)
-    return now_utc.tz_convert(tz).replace(microsecond=0)
-
-
-def replace_moves_instant(now_utc: pd.Timestamp, zone: str, source: str) -> bool:
-    try:
-        moved = _emhass_local_now(now_utc, zone, source).tz_convert("UTC")
-    except Exception:  # noqa: BLE001
-        return True
-    return moved != now_utc.floor("s")
+    return prev if mode == "first" else nxt
 
 
 def forecast_init_start(now_utc: pd.Timestamp, zone: str, step: int, mode: str) -> pd.Timestamp:
-    """Start that Forecast.__init__ uses today: nearest = round in UTC, first/last =
-    floor/ceil of the local wall time."""
-    loc = _emhass_local_now(now_utc, zone, "now")
-    if mode == "nearest":
-        return loc.tz_convert("UTC").round(f"{step}min")
-    return (loc.floor(f"{step}min") if mode == "first" else loc.ceil(f"{step}min")).tz_convert(
-        "UTC"
-    )
+    """Start of the grid of a run (independent oracle, see expected_start)."""
+    return expected_start(now_utc, zone, step, mode)
 
 
-def runtime_start(now_utc: pd.Timestamp, zone: str, step: int) -> pd.Timestamp:
-    """Start of utils.get_forecast_dates: floor of the local wall time."""
-    return _emhass_local_now(now_utc, zone, "convert").floor(f"{step}min").tz_convert("UTC")
-
-
-def violates_rounding_rule(
-    start: pd.Timestamp, now_utc: pd.Timestamp, step: int, mode: str
-) -> bool:
-    s = pd.Timedelta(minutes=step)
-    if mode == "first":
-        return not (start <= now_utc < start + s)
-    if mode == "last":
-        return not (start - s < now_utc <= start)
-    return abs(start - now_utc) > s / 2
-
-
-def wall_grid_conflict(now_utc: pd.Timestamp, zone: str, step: int, mode: str) -> bool:
-    """No wall-clock-aligned start satisfies the real-time rounding rule here, because the
-    aligned points around now are not one real step apart (e.g. Lord_Howe's 30-minute
-    transition with a 60-minute step)."""
-    return violates_rounding_rule(expected_start(now_utc, zone, step, mode), now_utc, step, mode)
+def runtime_start(
+    now_utc: pd.Timestamp, zone: str, step: int, mode: str = "nearest"
+) -> pd.Timestamp:
+    """Start of the runtime grid: the same start as Forecast."""
+    return expected_start(now_utc, zone, step, mode)
 
 
 def local_calendar_end(start_utc: pd.Timestamp, days: int, zone: str) -> pd.Timestamp:
@@ -257,7 +186,7 @@ def steps_between(a: pd.Timestamp, b: pd.Timestamp, step: int) -> int:
 def forecast_grid_points(now_utc: pd.Timestamp, zone: str, step: int, mode: str, horizon: int):
     """The grid Forecast builds: its own start, window end after d local calendar days, where
     d is the #1166 extension measured on the runtime grid; cut to the horizon."""
-    rt = runtime_start(now_utc, zone, step)
+    rt = runtime_start(now_utc, zone, step, mode)
     d = 1
     while steps_between(rt, local_calendar_end(rt, d, zone), step) < horizon:
         d += 1

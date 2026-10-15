@@ -63,27 +63,10 @@ def _forecast(zone, step):
     return env, idd["fcst"]
 
 
-def _wall_time_dropped(grid: pd.DatetimeIndex) -> bool:
-    """Does a later row of the first local day carry a wall time before the first row's?"""
-    day = grid[grid.day == grid[0].day]
-    first = day[0].hour * 60 + day[0].minute
-    return any((t.hour * 60 + t.minute) < first for t in day[1:])
-
-
 @pytest.mark.parametrize(("zone", "step", "label", "start"), list(_cases()))
 def test_list_onto_grid_starting_in_fold(request, zone, step, label, start):
     tz = pytz.timezone(zone)
     grid = pd.date_range(start.tz_convert(tz), periods=1440 // step, freq=f"{step}min")
-    if _wall_time_dropped(grid):
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "K9: _extract_daily_forecast selects the day with between_time() on wall "
-                    "time; rows of the second pass that are earlier than first_hour are dropped"
-                ),
-            )
-        )
     env, fcst = _forecast(zone, step)
     df_final = pd.DataFrame(index=grid)
     values = [marker(t) for t in grid]
