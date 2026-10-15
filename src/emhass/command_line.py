@@ -3222,6 +3222,15 @@ async def forecast_model_predict(
     # Make predictions
     if use_last_window:
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
+        # A model saved before var_model followed the configured load sensor may have been
+        # trained on another sensor than the one retrieved for this call (#1208).
+        var_model = input_data_dict["params"]["passed_data"]["var_model"]
+        if mlf.var_model not in data_last_window.columns and var_model in data_last_window.columns:
+            logger.warning(
+                f"The saved model was trained on {mlf.var_model} but {var_model} was retrieved, "
+                f"using it as the last window. Run forecast-model-fit to retrain on {var_model}."
+            )
+            data_last_window = data_last_window.rename(columns={var_model: mlf.var_model})
     else:
         data_last_window = None
     # When the model was trained with weather covariates, supply the future weather over the
