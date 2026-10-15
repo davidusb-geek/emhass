@@ -172,12 +172,58 @@ def add_local_calendar_days(
     return pd.Timestamp(resolved)
 
 
+def get_forecast_start(
+    now: pd.Timestamp | datetime,
+    freq: pd.Timedelta,
+    time_zone: datetime.tzinfo | str,
+    method_ts_round: str = "nearest",
+) -> pd.Timestamp:
+    """Round a clock reading to the first optimization step, without wall-clock ambiguity.
+
+    This is the single definition of the forecast start used by both the runtime
+    parameters (``get_forecast_dates``) and ``Forecast``, so that they build the same grid.
+    Whole seconds are kept in UTC and the result is returned in ``time_zone``; local wall
+    times are never localized, so repeated (fall-back) and missing (spring-forward) hours
+    cannot raise or select the wrong occurrence.
+
+    - ``nearest``: round to the closest step on the UTC clock (ties to even).
+    - ``first``: the latest step that is not after ``now``.
+    - ``last``: the earliest step that is not before ``now``.
+
+    ``first`` and ``last`` stay aligned to the local wall clock (e.g. :00/:30 in
+    Asia/Kathmandu) using the UTC offset in force at ``now``.
+
+    :param now: The clock reading; must be timezone-aware.
+    :param freq: The optimization time step.
+    :param time_zone: The configured site time zone the result is expressed in.
+    :param method_ts_round: ``nearest``, ``first`` or ``last``.
+    :raises ValueError: If ``method_ts_round`` is not one of the supported values.
+    """
+    # Whole seconds, rounded down as before: a request a fraction of a second after a step
+    # boundary (a cron job firing at :00) still gets that boundary for "last".
+    now_utc = pd.Timestamp(now).tz_convert("UTC").floor("s")
+    if method_ts_round == "nearest":
+        start_utc = now_utc.round(freq)
+    elif method_ts_round in ("first", "last"):
+        offset = now_utc.tz_convert(time_zone).utcoffset()
+        wall = (now_utc + offset).tz_localize(None)
+        wall = wall.floor(freq) if method_ts_round == "first" else wall.ceil(freq)
+        start_utc = (wall - offset).tz_localize("UTC")
+    else:
+        raise ValueError(
+            f"method_ts_round must be 'nearest', 'first' or 'last', got {method_ts_round!r}"
+        )
+    return start_utc.tz_convert(time_zone)
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
     time_zone: datetime.tzinfo,
     timedelta_days: int | None = 0,
-) -> pd.core.indexes.datetimes.DatetimeIndex:
+    method_ts_round: str = "nearest",
+    now: datetime | None = None,
+) -> list[str]:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
 
@@ -187,18 +233,23 @@ def get_forecast_dates(
     :type delta_forecast: int
     :param timedelta_days: Additional local calendar days needed for the forecast range, defaults to 0
     :type timedelta_days: Optional[int], optional
-    :return: A list of future forecast dates.
-    :rtype: pd.core.indexes.datetimes.DatetimeIndex
+    :param method_ts_round: How the first step is rounded, see :func:`get_forecast_start`.
+        Callers that feed ``Forecast`` must pass the configured ``method_ts_round`` so both
+        build the same grid. Defaults to ``nearest``, the configuration default, so a caller that
+        omits it gets the grid a default-configured run uses.
+    :type method_ts_round: str, optional
+    :param now: The timezone-aware clock reading to build the grid from. Pass the same value to
+        every call of one request so they share a grid; defaults to the current time.
+    :type now: datetime, optional
+    :return: The forecast dates as ISO 8601 strings, one per optimization step.
+    :rtype: list[str]
 
     """
     freq = pd.to_timedelta(freq, "minutes")
-    start_time = _get_now()
-
-    # start_time is the timezone-aware UTC instant from _get_now(); tz_convert expresses it in
-    # the configured timezone regardless of the host clock. It raises on a naive value, so a
-    # refactor that reintroduced a naive "now" here would fail loudly rather than silently shift.
-    start_forecast = (
-        pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
+    # _get_now() is the timezone-aware UTC instant; the start is derived from it in UTC so the
+    # host clock zone is irrelevant. get_forecast_start() raises on a naive value.
+    start_forecast = get_forecast_start(
+        _get_now() if now is None else now, freq, time_zone, method_ts_round
     )
     total_days = int(delta_forecast) + int(timedelta_days or 0)
     final_end_date = add_local_calendar_days(start_forecast, total_days, time_zone) - freq
@@ -1927,17 +1978,20 @@ def _align_runtime_forecast_mapping(
         forecast_data_df["time"], format="ISO8601", utc=True
     ).dt.tz_convert(time_zone)
 
-    # Aggregate any sub-step points to the optimization time step. Resample in
-    # the local time zone so buckets line up with get_forecast_dates(), including
-    # sub-hour UTC offsets.
+    target_dates = pd.to_datetime(forecast_dates, utc=True)
+
+    # Aggregate any sub-step points to the optimization time step. The buckets are
+    # anchored on the first grid instant, so each bucket is exactly one grid step wide
+    # and coincides with a grid point whatever the zone offset (sub-hour offsets,
+    # 30-minute DST changes).
     forecast_data_df = forecast_data_df.resample(
         pd.to_timedelta(optimization_time_step, "minutes"),
         on="time",
+        origin=target_dates[0] if len(target_dates) else "start_day",
     ).aggregate({"value": "mean"})
 
     # Align by instant in UTC across DST boundaries.
     forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
-    target_dates = pd.to_datetime(forecast_dates, utc=True)
 
     # Existing runtime mapping semantics: each supplied point holds until the
     # next point. A point before the horizon anchors the first target step.
@@ -2403,7 +2457,25 @@ async def treat_runtimeparams(
         else:
             time_zone = params["retrieve_hass_conf"]["time_zone"]
 
-        forecast_dates = get_forecast_dates(optimization_time_step, delta_forecast, time_zone)
+        # Same rounding as Forecast.__init__ so runtime forecasts are aligned to the grid
+        # the optimizer will actually use.
+        method_ts_round = params["retrieve_hass_conf"].get("method_ts_round", "nearest")
+        if method_ts_round not in ("nearest", "first", "last"):
+            logger.error("Wrong method_ts_round passed parameter: %r", method_ts_round)
+            method_ts_round = "nearest"  # actions that build a Forecast still fail on it
+        # The request clock is read here, once, and used for every grid of this request.
+        # Forecast reuses the captured start instead of reading the clock again, so the
+        # runtime forecasts and the optimizer share one grid even when the request crosses a
+        # time-step boundary.
+        request_now = _get_now()
+        forecast_dates = get_forecast_dates(
+            optimization_time_step,
+            delta_forecast,
+            time_zone,
+            method_ts_round=method_ts_round,
+            now=request_now,
+        )
+        params["passed_data"]["forecast_start"] = forecast_dates[0]
 
         # Add runtime exclusive (not in config) parameters to params
         # regressor-model-fit
@@ -2484,7 +2556,11 @@ async def treat_runtimeparams(
             while len(extended_forecast_dates) < int(prediction_horizon):
                 required_delta_forecast += 1
                 extended_forecast_dates = get_forecast_dates(
-                    optimization_time_step, required_delta_forecast, time_zone
+                    optimization_time_step,
+                    required_delta_forecast,
+                    time_zone,
+                    method_ts_round=method_ts_round,
+                    now=request_now,
                 )
             if required_delta_forecast > delta_forecast:
                 logger.info(

@@ -2315,6 +2315,8 @@ async def set_input_data_dict(
     if set_type in actions_without_fcst_or_opt:
         fcst = None
         opt = None
+        # No Forecast consumes the captured start, so do not carry it along.
+        (params.get("passed_data") or {}).pop("forecast_start", None)
         logger.debug(f"Skipping Optimization creation for action: {set_type}")
     else:
         fcst = Forecast(
