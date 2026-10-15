@@ -174,12 +174,14 @@ def _csv_regridded(zone, step, mode, utc) -> str | None:
 @pytest.mark.parametrize("fmt", ["utc", "local"])
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix(steps=(15, 30, 60))))
 def test_p4_csv_values_land_on_their_instant(request, zone, step, mode, inst, fmt):
-    xfail(
-        request,
-        _offgrid(zone, step, mode, inst.utc),
-        _csv_regridded(zone, step, mode, inst.utc),
-    )
+    offgrid = _offgrid(zone, step, mode, inst.utc)
+    regridded = _csv_regridded(zone, step, mode, inst.utc)
+    xfail(request, offgrid, regridded)
     r = _csv_run(zone, step, mode, inst.utc, False, fmt)
+    if r["error"] is not None and (offgrid or regridded) and zone != "Australia/Lord_Howe":
+        # The documented off-grid limitation is a *value* mismatch (nearest CSV row), never a
+        # loading/preparation error: that would be an unrelated defect, not an expected failure.
+        raise RuntimeError(f"unexpected error on a value-only expected failure: {r['error']}")
     assert r["error"] is None, r["error"]
     df = r["df"]
     got = df["unit_load_cost"].to_numpy(dtype=float)
