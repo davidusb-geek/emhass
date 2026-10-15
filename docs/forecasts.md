@@ -506,7 +506,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
-What happens internally: the values are validated, aggregated to the optimization step and matched to the grid by UTC instant, exactly as described under [Timestamped mappings](passing_data.md#timestamped-mappings).
+What happens internally: the values are validated, aggregated to the optimization step and matched to the grid by UTC instant, exactly as described under [Forecast input contract](passing_data.md#forecast-input-contract).
 
 When to use dictionary format:
 - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
@@ -517,30 +517,33 @@ When to use dictionary format:
 Practical Home Assistant Examples
 
 Dictionary format with Nordpool (Simple - Recommended!):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool: >
-		{% set prices = state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") + state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") %}
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{ dict(prices | map(attribute="start") | map("string") | zip(prices | map(attribute="value"))) | tojson }},
-			"prod_price_forecast": {{ dict(prices | map(attribute="start") | map("string") | zip(prices | map(attribute="value"))) | tojson }}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool: >
+    {% set prices = (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") or []) + (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") or []) %}
+    {% set mapping = dict(zip(prices | map(attribute="start") | map("string") | list, prices | map(attribute="value") | list)) %}
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{ mapping | tojson }},
+      "prod_price_forecast": {{ mapping | tojson }}
+    }' http://localhost:5000/action/dayahead-optim
 ```
 `raw_today` is a list of `{start, end, value}` objects, not the `{timestamp: value}` mapping EMHASS expects (passing it with `| tojson` as is makes the optimisation fail), so the template pairs each `start` with its `value`. Prices are placed by timestamp, so this is correct for hourly and 15-minute prices and on daylight saving days. `raw_today + raw_tomorrow` covers the whole day-ahead horizon. The `value` must be in currency per kWh, as for every EMHASS price (divide a per-MWh sensor by 1000).
+
+In Home Assistant templates `zip` is a function, `zip(keys, values)`, not a filter (`keys | zip(values)` fails with "No filter named 'zip'"); `dict(...)` and `tojson` are available. The `or []` keeps the template from failing when an attribute is missing, but then it renders an empty mapping (`{}`) or only today's prices, which does not make a valid day-ahead request: guard the automation, as described next. The `start` values are timestamps with their UTC offset (`2026-10-03 00:00:00+10:00`), which EMHASS reads as absolute instants.
 
 Run it when tomorrow's prices are published: while `raw_tomorrow` is empty, the steps after midnight hold the last price of today (hold-last), and an `unavailable` sensor can keep its old attributes, so the template alone would still send stale prices. Guard the trigger or automation with a condition such as `{{ states('sensor.nordpool_kwh_be_eur_3_10_025') not in ['unknown', 'unavailable'] and (state_attr('sensor.nordpool_kwh_be_eur_3_10_025', 'raw_tomorrow') or []) | length > 0 }}`.
 
 List format with Nordpool (Traditional - More Complex):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool_list: >
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{(
-				(state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
-				[now().hour:][:24]
-			)}}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool_list: >
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{(
+        (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
+        state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
+        [now().hour:][:24]
+      )}}
+    }' http://localhost:5000/action/dayahead-optim
 ```
 
 Notice how the list format requires:
@@ -650,6 +653,10 @@ An MPC call may look like this for 4 deferrable loads:
 ```
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
+
+```{note}
+This example sends plain lists, so every list is positional from the first optimization step (see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs)), and it prepends the current price as that first value. That only matches the grid when the first step is the 30-minute step containing now (`method_ts_round: first`) and the Amber forecast rows continue directly after the current interval. With the default `nearest`, a call in the second half of a step starts one step later and every price lands one step early. Amber forecast rows carry their own `start_time`, so a timestamped mapping avoids the alignment question.
+```
 
 ### Example combining multiple Solcast configurations
 

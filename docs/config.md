@@ -26,7 +26,7 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `sensor_linear_interp`: The list of retrieved variables that we would want to interpolate nans values using linear interpolation. For example:
 	- 'sensor.power_photovoltaics'
 	- 'sensor.power_load_no_var_loads'
-- `method_ts_round`: Rounding of the first optimization step, applied once per request: `first` rounds down, `last` rounds up, `nearest` to the closest step. The clock is taken in whole seconds, so a request exactly on a step boundary stays on it for all three methods, and an exact midpoint under `nearest` goes to the even-numbered step counted from the UTC epoch (for example 08:30 UTC with a 60 minute step gives 08:00 UTC and 09:30 UTC gives 10:00 UTC). `first` and `last` follow the local wall clock; `nearest` rounds on the UTC clock, so in a zone whose UTC offset is not a whole number of steps (for example Asia/Kolkata, +05:30, with a 60 minute step, or Asia/Kathmandu, +05:45, with a 30 or 60 minute step) its grid sits at :30 or :15/:45 local time. Use `first` or `last` for forecasts or tariffs defined on the local clock. The grid stays on the local wall clock across a daylight saving change only if the step divides the size of the shift. Australia/Lord_Howe shifts by 30 minutes, so use 5, 10, 15 or 30 minutes there; with 20, 45 or 60 minutes the grid sits off the wall clock after the change (a 20 minute grid at :00/:20/:40 becomes :10/:30/:50), which matters for hourly or tariff data defined on the local clock. See [Plain lists](passing_data.md#plain-lists) for how lists use this grid.
+- `method_ts_round`: Rounding of the first optimization step, applied once per request: `first` rounds down, `last` rounds up, `nearest` to the closest step. The clock is taken in whole seconds, so a request exactly on a step boundary stays on it for all three methods, and an exact midpoint under `nearest` goes to the even-numbered step counted from the UTC epoch (for example 08:30 UTC with a 60 minute step gives 08:00 UTC and 09:30 UTC gives 10:00 UTC). `first` and `last` follow the local wall clock; `nearest` rounds on the UTC clock, so in a zone whose UTC offset is not a whole number of steps (for example Asia/Kolkata, +05:30, with a 60 minute step, or Asia/Kathmandu, +05:45, with a 30 or 60 minute step) its grid sits at :30 or :15/:45 local time. Use `first` or `last` for forecasts or tariffs defined on the local clock. The grid stays on the local wall clock across a daylight saving change only if the step divides the size of the shift. Australia/Lord_Howe shifts by 30 minutes, so use 5, 10, 15 or 30 minutes there; with 20, 45 or 60 minutes the grid sits off the wall clock after the change (a 20 minute grid at :00/:20/:40 becomes :10/:30/:50), which matters for hourly or tariff data defined on the local clock. See [Forecast input contract](passing_data.md#forecast-input-contract) for how lists use this grid.
 - `continual_publish`: set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
 - `use_websocket`: Enable WebSocket as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.
 - `use_influxdb`: Enable InfluxDB (version 1.x) as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models. InfluxDB v2 is not currently supported.
@@ -94,7 +94,7 @@ These are the parameters needed to properly define the optimization problem.
 
 ```{note} 
 
-Since `start_timesteps` are relative indexes starting from 0 (the moment the optimization begins), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window (Launch Time = Index 0).
+Since `start_timesteps` are relative indexes starting from 0 (the first optimization step, which `method_ts_round` derives from the request time), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window (first step = Index 0), counted in elapsed time. See [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs).
 Example: 
 - Launch at 7:00 AM, allowed to start at 9:00 AM (2h delay).
 - Time step 30 min.
@@ -110,7 +110,7 @@ Example:
 
 ```{note} 
 
-Since `end_timesteps` are relative indexes starting from 0 (the moment the optimization begins), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window.
+Since `end_timesteps` are relative indexes starting from 0 (the first optimization step, which `method_ts_round` derives from the request time), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window, counted in elapsed time. A value of `0` disables the limit; see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs).
 Example: 
 - Launch at 7:00 AM, must finish by 6:00 PM (18:00).
 - Duration = 11 hours.
