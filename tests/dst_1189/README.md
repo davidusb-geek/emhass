@@ -1,14 +1,24 @@
 # EMHASS time-grid / DST test suite (davidusb-geek/emhass#1189)
 
-Offline pytest suite for #1189: one time grid per run, every value on its UTC instant, known failures as strict xfails.
+Offline pytest suite for #1189: one time grid per run, every value on its UTC instant; the remaining
+known failures are strict xfails.
 Run from the repository root: `uv run --extra test --with time-machine python -m pytest tests/dst_1189 -q`
-Expected on master `f571c59f` (14 Oct 2026): **3979 passed, 2485 xfailed**, no failures; 7 min 47 s on one core.
+Expected with the #1189 fix: **7469 passed, 42 skipped, 70 xfailed**, no failures (about 1 minute
+with `-n 16` from `pytest-xdist`, about 4-5 minutes on one core).
 
-Without uv: `pip install -e '.[test]' time-machine && python -m pytest tests/dst_1189 -q`. A fix shows up as
-`XPASS(strict)`, which fails the run: drop the matching predicate in `known.py` (or the test module)
-and the cases run as normal tests. `-rxX` lists every expected failure with its class; `-k Berlin`
-gives a quick look. `time-machine` is the only extra dependency; without it `conftest.py` skips
-the folder, so a plain `pytest` (and upstream CI) is unaffected.
+Without uv: `pip install -e '.[test]' time-machine && python -m pytest tests/dst_1189 -q`. A case that
+starts to pass shows up as `XPASS(strict)`, which fails the run: drop the matching predicate in
+`known.py` (or the test module) and the case runs as a normal test. `-rxX` lists every expected
+failure with its class; `-k Berlin` gives a quick look. `time-machine` is the only extra dependency;
+without it `conftest.py` skips the folder, so a plain `pytest` (and upstream CI) is unaffected.
+
+Provenance: this suite was written and contributed by Thorsten Hornung (@thorstenhornung1),
+https://github.com/thorstenhornung1/emhass/tree/tests/1189-dst-grid-regression (commit
+`50400dea5627d6f0d909f40dec05b2882ac8c97a`, shared in
+https://github.com/davidusb-geek/emhass/issues/1189#issuecomment-6178133707). The original commit is
+kept in the history with its authorship; later commits adapt it to the #1189 fix (fixed failure
+classes now run as ordinary tests, oracle helpers are independent of EMHASS (`cases.expected_start`), one event loop
+per process in the harness). The original text follows.
 
 Free to use, adapt or trim, in whole or in part, without asking and without attribution.
 Written with Claude Code (Anthropic), following `AGENTS.md` and `docs/develop_ai_coders.md`; the
@@ -40,6 +50,8 @@ The clock is frozen with `time_machine`, which freezes `datetime.now()`,
 | P4 | marked values (value = minutes since 2026-01-01Z of their instant) land on their UTC step: timestamp dicts, CSV with timestamps (UTC and local ISO), Open-Meteo cache, list path at method level | `test_alignment.py`, `test_list_path.py` |
 | P5 | `publish-data` publishes the plan row chosen by `method_ts_round` on the real timeline, with the plan's own timestamp | `test_publish.py` |
 | P6 | first step obeys `method_ts_round` (first may contain the running step, nearest <= half a step, last not in the past) | `test_grid_contract.py` |
+| P7 | first step equals an independent oracle (`cases.expected_start`: wall-clock aligned neighbour found by scanning real time; `nearest` rounded on the UTC clock) | `test_grid_contract.py` |
+| P8 | a request that crosses a step boundary between its two clock reads keeps one grid (one clock read per request) | `test_request_clock.py` |
 
 Matrix: Europe/Berlin, Australia/Sydney, Europe/Dublin (negative DST), Africa/Casablanca
 (Ramadan 2026, negative DST in pytz), Australia/Lord_Howe (30-min DST), Asia/Kathmandu
@@ -51,11 +63,18 @@ in the fold or gap, #1163/#1164), and on a normal day
 
 ## Expected failures
 
-Known failure classes are listed in `known.py` (K1-K9, K9 in `test_list_path.py`) and marked `xfail(strict=True)` with
-the reason. The predicates only describe *when* a failure is expected; they never feed into
-the assertions. A fixed class therefore shows up as `XPASS(strict)` = FAIL, which is the
-signal to update `known.py`. The `K3` items are design questions (wall-clock alignment vs.
-real-time steps with a 30-minute DST and a 60-minute step), not necessarily bugs.
+On master `f571c59f` the suite classified every failure into K1-K9 and marked about 2,500 cases as
+strict xfail. The #1189 fix resolves K1, K2, K4, K6, K7, K8 and K9, so those cases now run as
+ordinary tests. K5 (a CSV that does not cover the horizon) is the established hold-nearest
+behaviour and is tested as such, including its warning. `known.py` lists what is left, K3: timestamped
+CSV rows on a wall-clock aligned timeline in zones whose wall clock is not a whole number of steps from
+UTC. Australia/Lord_Howe with a 60-minute step is an unsupported combination (its 30-minute DST change
+moves the hourly rows off the grid, the prices become NaN and the solve fails explicitly), and
+Asia/Kathmandu with `nearest` at 30/60 minutes has a grid on UTC steps (:15/:45 local) against
+wall-clock CSV rows. Both are limitations, not defects of the fix, and are documented in
+`docs/config.md` (`method_ts_round`). The predicates only describe *when* a failure is expected; they
+never feed into the assertions. The independent oracles (`cases.expected_start`, source markers that
+encode the UTC instant of each value) do not call EMHASS code.
 
 ## Layout
 
@@ -66,7 +85,11 @@ folder on `sys.path` and prints the EMHASS/pandas/pytz versions in the pytest he
 
 | EMHASS | passed | xfailed | failed |
 |---|---|---|---|
-| v0.18.5 = master `2f3dc75d` | 3979 | 2485 | 0 |
-| master `f571c59f` (2026-10-14) | 3979 | 2485 | 0 |
-| v0.18.4 `ddad1a8d` | 3345 | 2475 | 644 (the window-end and short-day cases fixed by #1164/#1166) |
+| v0.18.5 = master `2f3dc75d` (as contributed) | 3979 | 2485 | 0 |
+| master `f571c59f` (2026-10-14, as contributed) | 3979 | 2485 | 0 |
+| v0.18.4 `ddad1a8d` (as contributed) | 3345 | 2475 | 644 (the window-end and short-day cases fixed by #1164/#1166) |
+| master `f571c59f` + #1189 fix (this suite, incl. P7/P8 and the K5 tests) | 7469 | 70 | 0 (42 skipped) |
+
+The fix suite has more cases (7,581) than the original (6,464): fixed xfail classes now run and pass, and
+P7/P8 and the K5 behaviour tests were added.
 

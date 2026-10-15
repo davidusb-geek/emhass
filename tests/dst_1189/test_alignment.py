@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 
 import numpy as np
@@ -27,13 +28,11 @@ from cases import (
     STEPS,
     TRANSITIONS,
     forecast_grid_points,
-    forecast_init_start,
     instants_for,
     is_aligned,
-    runtime_start,
 )
-from harness import Env, bucket_mean_marker, list_runtimeparams, marker, marker_dict
-from known import grid_not_utc_aligned, neg_dst_fold_in_horizon, start_floor_fails, xfail
+from harness import LOG, Env, bucket_mean_marker, list_runtimeparams, marker, marker_dict
+from known import xfail
 
 COLS = ("p_pv_forecast", "p_load_forecast", "unit_load_cost", "unit_prod_price")
 
@@ -44,38 +43,6 @@ def _matrix(zones=None, steps=STEPS):
             for inst in instants_for(zone, step):
                 for mode in MODES:
                     yield pytest.param(zone, step, mode, inst, id=f"{inst.id()}-{step}min-{mode}")
-
-
-def _k2_shift(zone, step, mode, utc) -> str | None:
-    try:
-        if runtime_start(utc, zone, step) != forecast_init_start(utc, zone, step, mode):
-            return (
-                "K2: timestamped runtime forecasts are aligned to the get_forecast_dates grid "
-                "and then used positionally on the Forecast grid -> every value one step off"
-            )
-    except Exception:  # noqa: BLE001
-        return None
-    return None
-
-
-def _resample_bins_off_grid(zone, step, mode, utc) -> str | None:
-    """_align_runtime_forecast_mapping resamples in local time from local midnight of the
-    first input point with real-time bins; after a 30-min transition 60-min bins sit on
-    :30 while the grid is wall-clock aligned on :00."""
-    try:
-        start = runtime_start(utc, zone, step)
-    except Exception:  # noqa: BLE001
-        return None
-    tz = pytz.timezone(zone)
-    first_point = (utc.floor("h") - pd.Timedelta(hours=3)).tz_convert(tz)
-    bins = pd.date_range(first_point.normalize(), periods=6 * 1440 // step, freq=f"{step}min")
-    if start not in bins:
-        return (
-            "K3 (design question): resample bins of timestamped forecasts run on real time "
-            "from local midnight, the grid on wall-clock time; across a 30-min transition "
-            "with a 60-min step they disagree by 30 min"
-        )
-    return None
 
 
 # --------------------------------------------------------------------------- dict -------
@@ -111,13 +78,6 @@ def _dict_run(zone, step, mode, utc):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix()))
 def test_p4_dict_values_land_on_their_instant(request, zone, step, mode, inst):
-    xfail(
-        request,
-        start_floor_fails(zone, step, mode, inst.utc),
-        _k2_shift(zone, step, mode, inst.utc),
-        _resample_bins_off_grid(zone, step, mode, inst.utc),
-        neg_dst_fold_in_horizon(zone, step, mode, inst.utc, 1440 // step),
-    )
     r = _dict_run(zone, step, mode, inst.utc)
     assert r["error"] is None, r["error"]
     df = r["df"]
@@ -168,6 +128,15 @@ def _csv_run(zone, step, mode, utc, gap: bool, fmt: str = "utc"):
         env.close()
 
 
+_LORD_HOWE_60 = (
+    "K3 (unsupported combination): a 60-minute step is a regular grid in elapsed time, but "
+    "Australia/Lord_Howe shifts its wall clock by 30 minutes; the hourly wall-clock CSV rows no "
+    "longer fall on the grid after the change, the prices become NaN and the solve fails "
+    "explicitly (see test_lord_howe_hourly_csv_after_a_30_minute_dst_change_fails_explicitly). "
+    "Use a step of 30 minutes or less there"
+)
+
+
 def _offgrid(zone, step, mode, utc) -> str | None:
     """Some Forecast grid point is not a row of the (wall-clock aligned) CSV: nearest rounds
     in UTC (Kathmandu, Lord_Howe), or a real-time grid crosses a 30-min transition."""
@@ -176,10 +145,13 @@ def _offgrid(zone, step, mode, utc) -> str | None:
     except Exception:  # noqa: BLE001
         return None
     if not all(is_aligned(t, zone, step) for t in grid):
+        if zone == "Australia/Lord_Howe":
+            return _LORD_HOWE_60
         return (
-            "K5: a Forecast grid point is not on the wall-clock grid of the CSV; the value "
-            "becomes NaN or merge_asof(direction='nearest') without tolerance silently takes "
-            "a neighbouring row"
+            "K3 (documented limitation): method_ts_round='nearest' rounds on the UTC clock; with "
+            "a +05:45 offset the 30/60-minute grid sits at :15/:45 local time while the "
+            "wall-clock CSV rows are at :00/:30, so every step takes the closest row, up to half "
+            "a step away. Use first/last (grid on the local clock) or a 15-minute step"
         )
     return None
 
@@ -195,24 +167,7 @@ def _csv_regridded(zone, step, mode, utc) -> str | None:
     first = utc.tz_convert(tz).normalize() - pd.Timedelta(days=1)
     real = {t.value for t in pd.date_range(first, periods=6 * 1440 // step, freq=f"{step}min")}
     if any(t.value not in real for t in grid):  # compare instants, not tz objects
-        return (
-            "K3 (design question): set_df_index_freq re-grids a timestamped CSV with "
-            "asfreq() on real time from its first row; wall-clock rows after a 30-min "
-            "transition fall off that grid and the values become NaN"
-        )
-    return None
-
-
-def _mixed_offsets(zone, utc) -> str | None:
-    tz = pytz.timezone(zone)
-    start = utc.tz_convert(tz).normalize() - pd.Timedelta(days=1)
-    idx = pd.date_range(start, (utc + pd.Timedelta(days=4)).tz_convert(tz), freq="15min")
-    if len({t.utcoffset() for t in idx}) > 1:
-        return (
-            "K7: a CSV in local ISO time that spans a DST change has two UTC offsets; "
-            "_load_forecast_data sniffs it with pd.to_datetime(..., errors='coerce') "
-            "without utc=True, which raises 'Mixed timezones detected' in pandas 3"
-        )
+        return _LORD_HOWE_60
     return None
 
 
@@ -221,11 +176,8 @@ def _mixed_offsets(zone, utc) -> str | None:
 def test_p4_csv_values_land_on_their_instant(request, zone, step, mode, inst, fmt):
     xfail(
         request,
-        start_floor_fails(zone, step, mode, inst.utc),
         _offgrid(zone, step, mode, inst.utc),
         _csv_regridded(zone, step, mode, inst.utc),
-        neg_dst_fold_in_horizon(zone, step, mode, inst.utc, 1440 // step),
-        _mixed_offsets(zone, inst.utc) if fmt == "local" else None,
     )
     r = _csv_run(zone, step, mode, inst.utc, False, fmt)
     assert r["error"] is None, r["error"]
@@ -243,24 +195,43 @@ def test_p4_csv_values_land_on_their_instant(request, zone, step, mode, inst, fm
     ("zone", "step", "mode", "inst"),
     [p for p in _matrix(zones=["Europe/Berlin"], steps=(30,)) if "normal" in p.id],
 )
-def test_p4_csv_not_covering_the_horizon_is_not_filled_silently(request, zone, step, mode, inst):
-    xfail(
-        request,
-        "K5: merge_asof(direction='nearest') without tolerance repeats the last CSV row "
-        "over the uncovered part of the horizon, without an error or warning",
-    )
-    r = _csv_run(zone, step, mode, inst.utc, True)
-    if r["error"] is not None:
-        return  # explicit failure is acceptable
+def test_p4_csv_not_covering_the_horizon_holds_the_last_row_and_warns(zone, step, mode, inst):
+    """Established contract (K5): steps after the last CSV row take the closest row, i.e. the
+    last one (merge_asof 'nearest'); it must not happen silently."""
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = records.append
+    LOG.addHandler(handler)
+    try:
+        r = _csv_run.__wrapped__(zone, step, mode, inst.utc, True)  # uncached: fresh log records
+    finally:
+        LOG.removeHandler(handler)
+    assert r["error"] is None, r["error"]
     df = r["df"]
     last = r["csv_index"][-1]
     uncovered = df.index[df.index > last]
     assert len(uncovered) > 0
-    vals = df.loc[uncovered, "unit_load_cost"]
-    assert vals.isna().all(), (
-        f"{len(uncovered)} uncovered steps were filled with the value of {last} "
-        f"(e.g. {uncovered[-1]} = {vals.iloc[-1]:.1f})"
-    )
+    assert (df.loc[uncovered, "unit_load_cost"] == marker(last)).all()
+    assert any("does not cover" in rec.getMessage() for rec in records)
+
+
+def test_lord_howe_hourly_csv_after_a_30_minute_dst_change_fails_explicitly():
+    """Unsupported combination (K3): never a silent plan on wrong prices."""
+    zone, step = "Australia/Lord_Howe", 60
+    utc = pd.Timestamp("2026-10-03T14:10:00Z")  # the 30-minute change is later the same day
+    env = Env(zone, step, "first", load_cost_forecast_method="csv")
+    try:
+        _write_csv(env, utc, step)
+        rp = list_runtimeparams(step, 1440 // step)
+        del rp["load_cost_forecast"]
+        idd, err = env.set_input(utc, rp, "naive-mpc-optim")
+        assert err is None, err
+        df = env.prepare_optim_frame(idd, utc)
+        assert df["unit_load_cost"].isna().any()
+        with pytest.raises(ValueError):
+            env.naive_mpc(idd, utc)
+    finally:
+        env.close()
 
 
 # ------------------------------------------------------------------------ open-meteo ----
@@ -308,11 +279,6 @@ def _om_run(zone, step, mode, utc):
 
 @pytest.mark.parametrize(("zone", "step", "mode", "inst"), list(_matrix(steps=(15, 30, 60))))
 def test_p4_open_meteo_values_land_on_their_instant(request, zone, step, mode, inst):
-    xfail(
-        request,
-        start_floor_fails(zone, step, mode, inst.utc),
-        grid_not_utc_aligned(zone, step, mode, inst.utc),
-    )
     r = _om_run(zone, step, mode, inst.utc)
     assert r["error"] is None, r["error"]
     w = r["weather"]

@@ -4,7 +4,7 @@
   early and publish_data(..., dont_post=True) never posts.
 * No network: all forecasts are passed at runtime (lists, timestamp dicts) or come from a
   CSV / a pre-seeded Open-Meteo cache file in a temporary data_path.
-* One clock: time_machine freezes datetime.now(), pd.Timestamp.now() and time.time()
+* One clock (except Env.set_input(forecast_now=...)): time_machine freezes datetime.now(), pd.Timestamp.now() and time.time()
   together, which covers every clock entry point EMHASS reads (utils._get_now,
   Forecast.__init__, publish's _get_closest_index, cache ages).
 * No patches to EMHASS code.
@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import pathlib
 import tempfile
+from unittest import mock
 
 import orjson
 import pandas as pd
@@ -33,6 +35,22 @@ LOG.addHandler(logging.NullHandler())
 LOG.propagate = False
 
 os.environ.pop("SUPERVISOR_TOKEN", None)  # would make get_ha_config() call the supervisor
+
+
+_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def run_async(coro):
+    """Run a coroutine on one event loop per process.
+
+    asyncio.run() builds a new loop every call. On Windows a new loop creates its self-pipe
+    from a loopback TCP socketpair, whose accept() can block forever when many pytest-xdist
+    workers create loops at the same moment; one long-lived loop avoids that and is faster.
+    """
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+    return _LOOP.run_until_complete(coro)
 
 
 def marker(ts) -> float:
@@ -64,7 +82,7 @@ class Env:
             "associations_path": ROOT / "data/associations.csv",
             "config_path": self.data_path / "config.json",
         }
-        self.params = asyncio.run(self._params(delta_days, optim))
+        self.params = run_async(self._params(delta_days, optim))
 
     async def _params(self, delta_days, optim):
         config = await utils.build_config(self.conf, LOG, self.conf["defaults_path"])
@@ -96,15 +114,34 @@ class Env:
 
     # -- actions ---------------------------------------------------------------------
 
-    def set_input(self, now_utc: pd.Timestamp, runtimeparams: dict, action: str):
-        """set_input_data_dict under a frozen clock. Returns (idd, error_repr)."""
+    def set_input(
+        self,
+        now_utc: pd.Timestamp,
+        runtimeparams: dict,
+        action: str,
+        forecast_now: pd.Timestamp | None = None,
+    ):
+        """set_input_data_dict under a frozen clock. Returns (idd, error_repr).
+
+        ``forecast_now`` makes ``pd.Timestamp.now()`` (what Forecast.__init__ reads) report a
+        different instant than the frozen ``datetime.now()`` (what treat_runtimeparams reads),
+        to emulate a request that crosses a time-step boundary between the two reads.
+        """
         params = dict(self.params)
         params["passed_data"] = runtimeparams
         if hasattr(cl, "OptimizationCache"):
             cl.OptimizationCache.clear()
-        with time_machine.travel(now_utc.to_pydatetime(), tick=False):
+        second_clock = contextlib.nullcontext()
+        if forecast_now is not None:
+            fixed = pd.Timestamp(forecast_now).tz_convert("UTC")
+
+            def _now(tz=None):
+                return fixed.tz_convert(tz) if tz is not None else fixed.tz_localize(None)
+
+            second_clock = mock.patch.object(pd.Timestamp, "now", staticmethod(_now))
+        with time_machine.travel(now_utc.to_pydatetime(), tick=False), second_clock:
             try:
-                idd = asyncio.run(
+                idd = run_async(
                     cl.set_input_data_dict(
                         self.conf,
                         "profit",
@@ -123,7 +160,9 @@ class Env:
     def runtime_grid(self, now_utc: pd.Timestamp, delta_days: int, horizon: int | None):
         """The grid treat_runtimeparams builds (utils.get_forecast_dates), same clock."""
         with time_machine.travel(now_utc.to_pydatetime(), tick=False):
-            dates = utils.get_forecast_dates(self.step, delta_days, self.params_tz())
+            dates = utils.get_forecast_dates(
+                self.step, delta_days, self.params_tz(), method_ts_round=self.mode
+            )
         dates = utc_list(dates)
         return dates[:horizon] if horizon else dates
 
@@ -139,7 +178,7 @@ class Env:
     def naive_mpc(self, idd, now_utc):
         """Solve and write opt_res_latest.csv like the add-on does (debug=False)."""
         with time_machine.travel(now_utc.to_pydatetime(), tick=False):
-            return asyncio.run(cl.naive_mpc_optim(idd, LOG, save_data_to_file=False, debug=False))
+            return run_async(cl.naive_mpc_optim(idd, LOG, save_data_to_file=False, debug=False))
 
     def publish(self, now_utc: pd.Timestamp, runtimeparams: dict | None = None):
         """publish-data as its own call (as Home Assistant triggers it), nothing posted."""
@@ -148,7 +187,7 @@ class Env:
             return None, err
         with time_machine.travel(now_utc.to_pydatetime(), tick=False):
             try:
-                res = asyncio.run(cl.publish_data(idd, LOG, dont_post=True))
+                res = run_async(cl.publish_data(idd, LOG, dont_post=True))
             except Exception as exc:  # noqa: BLE001
                 return None, f"{type(exc).__name__}: {exc}"
         if res is None:
