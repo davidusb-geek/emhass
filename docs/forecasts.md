@@ -531,7 +531,26 @@ shell_command:
 
 In Home Assistant templates `zip` is a function, `zip(keys, values)`, not a filter (`keys | zip(values)` fails with "No filter named 'zip'"); `dict(...)` and `tojson` are available. The `or []` keeps the template from failing when an attribute is missing, but then it renders an empty mapping (`{}`) or only today's prices, which does not make a valid day-ahead request: guard the automation, as described next. The `start` values are timestamps with their UTC offset (`2026-10-03 00:00:00+10:00`), which EMHASS reads as absolute instants.
 
-Run it when tomorrow's prices are published: while `raw_tomorrow` is empty, the steps after midnight hold the last price of today (hold-last), and an `unavailable` sensor can keep its old attributes, so the template alone would still send stale prices. Guard the trigger or automation with a condition such as `{{ states('sensor.nordpool_kwh_be_eur_3_10_025') not in ['unknown', 'unavailable'] and (state_attr('sensor.nordpool_kwh_be_eur_3_10_025', 'raw_tomorrow') or []) | length > 0 }}`.
+The `tojson` filter of Home Assistant writes an apostrophe as `'`, so a value or timestamp containing `'` cannot end the single-quoted `-d` argument (checked with the Home Assistant template engine: the rendered command stays one `-d` argument and the payload valid JSON); EMHASS then rejects a non-numeric price.
+
+Run it only when the prices cover the whole forecast window. A mapping that starts after now (today's prices missing), ends before the window does (tomorrow's not published, or an `unavailable` sensor that kept old attributes) or has a gap is silently completed by EMHASS: steps before the first point take its price and steps after the last point hold the last price, so the plan is valid but wrongly priced. The window of a day-ahead run is one local calendar day from now, so check coverage from the timestamps, not from a count of entries (a day has 23, 24 or 25 hourly entries, and 92, 96 or 100 quarter-hour entries). As an automation condition:
+
+```yaml
+condition:
+  - condition: template
+    value_template: >
+      {%- set s = "sensor.nordpool_kwh_be_eur_3_10_025" -%}
+      {%- set p = (state_attr(s, "raw_today") or []) + (state_attr(s, "raw_tomorrow") or []) -%}
+      {%- set ns = namespace(ok = p | length > 0) -%}
+      {%- for i in range(1, p | length) -%}
+        {%- if as_timestamp(p[i].start) != as_timestamp(p[i - 1].end) -%}{%- set ns.ok = false -%}{%- endif -%}
+      {%- endfor -%}
+      {{ states(s) not in ['unknown', 'unavailable'] and ns.ok
+         and as_timestamp(p[0].start) <= as_timestamp(now())
+         and as_timestamp(p[-1].end) >= as_timestamp(now() + timedelta(days=1)) }}
+```
+
+It requires the first entry to start at or before now, the entries to be contiguous, and the last one to end at or after the same wall-clock time tomorrow (`now() + timedelta(days=1)` is a local calendar day, as in EMHASS). With a `delta_forecast_daily` other than 1, replace `1` by that number of days.
 
 List format with Nordpool (Traditional - More Complex):
 ```yaml
@@ -553,9 +572,9 @@ Notice how the list format requires:
 
 `raw_today` already starts with the first hour of the local day, so `[now().hour:]` alone selects the current hour;
 do not prepend another value, which would shift every price one hour early. This positional list is right only for
-hourly prices on a day with 24 entries: with 15-minute prices (96 entries) or on a daylight saving day (23 or 25
-entries, one hour off after the change) it selects the wrong prices, so use the dictionary format there (or always).
-Before tomorrow's prices are published the list has fewer than 24 values and EMHASS rejects it (the optimisation does not run); use the same condition as for the dictionary format.
+hourly prices on a day with 24 entries: with 15-minute prices (96 entries) or on a daylight saving day (its `raw_today` has 23 or 25
+entries, so `[now().hour:]` is one hour off after the change) it selects the wrong prices, so use the dictionary format there (or always).
+A missing attribute does not stop this template from rendering (Home Assistant treats it as empty), and a list gives no protection against missing prices: with `raw_today` missing and `raw_tomorrow` present, the slice takes tomorrow's prices as today's, and in the first hour of the day it is still long enough, so EMHASS accepts a list of the wrong day. Use the same coverage condition as for the dictionary format, or better the dictionary format itself.
 
 Dictionary format handles all of this automatically!
 
