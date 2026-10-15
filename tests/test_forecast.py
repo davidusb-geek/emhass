@@ -4204,7 +4204,51 @@ class TestRepeatedHourForecastGrid(unittest.IsolatedAsyncioTestCase):
                     real_timestamp("2026-10-14T08:00:00", tz="UTC"),
                 )
                 self.assertTrue(any("forecast_start" in m for m in captured.output))
-                self.assertNotIn("forecast_start", params["passed_data"])  # consumed
+                self.assertNotIn("forecast_start", fcst.params["passed_data"])  # consumed
+
+    def test_two_forecasts_from_one_treated_params_dict_share_the_captured_grid(self):
+        """Direct library use: the captured start must not be consumed from the caller's dict.
+
+        The runtime forecasts of a treated request are already aligned to the captured grid.
+        A second Forecast built from the same dict a few minutes later (inside the staleness
+        window, past a step boundary) must use that grid again, not recompute its own one
+        (which would shift every aligned value by a step); beyond the window it is refused.
+        """
+        real_timestamp = pd.Timestamp
+        conf = copy.deepcopy(self.retrieve_hass_conf)
+        conf["method_ts_round"] = "first"
+        conf["optimization_time_step"] = pd.Timedelta(minutes=30)
+        params = copy.deepcopy(self.params)
+        params["passed_data"]["forecast_start"] = "2026-10-14T10:00:00+02:00"  # 08:00Z grid
+
+        def build(now_utc):
+            def _pinned_now(tz=None, _ts=real_timestamp(now_utc, tz="UTC")):
+                return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
+
+            with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+                return Forecast(
+                    conf,
+                    self.optim_conf,
+                    self.plant_conf,
+                    params,
+                    emhass_conf,
+                    logger,
+                    get_data_from_file=True,
+                )
+
+        first = build("2026-10-14T08:20:00")
+        second = build("2026-10-14T08:35:00")  # `first` would now round to 08:30
+        for fcst in (first, second):
+            self.assertEqual(
+                fcst.forecast_dates[0].tz_convert("UTC"),
+                real_timestamp("2026-10-14T08:00:00", tz="UTC"),
+            )
+        self.assertEqual(
+            params["passed_data"]["forecast_start"], "2026-10-14T10:00:00+02:00"
+        )  # the caller's dict is untouched
+        self.assertNotIn("forecast_start", second.params["passed_data"])  # consumed by the object
+        with self.assertRaisesRegex(ValueError, "not from the current request"):
+            build("2026-10-14T08:50:00")  # beyond one step plus ten minutes: refused, not rebuilt
 
     def test_forecast_rejects_an_unknown_method_even_with_a_captured_start(self):
         params = copy.deepcopy(self.params)
