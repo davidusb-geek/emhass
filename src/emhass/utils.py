@@ -2728,9 +2728,14 @@ async def treat_runtimeparams(
                 if "soc_target_timestep" in runtimeparams
                 else None
             )
-            params["passed_data"]["current_period_peak"] = None
-            # Like current_period_peak, the demand-window mask is naive-mpc-only:
-            # dayahead/perfect optimizations price the full horizon peak.
+            # Capacity-tariff peak floor: read it here too so dayahead-optim honours
+            # the already-incurred billing-period peak instead of minimising the
+            # absolute peak. (perfect-optim covers past data and does not use it.)
+            params["passed_data"]["current_period_peak"] = runtimeparams.get(
+                "current_period_peak", None
+            )
+            # The demand-window mask stays naive-mpc-only: dayahead/perfect
+            # optimizations price the full horizon peak.
             params["passed_data"]["capacity_charge_window"] = None
             # Like the above, MPC capacity consideration is naive-mpc-only
             # (issue #540 follow-up).
