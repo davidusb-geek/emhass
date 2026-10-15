@@ -464,6 +464,60 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertEqual(opt_res.isnull().sum().sum(), 0)
 
+    async def test_dayahead_forecast_optim_floors_capacity_peak(self):
+        """dayahead-optim must pass current_period_peak to the solver: with a
+        capacity tariff the planned import peak is floored at the peak already
+        incurred this billing period, exactly as in naive-mpc-optim."""
+
+        async def solve(current_period_peak):
+            params = await TestCommandLineAsyncUtils.get_test_params()
+            params["optim_conf"]["capacity_cost_per_kw"] = 5.0
+            runtimeparams = {
+                "load_cost_forecast": [0.1 if i % 12 < 6 else 0.4 for i in range(48)],
+                "prod_price_forecast": [0.05] * 48,
+                "load_power_forecast": [1500] * 48,
+                "pv_power_forecast": [0] * 48,
+            }
+            if current_period_peak is not None:
+                runtimeparams["current_period_peak"] = current_period_peak
+            params["passed_data"] = runtimeparams
+            input_data_dict = await set_input_data_dict(
+                emhass_conf,
+                "profit",
+                orjson.dumps(params).decode("utf-8"),
+                orjson.dumps(runtimeparams).decode("utf-8"),
+                "dayahead-optim",
+                logger,
+                get_data_from_file=True,
+            )
+            await dayahead_forecast_optim(input_data_dict, logger)
+            return float(input_data_dict["opt"].vars["peak_import"].value)
+
+        without = await solve(None)
+        with_peak = await solve(8000)
+        self.assertLess(without, 8000)
+        self.assertGreaterEqual(with_peak, 8000 - 1e-6)
+        # The runtime parameter is declared as an array: a one-entry list is the
+        # same single value for a one-component tariff.
+        self.assertGreaterEqual(await solve([8000]), 8000 - 1e-6)
+        # A value cannot add lines to the log: it is logged in its repr, so a
+        # newline in a string stays escaped, and the bad value is ignored.
+        with self.assertLogs(logger, level="INFO") as logs:
+            forged = await solve("8000\nERROR forged entry")
+        self.assertLess(forged, 8000)
+        self.assertFalse(any("\nERROR" in line for line in logs.output), logs.output)
+
+    async def test_dayahead_forecast_optim_keeps_stage_times_positional(self):
+        """stage_times keeps its positional slot after soc_final; the new
+        current_period_peak argument comes after it."""
+        import inspect
+
+        from emhass.optimization import Optimization
+
+        names = list(inspect.signature(Optimization.perform_dayahead_forecast_optim).parameters)
+        self.assertEqual(names.index("stage_times"), names.index("soc_final") + 1)
+        self.assertGreater(names.index("current_period_peak"), names.index("stage_times"))
+
     # Test dataframe output of perfect forecast optimization
     async def test_perfect_forecast_optim(self):
         costfun = "profit"
