@@ -2,15 +2,15 @@
 
 Offline pytest suite for #1189: one time grid per run, every value on its UTC instant; the remaining
 known failures are strict xfails.
-Run from the repository root: `uv run --extra test --with time-machine python -m pytest tests/dst_1189 -q`
+Runs with the normal `uv run pytest` (`time-machine` is in the `test` extra). On its own, from the repository root: `uv run --extra test python -m pytest tests/dst_1189 -q`
 Expected with the #1189 fix: **7469 passed, 42 skipped, 70 xfailed**, no failures (about 1 minute
 with `-n 16` from `pytest-xdist`, about 4-5 minutes on one core).
 
-Without uv: `pip install -e '.[test]' time-machine && python -m pytest tests/dst_1189 -q`. A case that
+Without uv: `pip install -e '.[test]' && python -m pytest tests/dst_1189 -q`. A case that
 starts to pass shows up as `XPASS(strict)`, which fails the run: drop the matching predicate in
 `known.py` (or the test module) and the case runs as a normal test. `-rxX` lists every expected
-failure with its class; `-k Berlin` gives a quick look. `time-machine` is the only extra dependency;
-without it `conftest.py` skips the folder, so a plain `pytest` (and upstream CI) is unaffected.
+failure with its class; `-k Berlin` gives a quick look. If `time-machine` is missing from an
+environment, `conftest.py` skips the folder instead of failing at collection.
 
 Provenance: this suite was written and contributed by Thorsten Hornung (@thorstenhornung1),
 https://github.com/thorstenhornung1/emhass/tree/tests/1189-dst-grid-regression (commit

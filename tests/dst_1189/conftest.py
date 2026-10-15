@@ -7,8 +7,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-# time-machine is not in the "test" extra, so a plain `pytest` (upstream CI) skips this
-# folder instead of failing at collection. Run it with `--with time-machine`.
+# time-machine is in the "test" extra, so CI runs this folder. In an environment without it the
+# folder is skipped instead of failing at collection.
 if importlib.util.find_spec("time_machine") is None:
     collect_ignore_glob = ["test_*.py"]
 
