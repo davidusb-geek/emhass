@@ -287,7 +287,10 @@ class Forecast:
         if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
-            self.params = params
+            # Work on a copy of passed_data: the captured forecast_start is consumed below, and a
+            # second Forecast built from the same dict must still see it (the runtime forecasts
+            # are aligned to that grid), not silently recompute another one.
+            self.params = {**params, "passed_data": dict(params.get("passed_data") or {})}
         else:
             self.params = orjson.loads(params)
 
