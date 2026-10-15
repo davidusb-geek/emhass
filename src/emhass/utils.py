@@ -1401,6 +1401,87 @@ def _per_user_load_list(value, offset: int) -> list:
     return [value] * offset
 
 
+# The fields a heat_topology in replace mode always overwrites with its compiled
+# values (otherwise the compiled def_load_config would not match
+# number_of_deferrable_loads, etc.). All per-load arrays must match
+# number_of_deferrable_loads, which the compiler sets.
+_TOPOLOGY_REPLACED_KEYS = frozenset(
+    {
+        "number_of_deferrable_loads",
+        "def_load_config",
+        "shared_thermal_tanks",
+        "tank_transfers",
+        "deferrable_load_groups",
+        "nominal_power_of_deferrable_loads",
+        "minimum_power_of_deferrable_loads",
+        "treat_deferrable_load_as_semi_cont",
+        "cost_forecast_per_deferrable_load",
+        "set_deferrable_load_single_constant",
+        "set_deferrable_startup_penalty",
+        "deferrable_load_max_cost",
+        "set_deferrable_max_startups",
+        "operating_hours_of_each_deferrable_load",
+        "start_timesteps_of_each_deferrable_load",
+        "end_timesteps_of_each_deferrable_load",
+        "is_electric_load",
+    }
+)
+
+
+def _restore_configured_shared_tanks(params: dict, configured) -> None:
+    """Undo the unchecked association copy of a rejected runtime tank list."""
+    if configured is None:
+        params["optim_conf"].pop("shared_thermal_tanks", None)
+    else:
+        params["optim_conf"]["shared_thermal_tanks"] = configured
+
+
+def _warn_replaced_deferrable_loads(
+    optim_conf: dict, compiled: dict, emhass_conf: dict, logger: logging.Logger
+) -> None:
+    """Warn when a heat_topology in replace mode drops configured deferrable loads.
+
+    Without extend_deferrable_loads the compiled flows replace the whole load
+    set, so loads configured beyond them (a dishwasher, a pool pump) are not
+    optimized. The shipped defaults configure two example loads; a load set whose
+    every overwritten field still equals the shipped value is taken as untouched
+    and replaced without a word.
+    """
+    try:
+        configured = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        return
+    compiled_count = int(compiled.get("number_of_deferrable_loads") or 0)
+    if configured <= compiled_count:
+        return
+    defaults_path = (emhass_conf or {}).get("defaults_path")
+    try:
+        defaults = orjson.loads(pathlib.Path(defaults_path).read_bytes()) if defaults_path else {}
+    except (OSError, orjson.JSONDecodeError):
+        defaults = {}
+
+    def _shipped(key):
+        value = optim_conf.get(key)
+        if key in defaults:
+            return value == defaults[key]
+        # Not in the defaults (def_load_config, the tank lists): only an empty
+        # value, or a list of empty entries, is untouched.
+        return not value or (isinstance(value, list) and not any(value))
+
+    if defaults and all(_shipped(key) for key in _TOPOLOGY_REPLACED_KEYS):
+        return
+    logger.warning(
+        "heat_topology replaces the deferrable loads: %d are configured but its flows "
+        "compile to %d, so loads %d..%d are not optimized. Set extend_deferrable_loads: "
+        "true in heat_topology to keep the configured loads and add the topology's "
+        "after them.",
+        configured,
+        compiled_count,
+        compiled_count,
+        configured - 1,
+    )
+
+
 def _extend_optim_conf_with_compiled_topology(
     optim_conf: dict, compiled: dict, logger: logging.Logger
 ) -> None:
@@ -2286,6 +2367,10 @@ async def treat_runtimeparams(
                 ):
                     batt_distinct_config_lists[batt_param_name] = list(configured)
 
+        # The configured shared tanks, before the association loop below copies a
+        # runtime list over them unchecked: a runtime list that the shared-tank
+        # validation further down rejects falls back to these.
+        configured_shared_tanks = params["optim_conf"].get("shared_thermal_tanks")
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
@@ -2779,6 +2864,7 @@ async def treat_runtimeparams(
             )
             if problem is not None:
                 logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
             elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
                 params["optim_conf"]["shared_thermal_tanks"] = tanks
                 topology = params["optim_conf"].get("heat_topology")
@@ -2796,6 +2882,7 @@ async def treat_runtimeparams(
                     "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
                     type(tanks).__name__,
                 )
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
 
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
@@ -3289,6 +3376,26 @@ async def treat_runtimeparams(
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
 
+    # Shared tanks from the configuration file get the same check as runtime
+    # ones (above), so a bad entry is reported and ignored instead of failing
+    # inside the optimizer. A runtime list that passed is checked again, which
+    # is harmless.
+    configured_tanks = optim_conf.get("shared_thermal_tanks")
+    if configured_tanks:
+        if not isinstance(configured_tanks, list) or not all(
+            isinstance(t, dict) for t in configured_tanks
+        ):
+            problem = "must be a list of tank objects"
+        else:
+            try:
+                n_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
+            except (TypeError, ValueError):
+                n_loads = 0
+            problem = _runtime_shared_tanks_problem(configured_tanks, n_loads)
+        if problem is not None:
+            logger.warning("shared_thermal_tanks in the configuration: %s. Ignoring them.", problem)
+            optim_conf.pop("shared_thermal_tanks", None)
+
     # If heat_topology is present (static config or runtime override), compile
     # it down to flat optim_conf primitives. Runtime override wins over static
     # config because runtimeparams have already been merged above.
@@ -3321,6 +3428,7 @@ async def treat_runtimeparams(
             # Default replace mode: merge compiled fields into optim_conf,
             # allowing user-set fields to win for things the compiler always
             # populates (e.g. operating_hours).
+            _warn_replaced_deferrable_loads(optim_conf, compiled, emhass_conf, logger)
             for key, val in compiled.items():
                 if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
@@ -3328,27 +3436,7 @@ async def treat_runtimeparams(
                     # For the structural fields we ALWAYS want compiled values
                     # (otherwise the compiled def_load_config doesn't match
                     # number_of_deferrable_loads, etc.)
-                    if key in {
-                        "number_of_deferrable_loads",
-                        "def_load_config",
-                        "shared_thermal_tanks",
-                        "tank_transfers",
-                        "deferrable_load_groups",
-                        "nominal_power_of_deferrable_loads",
-                        "minimum_power_of_deferrable_loads",
-                        "treat_deferrable_load_as_semi_cont",
-                        "cost_forecast_per_deferrable_load",
-                        # All per-load arrays must match number_of_deferrable_loads,
-                        # which the compiler sets - so override any defaults.
-                        "set_deferrable_load_single_constant",
-                        "set_deferrable_startup_penalty",
-                        "deferrable_load_max_cost",
-                        "set_deferrable_max_startups",
-                        "operating_hours_of_each_deferrable_load",
-                        "start_timesteps_of_each_deferrable_load",
-                        "end_timesteps_of_each_deferrable_load",
-                        "is_electric_load",
-                    }:
+                    if key in _TOPOLOGY_REPLACED_KEYS:
                         optim_conf[key] = val
         params["optim_conf"] = optim_conf
         logger.info(
