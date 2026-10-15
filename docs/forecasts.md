@@ -410,6 +410,8 @@ For the `csv` method you should push a csv file to the `data` folder. The CSV fi
     2021-04-29 01:00:00+00:00,243.38
     ...
 
+Each timestamp is read as an absolute instant: include the UTC offset (a timestamp without one is read as UTC). A file written in local time may therefore change offset in the middle, for example `+01:00` and `+02:00` across a daylight saving change, and both occurrences of a repeated local hour stay distinct. The rows should cover the whole optimization horizon at the `optimization_time_step`. For a step more than one source step (the median row spacing) after the last row or before the first, EMHASS keeps using the closest row and logs a warning (not checked for a file with a single row) with the number of uncovered steps and the first and last of them.
+
 For the list method, you just have to add the data as a list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option.
 
 The possible dictionary keys to pass data are:
