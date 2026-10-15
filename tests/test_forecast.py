@@ -4137,34 +4137,37 @@ class TestRepeatedHourForecastGrid(unittest.IsolatedAsyncioTestCase):
                         )
                     self.assertEqual([ts.isoformat() for ts in idx][: len(runtime)], runtime)
 
-    def test_forecast_ignores_a_start_from_another_request(self):
-        """A reused params dict must not pin an old grid."""
-        params = copy.deepcopy(self.params)
-        params["passed_data"]["forecast_start"] = "2026-10-12T10:00:00+02:00"  # two days old
+    def test_forecast_refuses_a_start_from_another_request(self):
+        """A start too far from the clock is never used to pin a grid, and never replaced by
+        another grid either (runtime forecasts may already be aligned to it): fail closed.
+        Covers a stale dict (two days) and a delayed request (30 min step: 08:00Z grid,
+        Forecast built at 08:45Z, 45 min > step + 10 min)."""
         real_timestamp = pd.Timestamp
-
-        def _pinned_now(tz=None, _ts=real_timestamp("2026-10-14T08:20:00", tz="UTC")):
-            return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
-
         conf = copy.deepcopy(self.retrieve_hass_conf)
         conf["method_ts_round"] = "first"
         conf["optimization_time_step"] = pd.Timedelta(minutes=30)
-        with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
-            with self.assertLogs(logger, level="WARNING") as captured:
-                fcst = Forecast(
-                    conf,
-                    self.optim_conf,
-                    self.plant_conf,
-                    params,
-                    emhass_conf,
-                    logger,
-                    get_data_from_file=True,
-                )
-        self.assertEqual(
-            fcst.forecast_dates[0].tz_convert("UTC"),
-            real_timestamp("2026-10-14T08:00:00", tz="UTC"),
-        )
-        self.assertTrue(any("not from the current request" in m for m in captured.output))
+        for start, now_utc in (
+            ("2026-10-12T10:00:00+02:00", "2026-10-14T08:20:00"),
+            ("2026-10-14T10:00:00+02:00", "2026-10-14T08:45:00"),
+        ):
+            with self.subTest(start=start, now=now_utc):
+                params = copy.deepcopy(self.params)
+                params["passed_data"]["forecast_start"] = start
+
+                def _pinned_now(tz=None, _ts=real_timestamp(now_utc, tz="UTC")):
+                    return _ts.tz_convert(tz) if tz is not None else _ts.tz_localize(None)
+
+                with unittest.mock.patch.object(pd.Timestamp, "now", staticmethod(_pinned_now)):
+                    with self.assertRaisesRegex(ValueError, "not from the current request"):
+                        Forecast(
+                            conf,
+                            self.optim_conf,
+                            self.plant_conf,
+                            params,
+                            emhass_conf,
+                            logger,
+                            get_data_from_file=True,
+                        )
 
     def test_forecast_start_is_single_use_and_malformed_values_are_ignored(self):
         """The captured start is consumed once; a bad value falls back to the clock."""

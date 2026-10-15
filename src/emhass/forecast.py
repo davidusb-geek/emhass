@@ -300,8 +300,10 @@ class Forecast:
         # A request that went through treat_runtimeparams carries the start it captured
         # ("forecast_start", ISO 8601 with offset); reuse it so the runtime forecasts and this
         # object share one grid. It is consumed here (single use), so a params dict that is
-        # reused for another request cannot pin an old grid. A value that is malformed or more
-        # than one step plus ten minutes from now is ignored with a warning.
+        # reused for another request cannot pin an old grid. A malformed value is ignored with a
+        # warning. A well-formed one more than one step plus ten minutes from now is refused: the
+        # runtime forecasts were aligned to that grid, so building another one would silently
+        # shift them (fail closed instead of rebasing).
         if self.method_ts_round not in ("nearest", "first", "last"):
             self.logger.error("Wrong method_ts_round passed parameter")
             raise ValueError(
@@ -316,11 +318,11 @@ class Forecast:
                 self.logger.warning("Ignoring malformed forecast_start %r", frozen_start)
             else:
                 if abs(captured_start - now) > self.freq + pd.Timedelta(minutes=10):
-                    self.logger.warning(
-                        "Ignoring forecast_start %s: it is not from the current request",
-                        frozen_start,
+                    raise ValueError(
+                        f"forecast_start {frozen_start} is not from the current request (more than "
+                        f"one step plus ten minutes from now, {now}); the runtime forecasts were "
+                        "aligned to it, so the grid is not rebuilt"
                     )
-                    captured_start = None
         if captured_start is not None:
             self.start_forecast = captured_start
         else:
