@@ -561,12 +561,8 @@ class Forecast:
                 limit_direction="both",
                 inplace=True,
             )
-            data = set_df_index_freq(data)
-            index_utc = data.index.tz_convert("utc")
-            index_tz = index_utc.round(
-                freq=data.index.freq, ambiguous="infer", nonexistent="shift_forward"
-            ).tz_convert(self.time_zone)
-            data.index = index_tz
+            # The index is already self.forecast_dates (aligned by construction);
+            # re-rounding it in UTC would collapse grids that are not UTC-aligned.
             data = set_df_index_freq(data)
             # Convert mm to cm and clip minimum to 0.1 cm
             data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
@@ -1929,21 +1925,22 @@ class Forecast:
             df_csv = pd.DataFrame.from_dict(data_dict)
             df_csv.index = forecast_dates_csv
             df_csv = df_csv.drop(["ts"], axis=1)
-            df_csv = set_df_index_freq(df_csv)
         else:
             if not os.path.exists(csv_path):
                 csv_path = self.emhass_conf["data_path"] / csv_path
             df_csv = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
             # Check if first column is a valid datetime
             first_col = df_csv.iloc[:, 0]
-            if pd.to_datetime(first_col, errors="coerce").notna().all():
+            # utc=True so local ISO timestamps spanning a DST change (two UTC offsets) are
+            # recognised, consistent with the parse below.
+            if pd.to_datetime(first_col, errors="coerce", utc=True).notna().all():
                 df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
                 df_csv.set_index("ts", inplace=True)
                 df_csv.index = df_csv.index.tz_convert(self.time_zone)
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv = df_csv.drop(["ts"], axis=1)
-            df_csv = set_df_index_freq(df_csv)
+        df_csv = set_df_index_freq(df_csv)
         return df_csv
 
     def _extract_daily_forecast(
@@ -1968,29 +1965,40 @@ class Forecast:
             end=df_timing.index[last_elm_index],
             freq=df_timing.index.freq,
         )
-        first_hour = f"{df_timing.index[first_elm_index].hour:02d}:{df_timing.index[first_elm_index].minute:02d}"
-        last_hour = f"{df_timing.index[last_elm_index].hour:02d}:{df_timing.index[last_elm_index].minute:02d}"
         # Extract data
-        if csv_path is None:
-            if list_and_perfect:
-                values_array = df_csv.between_time(first_hour, last_hour).values
-                # Adjust index length if necessary
-                fcst_index = fcst_index[0 : len(values_array)]
-                return pd.DataFrame(values_array, index=fcst_index)
-            else:
-                return pd.DataFrame(
-                    df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
-                    index=fcst_index,
+        if csv_path is None and list_and_perfect:
+            # Perfect optimization applies one daily profile to every historical day by
+            # time of day, so selection by wall-clock time is intentional here. Each target
+            # step takes the profile value of its own wall time (both passes of a repeated
+            # hour share it, a skipped hour has no step); steps the profile does not cover
+            # are left out and filled from the nearest step by the merge below.
+            minute_of_day = df_csv.index.hour * 60 + df_csv.index.minute
+            profile = df_csv[~minute_of_day.duplicated()]
+            profile = profile.set_axis(minute_of_day[~minute_of_day.duplicated()])
+            wall_times = fcst_index.hour * 60 + fcst_index.minute
+            covered = wall_times.isin(profile.index)
+            if not covered.all():
+                self.logger.debug(
+                    "%d step(s) have no profile value at their wall time; the nearest one is used",
+                    int((~covered).sum()),
                 )
-        else:
-            # For CSV path, filter by date string first
-            df_csv_filtered_date = df_csv.loc[
-                df_csv.index.strftime("%Y-%m-%d") == fcst_index[0].date().strftime("%Y-%m-%d")
-            ]
-            return pd.DataFrame(
-                df_csv_filtered_date.between_time(first_hour, last_hour).values,
-                index=fcst_index,
-            )
+            return pd.DataFrame(profile.loc[wall_times[covered]].values, index=fcst_index[covered])
+        # Otherwise every target instant is looked up exactly, by UTC instant. A wall-clock
+        # filter (between_time) would drop or double the repeated hour of a fall-back day.
+        return pd.DataFrame(self._values_at_instants(df_csv, fcst_index), index=fcst_index)
+
+    @staticmethod
+    def _values_at_instants(df: pd.DataFrame, instants: pd.DatetimeIndex) -> np.ndarray:
+        """Return ``df`` values at ``instants``, matching on the absolute UTC instant.
+
+        The lookup is strict: a missing instant raises ``KeyError``. Matching on UTC keeps
+        both occurrences of a repeated local time distinct and does not depend on whether the
+        two indexes carry pytz or zoneinfo time zones.
+        """
+        if df.index.tz is None or instants.tz is None:
+            return df.loc[instants, :].values
+        by_utc = df.set_axis(df.index.tz_convert("UTC"))
+        return by_utc.loc[instants.tz_convert("UTC"), :].values
 
     def get_forecast_out_from_csv_or_list(
         self,
@@ -2001,11 +2009,13 @@ class Forecast:
         list_and_perfect: bool | None = False,
     ) -> pd.DataFrame:
         r"""
-        Get the forecast data as a DataFrame from a CSV file.
+        Get the forecast data as a DataFrame from a CSV file or a list.
 
-        The data contained in the CSV file should be a 24h forecast with the same frequency as
-        the main 'optimization_time_step' parameter in the configuration file. The timestamp will not be used and
-        a new DateTimeIndex is generated to fit the timestamp index of the input data in 'df_final'.
+        The CSV file has no header. If every first-column value parses as a timestamp (a value
+        without a UTC offset is read as UTC), the rows are matched to the grid by UTC instant;
+        otherwise the values are assigned positionally to ``forecast_dates_csv``. A step more
+        than one source step beyond the span of the source takes the closest row and logs a
+        warning.
 
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
@@ -2039,7 +2049,33 @@ class Forecast:
         else:
             forecast_out = pd.DataFrame()
         if not forecast_out.empty and forecast_out.index.dtype != df_final.index.dtype:
-            forecast_out.index = forecast_out.index.astype(df_final.index.dtype)
+            if forecast_out.index.tz is not None and df_final.index.tz is not None:
+                # Same instants, expressed in df_final's zone. astype() with a zone name can
+                # swap a pytz index for a zoneinfo one (pandas 3) and break label lookups.
+                forecast_out.index = forecast_out.index.tz_convert(df_final.index.tz).as_unit(
+                    df_final.index.unit
+                )
+            else:
+                forecast_out.index = forecast_out.index.astype(df_final.index.dtype)
+        if len(forecast_out) > 1 and len(df_final):
+            # A source coarser than the step, or a few minutes off the grid, is held/matched
+            # by merge_asof(nearest) as intended. Only steps beyond the source's span (plus
+            # one source step) are a coverage gap worth a warning.
+            source_step = forecast_out.index.to_series().diff().median()
+            uncovered = (df_final.index < forecast_out.index.min() - source_step) | (
+                df_final.index > forecast_out.index.max() + source_step
+            )
+            if uncovered.any():
+                # merge_asof(nearest) below still fills these steps from the closest source
+                # row (the established hold behaviour); make that visible instead of silent.
+                self.logger.warning(
+                    "The forecast source does not cover %d of %d time steps (%s to %s); "
+                    "the nearest available value is used for them.",
+                    int(uncovered.sum()),
+                    len(df_final),
+                    df_final.index[uncovered][0],
+                    df_final.index[uncovered][-1],
+                )
         # Merge with final DataFrame to align indices
         merged = pd.merge_asof(
             df_final.sort_index(),
