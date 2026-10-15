@@ -2278,8 +2278,6 @@ async def treat_runtimeparams(
             check_batt_params(
                 num_batteries, params["plant_conf"], batt_default, batt_param_name, logger
             )
-        for soc_name in SOC_FRACTION_PLANT_PARAMS:
-            reject_soc_fraction_above_one(soc_name, params["plant_conf"].get(soc_name), logger)
         for batt_param_name, batt_default in BATT_ARRAY_PARAMS_OPTIM_CONF.items():
             _warn_if_runtime_scalar_masks_batt_list(
                 num_batteries,
@@ -2452,6 +2450,7 @@ async def treat_runtimeparams(
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
                 forecast_dates = extended_forecast_dates
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
@@ -2635,6 +2634,7 @@ async def treat_runtimeparams(
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             params["passed_data"]["prediction_horizon"] = None
 
             def _passthrough_soc_runtime(key: str):
@@ -3218,6 +3218,9 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # After the runtime merge when a request was supplied, and on the saved
+    # config when it was not. A percentage in either place must fail here.
+    reject_configured_soc_fractions(plant_conf, optim_conf, logger)
 
     # If heat_topology is present (static config or runtime override), compile
     # it down to flat optim_conf primitives. Runtime override wins over static
@@ -4839,6 +4842,12 @@ SOC_FRACTION_PLANT_PARAMS: tuple[str, ...] = (
     "battery_maximum_state_of_charge",
     "battery_target_state_of_charge",
 )
+# Penalty thresholds are fractions of capacity too. Their costs are currency
+# and stay out of this list (#935).
+SOC_FRACTION_OPTIM_PARAMS: tuple[str, ...] = (
+    "battery_soc_deficit_threshold",
+    "battery_soc_surplus_threshold",
+)
 BATT_ARRAY_PARAMS_OPTIM_CONF: dict[str, bool | int | float] = {
     "battery_soc_deficit_threshold": 0.4,
     "battery_soc_deficit_cost": 0.0,
@@ -4957,22 +4966,46 @@ class SocFractionError(ValueError):
     """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
 
 
+def reject_configured_soc_fractions(
+    plant_conf: dict, optim_conf: dict, logger: logging.Logger
+) -> None:
+    """Reject a saved or overridden SOC fraction above 1 (#935).
+
+    Plant bounds and the SOC penalty thresholds are fractions of battery
+    capacity. Their costs are currency and are not checked here.
+    """
+    for soc_name in SOC_FRACTION_PLANT_PARAMS:
+        reject_soc_fraction_above_one(soc_name, plant_conf.get(soc_name), logger)
+    for soc_name in SOC_FRACTION_OPTIM_PARAMS:
+        reject_soc_fraction_above_one(soc_name, optim_conf.get(soc_name), logger)
+
+
 def reject_soc_fraction_above_one(name: str, value, logger: logging.Logger) -> None:
     """Raise SocFractionError when a SOC value is above 1 (#935).
 
-    ``1`` is a full battery. ``None`` means the value was omitted. Anything
-    that is not a number is left untouched. An out-of-band fraction such as
-    ``0.05`` stays valid for the existing recovery and clamp logic.
+    ``1`` is a full battery. ``None`` means the value was omitted. A numeric
+    string is read as a number, so ``"80"`` is rejected the same way as ``80``.
+    Anything else that is not a number is left untouched. An out-of-band
+    fraction such as ``0.05`` stays valid for the existing recovery and clamp
+    logic.
     """
     if value is None:
         return
     items = value if isinstance(value, list) else [value]
     for index, item in enumerate(items):
-        if not isinstance(item, int | float) or item <= 1:
+        number = item
+        if isinstance(item, str):
+            try:
+                number = float(item)
+            except ValueError:
+                continue
+        elif isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        if number <= 1:
             continue
         label = f"{name}[{index}]" if isinstance(value, list) else name
         message = (
-            f"{label}={item} is above 1. State of charge is a fraction in "
+            f"{label}={number} is above 1. State of charge is a fraction in "
             f"[0, 1] (0.65 means 65%), not a percentage."
         )
         logger.error("%s", message)
