@@ -265,6 +265,56 @@ def test_dp_coupled_store_moves_in_small_steps():
     assert ctraj[-1] < ctraj[0] - 0.3, ctraj
 
 
+def test_dp_respects_max_thermal_power():
+    """A rated thermal-output cap must bound the DP's deliverable heat:
+    hp_max_power * COP is electrical headroom, not what the compressor can
+    physically move. Uncapped, a mild-weather COP lets the DP concentrate its
+    charging into one cheap slot far beyond the unit's rating; capped, every
+    step's delivered heat stays at or below the cap and charging spreads."""
+    base = {
+        "heat_capacity": 1.0,
+        "loss_coeff": 0.0,
+        "min_temp": 20.0,
+        "max_temp": 60.0,
+        "hp_max_power": 5.7,  # kW electric
+        "carnot_efficiency": 0.5,
+        "hx_approach": 5.0,  # mild outdoor + low targets -> COP ~5-8
+        "backup_max_power": 0.0,
+    }
+    n = 8
+    price = np.full(n, 0.50)
+    price[2] = 0.01  # one strictly cheapest slot invites a concentrated burst
+    # 12 kWh of late demand vs 5 kWh drainable storage: ~7 kWh must be banked,
+    # which uncapped concentrates into the single cheap slot (~14 kW thermal).
+    demand = np.zeros(n)
+    demand[6:] = 12.0
+
+    def delivered_per_step(res, params):
+        traj = res.tank_trajectory
+        qin = (traj[1:] - traj[:-1]) * params["heat_capacity"] + demand * 0.5
+        return qin / 0.5  # kW thermal
+
+    uncapped = solve_thermal_dp(
+        price,
+        outdoor_temperature=15.0,
+        params=ThermalDPParams(demand_kw=demand, **base),
+        tank_start=25.0,
+    )
+    capped = solve_thermal_dp(
+        price,
+        outdoor_temperature=15.0,
+        params=ThermalDPParams(demand_kw=demand, max_thermal_power=6.0, **base),
+        tank_start=25.0,
+    )
+    assert not uncapped.meta["infeasible"] and not capped.meta["infeasible"]
+    # Load-bearing: the uncapped DP must exceed the cap somewhere, else the
+    # capped assertion proves nothing.
+    assert delivered_per_step(uncapped, base).max() > 6.0 + 0.5
+    assert delivered_per_step(capped, base).max() <= 6.0 + 1e-6, (
+        "max_thermal_power must bound the DP's delivered heat at every step"
+    )
+
+
 def test_dp_solves_quickly():
     """The 2-state DP must be fast enough to live inside the optimisation loop."""
     params = ThermalDPParams(

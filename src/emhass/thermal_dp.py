@@ -99,6 +99,13 @@ class ThermalDPParams:
     # discretized state cannot absorb is shed at zero cost, never purchased away.
     demand_kw: float | np.ndarray = 0.0
 
+    # Optional rated thermal-output ceiling (kW thermal), last so positional
+    # construction of the fields above is unchanged. hp_max_power * COP is
+    # electrical headroom, not what the compressor can physically move: on a
+    # mild day a high COP would otherwise let the DP plan deliveries far above
+    # the unit's rating (mirrors the LP's per-source max_thermal_power cap).
+    max_thermal_power: float | None = None
+
 
 @dataclass
 class ThermalDPResult:
@@ -212,6 +219,10 @@ def solve_thermal_dp(
         np.where(lift > 1e-6, carnot, p.cop_bounds[0]), *p.cop_bounds
     )  # (N, nt): cop2d[t, j] = COP to charge to grid[j] at step t
     hp_cap_th = p.hp_max_power * cop2d * dt  # (N, nt) thermal kWh the HP delivers reaching j
+    if p.max_thermal_power is not None:
+        # The compressor's rated thermal output binds before electrical * COP does
+        # whenever the COP is high - the same physical ceiling the LP enforces.
+        hp_cap_th = np.minimum(hp_cap_th, p.max_thermal_power * dt)
     if p.hp_max_temp is not None and p.mode != "cool":
         hp_ceiling = _per_step(p.hp_max_temp, N, np.inf)
         hp_cap_th = np.where(grid[None, :] <= hp_ceiling[:, None] + 1e-9, hp_cap_th, 0.0)
