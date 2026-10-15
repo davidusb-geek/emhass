@@ -42,6 +42,7 @@ from emhass.command_line import (
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     HEAT_TOPOLOGY_KEYS,
+    SocFractionError,
     build_config,
     build_legacy_config_params,
     build_params,
@@ -597,13 +598,19 @@ async def _handle_action_dispatch(
     if action_name == "weather-forecast-cache":
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
-        await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        try:
+            await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        except SocFractionError:
+            return await grab_log(action_str), 400
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 
     if action_name == "export-influxdb-to-csv":
         action_str = " >> Exporting InfluxDB data to CSV..."
         logger.info(action_str)
-        success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
+        try:
+            success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
+        except SocFractionError:
+            return await grab_log(action_str), 400
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 200
         return await grab_log(action_str), 400

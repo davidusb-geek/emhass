@@ -230,6 +230,18 @@ class TestOpenapiArtifact(unittest.TestCase):
             "openapi.json is stale — run `python scripts/generate_openapi.py` and commit",
         )
 
+    def test_soc_fraction_fields_declare_maximum_one(self):
+        spec = gen.build_spec()
+        properties = spec["components"]["schemas"]["Config"]["properties"]
+        for name in (
+            "battery_minimum_state_of_charge",
+            "battery_maximum_state_of_charge",
+            "battery_target_state_of_charge",
+            "battery_soc_deficit_threshold",
+            "battery_soc_surplus_threshold",
+        ):
+            self.assertEqual(properties[name]["items"]["maximum"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1744,6 +1744,21 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 "soc_init[1]=65",
                 "naive-mpc-optim",
             ),
+            (
+                {"prediction_horizon": 10, "soc_target": "80"},
+                "soc_target=80",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_soc_deficit_threshold": 40},
+                "battery_soc_deficit_threshold=40",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_soc_surplus_threshold": 65},
+                "battery_soc_surplus_threshold=65",
+                "naive-mpc-optim",
+            ),
         )
         for runtimeparams, expected, set_type in cases:
             with self.subTest(expected=expected):
@@ -1769,6 +1784,25 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_init"], 1.0)
         self.assertEqual(params_out["passed_data"]["soc_final"], 1.0)
         self.assertEqual(plant_conf_out["battery_maximum_state_of_charge"], 1.0)
+
+    async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
+        """A percentage saved in the plant config fails even when the request adds nothing."""
+        params = await TestUtils.get_test_params()
+        params["plant_conf"]["battery_maximum_state_of_charge"] = 90
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        with self.assertRaises(utils.SocFractionError) as ctx:
+            await treat_runtimeparams(
+                None,
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "dayahead-optim",
+                logger,
+                emhass_conf,
+            )
+        self.assertIn("battery_maximum_state_of_charge=90", str(ctx.exception))
 
     async def test_treat_runtimeparams_ignore_pv_feedback_during_curtailment(self):
         """Wiring for ignore_pv_feedback_during_curtailment runtime flag (#818).
