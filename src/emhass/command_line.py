@@ -187,6 +187,7 @@ class OptimizationCacheKey:
     deferrable_load_groups: tuple
     shared_thermal_tanks: tuple  # shared-tank multi-source topology structure
     is_electric_load: tuple  # per-load electric-bus membership flag
+    sequence_load_running_state: tuple  # (index, current state, completed steps) per sequence load
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -361,6 +362,23 @@ class OptimizationCache:
                 load_type = "standard"
             def_structure.append((i, load_type))
 
+        # Sequence loads read def_current_state and def_current_operating_timesteps
+        # when the problem is built (they size the start-time variable and cut the
+        # completed steps from the power sequence), so for these loads a change in
+        # either value must miss the cache and rebuild the problem.
+        nominal_powers = optim_conf.get("nominal_power_of_deferrable_loads", []) or []
+        current_states = to_tuple(optim_conf.get("def_current_state", []))
+        completed_steps = to_tuple(optim_conf.get("def_current_operating_timesteps", []))
+        sequence_load_running_state = tuple(
+            (
+                i,
+                current_states[i] if i < len(current_states) else None,
+                completed_steps[i] if i < len(completed_steps) else None,
+            )
+            for i, power in enumerate(nominal_powers)
+            if isinstance(power, list)
+        )
+
         return OptimizationCacheKey(
             number_of_deferrable_loads=optim_conf.get("number_of_deferrable_loads", 0),
             set_use_battery=optim_conf.get("set_use_battery", False),
@@ -409,6 +427,7 @@ class OptimizationCache:
             # is_electric_load changes p_def_sum membership, hence the electric
             # power balance shape, hence structural.
             is_electric_load=to_tuple(optim_conf.get("is_electric_load", [])),
+            sequence_load_running_state=sequence_load_running_state,
             inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
