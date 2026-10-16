@@ -387,3 +387,16 @@ Edit order:
 
 Once developed, commit your code, and push the commit to your fork on GitHub.
 Once ready, submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.
+
+#### Before you open the pull request
+
+Scale the effort to the risk. A typo or wording fix needs `ruff` and a link check. A change to optimisation, time grids and timestamps, forecasts, external inputs, publication or anything that can act on equipment needs all of the following, and documentation that contains executable examples (YAML, Jinja, JSON, `curl`, scripts, cookbook snippets) counts as code.
+
+1. **Review the final diff as someone who assumes it is wrong.** Read `git diff upstream/master...HEAD` line by line and, for each changed line, ask what input, state or timing makes it give a plausible but wrong result: missing, empty, stale, partial or out-of-order data; a value that crosses a boundary (DST in both directions, 5/30/60-minute steps, units, 0/negative/maximum); two requests overlapping; text that ends up in a shell, a template or a query. Ask this about the lines you changed, not only the lines you meant to change.
+2. **Derive tests from those risks.** For each risk that applies, one test that fails without your change: the failure path (an explicit error rather than a silent fallback), an incomplete or stale input, one boundary of each affected axis. Do not add tests that no risk calls for.
+3. **Check guards against what the consumer needs.** A condition that tests a proxy (non-empty, a count, a sensor state) passes inputs the consumer cannot use. Test the property itself (for example that timestamps cover the forecast window) and fail closed.
+4. **Run the examples in their real runtime.** Render Home Assistant templates with the Home Assistant template engine, run Node-RED functions, `curl` payloads and scripts, and feed the result to EMHASS, including with incomplete input. Do not substitute stock Jinja or reasoning for the target runtime. Take every number and rule stated in the text (counts, defaults, what `0` means) from the source or a run, never from memory or from a single date.
+5. **Follow the concept through the repository.** When a change states or changes a contract, search `docs/`, cookbooks, case studies, `AGENTS.md` and the tests for the same concept and update or list what disagrees; a new rule that a sibling example contradicts is a defect.
+6. **Say what you verified.** The PR description lists what you ran with its result, what you reused from earlier evidence and what you did not verify. Do not mark a confirmed defect as out of scope to get ready: fix it, or open a separate issue for an unrelated one and link it.
+
+The same applies when an AI coding agent prepared the change: see [`develop_ai_coders.md`](develop_ai_coders.md) §4.

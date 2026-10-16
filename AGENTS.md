@@ -102,6 +102,7 @@ AI finds code + candidates. Domain experts decide bug vs design. 2026-04-26 audi
 - Units (HA scales SOC by 100; CSV uses 0..1).
 - Test reproducer present for any behaviour-change PR.
 - Smoke-test (`docker compose up` + browser config page) if schema or `web_server.py` changed.
+- Before calling a substantive change PR-ready, follow [`docs/develop.md` § Before you open the pull request](docs/develop.md#before-you-open-the-pull-request). For agents: re-read the final diff assuming it is wrong, run every executable example in its real runtime (not stock Jinja or reasoning), and report executed, inherited and unverified evidence separately. Never state that a check passed unless it ran.
 
 **No refactor without issue:**
 

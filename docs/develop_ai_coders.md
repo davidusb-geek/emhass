@@ -103,10 +103,29 @@ Run through before opening. Each item has a *why* — skip the item only if the 
 - [ ] `uvx ruff check .` clean? *Why: ruff is enforced via `.github/workflows/code-quality.yml`; a red lint blocks merge.*
 - [ ] Sign conventions verified (if PR touches power / SOC / cost variables)? *Why: column names do not encode sign; see §3 sign-conventions landmine.*
 - [ ] Forecast ingestion, runtime forecast processing, mapping alignment, forecast post-processing or load/PV physical-domain handling touched? Checked against the [Forecast input contract](passing_data.md#forecast-input-contract), and `tests/test_forecast_validity_contract.py` (signed prices/temperatures, final load boundary) still passes? *Why: a generic `>= 0` rule, a dropped bool check or a silent timestamp shift gives a valid-looking but wrong plan.*
+- [ ] Final diff read line by line as if it were wrong, including the lines the change touches only incidentally? *Why: the defects found after submission were in lines the author believed were fine; see "Lessons from PR #1224" below.*
+- [ ] Every executable example (YAML, Jinja, JSON, `curl`, scripts) run in its real runtime, also with missing, partial and stale input? *Why: an example that renders is not an example that is right; it can produce a valid-looking plan from wrong data.*
+- [ ] Each guard tests what the consumer needs (for example timestamps covering the forecast window), not a proxy such as non-empty or a count? *Why: a proxy passes the inputs that matter most.*
+- [ ] Every number and rule stated in the text taken from source or a run, and sibling docs that state the same concept checked? *Why: counts generalised from one date, and a new rule contradicted by an example in the same file, are caught by one search and one run.*
+- [ ] PR body separates what I ran, what I reused and what I did not verify? *Why: lets the reviewer spend time on the unverified part.*
 - [ ] One concern per PR (scope discipline)? *Why: bundled PRs invite scope-objection on one part and block the whole PR.*
 - [ ] Issue or Discussion linked in PR body if applicable? *Why: makes review context one-click; saves maintainer time.*
 - [ ] Reproducer in body if behavior-change fix? *Why: lets the maintainer confirm the bug, not just the patch.*
 - [ ] Maintainer-scope-corridors checked? ([Discussion #808](https://github.com/davidusb-geek/emhass/discussions/808) Layers, [Discussion #789](https://github.com/davidusb-geek/emhass/discussions/789) MILP scope) *Why: out-of-corridor PRs land in indefinite review limbo.*
+
+### Lessons from PR #1224
+
+A documentation PR for [#1189](https://github.com/davidusb-geek/emhass/issues/1189) received review comments after submission. The defects that were real each had a cheap pre-submission check:
+
+| Finding | Missed assumption | Check that finds it |
+|---|---|---|
+| Nordpool guard let an incomplete price mapping through; EMHASS backfills the first price and holds the last, so the plan was valid but wrongly priced | "Tomorrow's prices non-empty" implies full coverage | Run the guard against each missing/empty/gap/stale case (negative tests), and test the property (timestamps cover the window) |
+| Positional list example silently used tomorrow's prices as today's | Example tested only with complete data | Run every variant of an example with one attribute missing |
+| DST step counts "46 or 50" stated for a date | Generalised from one date and one zone | Take counts from the source or a run for both directions, a second zone and a run before and after the change |
+| Negative end step documented as "no limit" while a positive start was then ignored | Documented contract copied, never executed for the combinations | Run each documented value combination against the optimiser |
+| Example deadline counted from the tick, contradicting the new "count from the first step" rule | New contract not searched for in sibling examples | Search the repository for the concept after stating a contract |
+| Claim of shell injection in a `curl` example (a false positive) | Safety property implicit | State the property and test it in the real engine (here: `tojson` escapes the apostrophe) so the reviewer need not guess |
+| Overlapping runs overwriting a plan (pre-existing) | Not asked of a recipe whose lines changed | Ask the timing/concurrency question for every touched example; if pre-existing, file or link a follow-up instead of widening the PR |
 
 ## 5. Red flags: stop and ask
 
