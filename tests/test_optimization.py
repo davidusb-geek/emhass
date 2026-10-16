@@ -3431,6 +3431,35 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Available timeframe is shorter than the specified number of hours to operate", joined
         )
 
+    def test_window_start_kept_when_end_is_zero_or_negative(self):
+        """Issue #1225: an end timestep of 0 or less means "until the end of
+        the horizon", so a positive start must still keep the load off before it,
+        even when the steps before the start are the cheapest.
+        """
+        for end in (0, -1):
+            with self.subTest(end=end):
+                df = self.prepare_forecast_data()
+                df[self.fcst.var_load_cost] = [0.05] * 6 + [0.30] * 42
+                self.optim_conf.update(
+                    {
+                        "set_use_battery": False,
+                        "number_of_deferrable_loads": 1,
+                        "nominal_power_of_deferrable_loads": [1000],
+                        "start_timesteps_of_each_deferrable_load": [6],
+                        "end_timesteps_of_each_deferrable_load": [end],
+                        "operating_hours_of_each_deferrable_load": [1],
+                    }
+                )
+                self.opt = self.create_optimization()
+                res = self.opt.perform_naive_mpc_optim(
+                    df, self.p_pv_forecast, self.p_load_forecast, 10
+                )
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                p_def = res["P_deferrable0"].to_numpy()
+                self.assertTrue(np.allclose(p_def[:6], 0.0))
+                self.assertGreater(p_def[6:].sum(), 0.0)
+        self.assertEqual(Optimization.validate_def_timewindow(6, 0, 2, 10), (6, 10, None))
+
     def test_thermal_inertia_not_flagged_unknown(self):
         """Issue #943 linter: thermal_inertia is read from the per-load
         thermal_config dict (hc.get("thermal_inertia")), so warning that it is
