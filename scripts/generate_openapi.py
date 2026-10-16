@@ -58,6 +58,8 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
     dv = param.get("default_value", None)
     if dv is not None:
         leaf["default"] = dv
+    if param.get("maximum") is not None:
+        leaf["maximum"] = param["maximum"]
     schema = leaf
     for _ in parts[:-1]:  # one wrap per leading "array"
         schema = {"type": "array", "items": schema}

@@ -2255,21 +2255,25 @@ async def set_input_data_dict(
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
     if type(retrieve_hass_conf) is bool:
         return False
-    (
-        params,
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-    ) = await utils.treat_runtimeparams(
-        runtimeparams,
-        params,
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        set_type,
-        logger,
-        emhass_conf,
-    )
+    try:
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
+            runtimeparams,
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+    except utils.SocFractionError:
+        # The fraction-vs-percentage error is already logged. Stop before the solver.
+        return False
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
         params = dict(orjson.loads(params))
