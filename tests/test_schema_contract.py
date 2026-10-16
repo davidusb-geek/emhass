@@ -70,6 +70,9 @@ _KNOWN_TYPE_MISMATCHES = frozenset(
     }
 )
 
+_SCALAR_INPUT_TYPES = frozenset({"int", "float", "string", "boolean", "time", "select"})
+_PARAM_DEFINITIONS_ONLY = frozenset({"ignore_pv_feedback_during_curtailment"})
+
 # Mapping from param_definitions "input" type to acceptable Python types for defaults.
 _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
     "int": (int, type(None)),
@@ -202,6 +205,51 @@ def test_config_defaults_keys_match_param_definitions():
     assert not mismatches, (
         "config_defaults.json has values incompatible with their declared input type:\n  - "
         + "\n  - ".join(mismatches)
+    )
+
+
+def test_config_defaults_values_match_param_definitions():
+    """Shared scalar defaults match between the two default files.
+
+    param_definitions.json is the source of truth. Array parameters are
+    excluded: their UI default is one template element and config_defaults.json
+    holds the list for the default plant. ignore_pv_feedback_during_curtailment
+    is UI-only and is the one param_definitions key allowed to be absent here.
+    """
+    pd = json.loads(
+        Path("src/emhass/static/data/param_definitions.json").read_text(encoding="utf-8")
+    )
+    cd = json.loads(Path("src/emhass/data/config_defaults.json").read_text(encoding="utf-8"))
+
+    pd_flat: dict[str, object] = {}
+    pd_input: dict[str, str] = {}
+    for section_entries in pd.values():
+        for name, definition in section_entries.items():
+            pd_flat[name] = definition["default_value"]
+            pd_input[name] = definition["input"]
+
+    only_in_param_definitions = set(pd_flat) - set(cd)
+    assert only_in_param_definitions == _PARAM_DEFINITIONS_ONLY, (
+        "param_definitions.json keys missing from config_defaults.json: "
+        f"{sorted(only_in_param_definitions - _PARAM_DEFINITIONS_ONLY)}. "
+        "Add them to src/emhass/data/config_defaults.json, or to "
+        "_PARAM_DEFINITIONS_ONLY when the key is UI-only."
+    )
+
+    mismatches: list[str] = []
+    for key, config_value in cd.items():
+        if key not in pd_flat or pd_input[key] not in _SCALAR_INPUT_TYPES:
+            continue
+        if config_value != pd_flat[key]:
+            mismatches.append(
+                f"{key}: config_defaults.json has {config_value!r}, "
+                f"param_definitions.json default_value is {pd_flat[key]!r}"
+            )
+
+    assert not mismatches, (
+        "config_defaults.json scalars have drifted from param_definitions.json. "
+        "param_definitions.json is the source of truth; align config_defaults.json "
+        "to it:\n  - " + "\n  - ".join(mismatches)
     )
 
 
