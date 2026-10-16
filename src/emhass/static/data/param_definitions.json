@@ -853,6 +853,7 @@
       "Description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.3,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_maximum_state_of_charge": {
@@ -860,6 +861,7 @@
       "Description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.9,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_target_state_of_charge": {
@@ -867,6 +869,7 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
       "input": "array.float",
       "default_value": 0.6,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_stress_cost": {
@@ -888,6 +891,7 @@
     "Description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
     "input": "array.float",
     "default_value": 0.4,
+    "maximum": 1,
     "requires": {
       "set_use_battery": true
     }
@@ -906,6 +910,7 @@
       "Description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.9,
+      "maximum": 1,
       "requires": {
         "set_use_battery": true
     }

@@ -2685,6 +2685,7 @@ async def treat_runtimeparams(
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
                 forecast_dates = extended_forecast_dates
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
@@ -2710,6 +2711,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_init = soc_init[0]
+                reject_soc_fraction_above_one("soc_init", soc_init, logger)
                 if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
@@ -2733,6 +2735,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_final = soc_final[0]
+                reject_soc_fraction_above_one("soc_final", soc_final, logger)
                 if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
@@ -2770,6 +2773,7 @@ async def treat_runtimeparams(
                     return [value] * num_batteries
 
                 soc_init_list = _resolve_soc_runtime_list("soc_init", target_list)
+                reject_soc_fraction_above_one("soc_init", soc_init_list, logger)
                 for k in range(num_batteries):
                     if soc_init_list[k] < min_list[k]:
                         logger.warning(
@@ -2786,6 +2790,7 @@ async def treat_runtimeparams(
                 params["passed_data"]["soc_init"] = soc_init_list
 
                 soc_final_list = _resolve_soc_runtime_list("soc_final", target_list)
+                reject_soc_fraction_above_one("soc_final", soc_final_list, logger)
                 for k in range(num_batteries):
                     if soc_final_list[k] < min_list[k]:
                         logger.warning(
@@ -2804,6 +2809,7 @@ async def treat_runtimeparams(
             # and default to None (no intermediate target); clamping/validation of
             # the value and the timestep is handled in Optimization.perform_optimization.
             params["passed_data"]["soc_target"] = runtimeparams.get("soc_target", None)
+            reject_soc_fraction_above_one("soc_target", params["passed_data"]["soc_target"], logger)
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
             )
@@ -2863,6 +2869,7 @@ async def treat_runtimeparams(
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             params["passed_data"]["prediction_horizon"] = None
 
             def _passthrough_soc_runtime(key: str):
@@ -2884,6 +2891,8 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target"] = (
                 float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
             )
+            for soc_name in ("soc_init", "soc_final", "soc_target"):
+                reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
             params["passed_data"]["soc_target_timestep"] = (
                 int(runtimeparams["soc_target_timestep"])
                 if "soc_target_timestep" in runtimeparams
@@ -3460,6 +3469,9 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # After the runtime merge when a request was supplied, and on the saved
+    # config when it was not. A percentage in either place must fail here.
+    reject_configured_soc_fractions(plant_conf, optim_conf, logger)
 
     # Shared tanks from the configuration file get the same check as runtime
     # ones (above), so a bad entry is reported and ignored instead of failing
@@ -5074,6 +5086,20 @@ BATT_ARRAY_PARAMS_PLANT_CONF: dict[str, bool | int | float] = {
     "battery_target_state_of_charge": 0.6,
     "battery_stress_cost": 0.0,
 }
+# Plant SOC bounds are fractions in [0, 1]. Checked on their own because the
+# other entries in BATT_ARRAY_PARAMS_PLANT_CONF are watts, efficiencies, or
+# costs, which are valid above 1 (#935).
+SOC_FRACTION_PLANT_PARAMS: tuple[str, ...] = (
+    "battery_minimum_state_of_charge",
+    "battery_maximum_state_of_charge",
+    "battery_target_state_of_charge",
+)
+# Penalty thresholds are fractions of capacity too. Their costs are currency
+# and stay out of this list (#935).
+SOC_FRACTION_OPTIM_PARAMS: tuple[str, ...] = (
+    "battery_soc_deficit_threshold",
+    "battery_soc_surplus_threshold",
+)
 BATT_ARRAY_PARAMS_OPTIM_CONF: dict[str, bool | int | float] = {
     "battery_soc_deficit_threshold": 0.4,
     "battery_soc_deficit_cost": 0.0,
@@ -5186,6 +5212,56 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+class SocFractionError(ValueError):
+    """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
+
+
+def reject_configured_soc_fractions(
+    plant_conf: dict, optim_conf: dict, logger: logging.Logger
+) -> None:
+    """Reject a saved or overridden SOC fraction above 1 (#935).
+
+    Plant bounds and the SOC penalty thresholds are fractions of battery
+    capacity. Their costs are currency and are not checked here.
+    """
+    for soc_name in SOC_FRACTION_PLANT_PARAMS:
+        reject_soc_fraction_above_one(soc_name, plant_conf.get(soc_name), logger)
+    for soc_name in SOC_FRACTION_OPTIM_PARAMS:
+        reject_soc_fraction_above_one(soc_name, optim_conf.get(soc_name), logger)
+
+
+def reject_soc_fraction_above_one(name: str, value, logger: logging.Logger) -> None:
+    """Raise SocFractionError when a SOC value is above 1 (#935).
+
+    ``1`` is a full battery. ``None`` means the value was omitted. A numeric
+    string is read as a number, so ``"80"`` is rejected the same way as ``80``.
+    Anything else that is not a number is left untouched. An out-of-band
+    fraction such as ``0.05`` stays valid for the existing recovery and clamp
+    logic.
+    """
+    if value is None:
+        return
+    items = value if isinstance(value, list) else [value]
+    for index, item in enumerate(items):
+        number = item
+        if isinstance(item, str):
+            try:
+                number = float(item)
+            except ValueError:
+                continue
+        elif isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        if number <= 1:
+            continue
+        label = f"{name}[{index}]" if isinstance(value, list) else name
+        message = (
+            f"{label}={number} is above 1. State of charge is a fraction in "
+            f"[0, 1] (0.65 means 65%), not a percentage."
+        )
+        logger.error("%s", message)
+        raise SocFractionError(message)
 
 
 def _warn_if_runtime_scalar_masks_batt_list(

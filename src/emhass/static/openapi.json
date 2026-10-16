@@ -1121,7 +1121,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.3
+              "default": 0.3,
+              "maximum": 1
             },
             "title": "Minimum Battery charge percentage",
             "x-unit": "fraction",
@@ -1131,7 +1132,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.9
+              "default": 0.9,
+              "maximum": 1
             },
             "title": "Maximum Battery charge percentage",
             "x-unit": "fraction",
@@ -1141,7 +1143,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.6
+              "default": 0.6,
+              "maximum": 1
             },
             "title": "Battery desired percentage after optimization",
             "x-unit": "fraction",
@@ -1168,7 +1171,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.4
+              "default": 0.4,
+              "maximum": 1
             },
             "title": "Battery SOC deficit threshold",
             "description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
@@ -1186,7 +1190,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.9
+              "default": 0.9,
+              "maximum": 1
             },
             "title": "Battery SOC surplus threshold",
             "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."

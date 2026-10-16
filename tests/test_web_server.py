@@ -254,6 +254,30 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # App returns 400 for failures in this specific action
         self.assertEqual(response.status_code, 400)
 
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_weather_cache_soc_fraction_is_400(self, mock_load, mock_cache, mock_grab):
+        from emhass.utils import SocFractionError
+
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_cache.side_effect = SocFractionError("soc_init=65 is above 1")
+        mock_grab.return_value = ["ERROR soc_init=65 is above 1"]
+        response = await self.client.post("/action/weather-forecast-cache", json={})
+        self.assertEqual(response.status_code, 400)
+
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server.export_influxdb_to_csv", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_export_csv_soc_fraction_is_400(self, mock_load, mock_export, mock_grab):
+        from emhass.utils import SocFractionError
+
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_export.side_effect = SocFractionError("soc_init=65 is above 1")
+        mock_grab.return_value = ["ERROR soc_init=65 is above 1"]
+        response = await self.client.post("/action/export-influxdb-to-csv", json={})
+        self.assertEqual(response.status_code, 400)
+
     @patch("emhass.web_server.set_input_data_dict")
     @patch("emhass.web_server.forecast_model_fit")
     @patch("emhass.web_server.get_injection_dict_forecast_model_fit")
