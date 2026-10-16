@@ -7263,9 +7263,6 @@ class Optimization:
             #   (c) Valid window inside the horizon — mask = 1 inside, 0 outside.
             raw_start = def_start_timestep[k] if k < len(def_start_timestep) else 0
             raw_end = def_end_timestep[k] if k < len(def_end_timestep) else 0
-            if raw_start >= 1 and raw_end <= 0:
-                # no end limit: the window runs from the start to the end of the horizon
-                raw_end = max(raw_start, n)
             user_configured_window = (raw_start > 0 or raw_end > 0) and raw_start <= raw_end
             effective_window_size = max(0, min(n, raw_end) - max(0, raw_start))
 
@@ -8561,9 +8558,9 @@ class Optimization:
         start_validated = 0
         end_validated = 0
         warning = None
-        # An end of 0 or less means no end limit, so a start of one step or more still applies
-        if start >= 1 and end <= 0:
-            end = max(start, window)
+        # An end of 0 or less means no end limit, so a start inside the window still applies
+        if 1 <= start < window and end <= 0:
+            end = window
         # Verify that start <= end
         if start <= end or start <= 0 or end <= 0:
             # start and end should be within the optimization timewindow [0, window]
