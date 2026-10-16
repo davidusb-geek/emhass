@@ -366,7 +366,9 @@ class OptimizationCache:
         # when the problem is built (they size the start-time variable and cut the
         # completed steps from the power sequence), so for these loads a change in
         # either value must miss the cache and rebuild the problem.
-        nominal_powers = optim_conf.get("nominal_power_of_deferrable_loads", []) or []
+        nominal_powers = optim_conf.get("nominal_power_of_deferrable_loads")
+        if nominal_powers is None:
+            nominal_powers = []
         current_states = to_tuple(optim_conf.get("def_current_state", []))
         completed_steps = to_tuple(optim_conf.get("def_current_operating_timesteps", []))
         sequence_load_running_state = tuple(
