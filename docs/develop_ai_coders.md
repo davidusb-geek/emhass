@@ -104,7 +104,7 @@ Run through before opening. Each item has a *why* — skip the item only if the 
 - [ ] Sign conventions verified (if PR touches power / SOC / cost variables)? *Why: column names do not encode sign; see §3 sign-conventions landmine.*
 - [ ] Forecast ingestion, runtime forecast processing, mapping alignment, forecast post-processing or load/PV physical-domain handling touched? Checked against the [Forecast input contract](passing_data.md#forecast-input-contract), and `tests/test_forecast_validity_contract.py` (signed prices/temperatures, final load boundary) still passes? *Why: a generic `>= 0` rule, a dropped bool check or a silent timestamp shift gives a valid-looking but wrong plan.*
 - [ ] Final diff read line by line as if it were wrong, including the lines the change touches only incidentally? *Why: the defects found after submission were in lines the author believed were fine; see "Lessons from PR #1224" below.*
-- [ ] Every executable example (YAML, Jinja, JSON, `curl`, scripts) run in its real runtime, also with missing, partial and stale input? *Why: an example that renders is not an example that is right; it can produce a valid-looking plan from wrong data.*
+- [ ] Every executable example (YAML, Jinja, JSON, `curl`, scripts) run in its real runtime (or disclosed as not run), also with missing, partial and stale input? *Why: an example that renders is not an example that is right; it can produce a valid-looking plan from wrong data.*
 - [ ] Each guard tests what the consumer needs (for example timestamps covering the forecast window), not a proxy such as non-empty or a count? *Why: a proxy passes the inputs that matter most.*
 - [ ] Every number and rule stated in the text taken from source or a run, and sibling docs that state the same concept checked? *Why: counts generalised from one date, and a new rule contradicted by an example in the same file, are caught by one search and one run.*
 - [ ] PR body separates what I ran, what I reused and what I did not verify? *Why: lets the reviewer spend time on the unverified part.*
@@ -115,7 +115,7 @@ Run through before opening. Each item has a *why* — skip the item only if the 
 
 ### Lessons from PR #1224
 
-A documentation PR for [#1189](https://github.com/davidusb-geek/emhass/issues/1189) received review comments after submission. The defects that were real each had a cheap pre-submission check:
+A documentation PR for [#1189](https://github.com/davidusb-geek/emhass/issues/1189) received review comments after submission. Each finding, including one false positive and one pre-existing issue, had a cheap pre-submission check:
 
 | Finding | Missed assumption | Check that finds it |
 |---|---|---|
