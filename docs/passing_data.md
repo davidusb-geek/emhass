@@ -143,7 +143,7 @@ A mapping of ISO 8601 timestamps to values is aligned onto the optimization grid
 2. Timestamps are normalized by instant. Always include a UTC offset: a timestamp without an offset is read as UTC, not as local time.
 3. Points are aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value. The buckets are anchored on the first step of the optimization grid (set by `method_ts_round`), so each bucket coincides with one grid step in every time zone.
 4. The aggregated points are matched to the forecast grid by UTC instant, so DST transitions do not shift values.
-5. Each value holds until the next supplied point (step, hold-last semantics). A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
+5. Each value holds until the next supplied point (step, hold-last semantics). Holding applies to the aggregated bucket values: a bucket that contains two points holds their mean, not the later point, over the steps that follow it until the next bucket with a point. A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
 
 Coarser source data is therefore held constant, finer data is averaged, and there is no interpolation between points.
 
@@ -157,6 +157,26 @@ Coarser source data is therefore held constant, finer data is averaged, and ther
 #### Choosing a fallback
 
 When a forecast source is unavailable, don't substitute `0` by default. A zero household load or a zero import price is a valid number that produces a mathematically valid but wrong plan. Use a fallback only when it is trustworthy for that quantity, for example 0 W of PV at night or a known fixed tariff. Otherwise skip that optimization cycle, either by not calling the action or by letting EMHASS reject the invalid payload, and run again when fresh data is available.
+
+### Step indices and other positional inputs
+
+Everything that is indexed by optimization step shares the grid of the plain lists: the plain forecast lists above and the step indices `start_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load`. Index `i` is the instant `first_step + i x optimization_time_step`, measured in **elapsed time**. On a daylight saving day the local clock labels of those instants skip or repeat an hour.
+
+- **The first step is not always "now".** `method_ts_round` decides it, once per request: `first` is the step that contains the request time, `last` the next step boundary (the current one if the request is exactly on it), and `nearest` (default) the closest boundary on the UTC clock, so a request in the second half of a step starts one step later (see [`method_ts_round`](config.md)). Index 0 of a plain list or step index is that first step.
+- **One grid per EMHASS request, not per caller.** EMHASS reads the clock once when it receives a request and uses that first step for everything in the request. A caller that builds its payload first (a script, a template, a flow) uses its own earlier reading of the clock; if the two readings fall on different sides of a step boundary, the first step the caller assumed and the first step EMHASS used differ by one step. Setting `method_ts_round` to `first` does not synchronise the two clocks.
+- **Prefer timestamped mappings for forecasts and prices.** They are matched by instant, so the source timestamps are kept whatever the first step is (see above). Positional lists and step indices must still correspond to the grid EMHASS actually used: when you must send them, set `method_ts_round` to `first`, floor the clock to the step instead of reproducing the `nearest` rule, and, before acting on the first step of a time-sensitive plan, check that the first timestamp of the returned plan equals the first step you assumed.
+- **Step indices count from the first step.** `end_timesteps_of_each_deferrable_load = N` forbids operation at step `N` and later; `0` means *no end limit*, not "stop immediately". Do not combine a positive start step with an end of `0` or a negative end: EMHASS then ignores the start step too (verified with the optimiser), so give the end explicitly (for example the horizon length). A value derived from a clock time must be counted in elapsed time from the first step.
+- **Compute elapsed time from instants, not from wall-clock arithmetic.** Subtracting or adding to datetimes that share one time zone is a wall-clock operation, so across a daylight saving change the result is an hour off (23 or 25 elapsed hours between the same two local times). In Home Assistant templates use `as_timestamp()` (seconds since the epoch), for example `(as_timestamp(target) - as_timestamp(now())) / 60` for the minutes to a target time, and `as_timestamp(first_step) + step_seconds * i` for the instant of step `i`.
+- **Fixed-length horizons.** `prediction_horizon` is a number of steps and `delta_forecast_daily` is a number of local calendar days. A 48-step, 30-minute `prediction_horizon` is always 24 elapsed hours. A `delta_forecast_daily` window has a different number of steps only when it contains a daylight saving change, by the size of the change and the step: with 30-minute steps 46 or 50 for a one-hour change (Australia/Sydney), 47 or 49 for a 30-minute change (Australia/Lord_Howe), and 48 once the change is behind the first step. Without `prediction_horizon`, `naive-mpc-optim` plans only 10 steps.
+
+A Home Assistant template for the first step with `method_ts_round` set to `first` and an `optimization_time_step` of 30 minutes:
+
+```jinja
+{%- set step_s = 1800 -%}
+{%- set first_step = (as_timestamp(now()) // step_s) * step_s -%}
+```
+
+The floor on epoch seconds is the local step boundary only when the UTC offset is a whole number of steps, which holds for whole-hour and half-hour offsets with a 30-minute step. For a zone such as Asia/Kathmandu (+05:45) or Pacific/Chatham the floor lands on :15 and :45, so add the offset first: `{%- set off = now().utcoffset().total_seconds() -%}` and `first_step = ((as_timestamp(now()) + off) // step_s) * step_s - off` (checked in Home Assistant for Kathmandu, Kolkata, Sydney, Chatham and St. John's).
 
 ### Passing other data at runtime
 
