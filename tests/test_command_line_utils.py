@@ -3149,6 +3149,20 @@ class TestOptimizationCache(unittest.TestCase):
         # Key should be an OptimizationCacheKey dataclass instance
         self.assertIsInstance(key1, OptimizationCacheKey)
 
+    def test_cache_key_accepts_nominal_powers_as_array(self):
+        """A numpy array of nominal powers must not be truth-tested when building the key."""
+        optim_conf = copy.deepcopy(self.optim_conf)
+        optim_conf["nominal_power_of_deferrable_loads"] = np.array(
+            optim_conf["nominal_power_of_deferrable_loads"], dtype=float
+        )
+        key = OptimizationCache._compute_cache_key(
+            optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+        self.assertIsInstance(key, OptimizationCacheKey)
+
     def test_cache_key_different_for_different_config(self):
         """Test that different configs produce different cache keys."""
         key1 = OptimizationCache._compute_cache_key(
