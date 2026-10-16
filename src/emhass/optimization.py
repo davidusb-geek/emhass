@@ -8558,6 +8558,9 @@ class Optimization:
         start_validated = 0
         end_validated = 0
         warning = None
+        # An end of 0 or less means no end limit, so a start inside the window still applies
+        if 1 <= start < window and end <= 0:
+            end = window
         # Verify that start <= end
         if start <= end or start <= 0 or end <= 0:
             # start and end should be within the optimization timewindow [0, window]
