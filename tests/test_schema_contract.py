@@ -71,6 +71,20 @@ _KNOWN_TYPE_MISMATCHES = frozenset(
 )
 
 _SCALAR_INPUT_TYPES = frozenset({"int", "float", "string", "boolean", "time", "select"})
+# Every key of _INPUT_TYPE_TO_PY_TYPES is in exactly one of these two sets.
+# A new input type that is only added to the mapping is skipped by the scalar
+# drift guard until it is classified here.
+_NON_SCALAR_INPUT_TYPES = frozenset(
+    {
+        "array.int",
+        "array.float",
+        "array.string",
+        "array.boolean",
+        "array.time",
+        "array.array.float",
+        "object",
+    }
+)
 _PARAM_DEFINITIONS_ONLY = frozenset({"ignore_pv_feedback_during_curtailment"})
 
 # Mapping from param_definitions "input" type to acceptable Python types for defaults.
@@ -89,6 +103,15 @@ _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
     "array.array.float": (list, type(None)),
     "object": (dict, type(None)),
 }
+
+
+def _same_json_value(left: object, right: object) -> bool:
+    """True when two parsed JSON values have the same type and the same value.
+
+    ``True == 1`` and ``False == 0`` in Python, but JSON ``true`` and ``1``
+    are different and an integer parameter rejects a boolean.
+    """
+    return type(left) is type(right) and left == right
 
 
 def _extract_switch_body(js_src: str, fn_name: str) -> str:
@@ -195,6 +218,12 @@ def test_config_defaults_keys_match_param_definitions():
                 f"callers expecting a dict will crash (the #876 footgun)"
             )
             continue
+        if isinstance(default_value, bool) and input_type == "int":
+            mismatches.append(
+                f"{key}: default is bool {default_value!r}, declared input is 'int'. "
+                f"JSON true/false is not an integer"
+            )
+            continue
         if not isinstance(default_value, acceptable):
             mismatches.append(
                 f"{key}: default is {type(default_value).__name__} {default_value!r}, "
@@ -228,6 +257,16 @@ def test_config_defaults_values_match_param_definitions():
             pd_flat[name] = definition["default_value"]
             pd_input[name] = definition["input"]
 
+    classified = _SCALAR_INPUT_TYPES | _NON_SCALAR_INPUT_TYPES
+    overlap = _SCALAR_INPUT_TYPES & _NON_SCALAR_INPUT_TYPES
+    unclassified = (set(_INPUT_TYPE_TO_PY_TYPES) | set(pd_input.values())) - classified
+    assert not overlap and not unclassified, (
+        "every input type must be classified as scalar or non-scalar. "
+        f"overlap: {sorted(overlap) or 'none'}; "
+        f"unclassified: {sorted(unclassified) or 'none'}. "
+        "Add the type to _SCALAR_INPUT_TYPES or _NON_SCALAR_INPUT_TYPES."
+    )
+
     only_in_param_definitions = set(pd_flat) - set(cd)
     assert only_in_param_definitions == _PARAM_DEFINITIONS_ONLY, (
         "param_definitions.json keys missing from config_defaults.json: "
@@ -240,10 +279,21 @@ def test_config_defaults_values_match_param_definitions():
     for key, config_value in cd.items():
         if key not in pd_flat or pd_input[key] not in _SCALAR_INPUT_TYPES:
             continue
-        if config_value != pd_flat[key]:
+        input_type = pd_input[key]
+        schema_value = pd_flat[key]
+        if input_type == "int" and (
+            isinstance(config_value, bool) or isinstance(schema_value, bool)
+        ):
             mismatches.append(
-                f"{key}: config_defaults.json has {config_value!r}, "
-                f"param_definitions.json default_value is {pd_flat[key]!r}"
+                f"{key}: boolean default {config_value!r} / {schema_value!r} "
+                f"is not valid for input 'int'"
+            )
+            continue
+        if not _same_json_value(config_value, schema_value):
+            mismatches.append(
+                f"{key}: config_defaults.json has {type(config_value).__name__} {config_value!r}, "
+                f"param_definitions.json default_value is "
+                f"{type(schema_value).__name__} {schema_value!r}"
             )
 
     assert not mismatches, (
