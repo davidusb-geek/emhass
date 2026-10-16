@@ -3149,6 +3149,20 @@ class TestOptimizationCache(unittest.TestCase):
         # Key should be an OptimizationCacheKey dataclass instance
         self.assertIsInstance(key1, OptimizationCacheKey)
 
+    def test_cache_key_accepts_nominal_powers_as_array(self):
+        """A numpy array of nominal powers must not be truth-tested when building the key."""
+        optim_conf = copy.deepcopy(self.optim_conf)
+        optim_conf["nominal_power_of_deferrable_loads"] = np.array(
+            optim_conf["nominal_power_of_deferrable_loads"], dtype=float
+        )
+        key = OptimizationCache._compute_cache_key(
+            optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+        self.assertIsInstance(key, OptimizationCacheKey)
+
     def test_cache_key_different_for_different_config(self):
         """Test that different configs produce different cache keys."""
         key1 = OptimizationCache._compute_cache_key(
@@ -5073,6 +5087,43 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         # Verify the CVXPY parameter was updated
         self.assertEqual(opt_2.param_def_current_state[0].value, 1.0)
         self.assertEqual(opt_2.param_def_current_state[1].value, 0.0)
+
+    async def test_sequence_load_running_state_change_rebuilds(self):
+        """Issue #1221: a sequence load reads def_current_state and
+        def_current_operating_timesteps when the problem is built, so a change
+        must cause a cache MISS and the resumed load must run only the
+        remaining steps of its sequence, as it does without a cached object."""
+        base_rt = {
+            "pv_power_forecast": [0] * 10,
+            "load_power_forecast": [500] * 10,
+            "load_cost_forecast": [1.0] * 5 + [0.01] * 5,
+            "prod_price_forecast": [0.0] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [[1000, 2000, 500]],
+            "operating_hours_of_each_deferrable_load": [0],
+            "start_timesteps_of_each_deferrable_load": [0],
+            "end_timesteps_of_each_deferrable_load": [0],
+            "def_current_state": [False],
+            "def_current_operating_timesteps": [0],
+        }
+
+        input_data_dict = await self._run_set_input(base_rt)
+        opt_1 = input_data_dict["opt"]
+        await naive_mpc_optim(input_data_dict, logger, debug=True)
+
+        input_data_dict2 = await self._run_set_input(
+            {**base_rt, "def_current_state": [True], "def_current_operating_timesteps": [1]}
+        )
+        opt_2 = input_data_dict2["opt"]
+        self.assertIsNot(opt_1, opt_2, "sequence load running state change must cause cache MISS")
+
+        opt_res = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        p_def = opt_res["P_deferrable0"].to_numpy()
+        np.testing.assert_allclose(p_def[:2], [2000, 500], atol=1e-6)
+        np.testing.assert_allclose(p_def[2:], 0, atol=1e-6)
 
     async def test_cache_hit_on_battery_power_limit_change(self):
         """Test that changing battery_discharge_power_max keeps cache HIT.
