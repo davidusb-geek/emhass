@@ -16,6 +16,7 @@ Short, standalone, copy-pasteable recipes for common EMHASS patterns. Each recip
 ### EV charging
 
 - [EMHASS as planner, evcc as executor](ev_evcc_executor.md): EMHASS plans the EV charge as one deferrable in the whole-home optimization, and evcc executes it on the car (current modulation, live SOC, PV tracking). Works today on released evcc and EMHASS.
+- [EV charging with Node-RED, MQTT and evcc, without Home Assistant](ev_evcc_nodered_mqtt.md): the same planner/executor coupling with Node-RED as the only glue. The flow reads evcc state over MQTT, builds the MPC payload, publishes the EV setpoints as retained topics and switches the evcc loadpoint mode over REST, with a watchdog that falls back to surplus-only charging.
 
 This is the opposite coupling to the evcc-as-frontend idea under discussion at [evcc-io/evcc#29815](https://github.com/evcc-io/evcc/discussions/29815) (evcc calling EMHASS as its backend optimizer). That recipe can land if and when #29815 resolves; the two coexist.
 
