@@ -47,6 +47,7 @@ import pickle as cPickle
 import re
 import tempfile
 from datetime import datetime, timedelta
+from typing import Literal
 from urllib.parse import quote
 
 import aiofiles
@@ -105,6 +106,12 @@ solcast_backoff_seconds = (1, 2, 4)
 forecast_solar_request_timeout = 12
 forecast_solar_max_attempts = 3
 forecast_solar_backoff_seconds = (1, 2, 4)
+
+# Python 3.10 keeps asyncio.TimeoutError distinct from the builtin TimeoutError.
+# aiohttp's total timeout raises the asyncio one, which is not a ClientError,
+# so both have to be named or a timed-out request escapes the retry loop.
+# 3.11+ aliases them; listing both is the same handler there.
+forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError)
 
 
 def _solcast_overlap_average(
@@ -680,8 +687,14 @@ class Forecast:
             bias = max(0.0, min(1.0, bias))
         return bias
 
-    async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
-        """Helper to retrieve weather data from Solcast or cache."""
+    async def _get_weather_solcast(
+        self, w_forecast_cache_path: str
+    ) -> pd.DataFrame | Literal[False]:
+        """Helper to retrieve weather data from Solcast or cache.
+
+        Returns ``False`` for an HTTP error or when the daily cap is already full.
+        A timeout or connection error is raised after its retries.
+        """
         # The explicit `weather-forecast-cache` action sets weather_forecast_cache
         # and is meant to refresh the cache from the Solcast API. Reading the cache
         # first here would return a stale-but-present cache early (for Solcast,
@@ -756,7 +769,6 @@ class Forecast:
                     "https://api.solcast.com.au/rooftop_sites/"
                     f"{roof_id}/forecasts?hours={days_solcast}"
                 )
-                roof_ok = False
                 for attempt in range(1, solcast_max_attempts + 1):
                     try:
                         async with session.get(url, headers=headers) as response:
@@ -828,9 +840,8 @@ class Forecast:
                             total_data = data_tmp.copy()
                         else:
                             total_data = total_data + data_tmp
-                        roof_ok = True
                         break
-                    except (TimeoutError, aiohttp.ClientError):
+                    except forecast_transport_errors:
                         self.logger.error(
                             "Failed to fetch weather forecast from Solcast (attempt %s/%s)",
                             attempt,
@@ -838,29 +849,22 @@ class Forecast:
                             exc_info=True,
                         )
                         if attempt >= solcast_max_attempts:
-                            break
+                            raise
                         # The first attempt for every roof was reserved up front.
                         # A retry is another provider call and must fit under the cap.
+                        # The failed attempt still propagates: a timeout is not a
+                        # Solcast HTTP rejection.
                         if not self._solcast_rate_limit_ok(required_calls=1):
                             self.logger.warning(
                                 "Solcast daily API call limit reached (safety cap). "
                                 "Skipping retry to preserve quota."
                             )
-                            return False
+                            raise
                         backoff = solcast_backoff_seconds[
                             min(attempt - 1, len(solcast_backoff_seconds) - 1)
                         ]
                         self.logger.info("Retrying Solcast fetch in %ss", backoff)
                         await asyncio.sleep(backoff)
-                if not roof_ok:
-                    # A missing roof must not be published as a zero or partial
-                    # aggregate, and must not be written into the cache below.
-                    self.logger.error(
-                        "Failed to fetch Solcast forecast for rooftop %s after %s attempts",
-                        roof_id,
-                        solcast_max_attempts,
-                    )
-                    return False
 
         data = total_data
         if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
@@ -937,27 +941,20 @@ class Forecast:
                             data_tmp = data_tmp.fillna(0.0)
                         array_data = data_tmp
                         break
-                    except (TimeoutError, aiohttp.ClientError):
+                    except forecast_transport_errors:
                         self.logger.error(
                             "Failed to fetch solar weather forecast (attempt %s/%s)",
                             attempt,
                             forecast_solar_max_attempts,
                             exc_info=True,
                         )
-                        if attempt < forecast_solar_max_attempts:
-                            backoff = forecast_solar_backoff_seconds[
-                                min(attempt - 1, len(forecast_solar_backoff_seconds) - 1)
-                            ]
-                            self.logger.info("Retrying forecast.solar fetch in %ss", backoff)
-                            await asyncio.sleep(backoff)
-                if array_data is None:
-                    # Same rule as Solcast: a failed array is not a zero-PV plan,
-                    # and it must not be cached.
-                    self.logger.error(
-                        "Failed to fetch forecast.solar data after %s attempts",
-                        forecast_solar_max_attempts,
-                    )
-                    return False
+                        if attempt >= forecast_solar_max_attempts:
+                            raise
+                        backoff = forecast_solar_backoff_seconds[
+                            min(attempt - 1, len(forecast_solar_backoff_seconds) - 1)
+                        ]
+                        self.logger.info("Retrying forecast.solar fetch in %ss", backoff)
+                        await asyncio.sleep(backoff)
                 if len(data) == 0:
                     data = copy.deepcopy(array_data)
                 else:
@@ -1104,15 +1101,17 @@ class Forecast:
         method: str | None = "open-meteo",
         csv_path: str | None = "data_weather_forecast.csv",
         use_legacy_pvlib: bool | None = False,
-    ) -> pd.DataFrame:
+    ) -> pd.DataFrame | Literal[False] | None:
         r"""
         Get and generate weather forecast data.
 
         :param method: The desired method, options are 'open-meteo', 'csv', 'list', 'solcast' and \
             'solar.forecast'. Defaults to 'open-meteo'.
         :type method: str, optional
-        :return: The DataFrame containing the forecasted data
-        :rtype: pd.DataFrame
+        :return: The forecast frame. Solcast returns ``False`` for an HTTP error or when \
+            the daily cap is already full. ``None`` when the method is invalid or a runtime \
+            list is rejected. A transport failure is raised after its retries.
+        :rtype: pd.DataFrame | Literal[False] | None
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
         w_forecast_cache_path = os.path.abspath(
@@ -1271,6 +1270,10 @@ class Forecast:
                 + quote(str(self.time_zone), safe="")
                 + "&timeformat=unixtime"
             )
+            # Same rule as the PV fetch (#950). A cache that is present, including
+            # a stale one kept as the fallback, gets one attempt. Retrying it would
+            # add the backoff delay to every steady-state cycle. Only a cold start
+            # (nothing to fall back to) uses open_meteo_max_attempts.
             has_cache = data is not None
             max_attempts = 1 if has_cache else open_meteo_max_attempts
             # A bounded per-request timeout so a slow covariate fetch cannot
@@ -1288,7 +1291,17 @@ class Forecast:
                                 )
                     # Successful fetch; stop retrying.
                     break
-                except (TimeoutError, aiohttp.ClientError):
+                except aiohttp.ClientResponseError as exc:
+                    # HTTP status errors are not transport failures. A 400 or 429
+                    # will not succeed on a second try, so do not spend the attempts.
+                    self.logger.error(
+                        "Open-Meteo covariate fetch returned HTTP %s; not retrying",
+                        exc.status,
+                    )
+                    if has_cache:
+                        self.logger.warning("Returning old cached covariate data as a fallback")
+                    break
+                except forecast_transport_errors:
                     self.logger.error(
                         "Failed to fetch weather covariates from Open-Meteo (attempt %s/%s)",
                         attempt,
