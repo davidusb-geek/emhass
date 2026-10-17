@@ -54,7 +54,9 @@ Expected: EMHASS restarts cleanly and `naive-mpc-optim` returns a plan with a
 
 One `mqtt in` node subscribed to `evcc/loadpoints/1/+` feeds a `function` node that keeps
 four values in flow context (plugged in, charging, charge power in W, vehicle SOC in %) plus
-the arrival time of the SOC. The payload builder (Step 3) reads flow context, so the MPC
+the time the SOC last arrived. evcc republishes every loadpoint value on each of its update
+cycles, so that time is a liveness signal for the evcc to MQTT link, not the age of the
+vehicle's answer (see Caveats). The payload builder (Step 3) reads flow context, so the MPC
 tick never waits on evcc.
 
 ```javascript
@@ -91,7 +93,7 @@ step, which with `method_ts_round: first` is the step containing the tick.
 const step_min = 30, horizon = 48;                 // = optimization_time_step, prediction_horizon
 const charger_kw = 11.0, capacity_kwh = 77.0;      // charger nominal, usable battery of the car
 const target_soc = 80, departure_hhmm = "07:00";   // "be at 80 % by 07:00 local"
-const soc_max_age_ms = 6 * 3600 * 1000;            // see Caveats: SOC staleness
+const soc_max_age_ms = 15 * 60 * 1000;             // ~3 evcc cycles; see Caveats: SOC staleness
 const step_s = step_min * 60;
 const now = Date.now();
 
@@ -104,7 +106,7 @@ const dep = new Date(now); dep.setHours(hh, mm, 0, 0);
 if (dep.getTime() <= now) dep.setDate(dep.getDate() + 1);
 let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s), horizon);
 
-// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, stale SOC or unplugged -> 0 h.
+// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 h.
 const connected = flow.get("ev_connected") === true;
 const soc = flow.get("ev_soc_percent");
 const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) < soc_max_age_ms;
@@ -246,10 +248,14 @@ follows the plan again after the next successful tick.
   that night; do not assume EMHASS forecast-window handling changes the flow's arithmetic.
   The epoch floor for the first step assumes a UTC offset that is a whole number of steps
   (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
-- **SOC staleness.** evcc refreshes `vehicleSoc` only while the car answers; a sleeping car
-  can report an hours-old value. Step 3 treats an SOC older than `soc_max_age_ms` as missing
-  and plans 0 h. Pick the age from how often your vehicle API actually answers; a car that
-  never refreshes is never charged, which is the safe failure but not the wanted one.
+- **SOC staleness.** `soc_max_age_ms` in Step 3 catches a silent evcc or broken MQTT link
+  (no `vehicleSoc` message for three cycles) and plans 0 h for the EV, the safe failure. It
+  does not catch a stale vehicle answer: evcc republishes its cached SOC every cycle and
+  publishes no observation time, and with the loadpoint default `soc.poll.mode: charging`
+  the vehicle API is only queried while charging, so a car that sat unplugged for a day can
+  arrive with an old SOC. evcc's `connected` poll mode (queried every `interval` while
+  plugged in) narrows that gap at the cost of vehicle-API traffic, which evcc itself warns
+  about; otherwise treat the first plan after plug-in with the corresponding suspicion.
 - **A missed deadline rolls into the next day.** Leftover energy is then planned into the
   cheapest slots before tomorrow's departure, often midday PV. If the charge must stay
   overnight, bound `start_timesteps`/`end_timesteps` to the overnight window.
