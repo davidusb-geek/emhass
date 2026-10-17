@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import _pickle as cPickle
+import asyncio
 import bz2
 import copy
 import glob
@@ -1068,6 +1069,48 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
 
+    async def test_covariate_http_error_is_not_retried(self):
+        """A non-2xx covariate response is terminal. It is not a transport failure."""
+        from unittest.mock import patch
+
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with aioresponses() as mocked:
+                        mocked.get(url_pattern, status=400)
+                        mocked.get(url_pattern, status=400)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertIsNone(result)
+            self.assertEqual(total_calls, 1)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+
+    async def test_covariate_asyncio_timeout_is_retried(self):
+        """Python 3.10 raises asyncio.TimeoutError, which is not the builtin TimeoutError."""
+        from unittest.mock import patch
+
+        payload = {"latitude": self.fcst.lat, "longitude": self.fcst.lon, "minutely_15": {}}
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with aioresponses() as mocked:
+                        # asyncio.TimeoutError, not the builtin: they differ on Python 3.10.
+                        mocked.get(url_pattern, exception=asyncio.TimeoutError())  # noqa: UP041
+                        mocked.get(url_pattern, payload=payload)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertEqual(result, payload)
+            self.assertEqual(total_calls, 2)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+
     async def test_covariate_stale_cache_falls_back_without_retry(self):
         """A present cache is the fallback: one failed refresh, then the cached payload."""
         from unittest.mock import patch
@@ -2112,22 +2155,27 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         finally:
             forecast_module.forecast_solar_backoff_seconds = original_backoff
 
-    async def test_solar_forecast_transport_error_all_attempts_return_false(self):
-        """A forecast.solar outage returns False instead of an empty zero-PV frame."""
-        cache_path = self._solar_forecast_plants(1)
+    async def test_solar_forecast_transport_error_all_attempts_raise(self):
+        """A forecast.solar outage raises after the retries and does not write the cache."""
+        self._solar_forecast_plants(1)
+        self.fcst.params["passed_data"]["weather_forecast_cache"] = True
         url_pattern = re.compile(r"https://api\.forecast\.solar/estimate/.*")
         original_backoff = forecast_module.forecast_solar_backoff_seconds
         forecast_module.forecast_solar_backoff_seconds = (0, 0, 0)
         try:
-            with aioresponses() as mocked:
-                for _ in range(forecast_module.forecast_solar_max_attempts):
-                    mocked.get(url_pattern, exception=TimeoutError())
-                result = await self.fcst._get_weather_solar_forecast(cache_path)
-                total_calls = sum(len(v) for v in mocked.requests.values())
-            self.assertFalse(result)
-            self.assertNotIsInstance(result, pd.DataFrame)
-            self.assertEqual(total_calls, forecast_module.forecast_solar_max_attempts)
-            self.assertFalse(os.path.exists(cache_path))
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                cache_path = os.path.join(tmp_dir, "weather_forecast_data.pkl")
+                with aioresponses() as mocked:
+                    for _ in range(forecast_module.forecast_solar_max_attempts):
+                        mocked.get(url_pattern, exception=TimeoutError())
+                    with self.assertRaises(TimeoutError):
+                        await self.fcst._get_weather_solar_forecast(cache_path)
+                    total_calls = sum(len(v) for v in mocked.requests.values())
+                self.assertEqual(total_calls, forecast_module.forecast_solar_max_attempts)
+                self.assertFalse(
+                    os.path.exists(cache_path),
+                    "a failed forecast.solar fetch must not be cached",
+                )
         finally:
             forecast_module.forecast_solar_backoff_seconds = original_backoff
 
@@ -3420,16 +3468,16 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             with aioresponses() as mocked:
                 mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
                 mocked.get(url_pattern, payload={"forecasts": []})
-                res = await self.fcst.get_weather_forecast(method="solcast")
+                with self.assertRaises(aiohttp.ClientConnectionError):
+                    await self.fcst.get_weather_forecast(method="solcast")
                 total_calls = sum(len(v) for v in mocked.requests.values())
-            self.assertFalse(res)
             self.assertEqual(total_calls, 1)
             self.assertEqual(self._read_solcast_counter(), 8)
         finally:
             forecast_module.solcast_backoff_seconds = original_backoff
 
-    async def test_solcast_transport_error_all_attempts_return_false(self):
-        """Every transport attempt failing returns False rather than an empty forecast."""
+    async def test_solcast_transport_error_all_attempts_raise(self):
+        """Every transport attempt failing raises rather than returning an empty forecast."""
         self._solcast_retry_setup()
         url_pattern = re.compile(r"https://api\.solcast\.com\.au/.*")
         original_backoff = forecast_module.solcast_backoff_seconds
@@ -3438,10 +3486,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             with aioresponses() as mocked:
                 for _ in range(forecast_module.solcast_max_attempts):
                     mocked.get(url_pattern, exception=TimeoutError())
-                res = await self.fcst.get_weather_forecast(method="solcast")
+                with self.assertRaises(TimeoutError):
+                    await self.fcst.get_weather_forecast(method="solcast")
                 total_calls = sum(len(v) for v in mocked.requests.values())
-            self.assertFalse(res)
-            self.assertNotIsInstance(res, pd.DataFrame)
             self.assertEqual(total_calls, forecast_module.solcast_max_attempts)
             self.assertEqual(self._read_solcast_counter(), forecast_module.solcast_max_attempts)
         finally:
