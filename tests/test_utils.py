@@ -1715,7 +1715,6 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         if "optim_status" in self.df.columns:
             self.assertIn("optim_status", df.columns)
 
-
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
