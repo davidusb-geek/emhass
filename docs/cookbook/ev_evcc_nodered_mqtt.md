@@ -22,8 +22,8 @@ rather than repeated.
   owns battery dispatch.
 - Node-RED 3.x, core nodes only (`inject`, `mqtt in/out`, `function`, `http request`, `rbe`,
   `catch`, `trigger`).
-- Transport tested against: Node-RED 3.x, evcc 0.2xx/0.3xx (MQTT state topics, REST
-  `/api/loadpoints/{id}/mode` and `/mincurrent`), EMHASS 0.18.x.
+- Transport tested against: Node-RED 3.x, evcc 0.3xx (written against 0.317; MQTT state
+  topics, REST `/api/loadpoints/{id}/mode` and `/mincurrent`), EMHASS 0.18.x.
 
 ## Step 1: Verify your static EMHASS config
 
@@ -87,7 +87,9 @@ An `inject` node fires every MPC tick (15 min for a 30 min step) into this `func
 The EV is modelled as in the [EV study case](../study_cases/ev.md): energy to deliver =
 (target SOC - live SOC) x usable capacity, deadline = next departure, both recomputed on
 every call. Everything positional counts steps in elapsed time from the first optimization
-step, which with `method_ts_round: first` is the step containing the tick.
+step, which with `method_ts_round: first` is the step containing the tick. The two price
+lists are plain lists with at least `horizon` finite values, as the
+[Forecast input contract](../passing_data.md#forecast-input-contract) requires.
 
 ```javascript
 const step_min = 30, horizon = 48;                 // = optimization_time_step, prediction_horizon
@@ -192,7 +194,7 @@ Expected: `mosquitto_sub -t 'emhass/#' -v` shows the four retained topics and a 
 
 ## Step 5: Drive the evcc loadpoint over REST
 
-<!-- transport: evcc 0.2xx/0.3xx (tested) -->
+<!-- transport: evcc 0.3xx (written against 0.317, tested) -->
 
 An `mqtt in` on `emhass/ev/mode`, an `rbe` node (send on change only) and an `http request`
 node that posts the mode to evcc:
