@@ -47,6 +47,7 @@ import pickle as cPickle
 import re
 import tempfile
 from datetime import datetime, timedelta
+from typing import Literal
 from urllib.parse import quote
 
 import aiofiles
@@ -92,6 +93,25 @@ open_meteo_request_timeout = 12
 # is made and any failure falls back to the cache immediately (no added delay).
 open_meteo_max_attempts = 3
 open_meteo_backoff_seconds = (1, 2, 4)
+
+# Transport failures are retried. Solcast is only fetched after a cache miss
+# (or an explicit refresh). HTTP status errors stay terminal: 402/429 is a
+# quota response, and retrying it would spend more of the daily cap. Each
+# retry reserves one extra call and is skipped when that reservation does not fit.
+solcast_request_timeout = 12
+solcast_max_attempts = 3
+solcast_backoff_seconds = (1, 2, 4)
+
+# Same timeout and backoff. A failed array is not published as a zero-PV plan.
+forecast_solar_request_timeout = 12
+forecast_solar_max_attempts = 3
+forecast_solar_backoff_seconds = (1, 2, 4)
+
+# Python 3.10 keeps asyncio.TimeoutError distinct from the builtin TimeoutError.
+# aiohttp's total timeout raises the asyncio one, which is not a ClientError,
+# so both have to be named or a timed-out request escapes the retry loop.
+# 3.11+ aliases them; listing both is the same handler there.
+forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError)
 
 
 def _solcast_overlap_average(
@@ -667,8 +687,14 @@ class Forecast:
             bias = max(0.0, min(1.0, bias))
         return bias
 
-    async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
-        """Helper to retrieve weather data from Solcast or cache."""
+    async def _get_weather_solcast(
+        self, w_forecast_cache_path: str
+    ) -> pd.DataFrame | Literal[False]:
+        """Helper to retrieve weather data from Solcast or cache.
+
+        Returns ``False`` for an HTTP error or when the daily cap is already full.
+        A timeout or connection error is raised after its retries.
+        """
         # The explicit `weather-forecast-cache` action sets weather_forecast_cache
         # and is meant to refresh the cache from the Solcast API. Reading the cache
         # first here would return a stale-but-present cache early (for Solcast,
@@ -736,74 +762,109 @@ class Forecast:
         # coerce/validate/clamp policy.
         bias = self._parse_pv_quantile_bias()
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=solcast_request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             for roof_id in roof_ids:
-                url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
-                async with session.get(url, headers=headers) as response:
-                    if int(response.status) == 200:
-                        data = await response.json()
-                    elif int(response.status) in [402, 429]:
-                        self.logger.error(
-                            "Solcast error: May have exceeded your subscription limit."
-                        )
-                        return False
-                    elif int(response.status) >= 400 or (202 <= int(response.status) <= 299):
-                        self.logger.error(
-                            "Solcast error: Issue with request, check API key and rooftop ID."
-                        )
-                        return False
-                    if len(data["forecasts"]) == 0:
-                        self.logger.error("No data retrieved from Solcast service.")
-                        return False
-                    # Each Solcast row is an *average* power over the interval
-                    # [period_end - period, period_end); it is not an
-                    # instantaneous sample at period_end. Map those source
-                    # intervals onto the optimisation grid by overlap-weighted
-                    # averaging (see _solcast_overlap_average) so source-period
-                    # energy is preserved for any optimization_time_step -- finer,
-                    # equal or coarser than the source period, and grids that are
-                    # not an exact divisor of it -- without inventing
-                    # interpolation ramps or holding a value across a gap.
-                    solcast_period_ends = pd.DatetimeIndex(
-                        [pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]]
-                    )
-                    if solcast_period_ends.tz is None:
-                        solcast_period_ends = solcast_period_ends.tz_localize("UTC")
-                    solcast_period_ends = solcast_period_ends.tz_convert(self.forecast_dates.tz)
-                    # Respect each row's own `period`; fall back to PT30M only for
-                    # rows that omit it (the pre-existing compatibility default).
-                    solcast_periods = pd.to_timedelta(
-                        [elm.get("period") or "PT30M" for elm in data["forecasts"]]
-                    )
-                    solcast_period_starts = solcast_period_ends - solcast_periods
-                    # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
-                    # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
-                    # bias=1 => pure P10 (conservative / low estimate).
-                    # If pv_estimate10 is absent for an element, fall back to pv_estimate.
-                    source_power = []
-                    for elm in data["forecasts"]:
-                        p50 = elm["pv_estimate"]
-                        if bias > 0.0:
-                            p10 = elm.get("pv_estimate10")
-                            if p10 is not None:
-                                est = bias * p10 + (1.0 - bias) * p50
-                            else:
-                                est = p50
+                url = (
+                    "https://api.solcast.com.au/rooftop_sites/"
+                    f"{roof_id}/forecasts?hours={days_solcast}"
+                )
+                for attempt in range(1, solcast_max_attempts + 1):
+                    try:
+                        async with session.get(url, headers=headers) as response:
+                            if int(response.status) == 200:
+                                data = await response.json()
+                            elif int(response.status) in [402, 429]:
+                                self.logger.error(
+                                    "Solcast error: May have exceeded your subscription limit."
+                                )
+                                return False
+                            elif int(response.status) >= 400 or (
+                                202 <= int(response.status) <= 299
+                            ):
+                                self.logger.error(
+                                    "Solcast error: Issue with request, check API key and rooftop ID."
+                                )
+                                return False
+                            if len(data["forecasts"]) == 0:
+                                self.logger.error("No data retrieved from Solcast service.")
+                                return False
+                            # Each Solcast row is an *average* power over the interval
+                            # [period_end - period, period_end); it is not an
+                            # instantaneous sample at period_end. Map those source
+                            # intervals onto the optimisation grid by overlap-weighted
+                            # averaging (see _solcast_overlap_average) so source-period
+                            # energy is preserved for any optimization_time_step -- finer,
+                            # equal or coarser than the source period, and grids that are
+                            # not an exact divisor of it -- without inventing
+                            # interpolation ramps or holding a value across a gap.
+                            solcast_period_ends = pd.DatetimeIndex(
+                                [pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]]
+                            )
+                            if solcast_period_ends.tz is None:
+                                solcast_period_ends = solcast_period_ends.tz_localize("UTC")
+                            solcast_period_ends = solcast_period_ends.tz_convert(
+                                self.forecast_dates.tz
+                            )
+                            # Respect each row's own `period`; fall back to PT30M only for
+                            # rows that omit it (the pre-existing compatibility default).
+                            solcast_periods = pd.to_timedelta(
+                                [elm.get("period") or "PT30M" for elm in data["forecasts"]]
+                            )
+                            solcast_period_starts = solcast_period_ends - solcast_periods
+                            # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
+                            # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
+                            # bias=1 => pure P10 (conservative / low estimate).
+                            # If pv_estimate10 is absent for an element, fall back to pv_estimate.
+                            source_power = []
+                            for elm in data["forecasts"]:
+                                p50 = elm["pv_estimate"]
+                                if bias > 0.0:
+                                    p10 = elm.get("pv_estimate10")
+                                    if p10 is not None:
+                                        est = bias * p10 + (1.0 - bias) * p50
+                                    else:
+                                        est = p50
+                                else:
+                                    est = p50
+                                source_power.append(est * 1000)
+                            yhat = _solcast_overlap_average(
+                                solcast_period_starts,
+                                solcast_period_ends,
+                                np.asarray(source_power, dtype="float64"),
+                                self.forecast_dates,
+                                self.freq,
+                            )
+                            data_tmp = pd.DataFrame({"yhat": yhat}, index=self.forecast_dates)
+                        if len(total_data) == 0:
+                            total_data = data_tmp.copy()
                         else:
-                            est = p50
-                        source_power.append(est * 1000)
-                    yhat = _solcast_overlap_average(
-                        solcast_period_starts,
-                        solcast_period_ends,
-                        np.asarray(source_power, dtype="float64"),
-                        self.forecast_dates,
-                        self.freq,
-                    )
-                    data_tmp = pd.DataFrame({"yhat": yhat}, index=self.forecast_dates)
-                    if len(total_data) == 0:
-                        total_data = data_tmp.copy()
-                    else:
-                        total_data = total_data + data_tmp
+                            total_data = total_data + data_tmp
+                        break
+                    except forecast_transport_errors:
+                        self.logger.error(
+                            "Failed to fetch weather forecast from Solcast (attempt %s/%s)",
+                            attempt,
+                            solcast_max_attempts,
+                            exc_info=True,
+                        )
+                        if attempt >= solcast_max_attempts:
+                            raise
+                        # The first attempt for every roof was reserved up front.
+                        # A retry is another provider call and must fit under the cap.
+                        # The failed attempt still propagates: a timeout is not a
+                        # Solcast HTTP rejection.
+                        if not self._solcast_rate_limit_ok(required_calls=1):
+                            self.logger.warning(
+                                "Solcast daily API call limit reached (safety cap). "
+                                "Skipping retry to preserve quota."
+                            )
+                            raise
+                        backoff = solcast_backoff_seconds[
+                            min(attempt - 1, len(solcast_backoff_seconds) - 1)
+                        ]
+                        self.logger.info("Retrying Solcast fetch in %ss", backoff)
+                        await asyncio.sleep(backoff)
 
         data = total_data
         if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
@@ -838,7 +899,8 @@ class Forecast:
         data = pd.DataFrame()
         self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_SOLAR_FORECAST)
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=forecast_solar_request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             for i in range(len(self.plant_conf["pv_module_model"])):
                 url = (
                     "https://api.forecast.solar/estimate/"
@@ -852,32 +914,51 @@ class Forecast:
                     + "/"
                     + str(self.retrieve_hass_conf["solar_forecast_kwp"])
                 )
-                async with session.get(url, headers=headers) as response:
-                    data_raw = await response.json()
-                    data_dict = {
-                        "ts": list(data_raw["result"]["watts"].keys()),
-                        "yhat": list(data_raw["result"]["watts"].values()),
-                    }
-                    data_tmp = pd.DataFrame.from_dict(data_dict)
-                    data_tmp.set_index("ts", inplace=True)
-                    data_tmp.index = pd.to_datetime(data_tmp.index)
-                    data_tmp = data_tmp.tz_localize(
-                        self.forecast_dates.tz,
-                        ambiguous="infer",
-                        nonexistent="shift_forward",
-                    )
-                    data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                    # Gap filling
-                    mask_up = data_tmp.copy(deep=True).ffill().isnull()
-                    mask_down = data_tmp.copy(deep=True).bfill().isnull()
-                    data_tmp.loc[mask_up["yhat"], :] = 0.0
-                    data_tmp.loc[mask_down["yhat"], :] = 0.0
-                    data_tmp.interpolate(inplace=True, limit_area="inside")
-                    data_tmp = data_tmp.fillna(0.0)
-                    if len(data) == 0:
-                        data = copy.deepcopy(data_tmp)
-                    else:
-                        data = data + data_tmp
+                array_data = None
+                for attempt in range(1, forecast_solar_max_attempts + 1):
+                    try:
+                        async with session.get(url, headers=headers) as response:
+                            data_raw = await response.json()
+                            data_dict = {
+                                "ts": list(data_raw["result"]["watts"].keys()),
+                                "yhat": list(data_raw["result"]["watts"].values()),
+                            }
+                            data_tmp = pd.DataFrame.from_dict(data_dict)
+                            data_tmp.set_index("ts", inplace=True)
+                            data_tmp.index = pd.to_datetime(data_tmp.index)
+                            data_tmp = data_tmp.tz_localize(
+                                self.forecast_dates.tz,
+                                ambiguous="infer",
+                                nonexistent="shift_forward",
+                            )
+                            data_tmp = data_tmp.reindex(index=self.forecast_dates)
+                            # Gap filling
+                            mask_up = data_tmp.copy(deep=True).ffill().isnull()
+                            mask_down = data_tmp.copy(deep=True).bfill().isnull()
+                            data_tmp.loc[mask_up["yhat"], :] = 0.0
+                            data_tmp.loc[mask_down["yhat"], :] = 0.0
+                            data_tmp.interpolate(inplace=True, limit_area="inside")
+                            data_tmp = data_tmp.fillna(0.0)
+                        array_data = data_tmp
+                        break
+                    except forecast_transport_errors:
+                        self.logger.error(
+                            "Failed to fetch solar weather forecast (attempt %s/%s)",
+                            attempt,
+                            forecast_solar_max_attempts,
+                            exc_info=True,
+                        )
+                        if attempt >= forecast_solar_max_attempts:
+                            raise
+                        backoff = forecast_solar_backoff_seconds[
+                            min(attempt - 1, len(forecast_solar_backoff_seconds) - 1)
+                        ]
+                        self.logger.info("Retrying forecast.solar fetch in %ss", backoff)
+                        await asyncio.sleep(backoff)
+                if len(data) == 0:
+                    data = copy.deepcopy(array_data)
+                else:
+                    data = data + array_data
 
         if self.params["passed_data"].get("weather_forecast_cache", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
@@ -1020,15 +1101,17 @@ class Forecast:
         method: str | None = "open-meteo",
         csv_path: str | None = "data_weather_forecast.csv",
         use_legacy_pvlib: bool | None = False,
-    ) -> pd.DataFrame:
+    ) -> pd.DataFrame | Literal[False] | None:
         r"""
         Get and generate weather forecast data.
 
         :param method: The desired method, options are 'open-meteo', 'csv', 'list', 'solcast' and \
             'solar.forecast'. Defaults to 'open-meteo'.
         :type method: str, optional
-        :return: The DataFrame containing the forecasted data
-        :rtype: pd.DataFrame
+        :return: The forecast frame. Solcast returns ``False`` for an HTTP error or when \
+            the daily cap is already full. ``None`` when the method is invalid or a runtime \
+            list is rejected. A transport failure is raised after its retries.
+        :rtype: pd.DataFrame | Literal[False] | None
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
         w_forecast_cache_path = os.path.abspath(
@@ -1167,6 +1250,7 @@ class Forecast:
                 )
                 data = None
                 use_cache = False
+
         if not use_cache:
             self.logger.info("Fetching Open-Meteo weather covariates (past_days=%s)", past_days)
             headers = {"User-Agent": "EMHASS", "Accept": header_accept}
@@ -1186,21 +1270,57 @@ class Forecast:
                 + quote(str(self.time_zone), safe="")
                 + "&timeformat=unixtime"
             )
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=headers) as response:
-                        response.raise_for_status()
-                        data = await response.json()
-                        async with aiofiles.open(cache_path, "w") as json_file:
-                            await json_file.write(
-                                orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
-                            )
-            except aiohttp.ClientError:
-                self.logger.error(
-                    "Failed to fetch weather covariates from Open-Meteo", exc_info=True
-                )
-                if data is not None:
-                    self.logger.warning("Returning old cached covariate data as a fallback")
+            # Same rule as the PV fetch (#950). A cache that is present, including
+            # a stale one kept as the fallback, gets one attempt. Retrying it would
+            # add the backoff delay to every steady-state cycle. Only a cold start
+            # (nothing to fall back to) uses open_meteo_max_attempts.
+            has_cache = data is not None
+            max_attempts = 1 if has_cache else open_meteo_max_attempts
+            # A bounded per-request timeout so a slow covariate fetch cannot
+            # stall the cycle.
+            timeout = aiohttp.ClientTimeout(total=open_meteo_request_timeout)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(url, headers=headers) as response:
+                            response.raise_for_status()
+                            data = await response.json()
+                            async with aiofiles.open(cache_path, "w") as json_file:
+                                await json_file.write(
+                                    orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                                )
+                    # Successful fetch; stop retrying.
+                    break
+                except aiohttp.ClientResponseError as exc:
+                    # HTTP status errors are not transport failures. A 400 or 429
+                    # will not succeed on a second try, so do not spend the attempts.
+                    self.logger.error(
+                        "Open-Meteo covariate fetch returned HTTP %s; not retrying",
+                        exc.status,
+                    )
+                    if has_cache:
+                        self.logger.warning("Returning old cached covariate data as a fallback")
+                    break
+                except forecast_transport_errors:
+                    self.logger.error(
+                        "Failed to fetch weather covariates from Open-Meteo (attempt %s/%s)",
+                        attempt,
+                        max_attempts,
+                        exc_info=True,
+                    )
+                    if attempt < max_attempts:
+                        # Cold-start retry path only: back off, then try again.
+                        backoff = open_meteo_backoff_seconds[
+                            min(attempt - 1, len(open_meteo_backoff_seconds) - 1)
+                        ]
+                        self.logger.info(
+                            "Retrying Open-Meteo fetch in %ss (no usable cache yet)",
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                    elif has_cache:
+                        self.logger.warning("Returning old cached covariate data as a fallback")
+
         return data
 
     async def get_weather_covariates(
