@@ -3764,16 +3764,17 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     :rtype: dict
 
     """
+    df = df.copy()
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
     if "optim_status" in df.columns:
         optim_status = df["optim_status"].iloc[0]
+        df.drop("optim_status", axis=1, inplace=True)
     else:
         optim_status = "Status not available"
-    df.drop("optim_status", axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
-    df[cols_p] = df[cols_p].astype(int)
+    df[cols_p] = df[cols_p].round().astype("Int64")
     df[cols_else] = df[cols_else].round(3)
     # Create plots
     # Figure 0: Systems Powers
