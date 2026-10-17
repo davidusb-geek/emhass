@@ -1703,6 +1703,18 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("rgb(0, 0, 131)", html)
         self.assertIn("rgb(128, 0, 0)", html)
 
+    def test_get_injection_dict_nan_in_power_columns(self):
+        # Issue #1119: results containing missing/NaN values in power columns
+        # must serialize safely without IntCastingNaNError
+        df = self.df.copy()
+        df.loc[df.index[0], "P_PV"] = float("nan")
+        df.loc[df.index[1], "P_Load"] = float("nan")
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_0", injection_dict)
+        self.assertIn("table1", injection_dict)
+        if "optim_status" in self.df.columns:
+            self.assertIn("optim_status", df.columns)
+
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
