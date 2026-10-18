@@ -23,6 +23,7 @@ CURATED = {
     "/action/{action_name}": {"POST"},
     "/api/v1/last-run": {"GET"},
     "/api/v1/plan": {"GET"},
+    "/api/v1/dry-run/{action_name}": {"POST"},
     "/healthz": {"GET"},
     "/participant/v1/{op}": {"GET", "POST"},
 }
@@ -64,6 +65,8 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
         dv = param.get("default_value", None)
         if dv is not None:
             leaf["default"] = dv
+        if param.get("maximum") is not None:
+            leaf["maximum"] = param["maximum"]
         schema = leaf
         for _ in parts[:-1]:  # one wrap per leading "array"
             schema = {"type": "array", "items": schema}
@@ -126,6 +129,7 @@ _REPO = Path(__file__).resolve().parents[1]
 _PARAM_DEFS = _REPO / "src" / "emhass" / "static" / "data" / "param_definitions.json"
 _LAST_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "last-run.schema.json"
 _PLAN_SCHEMA = _REPO / "docs" / "api" / "v1" / "plan.schema.json"
+_DRY_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "dry-run.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
@@ -159,6 +163,7 @@ def build_spec(routes: set | None = None) -> dict:
         "Config": build_config_component(param_defs),
         "LastRun": _load_json(_LAST_RUN_SCHEMA),
         "Plan": _load_json(_PLAN_SCHEMA),
+        "DryRun": _load_json(_DRY_RUN_SCHEMA),
         "Healthz": _load_json(_HEALTHZ_SCHEMA),
     }
     config_ref = {"$ref": "#/components/schemas/Config"}
@@ -287,6 +292,47 @@ def build_spec(routes: set | None = None) -> dict:
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
                 },
             },
+        },
+        "/api/v1/dry-run/{action_name}": {
+            "post": {
+                "summary": "Solve an optimization and return the plan, writing nothing",
+                "description": (
+                    "Takes the body of POST /action/{action_name}. Solves as that action "
+                    "does, and writes no results file, entity, plan, last-run record, cache "
+                    "or model, and publishes nothing. An EMHASS without this route answers "
+                    "404, so it never runs a live solve instead."
+                ),
+                "externalDocs": {
+                    "description": "Plan output field reference",
+                    "url": _PLAN_OUTPUT_DOC,
+                },
+                "parameters": [
+                    {
+                        "name": "action_name",
+                        "in": "path",
+                        "required": True,
+                        "schema": {
+                            "type": "string",
+                            "enum": ["perfect-optim", "dayahead-optim", "naive-mpc-optim"],
+                        },
+                    }
+                ],
+                "requestBody": json_ct({"type": "object", "additionalProperties": True}),
+                "responses": {
+                    "200": {
+                        "description": "The solver ran; status says how",
+                        **json_ct({"$ref": "#/components/schemas/DryRun"}),
+                    },
+                    "400": {
+                        "description": "Refused, or stopped before the solver",
+                        **json_ct({"$ref": "#/components/schemas/DryRun"}),
+                    },
+                    "500": {
+                        "description": "The run failed",
+                        **json_ct({"$ref": "#/components/schemas/DryRun"}),
+                    },
+                },
+            }
         },
         "/healthz": {
             "get": {

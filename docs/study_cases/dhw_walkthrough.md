@@ -87,6 +87,10 @@ def build_dhw_profile(
     return profile
 ```
 
+```{note}
+The Python deadline sketch above is integration-layer date arithmetic, separate from EMHASS `delta_forecast_daily`. EMHASS resolves its own forecast window as local calendar days; the DHW profile is converted into timestep indices by this external helper. If a deadline must stay at the same local wall-clock hour across a daylight-saving transition, make that property explicit in the helper and test the relevant timezone transition rather than relying on the EMHASS forecast-window rule.
+```
+
 Once your runtime layer (Node-RED, AppDaemon, etc.) holds the array, the HA `rest_command` payload simply forwards it:
 
 ```yaml

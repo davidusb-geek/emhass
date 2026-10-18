@@ -70,6 +70,23 @@ _KNOWN_TYPE_MISMATCHES = frozenset(
     }
 )
 
+_SCALAR_INPUT_TYPES = frozenset({"int", "float", "string", "boolean", "time", "select"})
+# Every key of _INPUT_TYPE_TO_PY_TYPES is in exactly one of these two sets.
+# A new input type that is only added to the mapping is skipped by the scalar
+# drift guard until it is classified here.
+_NON_SCALAR_INPUT_TYPES = frozenset(
+    {
+        "array.int",
+        "array.float",
+        "array.string",
+        "array.boolean",
+        "array.time",
+        "array.array.float",
+        "object",
+    }
+)
+_PARAM_DEFINITIONS_ONLY = frozenset({"ignore_pv_feedback_during_curtailment"})
+
 # Mapping from param_definitions "input" type to acceptable Python types for defaults.
 _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
     "int": (int, type(None)),
@@ -86,6 +103,15 @@ _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
     "array.array.float": (list, type(None)),
     "object": (dict, type(None)),
 }
+
+
+def _same_json_value(left: object, right: object) -> bool:
+    """True when two parsed JSON values have the same type and the same value.
+
+    ``True == 1`` and ``False == 0`` in Python, but JSON ``true`` and ``1``
+    are different and an integer parameter rejects a boolean.
+    """
+    return type(left) is type(right) and left == right
 
 
 def _extract_switch_body(js_src: str, fn_name: str) -> str:
@@ -192,6 +218,12 @@ def test_config_defaults_keys_match_param_definitions():
                 f"callers expecting a dict will crash (the #876 footgun)"
             )
             continue
+        if isinstance(default_value, bool) and input_type == "int":
+            mismatches.append(
+                f"{key}: default is bool {default_value!r}, declared input is 'int'. "
+                f"JSON true/false is not an integer"
+            )
+            continue
         if not isinstance(default_value, acceptable):
             mismatches.append(
                 f"{key}: default is {type(default_value).__name__} {default_value!r}, "
@@ -202,6 +234,72 @@ def test_config_defaults_keys_match_param_definitions():
     assert not mismatches, (
         "config_defaults.json has values incompatible with their declared input type:\n  - "
         + "\n  - ".join(mismatches)
+    )
+
+
+def test_config_defaults_values_match_param_definitions():
+    """Shared scalar defaults match between the two default files.
+
+    param_definitions.json is the source of truth. Array parameters are
+    excluded: their UI default is one template element and config_defaults.json
+    holds the list for the default plant. ignore_pv_feedback_during_curtailment
+    is UI-only and is the one param_definitions key allowed to be absent here.
+    """
+    pd = json.loads(
+        Path("src/emhass/static/data/param_definitions.json").read_text(encoding="utf-8")
+    )
+    cd = json.loads(Path("src/emhass/data/config_defaults.json").read_text(encoding="utf-8"))
+
+    pd_flat: dict[str, object] = {}
+    pd_input: dict[str, str] = {}
+    for section_entries in pd.values():
+        for name, definition in section_entries.items():
+            pd_flat[name] = definition["default_value"]
+            pd_input[name] = definition["input"]
+
+    classified = _SCALAR_INPUT_TYPES | _NON_SCALAR_INPUT_TYPES
+    overlap = _SCALAR_INPUT_TYPES & _NON_SCALAR_INPUT_TYPES
+    unclassified = (set(_INPUT_TYPE_TO_PY_TYPES) | set(pd_input.values())) - classified
+    assert not overlap and not unclassified, (
+        "every input type must be classified as scalar or non-scalar. "
+        f"overlap: {sorted(overlap) or 'none'}; "
+        f"unclassified: {sorted(unclassified) or 'none'}. "
+        "Add the type to _SCALAR_INPUT_TYPES or _NON_SCALAR_INPUT_TYPES."
+    )
+
+    only_in_param_definitions = set(pd_flat) - set(cd)
+    assert only_in_param_definitions == _PARAM_DEFINITIONS_ONLY, (
+        "param_definitions.json keys missing from config_defaults.json: "
+        f"{sorted(only_in_param_definitions - _PARAM_DEFINITIONS_ONLY)}. "
+        "Add them to src/emhass/data/config_defaults.json, or to "
+        "_PARAM_DEFINITIONS_ONLY when the key is UI-only."
+    )
+
+    mismatches: list[str] = []
+    for key, config_value in cd.items():
+        if key not in pd_flat or pd_input[key] not in _SCALAR_INPUT_TYPES:
+            continue
+        input_type = pd_input[key]
+        schema_value = pd_flat[key]
+        if input_type == "int" and (
+            isinstance(config_value, bool) or isinstance(schema_value, bool)
+        ):
+            mismatches.append(
+                f"{key}: boolean default {config_value!r} / {schema_value!r} "
+                f"is not valid for input 'int'"
+            )
+            continue
+        if not _same_json_value(config_value, schema_value):
+            mismatches.append(
+                f"{key}: config_defaults.json has {type(config_value).__name__} {config_value!r}, "
+                f"param_definitions.json default_value is "
+                f"{type(schema_value).__name__} {schema_value!r}"
+            )
+
+    assert not mismatches, (
+        "config_defaults.json scalars have drifted from param_definitions.json. "
+        "param_definitions.json is the source of truth; align config_defaults.json "
+        "to it:\n  - " + "\n  - ".join(mismatches)
     )
 
 
@@ -305,15 +403,13 @@ def test_minus_elements_does_not_crash_on_zero_inputs(js_src):
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
-def test_build_param_element_object_type_renders_input(_build_param_fns):
-    """Node replay: buildParamElement for 'object' type must return HTML with <input>.
+def test_build_param_element_object_type_renders_textarea(_build_param_fns):
+    """Node replay: buildParamElement for 'object' type must return an editable
+    element (a multi-line <textarea> carrying the param_input class).
 
-    ThomasCZ's config has heat_topology={"sources":[]}.  On master the
-    nested-object render path produces the string "</br>" (no <input>), so
-    minusElements subsequently finds length==0 and crashes (#880).
-
-    On master: exits 1.
-    After fix (render as JSON text box): exits 0.
+    Guards the #880 class of breakage (object param rendering to "</br>" with
+    no editable element at all), updated for the textarea editor: a one-line
+    <input> was unusable for 50-line topologies (#539).
     """
     check_fn, build_fn = _build_param_fns
 
@@ -330,15 +426,19 @@ const paramDef = {{
 const config = {{ heat_topology: {{ sources: [] }} }};
 const html = buildParamElement(paramDef, "heat_topology", config);
 
-if (!html.includes('<input')) {{
-  process.stderr.write('FAIL: no <input> in rendered HTML: ' + JSON.stringify(html) + '\\n');
+if (!html.includes('<textarea')) {{
+  process.stderr.write('FAIL: no <textarea> in rendered HTML: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+if (!html.includes('param_input')) {{
+  process.stderr.write('FAIL: editor missing param_input class (saveConfiguration will not find it): ' + JSON.stringify(html) + '\\n');
   process.exit(1);
 }}
 process.exit(0);
 """
     proc = _run_node(node_script)
     assert proc.returncode == 0, (
-        f"buildParamElement produced no <input> for object type with value={{sources:[]}}:\n"
+        f"buildParamElement produced no editable element for object type with value={{sources:[]}}:\n"
         f"{proc.stderr.strip()}"
     )
 
@@ -373,26 +473,33 @@ if (html.includes('value=null') || html.includes('value="null"')) {{
   process.stderr.write('FAIL: rendered string null as value attribute: ' + JSON.stringify(html) + '\\n');
   process.exit(1);
 }}
+// Textarea editor: the content must be empty, not the literal text "null"
+// (saving "null" back would store the string "null" in config.json, #904).
+const m = html.match(/<textarea[^>]*>([\\s\\S]*?)<\\/textarea>/);
+if (!m) {{
+  process.stderr.write('FAIL: no <textarea> in rendered HTML: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+if (m[1].trim() !== '') {{
+  process.stderr.write('FAIL: textarea content should be empty for absent config, got: ' + JSON.stringify(m[1]) + '\\n');
+  process.exit(1);
+}}
 process.exit(0);
 """
     proc = _run_node(node_script)
     assert proc.returncode == 0, (
-        f"buildParamElement renders string 'null' as input value for absent config:\n"
-        f"{proc.stderr.strip()}"
+        f"buildParamElement renders string 'null' for absent config:\n{proc.stderr.strip()}"
     )
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
 def test_build_param_element_object_apostrophe_value_escaping(_build_param_fns):
-    """Node replay: object-type render must escape double quotes so apostrophes in
-    string values don't corrupt the HTML attribute.
+    """Node replay: an object value containing apostrophes and double quotes
+    must survive the render → decode → JSON.parse round trip.
 
-    Single-quote attribute wrapping (value='...') breaks when the JSON contains
-    an apostrophe, e.g. {"label":"John's panel"} → value='{"label":"John's panel"}'
-    terminates the attribute at the apostrophe.
-
-    On current (broken) code: exits 1 — no &quot; escape, single-quote wrap.
-    After fix (double-quote wrap + replaceAll): exits 0.
+    The textarea editor carries the JSON as element CONTENT (not an attribute),
+    so quotes need no escaping there - but the round trip must still recover
+    the original object exactly (the #880-era corruption class).
     """
     check_fn, build_fn = _build_param_fns
 
@@ -409,26 +516,19 @@ const paramDef = {{
 const config = {{ heat_topology: {{ label: "John's panel" }} }};
 const html = buildParamElement(paramDef, "heat_topology", config);
 
-// Must use &quot; escaping so double quotes inside the JSON are safe
-if (!html.includes('&quot;')) {{
-  process.stderr.write('FAIL: no &quot; escaping in rendered HTML: ' + JSON.stringify(html) + '\\n');
-  process.exit(1);
-}}
-// Must NOT use single-quote attribute wrapping (apostrophes break it)
-if (html.includes("value='")) {{
-  process.stderr.write('FAIL: single-quote attribute wrapping detected: ' + JSON.stringify(html) + '\\n');
-  process.exit(1);
-}}
-// Round-trip: decode &quot; → " then JSON.parse must recover the original object
-const m = html.match(/value="([^"]*)"/);
+const m = html.match(/<textarea[^>]*>([\\s\\S]*?)<\\/textarea>/);
 if (!m) {{
-  process.stderr.write('FAIL: no double-quoted value= attribute in: ' + JSON.stringify(html) + '\\n');
+  process.stderr.write('FAIL: no <textarea> in rendered HTML: ' + JSON.stringify(html) + '\\n');
   process.exit(1);
 }}
-const decoded = m[1].replaceAll('&quot;', '"');
+// Decode the content entities the renderer emits (the browser does the same)
+const decoded = m[1]
+  .replaceAll('&lt;', '<')
+  .replaceAll('&gt;', '>')
+  .replaceAll('&amp;', '&');
 let parsed;
 try {{ parsed = JSON.parse(decoded); }} catch (e) {{
-  process.stderr.write('FAIL: value attr does not round-trip via JSON.parse: ' + e + '\\n');
+  process.stderr.write('FAIL: textarea content does not round-trip via JSON.parse: ' + e + '\\n');
   process.exit(1);
 }}
 if (parsed.label !== "John's panel") {{
@@ -516,14 +616,12 @@ def test_save_configuration_object_type_null_representations(js_src):
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
 def test_build_param_element_object_html_special_chars_escaped(_build_param_fns):
-    """Node replay: object-type render must escape &, <, > in addition to double quotes.
+    """Node replay: object-type render must escape &, <, > in the textarea content.
 
     JSON values can contain arbitrary strings, e.g. {"label":"<b>bold</b> & more"}.
-    Unescaped & is interpreted as an HTML entity reference; < and > are malformed
-    in attribute context.  All four must be escaped: &→&amp; <→&lt; >→&gt; "→&quot;.
-
-    On current code: exits 1 — only " is escaped, &/</> are not.
-    After fix: exits 0.
+    Unescaped, "</textarea>" inside a value would terminate the element early,
+    and & starts an entity reference - the content must be entity-escaped and
+    still round-trip (the browser decodes entities back before .value is read).
     """
     check_fn, build_fn = _build_param_fns
 
@@ -541,9 +639,9 @@ const config = {{ heat_topology: {{ label: "<b>bold</b> & 'text'" }} }};
 const html = buildParamElement(paramDef, "heat_topology", config);
 
 const checks = [
-  ['&amp;',  html.includes('&amp;'),  'unescaped & in attribute'],
-  ['&lt;',   html.includes('&lt;'),   'unescaped < in attribute'],
-  ['&gt;',   html.includes('&gt;'),   'unescaped > in attribute'],
+  ['&amp;',  html.includes('&amp;'),  'unescaped & in content'],
+  ['&lt;',   html.includes('&lt;'),   'unescaped < in content'],
+  ['&gt;',   html.includes('&gt;'),   'unescaped > in content'],
 ];
 for (const [entity, found, msg] of checks) {{
   if (!found) {{
@@ -551,20 +649,24 @@ for (const [entity, found, msg] of checks) {{
     process.exit(1);
   }}
 }}
-// Round-trip: HTML-decode then JSON.parse must recover original object
-const m = html.match(/value="([^"]*)"/);
+// A raw <b> surviving into the markup means the value can break out of the textarea
+if (html.includes('<b>')) {{
+  process.stderr.write('FAIL: raw <b> tag leaked into markup: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+// Round-trip: HTML-decode the content then JSON.parse must recover the object
+const m = html.match(/<textarea[^>]*>([\\s\\S]*?)<\\/textarea>/);
 if (!m) {{
-  process.stderr.write('FAIL: no double-quoted value= attribute in: ' + JSON.stringify(html) + '\\n');
+  process.stderr.write('FAIL: no <textarea> in rendered HTML: ' + JSON.stringify(html) + '\\n');
   process.exit(1);
 }}
 const decoded = m[1]
-  .replaceAll('&quot;', '"')
-  .replaceAll('&amp;', '&')
   .replaceAll('&lt;', '<')
-  .replaceAll('&gt;', '>');
+  .replaceAll('&gt;', '>')
+  .replaceAll('&amp;', '&');
 let parsed;
 try {{ parsed = JSON.parse(decoded); }} catch (e) {{
-  process.stderr.write('FAIL: value attr does not round-trip via JSON.parse: ' + e + '\\n');
+  process.stderr.write('FAIL: textarea content does not round-trip via JSON.parse: ' + e + '\\n');
   process.exit(1);
 }}
 if (parsed.label !== "<b>bold</b> & 'text'") {{
@@ -856,3 +958,19 @@ def test_array_control_plus_click_preserves_typed_value(js_src):
     assert r["error"] is None, f"+ click raised: {r['error']}"
     assert r["after"] == 2, f"expected 2 rows, got {r['after']}"
     assert r["first_value"] == "3", f"first row reset to {r['first_value']!r} (should stay '3')"
+
+
+def test_object_textarea_readable_in_dark_mode():
+    """The object-param JSON textarea (heat_topology editor) must get a light
+    text color in the dark-mode media query, like the inputs. Without it the
+    textarea renders near-black (#181818) on the dark background - unreadable.
+    Guards the dark-mode contrast regression."""
+    css = Path("src/emhass/static/style.css").read_text(encoding="utf-8")
+    dark_idx = css.find("@media (prefers-color-scheme: dark)")
+    assert dark_idx != -1, "no dark-mode media block in style.css"
+    # The textarea selector must appear inside the dark-mode block (after its
+    # start) so it inherits the light text color override.
+    assert css.find(".param textarea.param-json", dark_idx) != -1, (
+        "object-param textarea is not in the dark-mode color override; "
+        "it will render dark text on the dark background"
+    )

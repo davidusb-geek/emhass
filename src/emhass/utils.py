@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import csv
+import itertools
 import logging
 import math
 import os
@@ -113,36 +114,146 @@ def _get_now() -> datetime:
     return datetime.now(UTC)
 
 
+def add_local_calendar_days(
+    timestamp: pd.Timestamp | datetime,
+    days: int,
+    time_zone: datetime.tzinfo | str | None = None,
+) -> pd.Timestamp:
+    """Add local calendar days with deterministic pytz DST endpoint handling.
+
+    EMHASS forecast horizons use local civil/calendar days, not fixed 24-hour
+    durations. Valid wall times therefore retain the existing 23/24/25-hour
+    behavior across DST. If the nominal target wall time does not exist, move
+    it forward by the timezone's actual transition gap. If it is ambiguous,
+    select the post-transition (chronologically later) occurrence.
+
+    EMHASS uses either the configured IANA timezone name or a pytz timezone,
+    depending on the calling path. IANA names are normalized with
+    pytz.timezone(). When no timezone is configured and timestamp is naive,
+    preserve the pre-existing naive calendar-day behavior.
+    """
+    ts = pd.Timestamp(timestamp)
+    days = int(days)
+
+    if time_zone is None and ts.tzinfo is None:
+        return ts if days == 0 else ts + pd.DateOffset(days=days)
+
+    tz = time_zone if time_zone is not None else ts.tz
+    if isinstance(tz, str):
+        # Some existing runtime-parameter paths carry the configured IANA
+        # timezone name until get_yaml_parse() converts it. Preserve that
+        # established contract and resolve it through EMHASS's pytz dependency.
+        tz = pytz.timezone(tz)
+    if not hasattr(tz, "localize") or not hasattr(tz, "normalize"):
+        raise TypeError("time_zone must be an IANA timezone name or pytz timezone")
+
+    if ts.tzinfo is None:
+        ts = pd.Timestamp(tz.localize(ts.to_pydatetime(), is_dst=None))
+
+    local = ts.tz_convert(tz)
+    if days == 0:
+        return local
+
+    nominal = local.tz_localize(None) + pd.DateOffset(days=days)
+    nominal_dt = pd.Timestamp(nominal).to_pydatetime()
+    try:
+        resolved = tz.localize(nominal_dt, is_dst=None)
+    except pytz.NonExistentTimeError:
+        # Attach the pre-transition offset, then normalize. This advances the
+        # nominal wall time by the timezone's real gap (e.g. 60 min in Sydney,
+        # 30 min on Lord Howe) rather than hard-coding an hour.
+        resolved = tz.normalize(tz.localize(nominal_dt, is_dst=False))
+    except pytz.AmbiguousTimeError:
+        # The is_dst flag does not encode chronology (zones such as Africa/Casablanca
+        # and Europe/Dublin use negative DST), so pick the later UTC instant instead.
+        resolved = max(
+            tz.localize(nominal_dt, is_dst=True),
+            tz.localize(nominal_dt, is_dst=False),
+        )
+    return pd.Timestamp(resolved)
+
+
+def get_forecast_start(
+    now: pd.Timestamp | datetime,
+    freq: pd.Timedelta,
+    time_zone: datetime.tzinfo | str,
+    method_ts_round: str = "nearest",
+) -> pd.Timestamp:
+    """Round a clock reading to the first optimization step, without wall-clock ambiguity.
+
+    This is the single definition of the forecast start used by both the runtime
+    parameters (``get_forecast_dates``) and ``Forecast``, so that they build the same grid.
+    Whole seconds are kept in UTC and the result is returned in ``time_zone``; local wall
+    times are never localized, so repeated (fall-back) and missing (spring-forward) hours
+    cannot raise or select the wrong occurrence.
+
+    - ``nearest``: round to the closest step on the UTC clock (ties to even).
+    - ``first``: the latest step that is not after ``now``.
+    - ``last``: the earliest step that is not before ``now``.
+
+    ``first`` and ``last`` stay aligned to the local wall clock (e.g. :00/:30 in
+    Asia/Kathmandu) using the UTC offset in force at ``now``.
+
+    :param now: The clock reading; must be timezone-aware.
+    :param freq: The optimization time step.
+    :param time_zone: The configured site time zone the result is expressed in.
+    :param method_ts_round: ``nearest``, ``first`` or ``last``.
+    :raises ValueError: If ``method_ts_round`` is not one of the supported values.
+    """
+    # Whole seconds, rounded down as before: a request a fraction of a second after a step
+    # boundary (a cron job firing at :00) still gets that boundary for "last".
+    now_utc = pd.Timestamp(now).tz_convert("UTC").floor("s")
+    if method_ts_round == "nearest":
+        start_utc = now_utc.round(freq)
+    elif method_ts_round in ("first", "last"):
+        offset = now_utc.tz_convert(time_zone).utcoffset()
+        wall = (now_utc + offset).tz_localize(None)
+        wall = wall.floor(freq) if method_ts_round == "first" else wall.ceil(freq)
+        start_utc = (wall - offset).tz_localize("UTC")
+    else:
+        raise ValueError(
+            f"method_ts_round must be 'nearest', 'first' or 'last', got {method_ts_round!r}"
+        )
+    return start_utc.tz_convert(time_zone)
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
     time_zone: datetime.tzinfo,
     timedelta_days: int | None = 0,
-) -> pd.core.indexes.datetimes.DatetimeIndex:
+    method_ts_round: str = "nearest",
+    now: datetime | None = None,
+) -> list[str]:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
 
     :param freq: Optimization time step.
     :type freq: int
-    :param delta_forecast: Number of days to forecast in the future to be used for the optimization.
+    :param delta_forecast: Number of local calendar days to forecast in the future for the optimization.
     :type delta_forecast: int
-    :param timedelta_days: Number of truncated days needed for each optimization iteration, defaults to 0
+    :param timedelta_days: Additional local calendar days needed for the forecast range, defaults to 0
     :type timedelta_days: Optional[int], optional
-    :return: A list of future forecast dates.
-    :rtype: pd.core.indexes.datetimes.DatetimeIndex
+    :param method_ts_round: How the first step is rounded, see :func:`get_forecast_start`.
+        Callers that feed ``Forecast`` must pass the configured ``method_ts_round`` so both
+        build the same grid. Defaults to ``nearest``, the configuration default, so a caller that
+        omits it gets the grid a default-configured run uses.
+    :type method_ts_round: str, optional
+    :param now: The timezone-aware clock reading to build the grid from. Pass the same value to
+        every call of one request so they share a grid; defaults to the current time.
+    :type now: datetime, optional
+    :return: The forecast dates as ISO 8601 strings, one per optimization step.
+    :rtype: list[str]
 
     """
     freq = pd.to_timedelta(freq, "minutes")
-    start_time = _get_now()
-
-    # start_time is the timezone-aware UTC instant from _get_now(); tz_convert expresses it in
-    # the configured timezone regardless of the host clock. It raises on a naive value, so a
-    # refactor that reintroduced a naive "now" here would fail loudly rather than silently shift.
-    start_forecast = (
-        pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
+    # _get_now() is the timezone-aware UTC instant; the start is derived from it in UTC so the
+    # host clock zone is irrelevant. get_forecast_start() raises on a naive value.
+    start_forecast = get_forecast_start(
+        _get_now() if now is None else now, freq, time_zone, method_ts_round
     )
-    end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
-    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+    total_days = int(delta_forecast) + int(timedelta_days or 0)
+    final_end_date = add_local_calendar_days(start_forecast, total_days, time_zone) - freq
 
     forecast_dates = pd.date_range(
         start=start_forecast,
@@ -333,7 +444,7 @@ def resolve_min_temperatures(
     config: dict,
     outdoor_temperature_forecast: np.ndarray | pd.Series | list | None,
     length: int,
-) -> list[float]:
+) -> list[float | None]:
     """Compute the effective per-slot lower temperature bound for a storage tank.
 
     Combines two sources, taking the element-wise max so the more conservative
@@ -395,7 +506,39 @@ def resolve_min_temperatures(
     else:
         effective = static_arr
 
-    return [float(v) for v in effective]
+    # A null/None entry in the static list survives np.asarray(dtype=float) as nan.
+    # Map it back to None so the downstream "v is not None" guards (the hard-bound and
+    # comfort-penalty builders, the recovery ramp) correctly read it as "no floor at
+    # this step" rather than letting a nan propagate into the LP.
+    return [None if np.isnan(v) else float(v) for v in effective]
+
+
+def cop_from_tank_temperature(
+    tank_temperature: Sequence[float] | np.ndarray,
+    carnot_efficiency: float,
+    outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series,
+    approach: float = 5.0,
+    cop_bounds: tuple[float, float] = (1.0, 8.0),
+    mode: str = "heat",
+) -> np.ndarray:
+    """COP for a heat pump charging a tank to its *own* achieved temperature.
+
+    The condenser (heat) runs at the tank temperature PLUS a small heat-exchanger
+    approach; the evaporator (cool) runs at the tank temperature MINUS the approach.
+    Either way the COP tracks the temperature the tank actually reaches rather than a
+    fixed weather curve. Used by the post-solve DP COP refinement to test consistency
+    and to set the COP at the globally-optimal temperature. Returns a per-timestep COP
+    array clipped to ``cop_bounds``.
+    """
+    tank = np.asarray(tank_temperature, dtype=float)
+    supply = tank - float(approach) if mode == "cool" else tank + float(approach)
+    cops = calculate_cop_heatpump(
+        supply_temperature=supply,
+        carnot_efficiency=carnot_efficiency,
+        outdoor_temperature_forecast=outdoor_temperature_forecast,
+        mode=mode,
+    )
+    return np.clip(np.asarray(cops, dtype=float), cop_bounds[0], cop_bounds[1])
 
 
 def resolve_thermal_battery_cop(
@@ -447,28 +590,34 @@ def resolve_thermal_battery_cop(
         raise ValueError(
             "resolve_thermal_battery_cop in heat-pump mode requires outdoor_temperature_forecast"
         )
-    # Heating-curve mode: per-slot supply T from outdoor T. Falls back to constant
-    # `supply_temperature` when no curve is configured.
-    heating_curve = hc.get("heating_curve")
-    if heating_curve:
-        supply_temperature = apply_heating_curve(heating_curve, outdoor_temperature_forecast)
+    sense = normalize_heat_cool_mode(
+        hc.get("sense") or "heat", field_name="sense", context="thermal_battery"
+    )
+    # Curve mode: per-slot supply T from outdoor T (weather compensation). Heat sources
+    # read `heating_curve`, cool sources read `cooling_curve` (and, as before that key
+    # existed, a `heating_curve` when no `cooling_curve` is set); both fall back to a
+    # constant `supply_temperature` when no curve is configured. A curve makes the supply
+    # (and hence the COP) vary over the horizon, which is what makes the source
+    # DP-refinable.
+    if sense == "cool":
+        curve = hc.get("cooling_curve") or hc.get("heating_curve")
+    else:
+        curve = hc.get("heating_curve")
+    if curve:
+        supply_temperature = apply_heating_curve(curve, outdoor_temperature_forecast)
     else:
         supply_temperature = hc.get("supply_temperature")
         if supply_temperature is None:
             raise ValueError(
                 "thermal_battery requires either 'efficiency' (constant-efficiency mode), "
-                "'supply_temperature' (constant heat-pump mode), or 'heating_curve' "
-                "(weather-compensated heat-pump mode)"
+                "'supply_temperature' (constant heat-pump mode), or a "
+                "'heating_curve'/'cooling_curve' (weather-compensated heat-pump mode)"
             )
     cops = calculate_cop_heatpump(
         supply_temperature=supply_temperature,
         carnot_efficiency=hc.get("carnot_efficiency", 0.4),
         outdoor_temperature_forecast=outdoor_temperature_forecast,
-        mode=normalize_heat_cool_mode(
-            hc.get("sense") or "heat",
-            field_name="sense",
-            context="thermal_battery",
-        ),
+        mode=sense,
     )
     return cops if length is None else cops[:length]
 
@@ -790,6 +939,41 @@ def compile_site(site: list, plant_conf: dict, logger: logging.Logger) -> bool:
     return inverter is not None
 
 
+def _numeric_series(value, path: str) -> list[float]:
+    """A list of finite numbers (not booleans or strings), as floats, or a
+    ValueError naming ``path``. A string is rejected rather than read as a list
+    of characters."""
+    if not isinstance(value, list | tuple):
+        raise ValueError(f"{path} must be a list of numbers, got {type(value).__name__}")
+    out = []
+    for i, v in enumerate(value):
+        if isinstance(v, bool) or not isinstance(v, int | float):
+            raise ValueError(f"{path}[{i}] must be a number, got {v!r}")
+        try:
+            f = float(v)
+        except OverflowError:
+            raise ValueError(f"{path}[{i}] is too large") from None
+        if not math.isfinite(f):
+            raise ValueError(f"{path}[{i}] must be finite, got {v!r}")
+        out.append(f)
+    return out
+
+
+# The top-level keys compile_heat_topology reads. The compiler ignores any other
+# key; the config page rejects them on save, where an unknown key is a typo.
+HEAT_TOPOLOGY_KEYS = frozenset(
+    {
+        "sources",
+        "storage",
+        "consumers",
+        "flows",
+        "actuator_groups",
+        "cost_tracks",
+        "extend_deferrable_loads",
+    }
+)
+
+
 def compile_heat_topology(topology: dict) -> dict:
     """Compile a heat-topology graph descriptor into flat optim_conf fields.
 
@@ -821,12 +1005,29 @@ def compile_heat_topology(topology: dict) -> dict:
     """
     if not isinstance(topology, dict) or not topology:
         return {}
+    # A missing or null field means "none"; any other value must have the right
+    # type, so a falsey value such as "" or 0 is not silently read as empty.
+    for key in ("sources", "storage", "consumers", "flows", "actuator_groups"):
+        if topology.get(key) is not None and not isinstance(topology[key], list):
+            raise ValueError(f"heat_topology.{key} must be a list")
+    if topology.get("cost_tracks") is not None and not isinstance(topology["cost_tracks"], dict):
+        raise ValueError("heat_topology.cost_tracks must be an object")
+    if not isinstance(topology.get("extend_deferrable_loads", False), bool):
+        raise ValueError("heat_topology.extend_deferrable_loads must be true or false")
     sources = topology.get("sources", []) or []
     storage = topology.get("storage", []) or []
     consumers = topology.get("consumers", []) or []
     flows = topology.get("flows", []) or []
     groups = topology.get("actuator_groups", []) or []
     cost_tracks = topology.get("cost_tracks", {}) or {}
+
+    # Validate ids up front so a malformed entry raises the documented
+    # ValueError naming the offending field, not an internal KeyError (the
+    # documented contract: an invalid topology raises ValueError).
+    for kind, entries in (("sources", sources), ("storage", storage)):
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict) or entry.get("id") in (None, ""):
+                raise ValueError(f"heat_topology.{kind}[{i}] is missing the required 'id' field")
 
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
@@ -835,16 +1036,55 @@ def compile_heat_topology(topology: dict) -> dict:
         raise ValueError("heat_topology.sources contains duplicate ids")
     if len(sto_by_id) != len(storage):
         raise ValueError("heat_topology.storage contains duplicate ids")
+    # Flows resolve `from` against sources first, so an id shared by a source and a
+    # storage would silently turn a tank->tank transfer into a source load.
+    shared_ids = sorted(set(src_by_id) & set(sto_by_id))
+    if shared_ids:
+        raise ValueError(
+            f"heat_topology: ids used by both a source and a storage: {shared_ids}; "
+            "source and storage ids must be distinct"
+        )
 
-    # Validate flows reference real source/storage ids
+    # Split flows: source->storage flows become deferrable loads; storage->storage
+    # flows are tank->tank heat transfers (e.g. a buffer feeding a room through the
+    # emitters). Both must point at a real storage; the source side differs.
+    source_flows = []
+    transfer_flows = []
+    transfer_pairs = set()
+    # Each transfer publishes its schedule as P_transfer_<from>_<to>.
+    transfer_columns = {}
     for i, f in enumerate(flows):
-        if f.get("from") not in src_by_id:
-            raise ValueError(
-                f"heat_topology.flows[{i}].from='{f.get('from')}' does not match any source.id"
-            )
         if f.get("to") not in sto_by_id:
             raise ValueError(
                 f"heat_topology.flows[{i}].to='{f.get('to')}' does not match any storage.id"
+            )
+        if f.get("from") in src_by_id:
+            source_flows.append(f)
+        elif f.get("from") in sto_by_id:
+            if f["from"] == f["to"]:
+                raise ValueError(
+                    f"heat_topology.flows[{i}] is a self-transfer ('{f['from']}' -> itself)"
+                )
+            if (f["from"], f["to"]) in transfer_pairs:
+                raise ValueError(
+                    f"heat_topology.flows[{i}] repeats the transfer {f['from']}->{f['to']}; "
+                    "one flow per pair of storages"
+                )
+            column = f"P_transfer_{f['from']}_{f['to']}"
+            if column in transfer_columns:
+                other = transfer_columns[column]
+                raise ValueError(
+                    f"heat_topology.flows[{i}] ({f['from']}->{f['to']}) and the transfer "
+                    f"{other[0]}->{other[1]} would both publish as {column}; rename a "
+                    "storage so the two schedules stay apart"
+                )
+            transfer_pairs.add((f["from"], f["to"]))
+            transfer_columns[column] = (f["from"], f["to"])
+            transfer_flows.append(f)
+        else:
+            raise ValueError(
+                f"heat_topology.flows[{i}].from='{f.get('from')}' does not match any "
+                "source.id or storage.id"
             )
 
     # Validate consumers target real storage
@@ -854,18 +1094,21 @@ def compile_heat_topology(topology: dict) -> dict:
                 f"heat_topology.consumers[{i}].target='{c.get('target')}' does not match any storage.id"
             )
 
-    # Build deferrable loads from flows
-    num_loads = len(flows)
+    # Build deferrable loads from the source->storage flows only
+    num_loads = len(source_flows)
     nominal_power = []
     min_power = []
     treat_semi_cont = []
     operating_hours = []
+    startup_penalty = []
+    max_startups = []
     def_load_config = []
     cost_per_load: list = []
     is_electric_load: list[bool] = []
     flow_to_load_idx: dict[tuple[str, str], int] = {}
+    cap_by_src_id: dict[str, float | list | None] = {}
 
-    for i, f in enumerate(flows):
+    for i, f in enumerate(source_flows):
         src = src_by_id[f["from"]]
         src_nominal_power = float(src.get("nominal_power", 0))
         src_min_power = float(src.get("min_power", 0))
@@ -881,6 +1124,29 @@ def compile_heat_topology(topology: dict) -> dict:
         min_power.append(src_min_power)
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
+        # Anti-short-cycle controls (optional, per source). The startup penalty
+        # prices each off->on switch (softly discouraging short-cycling); the
+        # max_startups cap is a hard limit on the number of starts per horizon.
+        # Both default to 0 (disabled) so existing topologies are unchanged.
+        penalty = float(src.get("startup_penalty", 0.0))
+        if penalty < 0:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, got {penalty}"
+            )
+        startup_penalty.append(penalty)
+        raw_cap = src.get("max_startups", 0)
+        if (
+            isinstance(raw_cap, bool)
+            or not isinstance(raw_cap, int | float)
+            or raw_cap < 0
+            or raw_cap != int(raw_cap)
+        ):
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].max_startups must be a whole "
+                f"number >= 0, got {raw_cap!r}"
+            )
+        starts_cap = int(raw_cap)
+        max_startups.append(starts_cap)
         # Source-side fields - shape expected by resolve_thermal_battery_cop
         source_block: dict = {}
         src_type = src.get("type", "").lower()
@@ -895,7 +1161,8 @@ def compile_heat_topology(topology: dict) -> dict:
             "constant_efficiency": True,  # ambiguous - default electric unless overridden
         }
         if src_type in {"heatpump", "heat_pump"}:
-            # Heating curve takes precedence; constant supply_temperature is the fallback.
+            # A weather-compensated curve takes precedence (heating_curve for heat sources,
+            # cooling_curve for chillers); a constant supply_temperature is the fallback.
             if "heating_curve" in src and src["heating_curve"]:
                 hc_block = dict(src["heating_curve"])
                 # Validate required fields up-front so users get clear errors
@@ -911,15 +1178,33 @@ def compile_heat_topology(topology: dict) -> dict:
                     "min_supply": float(hc_block.get("min_supply", 25.0)),
                     "max_supply": float(hc_block.get("max_supply", 70.0)),
                 }
+            elif "cooling_curve" in src and src["cooling_curve"]:
+                cc_block = dict(src["cooling_curve"])
+                for required in ("slope", "offset"):
+                    if required not in cc_block:
+                        raise ValueError(
+                            f"heat_topology.sources[{src['id']}].cooling_curve missing "
+                            f"required field '{required}'"
+                        )
+                source_block["cooling_curve"] = {
+                    "slope": float(cc_block["slope"]),
+                    "offset": float(cc_block["offset"]),
+                    "min_supply": float(cc_block.get("min_supply", 5.0)),
+                    "max_supply": float(cc_block.get("max_supply", 18.0)),
+                }
             elif "supply_temperature" in src:
                 source_block["supply_temperature"] = float(src["supply_temperature"])
             else:
                 raise ValueError(
                     f"heat_topology.sources[{src['id']}] (type=heatpump) requires "
-                    "either 'supply_temperature' or 'heating_curve'"
+                    "'supply_temperature', 'heating_curve', or 'cooling_curve'"
                 )
             source_block["carnot_efficiency"] = float(src.get("carnot_efficiency", 0.4))
         elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
+            if src.get("efficiency") is None:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}] (type={src_type}) requires 'efficiency'"
+                )
             source_block["efficiency"] = float(src["efficiency"])
         else:
             raise ValueError(
@@ -936,6 +1221,98 @@ def compile_heat_topology(topology: dict) -> dict:
         if "comfort_sense" in target_storage:
             source_block["sense"] = str(target_storage["comfort_sense"]).lower()
         is_electric_load.append(bool(src.get("electric", type_is_electric.get(src_type, True))))
+        # Optional per-source temperature ceiling: this source may only add heat
+        # while the shared tank is at or below this temperature (e.g. a heat pump
+        # limited to its supply/condenser temperature). A source without it (e.g.
+        # an electric booster) can drive the tank up to the tank's max_temperatures.
+        _cap = src.get("max_supply_temperature")
+        if _cap is not None:
+            if isinstance(_cap, (list, tuple, np.ndarray)):
+                cap_value = [float(x) for x in _cap]
+                if not cap_value:
+                    raise ValueError(
+                        f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                        "is an empty list; omit the key to leave the source uncapped."
+                    )
+            else:
+                cap_value = float(_cap)
+            if any(x <= 0 for x in (cap_value if isinstance(cap_value, list) else [cap_value])):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                    "must be > 0 degC; a non-positive ceiling permanently disables "
+                    "the source. Omit the key to leave it uncapped."
+                )
+            source_block["max_supply_temperature"] = cap_value
+            cap_by_src_id[src["id"]] = cap_value
+        else:
+            cap_by_src_id[src["id"]] = None
+            # A constant-supply heat pump (supply_temperature, no heating curve)
+            # cannot physically heat water above its supply temperature, but
+            # supply_temperature drives the COP only - it is NOT enforced as a
+            # ceiling. Without max_supply_temperature the optimiser may plan to
+            # heat the tank above it (a physically unreachable setpoint). Warn so
+            # the user can add max_supply_temperature to cap it. (Left opt-in:
+            # auto-capping at supply_temperature makes a tank whose min_temperature
+            # sits at the supply temperature infeasible.)
+            # Not needed when the storage's own ceiling already sits at or below
+            # the supply temperature, and not meaningful for a cooling source.
+            storage_max = target_storage.get(
+                "max_temperatures", target_storage.get("max_temperature")
+            )
+            storage_max_values = [
+                float(v)
+                for v in (storage_max if isinstance(storage_max, list) else [storage_max])
+                if isinstance(v, int | float)
+            ]
+            already_capped = bool(storage_max_values) and max(storage_max_values) <= float(
+                source_block.get("supply_temperature", float("inf"))
+            )
+            if (
+                "supply_temperature" in source_block
+                and source_block.get("sense", "heat") != "cool"
+                and not already_capped
+            ):
+                logging.getLogger(__name__).warning(
+                    "heat_topology.sources[%s] is a fixed-supply heat pump "
+                    "(supply_temperature=%.0f C) without max_supply_temperature: "
+                    "supply_temperature sets the COP only and is not enforced as a "
+                    "physical ceiling, so the optimiser may heat the tank above it. "
+                    "Set max_supply_temperature to cap the tank at the supply "
+                    "temperature.",
+                    src["id"],
+                    float(source_block["supply_temperature"]),
+                )
+        # Optional per-source thermal-output ceiling (W): caps cop * p_deferrable
+        # so a high COP (e.g. a small mild-weather Carnot lift) cannot make the
+        # model deliver more heat than the physical unit's rated thermal output.
+        # Unlike max_supply_temperature this is a straight power bound, not a
+        # temperature-gated switch, and is scalar-only: a unit's rated thermal
+        # output is a fixed hardware spec, not weather-dependent like condenser
+        # temperature.
+        _thermal_cap = src.get("max_thermal_power")
+        if _thermal_cap is not None:
+            if isinstance(_thermal_cap, bool) or not isinstance(_thermal_cap, int | float):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power must be a "
+                    f"number of W, got {_thermal_cap!r}"
+                )
+            thermal_cap_value = float(_thermal_cap)
+            if not np.isfinite(thermal_cap_value) or thermal_cap_value <= 0:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power "
+                    f"must be a finite number > 0 W, got {_thermal_cap!r}; omit the "
+                    "key to leave the source uncapped."
+                )
+            source_block["max_thermal_power"] = thermal_cap_value
+            # A source feeding several storages compiles into one load per flow;
+            # the optimizer caps those loads together by this id.
+            source_block["source_id"] = src["id"]
+        # Optional per-source threshold: with the storage's desired_temperatures
+        # set, this source stops beyond it (see the optimizer for the gate per
+        # source mode). Sources without it (or with null) inherit the
+        # storage-level overshoot_temperature at solve time.
+        if src.get("overshoot_temperature") is not None:
+            source_block["overshoot_temperature"] = float(src["overshoot_temperature"])
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")
@@ -947,18 +1324,24 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"heat_topology.sources[{src['id']}].cost_track='{cost_track_id}' "
                     "not found in cost_tracks"
                 )
-            cost_per_load.append(list(cost_tracks[cost_track_id]))
+            cost_per_load.append(
+                _numeric_series(
+                    cost_tracks[cost_track_id], f"heat_topology.cost_tracks.{cost_track_id}"
+                )
+            )
         flow_to_load_idx[(f["from"], f["to"])] = i
 
     # Aggregate consumer demand onto storage
     storage_demand: dict[str, dict] = {}
-    for c in consumers:
+    for ci, c in enumerate(consumers):
         target = c["target"]
         if target not in storage_demand:
             storage_demand[target] = {"profile": None, "building": None, "pool": None}
         ctype = (c.get("type") or "").lower()
         if ctype == "profile":
-            prof = list(c["profile"])
+            if c.get("profile") is None:
+                raise ValueError(f"heat_topology.consumers[{ci}] (type=profile) requires 'profile'")
+            prof = _numeric_series(c["profile"], f"heat_topology.consumers[{ci}].profile")
             existing = storage_demand[target]["profile"]
             if existing is None:
                 storage_demand[target]["profile"] = prof
@@ -1006,15 +1389,38 @@ def compile_heat_topology(topology: dict) -> dict:
                 "profile, building_demand, pool_comfort"
             )
 
+    def _positive(value, field):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not np.isfinite(number) or number <= 0:
+            raise ValueError(f"heat_topology.{field} must be a positive number, got {value!r}")
+        return number
+
     # Build shared_thermal_tanks from storage + aggregated demand + flows
     shared_tanks = []
     for s in storage:
         sid = s["id"]
-        load_ids = [flow_to_load_idx[(f["from"], f["to"])] for f in flows if f["to"] == sid]
+        # Heat capacity: a water volume (with density and heat capacity) or a
+        # thermal_mass. Checked here so an unusable storage is rejected when the
+        # configuration is saved, not at the next unattended run.
+        if s.get("thermal_mass") is not None:
+            _positive(s["thermal_mass"], f"storage[{sid}].thermal_mass")
+        elif s.get("volume") is not None:
+            _positive(s["volume"], f"storage[{sid}].volume")
+            for _cap_key in ("density", "heat_capacity"):
+                if s.get(_cap_key) is not None:
+                    _positive(s[_cap_key], f"storage[{sid}].{_cap_key}")
+        else:
+            raise ValueError(
+                f"heat_topology.storage[{sid}] needs a 'volume' (m3) or a 'thermal_mass' (kWh/K)"
+            )
+        load_ids = [flow_to_load_idx[(f["from"], f["to"])] for f in source_flows if f["to"] == sid]
         tank: dict = {
             "id": sid,
             "load_ids": load_ids,
-            "volume": float(s["volume"]),
+            "volume": float(s["volume"]) if s.get("volume") is not None else None,
             "density": float(s.get("density", 1000)),
             "heat_capacity": float(s.get("heat_capacity", 4.186)),
             "start_temperature": float(s.get("start_temperature", 20.0)),
@@ -1024,6 +1430,78 @@ def compile_heat_topology(topology: dict) -> dict:
             "max_temperatures": list(s.get("max_temperature", []))
             or list(s.get("max_temperatures", [])),
         }
+        # Warn when the static minimum band is probably unreachable: if EVERY
+        # source feeding this tank has a max_supply_temperature and some
+        # min_temperatures[t] exceeds the highest ceiling at t, no source can
+        # heat the tank to it. It is a warning, not an error: a tank that starts
+        # hot enough can still hold the minimum, and the solver decides. Only the
+        # static list is checked here; a min_temperature_curve resolves against
+        # weather at solve time.
+        feeding_caps = [cap_by_src_id[f["from"]] for f in source_flows if f["to"] == sid]
+        is_cooling = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+        if not is_cooling and feeding_caps and all(c is not None for c in feeding_caps):
+            for t, min_val in enumerate(tank["min_temperatures"]):
+                if min_val is None:
+                    continue
+                ceiling = max(
+                    (c[t] if t < len(c) else c[-1]) if isinstance(c, list) else c
+                    for c in feeding_caps
+                )
+                if float(min_val) > ceiling:
+                    logging.getLogger(__name__).warning(
+                        "heat_topology.storage[%s].min_temperatures[%s]=%s exceeds the "
+                        "highest max_supply_temperature (%s) of the sources feeding "
+                        "this storage; no source can heat it that far, so only a tank "
+                        "that is already hot enough can hold it. Raise a source "
+                        "ceiling, lower the minimum, or add an uncapped source (e.g. "
+                        "an electric booster).",
+                        sid,
+                        t,
+                        min_val,
+                        ceiling,
+                    )
+                    break
+        # The same for overshoot_temperature: with a desired temperature, a
+        # continuous source does not heat in a step that would end beyond it. A
+        # semi-continuous source is gated at the start of a step, so one step can
+        # still cross it, and a source without a threshold (none of its own, none
+        # on the storage) can pass it: the check needs every feeding source to be
+        # continuous and to have one.
+        desired = s.get("desired_temperature", s.get("desired_temperatures"))
+        feeding_srcs = [src_by_id[f["from"]] for f in source_flows if f["to"] == sid]
+        feeding_overshoots = [
+            src.get("overshoot_temperature")
+            if src.get("overshoot_temperature") is not None
+            else s.get("overshoot_temperature")
+            for src in feeding_srcs
+        ]
+        if (
+            desired not in (None, [])
+            and feeding_overshoots
+            and all(isinstance(o, int | float) for o in feeding_overshoots)
+            and not any(bool(src.get("treat_as_semi_cont", True)) for src in feeding_srcs)
+        ):
+            is_cool = str(s.get("comfort_sense") or "heat").strip().lower() == "cool"
+            limit = min(feeding_overshoots) if is_cool else max(feeding_overshoots)
+            band_key = "max_temperatures" if is_cool else "min_temperatures"
+            for t, val in enumerate(tank[band_key]):
+                if val is None:
+                    continue
+                if (float(val) < limit) if is_cool else (float(val) > limit):
+                    logging.getLogger(__name__).warning(
+                        "heat_topology.storage[%s].%s[%s]=%s lies beyond the "
+                        "overshoot_temperature (%s) of every source feeding this "
+                        "storage; overshoot_temperature stops a source in any step "
+                        "that would end beyond it, so only a storage that already "
+                        "starts there can hold that bound. Move the threshold past "
+                        "the bound, or add a source without one.",
+                        sid,
+                        band_key,
+                        t,
+                        val,
+                        limit,
+                    )
+                    break
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
         # should track. Same linear law as the source's heating_curve.
@@ -1052,7 +1530,7 @@ def compile_heat_topology(topology: dict) -> dict:
             tank["desired_temperatures"] = (
                 list(desired) if isinstance(desired, list | tuple) else float(desired)
             )
-        if "overshoot_temperature" in s:
+        if s.get("overshoot_temperature") is not None:
             tank["overshoot_temperature"] = float(s["overshoot_temperature"])
         if "penalty_factor" in s:
             tank["penalty_factor"] = float(s["penalty_factor"])
@@ -1063,6 +1541,35 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"heat_topology.storage[{sid}].comfort_sense='{sense}' must be 'heat' or 'cool'"
                 )
             tank["sense"] = sense
+        # Unified thermal-tank options (consolidation, issue #539): a storage MAY
+        # opt into building-zone physics. All optional; omitting every one of them
+        # preserves the existing water-tank behaviour byte-for-byte.
+        #   thermal_mass     (kWh/K) - heat capacity directly, instead of volume
+        #   loss_coefficient (kW/K)  - state-dependent loss UA*(T-outdoor)
+        #   thermal_inertia  (h)     - lag between heat input and temperature
+        #   window_area (m2) + shgc - solar gain through glazing (offsets heating)
+        # Each field must be a finite number in its physical range: a bad value
+        # would otherwise pass the save and fail every optimization run.
+        for _zone_key, _is_valid, _range in (
+            ("thermal_mass", lambda v: v > 0, "> 0 kWh/K"),
+            ("loss_coefficient", lambda v: v >= 0, ">= 0 kW/K"),
+            ("thermal_inertia", lambda v: v >= 0, ">= 0 h"),
+            ("window_area", lambda v: v >= 0, ">= 0 m2"),
+            ("shgc", lambda v: 0 <= v <= 1, "between 0 and 1"),
+        ):
+            raw = s.get(_zone_key)
+            if raw is None:
+                continue
+            try:
+                value = None if isinstance(raw, bool) else float(raw)
+            except (TypeError, ValueError, OverflowError):
+                value = None
+            if value is None or not math.isfinite(value) or not _is_valid(value):
+                raise ValueError(
+                    f"heat_topology.storage[{sid}].{_zone_key} must be a number "
+                    f"{_range}, got {raw!r}"
+                )
+            tank[_zone_key] = value
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1070,13 +1577,32 @@ def compile_heat_topology(topology: dict) -> dict:
             tank.update(demand["building"])
         if demand.get("pool"):
             tank.update(demand["pool"])
+        # loss_coefficient (state-dependent UA loss) and a building_demand consumer
+        # both model heat loss to outdoor - reject both on one storage to avoid
+        # double counting the space-heating demand.
+        if tank.get("loss_coefficient") is not None and demand.get("building"):
+            raise ValueError(
+                f"heat_topology.storage[{sid}]: loss_coefficient and a building_demand "
+                "consumer both model heat loss to outdoor; configure only one."
+            )
         shared_tanks.append(tank)
 
     # Build deferrable_load_groups from actuator_groups
     def_groups = []
     for gi, g in enumerate(groups):
         names = []
-        for flow_pair in g.get("flows", []):
+        group_flows = g.get("flows")
+        if not isinstance(group_flows, list) or not group_flows:
+            raise ValueError(
+                f"heat_topology.actuator_groups[{gi}].flows must list at least one "
+                "[source_id, storage_id] pair"
+            )
+        for flow_pair in group_flows:
+            if not isinstance(flow_pair, list | tuple) or len(flow_pair) != 2:
+                raise ValueError(
+                    f"heat_topology.actuator_groups[{gi}].flows entries must be "
+                    f"[source_id, storage_id] pairs, got {flow_pair!r}"
+                )
             key = (flow_pair[0], flow_pair[1])
             if key not in flow_to_load_idx:
                 raise ValueError(
@@ -1088,8 +1614,39 @@ def compile_heat_topology(topology: dict) -> dict:
             "mutual_exclusion": bool(g.get("mutual_exclusion", False)),
         }
         if "max_combined_power" in g:
-            def_group["max_power"] = float(g["max_combined_power"])
+            limit = g["max_combined_power"]
+            if isinstance(limit, bool) or not isinstance(limit, int | float) or not limit > 0:
+                raise ValueError(
+                    f"heat_topology.actuator_groups[{gi}].max_combined_power must be a "
+                    f"positive number (W), got {limit!r}"
+                )
+            def_group["max_power"] = float(limit)
         def_groups.append(def_group)
+
+    # Tank->tank heat transfers (e.g. a buffer feeding a room through the
+    # emitters). Each carries an emitter conductance (transfer_coefficient, kW/K)
+    # and a maximum delivered power (max_transfer_power, W).
+    tank_ids = {s["id"] for s in storage}
+    tank_transfers = []
+    for f in transfer_flows:
+        if f["from"] not in tank_ids or f["to"] not in tank_ids:
+            raise ValueError(
+                f"heat_topology transfer flow {f.get('from')}->{f.get('to')} must connect two storage ids"
+            )
+        tank_transfers.append(
+            {
+                "from": f["from"],
+                "to": f["to"],
+                "transfer_coefficient": _positive(
+                    f.get("transfer_coefficient", 1.0),
+                    f"flows[{f['from']}->{f['to']}].transfer_coefficient",
+                ),
+                "max_transfer_power": _positive(
+                    f.get("max_transfer_power", 1e6),
+                    f"flows[{f['from']}->{f['to']}].max_transfer_power",
+                ),
+            }
+        )
 
     return {
         "number_of_deferrable_loads": num_loads,
@@ -1098,17 +1655,262 @@ def compile_heat_topology(topology: dict) -> dict:
         "treat_deferrable_load_as_semi_cont": treat_semi_cont,
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
-        "set_deferrable_startup_penalty": [0.0] * num_loads,
+        "set_deferrable_startup_penalty": startup_penalty,
         "deferrable_load_max_cost": [0.0] * num_loads,
-        "set_deferrable_max_startups": [0] * num_loads,
+        "set_deferrable_max_startups": max_startups,
         "start_timesteps_of_each_deferrable_load": [0] * num_loads,
         "end_timesteps_of_each_deferrable_load": [0] * num_loads,
         "def_load_config": def_load_config,
         "shared_thermal_tanks": shared_tanks,
+        "tank_transfers": tank_transfers,
         "deferrable_load_groups": def_groups,
         "cost_forecast_per_deferrable_load": cost_per_load,
         "is_electric_load": is_electric_load,
     }
+
+
+def _runtime_shared_tanks_problem(tanks, n_loads: int) -> str | None:
+    """Why a runtime shared_thermal_tanks list cannot be used, or None.
+
+    Each tank's load_ids must be a list of whole numbers (not booleans or
+    strings) within the configured loads, a load may feed only one tank and
+    only once (otherwise its heat is counted twice and its power once), and
+    tank ids must be unique (a start-temperature override would update every
+    tank with that id). A non-list is reported by the caller.
+    """
+    if not isinstance(tanks, list) or not all(isinstance(t, dict) for t in tanks):
+        return None
+    members, ids = [], []
+    for t in tanks:
+        load_ids = t.get("load_ids")
+        if not isinstance(load_ids, list):
+            return f"tank {t.get('id')!r} needs load_ids as a list, got {load_ids!r}"
+        for i in load_ids:
+            # Check ints without converting them to float, which overflows for a
+            # huge integer.
+            whole = (isinstance(i, int) and not isinstance(i, bool)) or (
+                isinstance(i, float) and i.is_integer()
+            )
+            if not whole or not 0 <= int(i) < n_loads:
+                return (
+                    f"tank {t.get('id')!r} has load_ids entry {i!r}; it must be a "
+                    f"whole number from 0 to {n_loads - 1}"
+                )
+            members.append(int(i))
+        ids.append(str(t.get("id")))
+    repeated = sorted({i for i in members if members.count(i) > 1})
+    if repeated:
+        return f"load_ids {repeated} appear more than once; a load can feed only one tank, once"
+    repeated_ids = sorted({i for i in ids if ids.count(i) > 1})
+    if repeated_ids:
+        return f"tank ids {repeated_ids} are used more than once"
+    return None
+
+
+def _per_user_load_list(value, offset: int) -> list:
+    """A per-load value as a list for the user's ``offset`` loads: a list is
+    copied, a scalar (e.g. a runtime override) applies to each of them, and a
+    missing value is empty."""
+    if isinstance(value, list):
+        return list(value)
+    if value is None:
+        return []
+    return [value] * offset
+
+
+# The fields a heat_topology in replace mode always overwrites with its compiled
+# values (otherwise the compiled def_load_config would not match
+# number_of_deferrable_loads, etc.). All per-load arrays must match
+# number_of_deferrable_loads, which the compiler sets.
+_TOPOLOGY_REPLACED_KEYS = frozenset(
+    {
+        "number_of_deferrable_loads",
+        "def_load_config",
+        "shared_thermal_tanks",
+        "tank_transfers",
+        "deferrable_load_groups",
+        "nominal_power_of_deferrable_loads",
+        "minimum_power_of_deferrable_loads",
+        "treat_deferrable_load_as_semi_cont",
+        "cost_forecast_per_deferrable_load",
+        "set_deferrable_load_single_constant",
+        "set_deferrable_startup_penalty",
+        "deferrable_load_max_cost",
+        "set_deferrable_max_startups",
+        "operating_hours_of_each_deferrable_load",
+        "start_timesteps_of_each_deferrable_load",
+        "end_timesteps_of_each_deferrable_load",
+        "is_electric_load",
+    }
+)
+
+
+def _restore_configured_shared_tanks(params: dict, configured) -> None:
+    """Undo the unchecked association copy of a rejected runtime tank list."""
+    if configured is None:
+        params["optim_conf"].pop("shared_thermal_tanks", None)
+    else:
+        params["optim_conf"]["shared_thermal_tanks"] = configured
+
+
+def _warn_replaced_deferrable_loads(
+    optim_conf: dict, compiled: dict, emhass_conf: dict, logger: logging.Logger
+) -> None:
+    """Warn when a heat_topology in replace mode drops configured deferrable loads.
+
+    Without extend_deferrable_loads the compiled flows replace the whole load
+    set, so loads configured beyond them (a dishwasher, a pool pump) are not
+    optimized. The shipped defaults configure two example loads; a load set whose
+    every overwritten field still equals the shipped value is taken as untouched
+    and replaced without a word.
+    """
+    try:
+        configured = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        return
+    compiled_count = int(compiled.get("number_of_deferrable_loads") or 0)
+    if configured <= compiled_count:
+        return
+    defaults_path = (emhass_conf or {}).get("defaults_path")
+    try:
+        defaults = orjson.loads(pathlib.Path(defaults_path).read_bytes()) if defaults_path else {}
+    except (OSError, orjson.JSONDecodeError):
+        defaults = {}
+
+    def _shipped(key):
+        value = optim_conf.get(key)
+        if key in defaults:
+            return value == defaults[key]
+        # Not in the defaults (def_load_config, the tank lists): only an empty
+        # value, or a list of empty entries, is untouched.
+        return not value or (isinstance(value, list) and not any(value))
+
+    if defaults and all(_shipped(key) for key in _TOPOLOGY_REPLACED_KEYS):
+        return
+    logger.warning(
+        "heat_topology replaces the deferrable loads: %d are configured but its flows "
+        "compile to %d, so loads %d..%d are not optimized. Set extend_deferrable_loads: "
+        "true in heat_topology to keep the configured loads and add the topology's "
+        "after them.",
+        configured,
+        compiled_count,
+        compiled_count,
+        configured - 1,
+    )
+
+
+def _extend_optim_conf_with_compiled_topology(
+    optim_conf: dict, compiled: dict, logger: logging.Logger
+) -> None:
+    """Append compiled heat_topology loads after the user's configured loads.
+
+    Used when the topology sets ``extend_deferrable_loads: true``. The user's
+    first N deferrable loads stay untouched (short per-load arrays are padded
+    to N with the usual defaults first, longer ones truncated to N so the
+    compiled loads land at deterministic indices), the compiled loads take
+    indices N..N+M-1, and every compiled load reference (shared-tank
+    ``load_ids``, actuator-group ``deferrable<i>`` names) is shifted by N.
+    Existing manual ``shared_thermal_tanks`` / ``deferrable_load_groups``
+    entries are kept; the compiled ones are appended after them.
+    """
+    offset = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    num_compiled = compiled["number_of_deferrable_loads"]
+
+    # Per-load arrays: user's values (normalized to `offset` entries) followed
+    # by the compiled values. Pad defaults match the established per-load
+    # defaults used elsewhere (check_def_loads call sites).
+    pad_defaults = {
+        "nominal_power_of_deferrable_loads": 0.0,
+        "minimum_power_of_deferrable_loads": 0.0,
+        "treat_deferrable_load_as_semi_cont": True,
+        "operating_hours_of_each_deferrable_load": 0,
+        "set_deferrable_load_single_constant": False,
+        "set_deferrable_startup_penalty": 0.0,
+        "deferrable_load_max_cost": 0.0,
+        "set_deferrable_max_startups": 0,
+        "start_timesteps_of_each_deferrable_load": 0,
+        "end_timesteps_of_each_deferrable_load": 0,
+        "cost_forecast_per_deferrable_load": None,
+        "is_electric_load": True,
+    }
+    for key, default in pad_defaults.items():
+        existing = _per_user_load_list(optim_conf.get(key), offset)
+        existing += [default] * (offset - len(existing))
+        optim_conf[key] = existing[:offset] + list(compiled[key])
+    # Minimum on/off times and MPC operating timesteps are not compiled; keep the
+    # user's entries for their own loads and give the topology loads none (a
+    # longer user array must not leak onto the appended loads).
+    n_compiled = len(compiled["def_load_config"])
+    for key in (
+        "def_minimum_on_time",
+        "def_minimum_off_time",
+        "operating_timesteps_of_each_deferrable_load",
+    ):
+        existing = optim_conf.get(key)
+        if existing is not None:
+            existing = _per_user_load_list(existing, offset)[:offset]
+            optim_conf[key] = existing + [0] * (offset - len(existing)) + [0] * n_compiled
+    # Runtime state for the user's loads: the appended topology loads get the
+    # defaults the optimizer would assume (off, no elapsed time, no power), so
+    # every array matches the final load count. An array that already covers
+    # every load is kept, and one of any other length is left to the
+    # optimizer's own length handling.
+    for key, default in (
+        ("def_current_state", False),
+        ("def_current_on_timesteps", 0),
+        ("def_current_off_timesteps", 0),
+        ("def_current_power", 0.0),
+        ("def_current_operating_timesteps", 0),
+    ):
+        existing = optim_conf.get(key)
+        if isinstance(existing, list) and len(existing) == offset:
+            optim_conf[key] = list(existing) + [default] * n_compiled
+    # def_load_config pads with fresh dicts (no shared instance between slots).
+    def_cfgs = optim_conf.get("def_load_config")
+    def_cfgs = list(def_cfgs) if isinstance(def_cfgs, list) else []
+    def_cfgs += [{} for _ in range(offset - len(def_cfgs))]
+    optim_conf["def_load_config"] = def_cfgs[:offset] + list(compiled["def_load_config"])
+
+    # Shift compiled load references by the user's load count.
+    shifted_tanks = []
+    for tank in compiled["shared_thermal_tanks"]:
+        tank = dict(tank)
+        tank["load_ids"] = [int(i) + offset for i in tank.get("load_ids", [])]
+        shifted_tanks.append(tank)
+    shifted_groups = []
+    for group in compiled["deferrable_load_groups"]:
+        group = dict(group)
+        group["names"] = [
+            f"deferrable{int(name.removeprefix('deferrable')) + offset}"
+            for name in group.get("names", [])
+        ]
+        shifted_groups.append(group)
+    kept_tanks = list(optim_conf.get("shared_thermal_tanks") or [])
+    kept_ids = {str(t.get("id")) for t in kept_tanks if isinstance(t, dict)}
+    clashes = sorted(kept_ids & {str(t.get("id")) for t in shifted_tanks})
+    if clashes:
+        raise ValueError(
+            f"heat_topology storage ids {clashes} are also used by the configured "
+            "shared_thermal_tanks; with extend_deferrable_loads both are kept, so "
+            "each tank needs its own id"
+        )
+    optim_conf["shared_thermal_tanks"] = kept_tanks + shifted_tanks
+    optim_conf["deferrable_load_groups"] = (
+        list(optim_conf.get("deferrable_load_groups") or []) + shifted_groups
+    )
+    # Tank->tank transfers are compiler output only (no user-facing setting), so any
+    # existing value is a previous compile's: replace it rather than append.
+    optim_conf["tank_transfers"] = list(compiled.get("tank_transfers") or [])
+
+    optim_conf["number_of_deferrable_loads"] = offset + num_compiled
+    logger.info(
+        "heat_topology extend_deferrable_loads: %d configured loads kept, "
+        "%d topology loads appended at indices %d..%d",
+        offset,
+        num_compiled,
+        offset,
+        offset + num_compiled - 1,
+    )
 
 
 def calculate_thermal_loss_signed(
@@ -1502,6 +2304,34 @@ def update_params_with_ha_config(
     return params
 
 
+def describe_invalid_forecast_value(forecast_key: str, items) -> str | None:
+    """Describe the first forecast value that is not a finite real number (#1135).
+
+    :param forecast_key: Name used in the diagnostic, e.g. ``load_power_forecast``.
+    :param items: ``(location, value)`` pairs: ``enumerate(values)`` for a list \
+        (reported as a position) or ``mapping.items()``/``series.items()`` \
+        (reported as the timestamp).
+    :return: One diagnostic for the first invalid value, or None if all are valid. \
+        NaN, +/-Inf, booleans (``bool`` subclasses ``int``) and non-numeric \
+        values are invalid; the sign of a value is not checked here.
+    """
+    for location, value in items:
+        if isinstance(value, bool | np.bool_):
+            reason = "boolean value"
+        elif not isinstance(value, int | float | np.integer | np.floating):
+            reason = "non-numeric value"
+        elif isinstance(value, float | np.floating) and not math.isfinite(value):
+            reason = "non-finite value"
+        else:
+            continue
+        where = f"position {location}" if isinstance(location, int) else location
+        return (
+            f"{forecast_key} contains {reason} {value!r} at {where}; "
+            "forecast values must be finite real numbers"
+        )
+    return None
+
+
 def _align_runtime_forecast_mapping(
     forecast_input: dict,
     forecast_dates: list[str],
@@ -1520,17 +2350,20 @@ def _align_runtime_forecast_mapping(
         forecast_data_df["time"], format="ISO8601", utc=True
     ).dt.tz_convert(time_zone)
 
-    # Aggregate any sub-step points to the optimization time step. Resample in
-    # the local time zone so buckets line up with get_forecast_dates(), including
-    # sub-hour UTC offsets.
+    target_dates = pd.to_datetime(forecast_dates, utc=True)
+
+    # Aggregate any sub-step points to the optimization time step. The buckets are
+    # anchored on the first grid instant, so each bucket is exactly one grid step wide
+    # and coincides with a grid point whatever the zone offset (sub-hour offsets,
+    # 30-minute DST changes).
     forecast_data_df = forecast_data_df.resample(
         pd.to_timedelta(optimization_time_step, "minutes"),
         on="time",
+        origin=target_dates[0].tz_convert(time_zone) if len(target_dates) else "start_day",
     ).aggregate({"value": "mean"})
 
     # Align by instant in UTC across DST boundaries.
     forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
-    target_dates = pd.to_datetime(forecast_dates, utc=True)
 
     # Existing runtime mapping semantics: each supplied point holds until the
     # next point. A point before the horizon anchors the first target step.
@@ -1606,6 +2439,15 @@ def _validate_and_align_external_pv_pair(
             )
         numeric_inputs = [list(p50_input.values()), list(p10_input.values())]
 
+    # #1135: validate the original values before NumPy/pandas can coerce
+    # booleans or numeric-looking strings into floats. This is the same
+    # finite-real contract used by the ordinary runtime forecast path.
+    for key, source in (("pv_power_forecast", p50_input), ("pv_power_forecast_p10", p10_input)):
+        items = source.items() if both_mappings else enumerate(source)
+        invalid = describe_invalid_forecast_value(key, items)
+        if invalid is not None:
+            return None, None, invalid
+
     try:
         numeric = np.asarray(numeric_inputs, dtype=float)
     except (TypeError, ValueError):
@@ -1618,21 +2460,27 @@ def _validate_and_align_external_pv_pair(
     if both_lists:
         horizon = len(forecast_dates)
         return p50_input[:horizon], p10_input[:horizon], None
-    return (
-        _align_runtime_forecast_mapping(
-            dict(zip(p50_input, numeric[0])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        _align_runtime_forecast_mapping(
-            dict(zip(p10_input, numeric[1])),
-            forecast_dates,
-            optimization_time_step,
-            time_zone,
-        ),
-        None,
+
+    aligned_p50 = _align_runtime_forecast_mapping(
+        dict(zip(p50_input, numeric[0])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
     )
+    aligned_p10 = _align_runtime_forecast_mapping(
+        dict(zip(p10_input, numeric[1])),
+        forecast_dates,
+        optimization_time_step,
+        time_zone,
+    )
+    for key, values in (
+        ("pv_power_forecast", aligned_p50),
+        ("pv_power_forecast_p10", aligned_p10),
+    ):
+        invalid = describe_invalid_forecast_value(key, enumerate(values))
+        if invalid is not None:
+            return None, None, f"{invalid} after timestamp alignment"
+    return aligned_p50, aligned_p10, None
 
 
 _LOAD_PUBLISH_ID_KEYS = (
@@ -1672,49 +2520,6 @@ def _default_load_publish_ids(k: int, temperature_unit: str = "°C") -> dict[str
             "friendly_name": f"Heating demand {k}",
         },
     }
-
-
-class RuntimeParamError(ValueError):
-    """A runtime parameter whose value cannot be read safely; the action is
-    refused rather than guessed at."""
-
-
-_TRUE = ("true", "1", "yes", "on")
-_FALSE = ("false", "0", "no", "off", "")
-
-
-def parse_dry_run(value: object) -> bool:
-    """The runtime ``dry_run`` flag, read strictly.
-
-    ``bool()`` would read the string ``"false"`` - which is what a templated
-    request often sends - as True, and quietly turn a live run into a dry run
-    that publishes nothing. Booleans, 0/1, and the strings true/false, 1/0,
-    yes/no, on/off (any case) are accepted; anything else raises.
-
-    Args:
-        value: The value passed as ``dry_run``.
-
-    Returns:
-        bool: Whether the run is a dry run.
-
-    Raises:
-        RuntimeParamError: For any other value.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if value is None:
-        return False
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in _TRUE:
-            return True
-        if v in _FALSE:
-            return False
-    raise RuntimeParamError(
-        f"dry_run must be true or false, got {value!r} ({type(value).__name__})"
-    )
 
 
 async def treat_runtimeparams(
@@ -1882,6 +2687,10 @@ async def treat_runtimeparams(
                 ):
                     batt_distinct_config_lists[batt_param_name] = list(configured)
 
+        # The configured shared tanks, before the association loop below copies a
+        # runtime list over them unchecked: a runtime list that the shared-tank
+        # validation further down rejects falls back to these.
+        configured_shared_tanks = params["optim_conf"].get("shared_thermal_tanks")
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
@@ -1974,6 +2783,12 @@ async def treat_runtimeparams(
         check_batt_charge_derating(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
+        # Strict: a curve in the request must be valid and usable (no recovery).
+        check_inverter_power_curves(
+            params["plant_conf"],
+            logger,
+            supplied=[name for name, *_ in _INVERTER_CURVE_PARAMS if name in runtimeparams],
+        )
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -2028,7 +2843,25 @@ async def treat_runtimeparams(
         else:
             time_zone = params["retrieve_hass_conf"]["time_zone"]
 
-        forecast_dates = get_forecast_dates(optimization_time_step, delta_forecast, time_zone)
+        # Same rounding as Forecast.__init__ so runtime forecasts are aligned to the grid
+        # the optimizer will actually use.
+        method_ts_round = params["retrieve_hass_conf"].get("method_ts_round", "nearest")
+        if method_ts_round not in ("nearest", "first", "last"):
+            logger.error("Wrong method_ts_round passed parameter: %r", method_ts_round)
+            method_ts_round = "nearest"  # actions that build a Forecast still fail on it
+        # The request clock is read here, once, and used for every grid of this request.
+        # Forecast reuses the captured start instead of reading the clock again, so the
+        # runtime forecasts and the optimizer share one grid even when the request crosses a
+        # time-step boundary.
+        request_now = _get_now()
+        forecast_dates = get_forecast_dates(
+            optimization_time_step,
+            delta_forecast,
+            time_zone,
+            method_ts_round=method_ts_round,
+            now=request_now,
+        )
+        params["passed_data"]["forecast_start"] = forecast_dates[0]
 
         # Add runtime exclusive (not in config) parameters to params
         # regressor-model-fit
@@ -2098,30 +2931,37 @@ async def treat_runtimeparams(
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
             # Auto-extend the forecast window to cover the requested MPC horizon.
-            # forecast_dates was sized from delta_forecast_daily (default 1 day) above,
-            # before prediction_horizon was known; a longer horizon would otherwise be
-            # silently truncated by the [0:prediction_horizon] slice below, and the
-            # weather/Solcast fetch (which scales its request to the window length)
-            # would only pull 1 day. So grow the window to fit and rebuild it once.
-            steps_per_day = int(24 * 60 / optimization_time_step)
-            required_delta_forecast = max(
-                delta_forecast,
-                -(-int(prediction_horizon) // steps_per_day),  # ceil division
-            )
+            # Forecast days are local calendar days, so their timestep count is not
+            # always 24h / optimization_time_step: a DST spring-forward day is shorter
+            # and a fall-back day is longer. Compare the requested timestep horizon
+            # against the actual timezone-aware grid instead of assuming a fixed number
+            # of steps per day. Grow by whole local calendar days until the grid covers
+            # the request; downstream slicing still trims it to prediction_horizon.
+            required_delta_forecast = delta_forecast
+            extended_forecast_dates = forecast_dates
+            while len(extended_forecast_dates) < int(prediction_horizon):
+                required_delta_forecast += 1
+                extended_forecast_dates = get_forecast_dates(
+                    optimization_time_step,
+                    required_delta_forecast,
+                    time_zone,
+                    method_ts_round=method_ts_round,
+                    now=request_now,
+                )
             if required_delta_forecast > delta_forecast:
                 logger.info(
-                    "naive-mpc prediction_horizon=%s exceeds the %s-day forecast window; "
-                    "extending delta_forecast_daily to %s day(s) to cover the full horizon "
-                    "and its weather forecast.",
+                    "naive-mpc prediction_horizon=%s exceeds the actual %s-day forecast "
+                    "grid (%s timestep(s)); extending delta_forecast_daily to %s day(s) "
+                    "to cover the full horizon and its weather forecast.",
                     prediction_horizon,
                     delta_forecast,
+                    len(forecast_dates),
                     required_delta_forecast,
                 )
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
-                forecast_dates = get_forecast_dates(
-                    optimization_time_step, delta_forecast, time_zone
-                )
+                forecast_dates = extended_forecast_dates
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
@@ -2147,6 +2987,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_init = soc_init[0]
+                reject_soc_fraction_above_one("soc_init", soc_init, logger)
                 if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
@@ -2170,6 +3011,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_final = soc_final[0]
+                reject_soc_fraction_above_one("soc_final", soc_final, logger)
                 if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
@@ -2207,6 +3049,7 @@ async def treat_runtimeparams(
                     return [value] * num_batteries
 
                 soc_init_list = _resolve_soc_runtime_list("soc_init", target_list)
+                reject_soc_fraction_above_one("soc_init", soc_init_list, logger)
                 for k in range(num_batteries):
                     if soc_init_list[k] < min_list[k]:
                         logger.warning(
@@ -2223,6 +3066,7 @@ async def treat_runtimeparams(
                 params["passed_data"]["soc_init"] = soc_init_list
 
                 soc_final_list = _resolve_soc_runtime_list("soc_final", target_list)
+                reject_soc_fraction_above_one("soc_final", soc_final_list, logger)
                 for k in range(num_batteries):
                     if soc_final_list[k] < min_list[k]:
                         logger.warning(
@@ -2241,6 +3085,7 @@ async def treat_runtimeparams(
             # and default to None (no intermediate target); clamping/validation of
             # the value and the timestep is handled in Optimization.perform_optimization.
             params["passed_data"]["soc_target"] = runtimeparams.get("soc_target", None)
+            reject_soc_fraction_above_one("soc_target", params["passed_data"]["soc_target"], logger)
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
             )
@@ -2300,6 +3145,7 @@ async def treat_runtimeparams(
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             params["passed_data"]["prediction_horizon"] = None
 
             def _passthrough_soc_runtime(key: str):
@@ -2321,14 +3167,21 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target"] = (
                 float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
             )
+            for soc_name in ("soc_init", "soc_final", "soc_target"):
+                reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
             params["passed_data"]["soc_target_timestep"] = (
                 int(runtimeparams["soc_target_timestep"])
                 if "soc_target_timestep" in runtimeparams
                 else None
             )
-            params["passed_data"]["current_period_peak"] = None
-            # Like current_period_peak, the demand-window mask is naive-mpc-only:
-            # dayahead/perfect optimizations price the full horizon peak.
+            # Capacity-tariff peak floor: read it here too so dayahead-optim honours
+            # the already-incurred billing-period peak instead of minimising the
+            # absolute peak. (perfect-optim covers past data and does not use it.)
+            params["passed_data"]["current_period_peak"] = runtimeparams.get(
+                "current_period_peak", None
+            )
+            # The demand-window mask stays naive-mpc-only: dayahead/perfect
+            # optimizations price the full horizon peak.
             params["passed_data"]["capacity_charge_window"] = None
             # Like the above, MPC capacity consideration is naive-mpc-only
             # (issue #540 follow-up).
@@ -2362,6 +3215,36 @@ async def treat_runtimeparams(
                             "start_temperature"
                         ] = runtimeparams["heater_start_temperatures"][k]
 
+        # Shared thermal tanks (multi-source storage) passed at runtime: the
+        # manual flat alternative to heat_topology (issue #539). Same surface
+        # as def_load_config above - runtime-only, no config-file counterpart.
+        if "shared_thermal_tanks" in runtimeparams:
+            tanks = runtimeparams["shared_thermal_tanks"]
+            problem = _runtime_shared_tanks_problem(
+                tanks, int(params["optim_conf"].get("number_of_deferrable_loads") or 0)
+            )
+            if problem is not None:
+                logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
+            elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
+                params["optim_conf"]["shared_thermal_tanks"] = tanks
+                topology = params["optim_conf"].get("heat_topology")
+                if isinstance(topology, dict) and topology:
+                    logger.warning(
+                        "Both heat_topology and runtime shared_thermal_tanks are "
+                        "set; the compiled topology replaces the runtime tank "
+                        "list (with extend_deferrable_loads: true the runtime "
+                        "tanks are kept and the topology's tanks appended). "
+                        "Pass heat_topology itself at runtime to change tanks "
+                        "per run."
+                    )
+            else:
+                logger.warning(
+                    "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
+                    type(tanks).__name__,
+                )
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
+
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
         # so they cannot silently drift onto different timelines.
@@ -2380,6 +3263,10 @@ async def treat_runtimeparams(
             "outdoor_temperature_forecast_method",
         ]
         paired_external_pv = "pv_power_forecast_p10" in runtimeparams
+        # Internal provenance marker used only to distinguish an omitted
+        # outdoor-temperature runtime forecast from one supplied and rejected
+        # by the #1135 numerical-validity contract.
+        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = False
 
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
@@ -2389,40 +3276,59 @@ async def treat_runtimeparams(
                 continue
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
+                invalid = None
+
+                # Preserve the existing legacy stringified-list compatibility,
+                # but normalize it before length/value validation so the parsed
+                # values are subject to the same #1135 finite-real contract.
+                if isinstance(forecast_input, str):
+                    try:
+                        parsed_forecast = ast.literal_eval(forecast_input)
+                    except (SyntaxError, ValueError):
+                        parsed_forecast = None
+                    if isinstance(parsed_forecast, list):
+                        forecast_input = parsed_forecast
+                        runtimeparams[forecast_key] = parsed_forecast
+
                 if isinstance(forecast_input, dict):
-                    forecast_input = _align_runtime_forecast_mapping(
-                        forecast_input,
-                        forecast_dates,
-                        optimization_time_step,
-                        time_zone,
+                    # Check the supplied values before pandas aggregation can
+                    # coerce (bool -> 1.0) or fail on them, so the diagnostic
+                    # names the source timestamp and value (#1135).
+                    invalid = describe_invalid_forecast_value(forecast_key, forecast_input.items())
+                    if invalid is None:
+                        forecast_input = _align_runtime_forecast_mapping(
+                            forecast_input,
+                            forecast_dates,
+                            optimization_time_step,
+                            time_zone,
+                        )
+                if (
+                    invalid is None
+                    and isinstance(forecast_input, list)
+                    and len(forecast_input) >= len(forecast_dates)
+                ):
+                    invalid = describe_invalid_forecast_value(
+                        forecast_key, enumerate(forecast_input)
                     )
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = forecast_input
-                    params["optim_conf"][forecast_methods[method]] = "list"
-                else:
+                    if invalid is None:
+                        params["passed_data"][forecast_key] = forecast_input
+                        params["optim_conf"][forecast_methods[method]] = "list"
+                elif invalid is None:
                     logger.error(
                         f"ERROR: The passed data is either the wrong type or the length is not correct, length should be {str(len(forecast_dates))}"
                     )
                     logger.error(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
-                # Check if string contains list, if so extract
-                if isinstance(forecast_input, str) and isinstance(
-                    ast.literal_eval(forecast_input), list
-                ):
-                    forecast_input = ast.literal_eval(forecast_input)
-                    runtimeparams[forecast_key] = forecast_input
-                list_non_digits = [
-                    x for x in forecast_input if not (isinstance(x, int) or isinstance(x, float))
-                ]
-                if len(list_non_digits) > 0:
-                    logger.warning(
-                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
-                    )
-                    for x in list_non_digits:
-                        logger.warning(
-                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
-                        )
+                if invalid is not None:
+                    # Fail closed (#1135): select the list method without data
+                    # so the forecast/optimization cycle stops instead of
+                    # falling back to the configured forecast method.
+                    logger.error("ERROR: %s", invalid)
+                    params["passed_data"][forecast_key] = None
+                    params["optim_conf"][forecast_methods[method]] = "list"
+                    if forecast_key == "outdoor_temperature_forecast":
+                        params["passed_data"]["_outdoor_temperature_forecast_rejected"] = True
             else:
                 params["passed_data"][forecast_key] = None
 
@@ -2540,6 +3446,15 @@ async def treat_runtimeparams(
                 default=default,
                 cast=caster,
             )
+        # config_defaults.json always supplies var_model, and a GUI save writes that stock
+        # value back to config.json. An unset or stock var_model follows the configured
+        # load sensor, so a custom sensor_power_load_no_var_loads is the forecaster input (#1208).
+        if (
+            "var_model" not in runtimeparams
+            and default_var_model
+            and params["passed_data"]["var_model"] in (None, "sensor.power_load_no_var_loads")
+        ):
+            params["passed_data"]["var_model"] = default_var_model
 
         # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
@@ -2635,9 +3550,6 @@ async def treat_runtimeparams(
         else:
             entity_save = runtimeparams["entity_save"]
         params["passed_data"]["entity_save"] = entity_save
-
-        # Plan without touching the live plan: return the plan, write nothing (opt-in)
-        params["passed_data"]["dry_run"] = parse_dry_run(runtimeparams.get("dry_run", False))
 
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
@@ -2816,6 +3728,10 @@ async def treat_runtimeparams(
             params["passed_data"]["custom_deferrable_forecast_id"] = runtimeparams[
                 "custom_deferrable_forecast_id"
             ]
+        if "custom_deferrable_state_id" in runtimeparams.keys():
+            params["passed_data"]["custom_deferrable_state_id"] = runtimeparams[
+                "custom_deferrable_state_id"
+            ]
         if "custom_predicted_temperature_id" in runtimeparams.keys():
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
@@ -2829,47 +3745,72 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # After the runtime merge when a request was supplied, and on the saved
+    # config when it was not. A percentage in either place must fail here.
+    reject_configured_soc_fractions(plant_conf, optim_conf, logger)
+
+    # Shared tanks from the configuration file get the same check as runtime
+    # ones (above), so a bad entry is reported and ignored instead of failing
+    # inside the optimizer. A runtime list that passed is checked again, which
+    # is harmless.
+    configured_tanks = optim_conf.get("shared_thermal_tanks")
+    if configured_tanks:
+        if not isinstance(configured_tanks, list) or not all(
+            isinstance(t, dict) for t in configured_tanks
+        ):
+            problem = "must be a list of tank objects"
+        else:
+            try:
+                n_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
+            except (TypeError, ValueError):
+                n_loads = 0
+            problem = _runtime_shared_tanks_problem(configured_tanks, n_loads)
+        if problem is not None:
+            logger.warning("shared_thermal_tanks in the configuration: %s. Ignoring them.", problem)
+            optim_conf.pop("shared_thermal_tanks", None)
 
     # If heat_topology is present (static config or runtime override), compile
     # it down to flat optim_conf primitives. Runtime override wins over static
     # config because runtimeparams have already been merged above.
     heat_topology = optim_conf.get("heat_topology")
+    extend_mode = bool(
+        isinstance(heat_topology, dict)
+        and heat_topology
+        and heat_topology.get("extend_deferrable_loads", False)
+    )
     if isinstance(heat_topology, dict) and heat_topology:
         try:
             compiled = compile_heat_topology(heat_topology)
         except ValueError as e:
             logger.error("heat_topology compile failed: %s", e)
             raise
-        # Merge compiled fields into optim_conf, allowing user-set fields to win
-        # for things the compiler always populates (e.g. operating_hours).
-        for key, val in compiled.items():
-            if key not in optim_conf or optim_conf[key] in (None, [], {}):
-                optim_conf[key] = val
-            else:
-                # For the structural fields we ALWAYS want compiled values
-                # (otherwise the compiled def_load_config doesn't match
-                # number_of_deferrable_loads, etc.)
-                if key in {
-                    "number_of_deferrable_loads",
-                    "def_load_config",
-                    "shared_thermal_tanks",
-                    "deferrable_load_groups",
-                    "nominal_power_of_deferrable_loads",
-                    "minimum_power_of_deferrable_loads",
-                    "treat_deferrable_load_as_semi_cont",
-                    "cost_forecast_per_deferrable_load",
-                    # All per-load arrays must match number_of_deferrable_loads,
-                    # which the compiler sets - so override any defaults.
-                    "set_deferrable_load_single_constant",
-                    "set_deferrable_startup_penalty",
-                    "deferrable_load_max_cost",
-                    "set_deferrable_max_startups",
-                    "operating_hours_of_each_deferrable_load",
-                    "start_timesteps_of_each_deferrable_load",
-                    "end_timesteps_of_each_deferrable_load",
-                    "is_electric_load",
-                }:
+        if heat_topology.get("extend_deferrable_loads", False):
+            # Opt-in append mode: keep the user's configured deferrable loads
+            # and add the compiled topology loads AFTER them. Setting the flag
+            # is the user asserting their flat per-load config describes real
+            # loads (the compiler cannot tell configured loads apart from
+            # defaults, which is why replace is the default).
+            _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+            # naive-mpc-optim reads the operating timesteps from passed_data.
+            passed = params.get("passed_data") or {}
+            if passed.get("operating_timesteps_of_each_deferrable_load") is not None:
+                passed["operating_timesteps_of_each_deferrable_load"] = optim_conf[
+                    "operating_timesteps_of_each_deferrable_load"
+                ]
+        else:
+            # Default replace mode: merge compiled fields into optim_conf,
+            # allowing user-set fields to win for things the compiler always
+            # populates (e.g. operating_hours).
+            _warn_replaced_deferrable_loads(optim_conf, compiled, emhass_conf, logger)
+            for key, val in compiled.items():
+                if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
+                else:
+                    # For the structural fields we ALWAYS want compiled values
+                    # (otherwise the compiled def_load_config doesn't match
+                    # number_of_deferrable_loads, etc.)
+                    if key in _TOPOLOGY_REPLACED_KEYS:
+                        optim_conf[key] = val
         params["optim_conf"] = optim_conf
         logger.info(
             "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
@@ -2898,6 +3839,47 @@ async def treat_runtimeparams(
         else:
             compile_site(site, plant_conf, logger)
 
+    # Per-tank start-temperature override (issue #539), keyed by tank id.
+    # Applied AFTER the heat_topology compile so it patches manual and
+    # compiled tanks alike - the per-run analog of soc_init and
+    # heater_start_temperatures for MPC loops feeding live sensor readings.
+    if runtimeparams and "shared_tank_start_temperatures" in runtimeparams:
+        overrides = runtimeparams["shared_tank_start_temperatures"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_start_temperatures must be an object mapping tank "
+                "id to a temperature, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, temp in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_start_temperatures: unknown tank id '%s' "
+                        "(known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                try:
+                    # A boolean is not a temperature (float(True) would be 1.0).
+                    temp_value = None if isinstance(temp, bool) else float(temp)
+                except (TypeError, ValueError, OverflowError):
+                    temp_value = None
+                if temp_value is None or not math.isfinite(temp_value):
+                    logger.warning(
+                        "shared_tank_start_temperatures['%s']=%r is not numeric; ignoring.",
+                        tank_id,
+                        temp,
+                    )
+                    continue
+                for tank in tanks:
+                    if isinstance(tank, dict) and str(tank.get("id")) == tank_id:
+                        tank["start_temperature"] = temp_value
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the
     # association loop above, the def_load_config handling, and the
@@ -2934,6 +3916,16 @@ async def treat_runtimeparams(
                 # array should never be reported as a runtime override.
                 was_provided = runtime_value is not None
 
+                if (
+                    was_provided
+                    and not isinstance(runtime_value, list)
+                    and extend_mode
+                    and isinstance(optim_conf.get(def_array_name), list)
+                    and len(optim_conf[def_array_name]) == final_num_def_loads
+                ):
+                    # Extend mode already applied the scalar to the user's own
+                    # loads and kept the compiled values of the topology loads.
+                    continue
                 if was_provided and not isinstance(runtime_value, list):
                     # A runtime scalar means every load, not "pad with the
                     # default" - mirrors check_batt_params's silent
@@ -3059,13 +4051,14 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     :rtype: dict
 
     """
+    df = df.copy()
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
     if "optim_status" in df.columns:
         optim_status = df["optim_status"].iloc[0]
+        df.drop("optim_status", axis=1, inplace=True)
     else:
         optim_status = "Status not available"
-    df.drop("optim_status", axis=1, inplace=True)
     # Other text columns (with a coordinator backend: backend_used,
     # backend_fallback_reason, fed_stop_reason) hold one value for the whole
     # plan, so they go in the summary table instead of the plots.
@@ -3080,7 +4073,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
-    df[cols_p] = df[cols_p].astype(int)
+    df[cols_p] = df[cols_p].round().astype("Int64")
     df[cols_else] = df[cols_else].round(3)
     # Create plots
     # Figure 0: Systems Powers
@@ -3099,14 +4092,27 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
     # Figure 1: Battery SOC (Optional)
+    # One trace per SOC column: the bare "SOC_opt" with one battery, or "SOC_opt_<k>" per
+    # battery when number_of_batteries > 1 (#610), where no bare "SOC_opt" exists.
     image_path_1 = None
-    if "SOC_opt" in df.columns.to_list():
+    cols_soc = [
+        i
+        for i in df.columns.to_list()
+        if i == "SOC_opt" or (i.startswith("SOC_opt_") and i[len("SOC_opt_") :].isdigit())
+    ]
+    if cols_soc:
+        # Size the palette to the SOC traces, not the power columns above: with one
+        # battery this is the same first colour as before, with several it spreads them.
+        n_colors = len(cols_soc)
+        colors_soc = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
         fig_1 = px.line(
-            df["SOC_opt"],
+            df[cols_soc],
             title="Battery state of charge schedule after optimization results",
             template="presentation",
             line_shape="hv",
-            color_discrete_sequence=colors,
+            color_discrete_sequence=colors_soc,
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
@@ -4021,6 +5027,9 @@ async def build_params(
     check_batt_charge_derating(
         num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
     )
+    # Persisted configuration recovers (an unusable curve is cleared and logged) so the
+    # service and configuration page stay reachable; /set-config validates strictly first.
+    check_inverter_power_curves(params["plant_conf"], logger, recover=True)
 
     # historic_days_to_retrieve should be no less then 2
     if params["retrieve_hass_conf"].get("historic_days_to_retrieve", None) is not None:
@@ -4388,6 +5397,20 @@ BATT_ARRAY_PARAMS_PLANT_CONF: dict[str, bool | int | float] = {
     "battery_target_state_of_charge": 0.6,
     "battery_stress_cost": 0.0,
 }
+# Plant SOC bounds are fractions in [0, 1]. Checked on their own because the
+# other entries in BATT_ARRAY_PARAMS_PLANT_CONF are watts, efficiencies, or
+# costs, which are valid above 1 (#935).
+SOC_FRACTION_PLANT_PARAMS: tuple[str, ...] = (
+    "battery_minimum_state_of_charge",
+    "battery_maximum_state_of_charge",
+    "battery_target_state_of_charge",
+)
+# Penalty thresholds are fractions of capacity too. Their costs are currency
+# and stay out of this list (#935).
+SOC_FRACTION_OPTIM_PARAMS: tuple[str, ...] = (
+    "battery_soc_deficit_threshold",
+    "battery_soc_surplus_threshold",
+)
 BATT_ARRAY_PARAMS_OPTIM_CONF: dict[str, bool | int | float] = {
     "battery_soc_deficit_threshold": 0.4,
     "battery_soc_deficit_cost": 0.0,
@@ -4500,6 +5523,126 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+# A dry run solves as a live run does, returns the plan, and writes nothing.
+# It is a URL of its own, not a runtime parameter: an EMHASS that predates it
+# answers 404 there, where it would ignore an unknown parameter and run live.
+DRY_RUN_URL = "/api/v1/dry-run/<action>"
+DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
+# Runtime parameters that ask for a write. A dry run refuses them rather than
+# ignore them, so a caller never believes something was saved.
+DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+
+_FLAG_TRUE = ("true", "1", "yes", "on")
+_FLAG_FALSE = ("false", "0", "no", "off", "")
+
+
+def read_flag(value: object, name: str) -> bool:
+    """Read a runtime on/off parameter strictly.
+
+    ``bool("false")`` is True, and a templated request often sends the string.
+    Booleans, 0 and 1, None, and the strings true/false, 1/0, yes/no, on/off
+    (any case) are read; anything else raises.
+
+    :param value: The value sent for the parameter.
+    :param name: The parameter's name, for the error message.
+    :return: The parameter's value.
+    :raises ValueError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _FLAG_TRUE:
+            return True
+        if text in _FLAG_FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
+    """Why a request must be refused before anything runs, or None.
+
+    On an action URL a ``dry_run`` parameter that is not false is refused:
+    that URL never honours it, and running live would replace the plan the
+    caller meant to keep. On the dry-run URL, ``dry_run`` may be left out or
+    true, and the parameters that ask for a write are refused.
+
+    :param runtimeparams: The request's runtime parameters.
+    :param dry_run: True for the dry-run URL, False for an action URL.
+    :return: The reason to refuse the request, or None.
+    """
+    try:
+        asked = read_flag(runtimeparams.get("dry_run"), "dry_run")
+        if asked and not dry_run:
+            return (
+                f"dry_run is not a runtime parameter of this URL; send the same "
+                f"body to {DRY_RUN_URL} for a dry run. Nothing was run"
+            )
+        if dry_run and "dry_run" in runtimeparams and not asked:
+            return "dry_run is false in the body of a dry run. Nothing was run"
+        if dry_run:
+            for key in DRY_RUN_REFUSED_KEYS:
+                if read_flag(runtimeparams.get(key), key):
+                    return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
+    except ValueError as exc:
+        return f"{exc}. Nothing was run"
+    return None
+
+
+class SocFractionError(ValueError):
+    """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
+
+
+def reject_configured_soc_fractions(
+    plant_conf: dict, optim_conf: dict, logger: logging.Logger
+) -> None:
+    """Reject a saved or overridden SOC fraction above 1 (#935).
+
+    Plant bounds and the SOC penalty thresholds are fractions of battery
+    capacity. Their costs are currency and are not checked here.
+    """
+    for soc_name in SOC_FRACTION_PLANT_PARAMS:
+        reject_soc_fraction_above_one(soc_name, plant_conf.get(soc_name), logger)
+    for soc_name in SOC_FRACTION_OPTIM_PARAMS:
+        reject_soc_fraction_above_one(soc_name, optim_conf.get(soc_name), logger)
+
+
+def reject_soc_fraction_above_one(name: str, value, logger: logging.Logger) -> None:
+    """Raise SocFractionError when a SOC value is above 1 (#935).
+
+    ``1`` is a full battery. ``None`` means the value was omitted. A numeric
+    string is read as a number, so ``"80"`` is rejected the same way as ``80``.
+    Anything else that is not a number is left untouched. An out-of-band
+    fraction such as ``0.05`` stays valid for the existing recovery and clamp
+    logic.
+    """
+    if value is None:
+        return
+    items = value if isinstance(value, list) else [value]
+    for index, item in enumerate(items):
+        number = item
+        if isinstance(item, str):
+            try:
+                number = float(item)
+            except ValueError:
+                continue
+        elif isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        if number <= 1:
+            continue
+        label = f"{name}[{index}]" if isinstance(value, list) else name
+        message = (
+            f"{label}={number} is above 1. State of charge is a fraction in "
+            f"[0, 1] (0.65 means 65%), not a percentage."
+        )
+        logger.error("%s", message)
+        raise SocFractionError(message)
 
 
 def _warn_if_runtime_scalar_masks_batt_list(
@@ -4681,6 +5824,257 @@ def _charge_derating_fault(table: list[list[float]]) -> str | None:
             )
         previous_soc, previous_max = soc_threshold, power_max
     return None
+
+
+# Hard cap on the points of one inverter curve. The MILP carries P-1 timestep-sized
+# binaries per curved direction, so the solve time grows with the point count; a
+# datasheet efficiency table has 5-12 points, so this leaves ample headroom while
+# stopping an oversized (accidental or hostile) curve before any variable exists.
+INVERTER_CURVE_MAX_POINTS = 20
+
+
+def _finite_curve_number(value, parameter_name: str, position: int, name: str) -> float:
+    """Return value as a finite float, or raise ValueError (never OverflowError)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a number"
+        )
+    try:
+        number = float(value)
+    except OverflowError:  # an int too large for a float
+        number = math.inf
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{parameter_name}: point {position} has {name}={value!r}, expected a finite number"
+        )
+    return number
+
+
+def inverter_power_curve_is_unset(curve) -> bool:
+    """True only for the explicit empty list, the default that keeps the scalar efficiency.
+
+    Every other value (None, False, 0, "", () ...) is a supplied curve and must be
+    validated: treating falsey values as "unset" would silently swap the physical model.
+    """
+    return isinstance(curve, list) and not curve
+
+
+def validate_inverter_power_curve(
+    curve: list, parameter_name: str, direction: str
+) -> list[tuple[float, float]]:
+    """
+    Validate one configured inverter efficiency curve and return internal
+    (ac_w, dc_w) transfer points (#746).
+
+    Public configuration uses [ac_power_w, efficiency] points, indexed on the AC
+    side, which is where inverters and AC-coupled batteries are commanded and
+    measured. Efficiency is a fraction, so 97% is 0.97. The zero-power transfer
+    origin is inserted internally; users do not provide an efficiency at 0 W.
+
+    - ``dc_ac`` (discharge): ``[ac_output_power_w, efficiency]``, with
+      ``dc_input = ac_output / efficiency``. Delivering positive AC power needs
+      DC power, so efficiency must be > 0.
+    - ``ac_dc`` (charge): ``[ac_input_power_w, efficiency]``, with
+      ``dc_output = ac_input * efficiency``. Fixed losses can consume all of a
+      small AC input, so efficiency may be 0 (for example 50 W AC in -> 0 W DC out).
+
+    The DC-side transfer must be non-decreasing. Flat segments are valid.
+
+    :param curve: configured [ac_power_w, efficiency] points
+    :type curve: list
+    :param parameter_name: name used in error messages
+    :type parameter_name: str
+    :param direction: dc_ac or ac_dc
+    :type direction: str
+    :raises ValueError: when the curve is unusable
+    :return: internal transfer points as (ac_w, dc_w) tuples
+    :rtype: list[tuple[float, float]]
+    """
+    ac_name = "ac_output_power_w" if direction == "dc_ac" else "ac_input_power_w"
+    pair = f"[{ac_name}, efficiency]"
+    if not isinstance(curve, list | tuple) or len(curve) < 2:
+        raise ValueError(
+            f"{parameter_name}: must be a list of at least 2 {pair} points, got {curve!r}"
+        )
+    if len(curve) > INVERTER_CURVE_MAX_POINTS:
+        raise ValueError(
+            f"{parameter_name}: has {len(curve)} points, at most {INVERTER_CURVE_MAX_POINTS} "
+            f"are supported (each adds binary variables to every time step)"
+        )
+
+    configured: list[tuple[float, float]] = []
+    for position, row in enumerate(curve, start=1):
+        if not isinstance(row, list | tuple) or len(row) != 2:
+            raise ValueError(
+                f"{parameter_name}: point {position} is {row!r}, expected a {pair} pair"
+            )
+        power = _finite_curve_number(row[0], parameter_name, position, ac_name)
+        efficiency = _finite_curve_number(row[1], parameter_name, position, "efficiency")
+        if power <= 0:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={power}, expected a strictly "
+                f"positive AC-side power in watts; the zero-power origin is added internally"
+            )
+        if efficiency < 0 or efficiency > 1:
+            raise ValueError(
+                f"{parameter_name}: point {position} has efficiency={efficiency}, expected "
+                f"0 <= efficiency <= 1 (percentage/100; use 0.97 for 97%)"
+            )
+        if direction == "dc_ac" and efficiency == 0:
+            raise ValueError(
+                f"{parameter_name}: point {position} has efficiency=0 at positive {ac_name}; "
+                f"DC-to-AC delivers AC output, so zero efficiency would require infinite DC "
+                f"input and cannot be represented by this curve"
+            )
+        configured.append((power, efficiency))
+
+    for position in range(2, len(configured) + 1):
+        previous_power = configured[position - 2][0]
+        power = configured[position - 1][0]
+        if power <= previous_power:
+            raise ValueError(
+                f"{parameter_name}: point {position} has {ac_name}={power}, which does not "
+                f"exceed the {previous_power} before it: points must ascend strictly by {ac_name}"
+            )
+
+    points: list[tuple[float, float]] = [(0.0, 0.0)]
+    for power, efficiency in configured:
+        dc_power = power / efficiency if direction == "dc_ac" else power * efficiency
+        if not math.isfinite(dc_power):
+            raise ValueError(
+                f"{parameter_name}: {ac_name}={power} with efficiency={efficiency} converts to a "
+                f"non-finite DC-side power; use a larger efficiency"
+            )
+        points.append((power, dc_power))
+
+    for position in range(2, len(points)):
+        dc_prev = points[position - 1][1]
+        dc_now = points[position][1]
+        if dc_now < dc_prev - 1e-9 * max(1.0, dc_prev):
+            raise ValueError(
+                f"{parameter_name}: point {position} converts to DC-side power {dc_now}, which "
+                f"is below {dc_prev} from the previous point: the DC-side transfer power must "
+                f"be non-decreasing"
+            )
+    for (ac_a, dc_a), (ac_b, dc_b) in itertools.pairwise(points):
+        if not math.isfinite((dc_b - dc_a) / (ac_b - ac_a)):
+            raise ValueError(
+                f"{parameter_name}: points around {ac_name}={ac_b} are too close together "
+                f"to form a finite segment slope"
+            )
+    return points
+
+
+_INVERTER_CURVE_PARAMS = (
+    ("inverter_power_curve_dc_ac", "dc_ac", "inverter_ac_output_max", "inverter_efficiency_dc_ac"),
+    ("inverter_power_curve_ac_dc", "ac_dc", "inverter_ac_input_max", "inverter_efficiency_ac_dc"),
+)
+
+
+def inverter_power_curve_faults(config: dict) -> list[str]:
+    """
+    Return one message per unusable inverter power curve in an explicit save request (#746).
+
+    Used by ``/set-config`` before anything is written, so a curve the user typed is
+    rejected with its reason instead of being silently dropped. An absent parameter or
+    an explicit empty list is fine (scalar efficiency); any other value is validated.
+    The hybrid flag is not checked, since a valid curve may be kept while
+    ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
+
+    :param config: the submitted flat configuration
+    :type config: dict
+    :return: validation messages (empty when every curve is usable)
+    :rtype: list[str]
+    """
+    faults = []
+    for parameter_name, direction, *_ in _INVERTER_CURVE_PARAMS:
+        curve = config.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
+            continue
+        try:
+            validate_inverter_power_curve(curve, parameter_name, direction)
+        except ValueError as err:
+            faults.append(str(err))
+    return faults
+
+
+def check_inverter_power_curves(
+    plant_conf: dict,
+    logger: logging.Logger,
+    *,
+    recover: bool = False,
+    supplied: tuple[str, ...] | list[str] = (),
+) -> None:
+    """
+    Validate the optional inverter power-dependent efficiency curves of a plant_conf (#746).
+
+    An absent parameter or an explicit empty list is the default and leaves the scalar
+    ``inverter_efficiency_dc_ac`` / ``inverter_efficiency_ac_dc`` path untouched.
+    Any other value is a configured [ac_power_w, efficiency] curve: it is validated and
+    converted to internal transfer points (see :func:`validate_inverter_power_curve`).
+
+    Two contracts, chosen by the caller:
+
+    - strict (default, runtime parameters): a fault raises ValueError, because a
+      request that carries a curve expects it to be used and silently falling back
+      to the scalar would change the physics.
+    - ``recover=True`` (persisted configuration in ``build_params``): the unusable
+      curve is cleared and logged at error level, so the scalar efficiency of that
+      direction applies and the configuration page and service stay reachable to
+      repair it. Same trade-off as ``battery_charge_power_derating``.
+
+    A valid curve with ``inverter_is_hybrid`` false is dormant: it is kept, ignored
+    by the optimizer, and warned about, so switching hybrid off in the UI never
+    discards or rejects a stored curve. A curve named in ``supplied`` (set by the
+    current request) with hybrid off raises ValueError instead, as it would be
+    ignored without the requester knowing.
+
+    :param plant_conf: the plant_conf dict
+    :type plant_conf: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :param recover: clear and log an unusable curve instead of raising
+    :type recover: bool
+    :param supplied: curve parameter names provided by the current request
+    :type supplied: tuple[str, ...] | list[str]
+    :raises ValueError: when a curve is unusable and ``recover`` is False
+    """
+    hybrid = plant_conf.get("inverter_is_hybrid", False)
+    for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
+        curve = plant_conf.get(parameter_name, [])
+        if inverter_power_curve_is_unset(curve):
+            continue
+        try:
+            points = validate_inverter_power_curve(curve, parameter_name, direction)
+            if not hybrid and parameter_name in supplied:
+                raise ValueError(
+                    f"{parameter_name}: requires inverter_is_hybrid=true; the curves model the "
+                    f"hybrid inverter's DC bus <-> AC conversion"
+                )
+        except ValueError as err:
+            if not recover:
+                raise
+            # At error level: a dropped curve is otherwise indistinguishable from a
+            # working one, as the scalar efficiency applies either way.
+            logger.error(
+                f"{err}. Ignoring {parameter_name}: the scalar {scalar_name}="
+                f"{plant_conf.get(scalar_name, 1.0)} applies until the curve is corrected."
+            )
+            plant_conf[parameter_name] = []
+            continue
+        if not hybrid:
+            logger.warning(
+                f"{parameter_name} is set but inverter_is_hybrid is false: the curve is "
+                f"kept and ignored until inverter_is_hybrid is enabled."
+            )
+            continue
+        limit = plant_conf.get(limit_name)
+        if isinstance(limit, int | float) and points[-1][0] < limit:
+            logger.warning(
+                f"{parameter_name}: the curve ends at {points[-1][0]} W on the AC side, below "
+                f"{limit_name}={limit} W. The curve's last point is the supported power "
+                f"domain, so the optimizer will not plan beyond it."
+            )
 
 
 def check_batt_charge_derating(

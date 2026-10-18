@@ -88,8 +88,8 @@ Heat-input variable at the first timestep `q_input_start=0` creates infeasibilit
 ### Dual logger subsystems
 EMHASS has two logger setups: CLI (`src/emhass/command_line.py`) and Web (`src/emhass/web_server.py`). Both substantive (90+ and 70+ logger calls — grep `logger\.`). Touch both or none. AI tools that "improve logging" in one file break log-format parity with the other.
 
-### `OptimizationCacheKey` 4-step add-a-param workflow
-Adding a new optimisation parameter requires 4 edits per `docs/develop.md`: (1) `src/emhass/data/config_defaults.json`, (2) `src/emhass/static/data/param_definitions.json`, (3) optim helper signature in `command_line.py`, (4) the cache-key tuple (`OptimizationCacheKey` dataclass declared at `src/emhass/command_line.py:108`). AI tools regularly forget step 4 — silent cache-miss-explosion on every solve. Grep `OptimizationCacheKey` in `src/emhass/` before adding params; verify your new param is in the tuple.
+### `OptimizationCacheKey` and the add-a-param workflow
+Adding a new optimisation parameter follows the steps in `docs/develop.md` (`associations.csv`, `config_defaults.json`, `param_definitions.json`, then check the cache key). Step 4 is a *check*, not always an edit: `_compute_cache_key` already hashes every `plant_conf` and `optim_conf` key (`plant_conf_hash`, `optim_conf_structural_hash`) except the `plant_runtime_keys` / `optim_conf_runtime_keys` exclusions, so a new structural parameter there invalidates the cache without a new dataclass field. Do not add a redundant field; prove it with a test that changing the value changes the key. An explicit `OptimizationCacheKey` field is only needed for values outside those hashes, values in a runtime-keys exclusion that still change the problem structure, or values needing a canonical form. Wrongly adding a parameter to a runtime-keys set (stale reuse) or hashing a per-call value (cache-miss on every solve) are the real failure modes — grep `_compute_cache_key` in `src/emhass/command_line.py` and read the exclusion sets before adding params.
 
 ### Source-resolve discipline
 Ambiguous types / signs / units / conventions: trace upstream code first. "Ask maintainer" is last resort. Real precedent: PR [#835](https://github.com/davidusb-geek/emhass/pull/835)'s sign-convention questions self-resolved from `optimization.py` MILP constraints rather than punting to the maintainer. Audit-source-ambiguity does not have to propagate into the PR.
@@ -102,6 +102,7 @@ Run through before opening. Each item has a *why* — skip the item only if the 
 - [ ] `pytest tests/` passes locally? *Why: CI runs the same suite; local-fail = CI-fail = wasted review cycle.*
 - [ ] `uvx ruff check .` clean? *Why: ruff is enforced via `.github/workflows/code-quality.yml`; a red lint blocks merge.*
 - [ ] Sign conventions verified (if PR touches power / SOC / cost variables)? *Why: column names do not encode sign; see §3 sign-conventions landmine.*
+- [ ] Forecast ingestion, runtime forecast processing, mapping alignment, forecast post-processing or load/PV physical-domain handling touched? Checked against the [Forecast input contract](passing_data.md#forecast-input-contract), and `tests/test_forecast_validity_contract.py` (signed prices/temperatures, final load boundary) still passes? *Why: a generic `>= 0` rule, a dropped bool check or a silent timestamp shift gives a valid-looking but wrong plan.*
 - [ ] One concern per PR (scope discipline)? *Why: bundled PRs invite scope-objection on one part and block the whole PR.*
 - [ ] Issue or Discussion linked in PR body if applicable? *Why: makes review context one-click; saves maintainer time.*
 - [ ] Reproducer in body if behavior-change fix? *Why: lets the maintainer confirm the bug, not just the patch.*

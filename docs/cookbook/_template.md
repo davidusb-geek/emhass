@@ -21,11 +21,20 @@ Contributor rules:
        (`treat_runtimeparams`), `src/emhass/optimization.py`, or
        `src/emhass/data/config_defaults.json`.
 
-  B. Length and array-size discipline
+  B. Forecast arrays: length, values and fallbacks
      - Whenever a Snippet builds an array passed to EMHASS (`load_cost_forecast`,
        `prod_price_forecast`, etc.), include either a runtime length-check OR an
-       in-code comment stating the expected length (= `horizon_steps`). EMHASS
-       silently pads / truncates mismatched arrays.
+       in-code comment stating the expected length (= `horizon_steps`). A plain
+       list must have at least `horizon_steps` values: extra values are ignored
+       and a shorter list is rejected (never padded). A timestamped mapping is
+       aggregated and aligned by EMHASS instead; say which one the Snippet sends.
+     - Preflight that every value is a finite number (no NaN, null, booleans or
+       strings). EMHASS fails the cycle on such values.
+     - Do not default missing load or price data to 0. Skip the call (fail
+       closed) unless a fallback is genuinely known for that quantity, such as
+       0 W of PV at night.
+     - Link to the Forecast input contract in `passing_data.md` rather than
+       restating it.
 
   C. Transport tagging
      - Mark every Snippet with which transport stack it was tested on (e.g.

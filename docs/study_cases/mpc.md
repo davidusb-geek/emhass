@@ -2,7 +2,7 @@
 
 > **Type:** How-To Guide — task-oriented, follow when you need a live, continuously-updated optimization plan instead of a static day-ahead schedule.
 
-The `dayahead-optim` action computes a single 24 h schedule once per day. For systems where forecasts and state change throughout the day (especially battery SOC, EV state, dynamic prices), you want **Model Predictive Control**: re-run the optimization on a rolling window every N minutes, using the latest measurements as the new initial state.
+The `dayahead-optim` action normally computes one local calendar-day schedule once per day. Because `delta_forecast_daily` follows the configured timezone, that civil day can contain 23, 24, or 25 elapsed hours across a daylight-saving transition. By contrast, `prediction_horizon` is a timestep count: the 48-step/30-minute examples below are a fixed 24-hour rolling horizon. For systems where forecasts and state change throughout the day (especially battery SOC, EV state, dynamic prices), you want **Model Predictive Control**: re-run the optimization on a rolling window every N minutes, using the latest measurements as the new initial state.
 
 EMHASS implements this with the `naive-mpc-optim` action. This page walks through wiring it up.
 
@@ -76,6 +76,8 @@ For the matching `shell_command.emhass_publish_data`, see [Automations](../autom
 ## Output
 
 After each MPC run, EMHASS publishes the same sensors as `dayahead-optim` (`sensor.p_deferrable0`, `sensor.soc_optim`, etc.), but the schedule covering the prediction horizon replaces the previous one. Your HA automations follow the current state of `sensor.p_deferrable*` to switch real loads on/off; they don't care whether the underlying schedule came from `dayahead-optim` or `naive-mpc-optim`.
+
+The first optimization step of each run is set by `method_ts_round`. `nearest` (default) rounds on the UTC timeline and the result is then shown in the configured time zone, so the local clock time of the first step depends on the zone's UTC offset. The examples assume a zone whose UTC offset is a whole number of optimization steps, such as Australia/Sydney with a 30-minute step: a run at 12:20 plans from 12:30 with `nearest`, and from 12:00 with `first`. In a fractional-offset zone such as Asia/Kathmandu (+05:45) the same 12:20 run plans from 12:15 with `nearest`; `first` and `last` stay on the local clock (12:00 and 12:30). Plain price lists, `end_timesteps_of_each_deferrable_load` and other step-indexed inputs start at that first step, so set `method_ts_round` to `first` when you build them from your own clock, or send timestamped mappings (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 
 The plan-cycle behavior with a 30-minute re-run cadence and a 24 h horizon: at minute 0 the optimizer plans 24 h forward; at minute 30 it plans 24 h forward from the new "now"; at minute 60 again; and so on. Each plan **partially overlaps** the previous one for the next 23.5 h, but the new plan reflects the latest SOC, latest `def_total_hours`, latest forecast.
 

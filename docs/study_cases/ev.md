@@ -91,6 +91,10 @@ rest_command:
 
 Replace `sensor.YOUR_EV_REMAINING_KWH` with the actual sensor your integration publishes. The contract is: a sensor that reports kWh remaining to deliver before the next deadline.
 
+```{note}
+The deadline calculation above belongs to the Home Assistant/Jinja integration layer; it is not the same contract as EMHASS `delta_forecast_daily`. The EMHASS forecast horizon uses local calendar-day semantics, while `prediction_horizon` and `end_timesteps_of_each_deferrable_load` are timestep counts. If the departure deadline must remain at the same local wall-clock time across a daylight-saving transition, validate or construct the next local 07:00 using Home Assistant's configured timezone rather than assuming EMHASS forecast-window handling changes the template's datetime arithmetic.
+```
+
 ## Output
 
 `sensor.p_deferrable2` carries the optimized EV charging power per timestep. An HA automation drives the charger:

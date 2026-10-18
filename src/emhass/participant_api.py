@@ -94,8 +94,6 @@ async def build_session(
         "prediction_horizon": n,
         "pv_power_forecast": [0.0] * n,
         "load_power_forecast": [0.0] * n,
-        # its own inputs only: nothing it builds here touches the live problem
-        "dry_run": True,
     }
     if params["optim_conf"].get("load_cost_forecast_method") == "list":
         runtime["load_cost_forecast"] = [0.0] * n
@@ -123,6 +121,8 @@ async def build_session(
         "naive-mpc-optim",
         logger,
         get_data_from_file=get_data_from_file,
+        # its own inputs only: nothing it builds here touches the live problem
+        dry_run=True,
     )
     if not idd:
         raise RuntimeError("EMHASS could not build its inputs for this horizon")

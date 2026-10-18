@@ -4,11 +4,11 @@ EMHASS will need 4 forecasts to work properly:
 
 - PV power production forecast (internally based on the weather forecast and the characteristics of your PV plant). This is given in Watts.
 
-- Load power forecast: how much power your house will demand in the next 24 hours. This is given in Watts.
+- Load power forecast: how much power your house will demand over the configured forecast horizon. This is given in Watts.
 
-- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in currency/kWh.
+- Load cost forecast: the price of the energy from the grid over the configured forecast horizon. This is given in currency/kWh.
 
-- PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in currency/kWh.
+- PV production selling price forecast: the price at which you will sell your excess PV production over the configured forecast horizon. This is given in currency/kWh.
 
 Some methods are generalized to the 4 forecasts needed. For all the forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods, it is then possible to use data from external forecast providers.
     
@@ -18,8 +18,7 @@ For the **weather forecast**, the first method (`open-meteo`) uses Open-Meteo we
 
 The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
-The specific methods for the **load forecast** is a first method (`typical`) that uses historic values of a typical household power consumption. This method uses simple statistic methods and load power grouped by the same day-of-the-week of the current month. The load power is scaled using the parameter `maximum_power_from_grid`. A second method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the forecast for 
-a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily`. A third method (`mlforecaster`)
+The specific methods for the **load forecast** is a first method (`typical`) that uses historic values of a typical household power consumption. This method uses simple statistic methods and load power grouped by the same day-of-the-week of the current month. The load power is scaled using the parameter `maximum_power_from_grid`. A second method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the load at a given time of day will be the same as the last time that time of day was observed, typically 24 hours earlier. A third method (`mlforecaster`)
 uses an internal custom forecasting model using machine learning. There is a section in the documentation explaining how to use this method.
     
 ```{note} 
@@ -226,6 +225,8 @@ To activate this option all that is needed is to set `set_use_adjusted_pv` to `T
 
 The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast` class. This method fits a regression model to adjust the PV forecast. It uses historical forecasted and actual PV production data as training input, incorporating additional features such as time of day and solar angles. The model is trained using time-series cross-validation, with hyperparameter tuning performed via grid search. The best model is selected based on mean squared error scoring. The historical data retrieved depends on the `historic_days_to_retrieve` parameter in the configuration. By default, the method uses `LassoRegression`, but the `adjusted_pv_regression_model` parameter supports the following regression models (defined in `machine_learning_regressor.py`): 'LinearRegression', 'RidgeRegression', 'LassoRegression', 'ElasticNet', 'KNeighborsRegressor', 'DecisionTreeRegressor', 'SVR', 'RandomForestRegressor', 'ExtraTreesRegressor', 'GradientBoostingRegressor', 'AdaBoostRegressor', and 'MLPRegressor'. Once the model is trained, it computes root mean squared error (RMSE) and R² metrics to assess performance. These metrics are logged for reference. If debugging is disabled, the trained model is saved for future use.
 
+On handled model training or cached-model loading failures, EMHASS logs the condition and uses the original unadjusted PV forecast for that optimization cycle. The adjustment layer therefore does not replace an otherwise valid base PV forecast with an invalid value.
+
 When `compute_curtailment` is enabled, timesteps where PV production was curtailed are excluded from the training data, with a one-timestep margin on either side to absorb execution lag. The curtailment information is read from the history of the published curtailment entity (`custom_pv_curtailment_id`, by default `sensor.p_pv_curtailment`). During curtailment the measured production is deliberately below the achievable PV power, so training on those samples would teach the model a systematic downward bias. If the curtailment entity has no recorded history, the model is trained on unfiltered data.
 
 The actual **Forecast Adjustment** is performed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a threshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration.
@@ -260,7 +261,12 @@ New in EMHASS v0.12.0: the default method for load power forecast is the `typica
 
 The default method for load forecast is the `typical` method, which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month. This provides a typical daily load power characteristic with a 30 minute resolution. The load power is scaled using the parameter `maximum_power_from_grid`. This method uses the default data with 1-year of load power consumption in file `data/data_train_load_clustering.pkl`. You can customize this data to your own household consumption by erasing the previous file and running the script `scripts/load_clustering.py` (this will try to fetch 365 days of data from your load power sensor). However, if you have a working configuration without any problems with data retrieve from Home Assistant, then it is adviced to use the more advanced method `mlforecaster`.
 
-A second method is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily` and the default value for this is 24h.
+A second method is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the load at each future time step will be equal to the load observed at the same time of day on the most recent day for which that time is already known: for a forecast starting now, the next 24 hours repeat the last 24 hours, and a horizon longer than one day repeats that same last day again. The alignment is on the time of day, whatever the length of the forecast horizon (e.g. a `naive-mpc-optim` `prediction_horizon` shorter or longer than one day). Calendar days are used, so across a daylight saving time change 07:00 is still forecast from 07:00. If a time of day is missing in the history (a gap, or a time that was skipped or repeated by a daylight saving time change), it is taken from the day before. The history retrieved for this method covers `delta_forecast_daily` days, whose default is **1 local calendar day** rather than a fixed 24-hour duration; this is enough as only the most recent day is needed.
+
+
+```{note}
+Forecast windows follow the configured local timezone. A one-day window therefore normally contains 24 hours, but a valid window crossing daylight saving time can contain 23 hours on spring-forward or 25 hours on fall-back. If the nominal calendar-day endpoint itself is in a skipped/repeated wall-clock interval, EMHASS moves a nonexistent endpoint forward by the timezone's actual DST gap and chooses the post-transition occurrence for an ambiguous endpoint. The generated optimization timestep count follows the resolved real timeline; callers supplying external forecast lists must provide enough rows for that resolved window or an explicit shorter `prediction_horizon`.
+```
 
 This is presented graphically here:
 
@@ -310,6 +316,7 @@ A few things to keep in mind when reading the report:
 - The skill score is `1 - method_MAE / naive_MAE`, computed over the days a method and `naive` both cover so the comparison is fair even when a method covers fewer days. `naive` is the baseline at `0` and a positive value means the method beats naive persistence.
 - `mlforecaster` is fitted fresh in memory on the `train` window for this report using a fast LinearRegression baseline; it never reads a model you previously trained with `forecast-model-fit`, so the report works even if you have never run a fit (and it will not stall on a slow configured estimator).
 - `typical` here is derived from the retrieved history window rather than the long-term typical profile used in production, and it needs prior same-month, same-weekday history, so on a short window it may cover fewer days than the other methods (compare the `n` columns).
+- The report's history starts at the load sensor's first recorded (non-missing) value, and a recorded 0 W can mark that start. If the retrieval window begins before the sensor had any data (for example a recently added sensor), that earlier stretch is left out rather than turned into 0 W history, so the report may cover fewer days than requested or return the "not enough history" message. From the first recorded value onwards, the history is cleaned with your usual `set_zero_min`, `sensor_replace_zero` and `sensor_linear_interp` settings. This only affects the calibration report; the history preparation used by the optimizations is unchanged.
 
 ## Load cost forecast
 
@@ -357,6 +364,35 @@ This example is presented graphically here:
 
 ![](./images/hp_hc_periods.png)
 
+### Tariff schedule time zone
+
+By default the `start` and `end` times of `load_peak_hour_periods` are wall-clock times in the site `time_zone`, the same clock as the optimization timestamps. Some tariffs publish their periods on a different clock, for example a fixed UTC+10 all year while the site's civil time moves to UTC+11 in summer. For such a tariff the same wall-clock period lands on the wrong absolute intervals during daylight saving.
+
+The optional `tariff_schedule_time_zone` parameter (in `optim_conf`, next to `load_peak_hour_periods`) names the time zone identifier the periods are written in:
+
+- Empty or unset (the default): the periods are interpreted in the site `time_zone`, exactly as before.
+- A time zone identifier: each optimization timestep is re-expressed in that zone to decide whether it falls inside a peak period. The optimization timestamps themselves, the forecast days and the global `time_zone` are unchanged; only the timesteps selected as peak differ.
+- An identifier that is not recognised is an error: the run is aborted and the invalid value is logged. It never falls back to the site time zone.
+- It only applies to `load_cost_forecast_method=hp_hc_periods`. Load and production prices passed as timestamped data (or read from CSV) are not affected, and `capacity_charge_window` is still built by the caller, who is responsible for the clock it is written in.
+
+Only time zone identifiers are accepted; there is no separate offset syntax. A fixed offset is available as an `Etc/GMT` identifier, whose sign is inverted: `Etc/GMT-10` is UTC+10.
+
+Example: a tariff with a 17:00-21:00 peak on a fixed UTC+10 clock, at a site in `Australia/Sydney`:
+
+    - time_zone: Australia/Sydney
+    - tariff_schedule_time_zone: Etc/GMT-10
+    - load_peak_hour_periods:
+        - period_hp_1:
+            - start: '17:00'
+            - end: '21:00'
+
+| Date | Site clock | Peak timesteps (site time) |
+|---|---|---|
+| Standard time (UTC+10) | AEST | 17:00-21:00 |
+| Daylight time (UTC+11) | AEDT | 18:00-22:00 |
+
+In both cases the peak is the same absolute interval, 07:00-11:00 UTC. Without `tariff_schedule_time_zone` the peak would stay at 17:00-21:00 site time during daylight time.
+
 ## PV production selling price forecast
 
 The default method for this forecast is simply a constant value. This can be obtained using `method=constant`.
@@ -373,6 +409,8 @@ For the `csv` method you should push a csv file to the `data` folder. The CSV fi
     2021-04-29 00:30:00+00:00,274.27
     2021-04-29 01:00:00+00:00,243.38
     ...
+
+Each timestamp is read as an absolute instant: include the UTC offset (a timestamp without one is read as UTC). A file written in local time may therefore change offset in the middle, for example `+01:00` and `+02:00` across a daylight saving change, and both occurrences of a repeated local hour stay distinct. The rows should cover the whole optimization horizon at the `optimization_time_step`. For a step more than one source step (the median row spacing) after the last row or before the first, EMHASS keeps using the closest row and logs a warning (not checked for a file with a single row) with the number of uncovered steps and the first and last of them.
 
 For the list method, you just have to add the data as a list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option.
 
@@ -393,12 +431,16 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
-You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list length should be 24 data points.
+You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list should contain one value per step: 24 hourly values, or 23 or 25 across a daylight saving change.
 
 ### Understanding forecast data formats: List vs Dictionary
 
 EMHASS supports two formats for passing forecast data as runtime parameters: **list format** and **dictionary format
 with timestamps**. Understanding when to use each format can significantly simplify your Home Assistant automations.
+
+Both formats follow the [Forecast input contract](passing_data.md#forecast-input-contract): every value must be a finite
+real number (no `NaN`, `null`, booleans or strings), prices and temperatures may be negative, and the load and PV power
+that reach the optimizer are kept at or above 0 W.
 
 #### List Format (Traditional)
 
@@ -406,8 +448,9 @@ The list format passes forecast values as a simple array. This is the most compa
 attention to timing and data length.
 
 **Requirements:**
-- The list must contain values for the **current time period first**, followed by future values
-- The list length must match your prediction horizon based on `optimization_time_step`
+- The list must start with the value for the **first step of the optimization grid** (set by `method_ts_round`; with `first` it is the step that contains now), followed by future values
+- The list must contain at least one value per horizon step based on `optimization_time_step`. Extra values are
+ignored, and a shorter list is rejected with an error rather than padded
 - Values must be in the correct order (chronological)
 
 **Example:**
@@ -418,7 +461,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 	"optimization_time_step": 60
 }' http://localhost:5000/action/dayahead-optim
 ```
-For a 24-hour forecast with 1-hour intervals, you need exactly 24 values starting from the current hour.
+For a 24-hour forecast with 1-hour intervals, you need one value per grid step, 24 hourly values (23 or 25 across a daylight saving change), starting at the first grid step.
 
 When to use list format:
 - Your forecast data is already aligned with EMHASS intervals
@@ -428,14 +471,15 @@ When to use list format:
 Dictionary Format with Timestamps (Recommended for most users)
 
 The dictionary format allows you to pass forecast values with explicit timestamps. EMHASS will automatically handle
-resampling, alignment, and gap filling.
+aggregation, alignment, and gap filling.
 
 Advantages:
-- Automatic resampling: If your data is hourly but EMHASS runs at 15-minute intervals, resampling happens
-automatically
+- Automatic alignment: If your data is hourly but EMHASS runs at 15-minute intervals, each hourly value is held for
+the 15-minute steps it covers
 - Flexible timing: No need to calculate exact list length or worry about current time alignment
 - Self-documenting: Timestamps make it clear which value applies when
-- Automatic gap filling: Missing timestamps are filled using forward-fill and backward-fill
+- Automatic gap filling: Each value holds until the next supplied point, and steps before the first point take the
+first value
 - Timezone aware: Timestamps are parsed and converted to your configured timezone
 
 Format:
@@ -462,12 +506,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
-What happens internally:
-1. Timestamps are parsed as ISO8601 format with timezone
-2. Data is resampled to match your optimization_time_step (e.g., from 1h to 15min intervals)
-3. Values are aligned with the forecast horizon using nearest-neighbor interpolation
-4. Any missing values are filled using forward-fill then backward-fill
-5. The result is converted to a list for the optimizer
+What happens internally: the values are validated, aggregated to the optimization step and matched to the grid by UTC instant, exactly as described under [Forecast input contract](passing_data.md#forecast-input-contract).
 
 When to use dictionary format:
 - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
@@ -478,35 +517,64 @@ When to use dictionary format:
 Practical Home Assistant Examples
 
 Dictionary format with Nordpool (Simple - Recommended!):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool: >
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }},
-			"prod_price_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool: >
+    {% set prices = (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") or []) + (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") or []) %}
+    {% set mapping = dict(zip(prices | map(attribute="start") | map("string") | list, prices | map(attribute="value") | list)) %}
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{ mapping | tojson }},
+      "prod_price_forecast": {{ mapping | tojson }}
+    }' http://localhost:5000/action/dayahead-optim
 ```
-The Nordpool integration already provides data in dictionary format with timestamps, so you can pass it directly using `| tojson`!
+`raw_today` is a list of `{start, end, value}` objects, not the `{timestamp: value}` mapping EMHASS expects (passing it with `| tojson` as is makes the optimisation fail), so the template pairs each `start` with its `value`. Prices are placed by timestamp, so this is correct for hourly and 15-minute prices and on daylight saving days. `raw_today + raw_tomorrow` covers the whole day-ahead horizon. The `value` must be in currency per kWh, as for every EMHASS price (divide a per-MWh sensor by 1000).
+
+In Home Assistant templates `zip` is a function, `zip(keys, values)`, not a filter (`keys | zip(values)` fails with "No filter named 'zip'"); `dict(...)` and `tojson` are available. The `or []` keeps the template from failing when an attribute is missing, but then it renders an empty mapping (`{}`) or only today's prices, which does not make a valid day-ahead request: guard the automation, as described next. The `start` values are timestamps with their UTC offset (`2026-10-03 00:00:00+10:00`), which EMHASS reads as absolute instants.
+
+The `tojson` filter of Home Assistant writes an apostrophe as `'`, so a value or timestamp containing `'` cannot end the single-quoted `-d` argument (checked with the Home Assistant template engine: the rendered command stays one `-d` argument and the payload valid JSON); EMHASS then rejects a non-numeric price.
+
+Run it only when the prices cover the whole forecast window. A mapping that starts after now (today's prices missing), ends before the window does (tomorrow's not published, or an `unavailable` sensor that kept old attributes) or has a gap is silently completed by EMHASS: steps before the first point take its price and steps after the last point hold the last price, so the plan is valid but wrongly priced. The window of a day-ahead run is one local calendar day from now, so check coverage from the timestamps, not from a count of entries (a day has 23, 24 or 25 hourly entries, and 92, 96 or 100 quarter-hour entries). As an automation condition:
+
+```yaml
+condition:
+  - condition: template
+    value_template: >
+      {%- set s = "sensor.nordpool_kwh_be_eur_3_10_025" -%}
+      {%- set p = (state_attr(s, "raw_today") or []) + (state_attr(s, "raw_tomorrow") or []) -%}
+      {%- set ns = namespace(ok = p | length > 0) -%}
+      {%- for i in range(1, p | length) -%}
+        {%- if as_timestamp(p[i].start) != as_timestamp(p[i - 1].end) -%}{%- set ns.ok = false -%}{%- endif -%}
+      {%- endfor -%}
+      {{ states(s) not in ['unknown', 'unavailable'] and ns.ok
+         and as_timestamp(p[0].start) <= as_timestamp(now())
+         and as_timestamp(p[-1].end) >= as_timestamp(now() + timedelta(days=1)) }}
+```
+
+It requires the first entry to start at or before now, the entries to be contiguous, and the last one to end at or after the same wall-clock time tomorrow (`now() + timedelta(days=1)` is a local calendar day, as in EMHASS). With a `delta_forecast_daily` other than 1, replace `1` by that number of days.
 
 List format with Nordpool (Traditional - More Complex):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool_list: >
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{(
-				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float(0)] +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
-				[now().hour:][:24]
-			)}}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool_list: >
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{(
+        (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
+        state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
+        [now().hour:][:24]
+      )}}
+    }' http://localhost:5000/action/dayahead-optim
 ```
 
 Notice how the list format requires:
-- Adding the current hour value first `[states("sensor.nordpool...")]`
 - Extracting values from dictionaries `map(attribute="value")`
-- Slicing from current hour `[now().hour:]`
+- Slicing from current hour `[now().hour:]`. With a 60-minute step this is the first grid step only for `method_ts_round: first`. With the default `nearest` from about :30 on (an exact :30 goes to the even UTC hour), and with `last` (a time that is not exactly on a step), the grid starts one hour later, so every value is applied one hour too late
 - Limiting to the correct length `[:24]`
+
+`raw_today` already starts with the first hour of the local day, so `[now().hour:]` alone selects the current hour;
+do not prepend another value, which would shift every price one hour early. This positional list is right only for
+hourly prices on a day with 24 entries: with 15-minute prices (96 entries) or on a daylight saving day (its `raw_today` has 23 or 25
+entries, so `[now().hour:]` is one hour off after the change) it selects the wrong prices, so use the dictionary format there (or always).
+A missing attribute does not stop this template from rendering (Home Assistant treats it as empty), and a list gives no protection against missing prices: with `raw_today` missing and `raw_tomorrow` present, the slice takes tomorrow's prices as today's, and in the first hour of the day it is still long enough, so EMHASS accepts a list of the wrong day. Use the same coverage condition as for the dictionary format, or better the dictionary format itself.
 
 Dictionary format handles all of this automatically!
 
@@ -515,17 +583,17 @@ Important Notes
 Timezone handling:
 - Timestamps should include timezone information (e.g., +00:00 for UTC, +02:00 for CEST)
 - EMHASS will convert timestamps to your configured timezone from `secrets_emhass.yaml`
-- If timestamps don't include timezone, they're assumed to be in your local timezone
+- If timestamps don't include timezone, they're read as UTC, not as your local time. Always include the offset to
+avoid a silent shift
 
 Data resolution:
 - Dictionary format works best when your source data is at a coarser resolution than your optimization_time_step
 - Example: Hourly price data automatically resampled to 15-minute intervals
-- The resampling uses "nearest neighbor" method, so hourly prices are held constant for all 15-minute intervals within
-that hour
+- Each hourly price is held constant for all 15-minute intervals within that hour (step semantics, no interpolation)
 
 Current values:
-- When using list format, the first value in the list must be the current period
-- Example: If it's 14:30 and your intervals are 30 minutes, the first value should be for 14:30-15:00
+- When using list format, the first value in the list must be for the first grid step: with `method_ts_round: first` the step that contains now, with `last` the first step boundary not before now, with `nearest` (default) the closest boundary
+- Example: at 14:50 with 30-minute intervals, `nearest` starts the grid at 15:00
 - Dictionary format automatically handles this by using timestamps
 
 Mixing formats:
@@ -593,10 +661,10 @@ An MPC call may look like this for 4 deferrable loads:
 
 ```yaml
     post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
-          ([states('sensor.amber_general_price')|float(0)] +
+          ([states('sensor.amber_general_price')|float] +
           state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
           }}, \"prod_price_forecast\":{{(
-          ([states('sensor.amber_feed_in_price')|float(0)] +
+          ([states('sensor.amber_feed_in_price')|float] +
           state_attr('sensor.amber_feed_in_forecast', 'forecasts')|map(attribute='per_kwh')|list)[:48]) 
           }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
           }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100
@@ -604,6 +672,10 @@ An MPC call may look like this for 4 deferrable loads:
 ```
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
+
+```{note}
+This example sends plain lists, so every list is positional from the first optimization step (see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs)), and it prepends the current price as that first value. That only matches the grid when the first step is the 30-minute step containing now (`method_ts_round: first`) and the Amber forecast rows continue directly after the current interval. With the default `nearest`, a call in the second half of a step starts one step later and every price lands one step early. Amber forecast rows carry their own `start_time`, so a timestamped mapping avoids the alignment question.
+```
 
 ### Example combining multiple Solcast configurations
 
@@ -694,6 +766,8 @@ The subsequent shell command to concatenate `today` and `tomorrow` values can be
 shell_command:
   trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
+
+This command assumes a 60-minute `optimization_time_step` and `method_ts_round: first`, so that the list starts at the current hour (see [the list format](#understanding-forecast-data-formats-list-vs-dictionary)). With another step or rounding mode, prefer the dictionary format.
 
 ## Now/current values in forecasts
 

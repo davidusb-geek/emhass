@@ -237,6 +237,73 @@
         }
       }
     },
+    "/api/v1/dry-run/{action_name}": {
+      "post": {
+        "summary": "Solve an optimization and return the plan, writing nothing",
+        "description": "Takes the body of POST /action/{action_name}. Solves as that action does, and writes no results file, entity, plan, last-run record, cache or model, and publishes nothing. An EMHASS without this route answers 404, so it never runs a live solve instead.",
+        "externalDocs": {
+          "description": "Plan output field reference",
+          "url": "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
+        },
+        "parameters": [
+          {
+            "name": "action_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "perfect-optim",
+                "dayahead-optim",
+                "naive-mpc-optim"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The solver ran; status says how",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused, or stopped before the solver",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The run failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Liveness/readiness probe",
@@ -740,14 +807,14 @@
             ],
             "default": "nearest",
             "title": "Timestamp rounding method",
-            "description": "Set the method for timestamp rounding, options are: first, last and nearest."
+            "description": "Rounding of the first optimization step, applied once per request: first = round down, last = round up, nearest = closest step (on the UTC clock)."
           },
           "delta_forecast_daily": {
             "type": "integer",
             "default": 1,
             "title": "Number of forecasted days",
             "x-unit": "days",
-            "description": "The number of days for forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. For naive-mpc, the forecast window is now extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs. (unit: days)"
+            "description": "The number of local calendar days covered by forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. This is not a fixed 24-hour duration: the timestep count follows the configured timezone (normally 24 hours, 23 across spring-forward and 25 across fall-back). If a nominal calendar-day endpoint falls in a skipped or repeated wall-clock interval, EMHASS resolves it deterministically using the timezone transition. For naive-mpc, the forecast window is extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs. (unit: days)"
           },
           "load_forecast_method": {
             "type": "string",
@@ -876,6 +943,32 @@
             "x-unit": "fraction",
             "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100) (unit: fraction)"
           },
+          "inverter_power_curve_dc_ac": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "default": []
+              }
+            },
+            "title": "Hybrid inverter DC to AC power curve",
+            "x-unit": "W",
+            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+          },
+          "inverter_power_curve_ac_dc": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "default": []
+              }
+            },
+            "title": "Hybrid inverter AC to DC power curve",
+            "x-unit": "W",
+            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+          },
           "inverter_stress_cost": {
             "type": "number",
             "default": 0.0,
@@ -895,6 +988,31 @@
             "default": false,
             "title": "Set compute curtailment (grid export limit)",
             "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon"
+          },
+          "cop_solver": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "dp",
+              "static"
+            ],
+            "default": "static",
+            "title": "Heat-pump COP solver",
+            "description": "How the temperature-dependent heat-pump COP is resolved for shared thermal tanks. 'static' (default) keeps the constant heating-curve COP - the pre-existing behavior. 'auto' runs an exact dynamic-programming refinement when the static solve's COP is inconsistent with the achieved tank temperature; 'dp' always runs it. Opt in with 'auto' for tanks whose heat pump banks heat well above its curve supply."
+          },
+          "cop_solver_tolerance": {
+            "type": "number",
+            "default": 0.5,
+            "title": "COP solver trigger tolerance",
+            "x-unit": "COP",
+            "description": "The DP COP refinement engages when the COP used differs from COP(achieved tank temperature) by more than this many COP units. Defaults to 0.5. (unit: COP)"
+          },
+          "cop_hx_approach": {
+            "type": "number",
+            "default": 5.0,
+            "title": "COP heat-exchanger approach",
+            "x-unit": "degC",
+            "description": "Temperature difference (degC) between a thermal store and the heat pump's working fluid used when evaluating the temperature-dependent COP: the condenser runs at store temperature plus this approach (heating), the evaporator at store temperature minus it (cooling). Used by the COP consistency check and the DP refinement. Defaults to 5. (unit: degC)"
           },
           "load_cost_forecast_method": {
             "type": "string",
@@ -923,6 +1041,12 @@
             },
             "title": "List peak hour periods",
             "description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours."
+          },
+          "tariff_schedule_time_zone": {
+            "type": "string",
+            "default": "",
+            "title": "Tariff schedule time zone",
+            "description": "Optional time zone identifier (for example Etc/GMT-10 for a fixed UTC+10 clock) in which the peak hour periods are written, when the tariff's clock differs from the site time zone. Leave empty to use the site time zone."
           },
           "load_peak_hours_cost": {
             "type": "number",
@@ -1368,7 +1492,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.3
+              "default": 0.3,
+              "maximum": 1
             },
             "title": "Minimum Battery charge percentage",
             "x-unit": "fraction",
@@ -1378,7 +1503,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.9
+              "default": 0.9,
+              "maximum": 1
             },
             "title": "Maximum Battery charge percentage",
             "x-unit": "fraction",
@@ -1388,7 +1514,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.6
+              "default": 0.6,
+              "maximum": 1
             },
             "title": "Battery desired percentage after optimization",
             "x-unit": "fraction",
@@ -1415,7 +1542,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.4
+              "default": 0.4,
+              "maximum": 1
             },
             "title": "Battery SOC deficit threshold",
             "description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
@@ -1433,7 +1561,8 @@
             "type": "array",
             "items": {
               "type": "number",
-              "default": 0.9
+              "default": 0.9,
+              "maximum": 1
             },
             "title": "Battery SOC surplus threshold",
             "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
@@ -1446,6 +1575,13 @@
             },
             "title": "Battery SOC surplus cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
+          },
+          "battery_soc_final_reward_factor": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Battery SOC final reward factor",
+            "x-unit": "fraction",
+            "description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both directions. (unit: fraction)"
           },
           "capacity_cost_per_kw": {
             "type": "array",
@@ -1670,6 +1806,136 @@
                 },
                 "plan": {
                   "const": null
+                }
+              }
+            }
+          }
+        ]
+      },
+      "DryRun": {
+        "title": "EMHASS /api/v1/dry-run/<action> response",
+        "description": "Response shape for POST /api/v1/dry-run/<action>. A dry run solves as POST /action/<action> does and writes nothing. When the solver ran (HTTP 200), the response carries the run record /api/v1/last-run would have served and the plan /api/v1/plan would have served. warnings and errors are the ones this request logged, and no other request's. See docs/dry_run.md.",
+        "type": "object",
+        "required": [
+          "dry_run",
+          "action",
+          "status",
+          "plan",
+          "warnings",
+          "errors"
+        ],
+        "properties": {
+          "dry_run": {
+            "const": true,
+            "description": "Always true: nothing was written."
+          },
+          "action": {
+            "type": "string",
+            "description": "The action from the URL: perfect-optim, dayahead-optim or naive-mpc-optim (any other is refused, and echoed here)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "infeasible",
+              "error",
+              "not-run"
+            ],
+            "description": "ok, infeasible or error: the solver ran, and status is what /api/v1/last-run would report (only an ok plan would have replaced /api/v1/plan). not-run: refused (HTTP 400) or failed (HTTP 500) before a plan was made; errors says why."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 UTC instant when the run completed. Present when the solver ran."
+          },
+          "stage_times": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Per-stage elapsed seconds, as in /api/v1/last-run. Present when the solver ran."
+          },
+          "duration_total_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Wall-clock seconds of the run, as in /api/v1/last-run. Present when the solver ran."
+          },
+          "emhass_version": {
+            "type": "string",
+            "description": "Installed emhass package version. Present when the solver ran."
+          },
+          "schema_version": {
+            "type": "string",
+            "description": "EMHASS_SCHEMA_VERSION; the plan columns follow docs/plan_output_schema.md at this version. Present when the solver ran."
+          },
+          "infeasible": {
+            "type": "boolean",
+            "description": "True when the solver returned Infeasible. Present when the solver ran."
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As in /api/v1/last-run. Present when the solver ran."
+          },
+          "plan": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "Per-timestep records, the same as /api/v1/plan's plan, with each record's optim_status. Returned whatever the status, so a caller can see what an infeasible what-if gave. Null when status is not-run."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The warnings this request logged."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The errors this request logged. When status is not-run, they say why."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "not-run"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "plan": {
+                  "const": null
+                }
+              }
+            },
+            "else": {
+              "required": [
+                "timestamp",
+                "stage_times",
+                "duration_total_seconds",
+                "emhass_version",
+                "schema_version",
+                "infeasible",
+                "error_message"
+              ],
+              "properties": {
+                "plan": {
+                  "type": "array"
                 }
               }
             }

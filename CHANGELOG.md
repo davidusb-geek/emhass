@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.18.6 - 2026-10-16
+
+Rolling out anew version of EMHASS loaded with a bunch of fixes and improvements.
+Update to this version to prepare for the upcoming DST change challenge.
+Thanks to all contributors.
+
+### Improvement
+- test: DST regression suite for the time grid and forecast transport (#1189) (@MMicieli)
+- feat: cap a heat pump's delivered heat with max_thermal_power (#539) (@snauwaertc)
+- feat: opt-in DP COP refinement for shared-tank heat pumps (part 2 of #1187) (@snauwaertc)
+- feat: dynamic-programming solver for a heat-pump-charged store (part 1 of #1187) (@snauwaertc)
+
+### Documentation
+- docs: clarify the DST-safe time-grid contract and Nordpool forecasts (#1189) (@MMicieli)
+- docs: fix the Nordpool examples (timestamp mapping, no prepended value, hourly 24-entry days only) (#1189) (@MMicieli)
+- docs: the DP COP refinement and the thermal math model (part 3 of #1187) (@snauwaertc)
+- docs: cookbook recipes for DHW and heat pump (@snauwaertc)
+
+### Fix
+- fix: rebuild the cached problem when a sequence load's running state changes (@Blizzeq)
+- fix: keep a positive deferrable load start when the end timestep is 0 or negative (@Blizzeq)
+- fix: reject a state of charge above 1 before it reaches the solver (@HFZR2005)
+- fix: keep the captured forecast start across Forecasts built from one params dict; explicit tz origin (#1189 follow-up) (@MMicieli)
+- fix: keep forecast values on their UTC instants across a DST change (#1189) (@MMicieli)
+- fix: use one UTC-safe time grid per request (#1189) (@MMicieli)
+- fix: use the configured load sensor as var_model when var_model is unset or the stock default (@Blizzeq)
+- fix: scale the soc_final penalty by the self-consumption big-M (@Blizzeq)
+- fix: warn when heat_topology replaces configured loads; keep shared_thermal_tanks from config.json (@snauwaertc)
+- fix: forward current_period_peak through the dayahead capacity-tariff path (@snauwaertc)
+- fix: price a temperature bound that free gains alone break, instead of an infeasible run (@snauwaertc)
+- fix: read def_load_config from config.json into optim_conf (@Blizzeq)
+- fix: sleep to the next continual_publish period boundary (@Blizzeq)
+- fix: interpolate interior Forecast.Solar gaps at sub-hourly steps (@Blizzeq)
+- fix: replace fillna(method=...) removed in pandas 3 in the weather safety fill (@Blizzeq)
+- Fix: validate Open-Meteo covariate cache span (@Unplanted6505)
+- fix(command_line): fallback to nearest index when ffill/bfill returns -1 (@Blizzeq)
+
+## 0.18.5 - 2026-10-09
+
+This release brings massive upgrades to the thermal modeling engine, advanced hybrid-inverter configurations, and robust fixes for DST transitions and forecasting.
+
+Thanks to @snauwaertc for an incredible overhaul of the thermal engine and heat topology.
+On Batteries & Inverters, You can now define optional power-dependent efficiency curves for hybrid-inverters (AC-side, DC→AC, and AC→DC) for much more accurate modeling (@MMicieli). You now have more control over your battery's target state at the end of the optimization run (@lutorm). The web UI now properly displays the battery SOC chart when using more than one battery (@LesIT1).
+On Timezones, DST & Forecasting, several fixes were proposed to ensure forecasts, endpoints, and naive-MPC horizons behave perfectly across Daylight Saving Time transitions.
+
+A huge thank you to all our contributors for making this release possible!
+
+### Improvement
+- feat: one thermal model in heat_topology - building zones, tank-to-tank transfers, window solar (#539) (@snauwaertc)
+- feat: edit heat_topology in a text box and validate it on save (#539) (@snauwaertc)
+- feat: runtime shared tanks, per-tank start temperatures and extend mode for heat_topology (#539) (@snauwaertc)
+- feat: add battery_soc_final_reward_factor. (@lutorm)
+- feat: per-source overshoot and combi tanks for heat_topology (#539) (@snauwaertc)
+- feat: per-source temperature ceiling and anti-cycling for heat_topology (#539) (@snauwaertc)
+- feat: separate tariff schedule timezone from site timezone (@MMicieli)
+- feat: optional power-dependent hybrid-inverter efficiency curves (AC-side, DC→AC and AC→DC) (@MMicieli)
+
+### Fix
+- fix: add the start <= on bound only for loads with a startup penalty (@snauwaertc)
+- fix: apply custom_deferrable_state_id passed at runtime (@Blizzeq)
+- fix: align the naive load forecast on the time of day for any horizon (@martinarva)
+- fix: extend naive-MPC horizon across DST-short calendar days (@MMicieli)
+- fix: resolve forecast endpoints inside DST transitions (@MMicieli)
+- fix: preserve PV forecast on unexpected model load errors (@MMicieli)
+- fix: avoid WebSocket reconnect deadlock (@mikamikasuki)
+- fix: extend VictoriaMetrics FILL(previous) through query end (@MMicieli)
+- fix: parse --debug and --log2file values as booleans (@Blizzeq)
+- fix: show the battery SOC chart in the web UI with more than one battery (@LesIT1)
+- fix: check the PV plant lists against pv_module_model before the plant loop (@LesIT1)
+- fix: enforce forecast validity at optimizer boundaries (@MMicieli)
+- fix: exclude pre-observation history from forecast calibration (@MMicieli)
+- fix: shared thermal tanks - stale plans, missing comfort columns, and validation gaps (@snauwaertc)
+- fix: last-run/plan status for Optimal_Inaccurate runs, and publish-data robustness (@snauwaertc)
+- fix: thermal and heat_topology bugfixes on existing code (@snauwaertc)
+- fix: center Plotly graph wrappers (@WartoWiedziec)
+
 ## 0.18.4 - 2026-09-27
 
 ### Improvement

@@ -3,7 +3,7 @@ name: emhass-agents
 description: Vendor-neutral rules for AI coding agents working on EMHASS source.
 ---
 
-<!-- Last verified against upstream/master @ 6537c47, 2026-04-30 -->
+<!-- Last verified against upstream/master @ 237d0fe, 2026-09-30 -->
 
 Rules for AI coders (Claude Code, Cursor, Aider, Copilot, Codex) on EMHASS source. Complements `docs/develop.md` (human canon); no duplication. Where `develop.md` covers topic, this links + adds AI-specific constraints.
 
@@ -109,11 +109,21 @@ AI finds code + candidates. Domain experts decide bug vs design. 2026-04-26 audi
 - Renaming public API params breaks downstream; needs migration path.
 - New dependencies: issue first.
 
-**Add parameter:** four-step workflow in `docs/develop.md` (`associations.csv` + `config_defaults.json` + `param_definitions.json` + `OptimizationCacheKey`, optional `check_def_loads`). Skip step → breaks something.
+**Add parameter:** four-step workflow in `docs/develop.md` (`associations.csv` + `config_defaults.json` + `param_definitions.json` + cache-key check, optional `check_def_loads`). Structural `plant_conf`/`optim_conf` keys are already covered by `plant_conf_hash`/`optim_conf_structural_hash` (minus the runtime-keys exclusions); add an explicit `OptimizationCacheKey` field only when they are not — test that a value change changes the key. Skip step → breaks something.
 
 **Change default value (existing param):** `src/emhass/static/data/param_definitions.json` first — source of truth. Align `src/emhass/data/config_defaults.json` to match. See `docs/develop.md` § Changing default values.
 
-**External forecast feed alignment.** `runtimeparams` handlers for `pv_power_forecast`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast` tolerate length/frequency/timezone differences — day-ahead feeds publish 24h not 48h, padded gracefully. Tolerant ≠ silent: log clearly when alignment happens. Silent shifts → wrong-but-valid-looking plans (`optim_status: Optimal`, every timestep offset by N).
+**External forecast feeds.** Canonical contract: [`docs/passing_data.md` § Forecast input contract](docs/passing_data.md#forecast-input-contract). Follow it; don't restate it. Keys: `pv_power_forecast`, `pv_power_forecast_p10`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast`, `outdoor_temperature_forecast`.
+
+- Plain list ≠ timestamp mapping. List = already optimization timesteps; shorter than horizon → rejected + ignored (configured method runs), never padded; longer → first horizon values used. Mapping → mean-aggregated to `optimization_time_step` buckets anchored on the first grid step, matched by UTC instant, hold-last + leading backfill (`utils._align_runtime_forecast_mapping`). P10 = same representation + timeline as P50 (`utils._validate_and_align_external_pv_pair`).
+- Every forecast **value** = finite real number. NaN, ±Inf, null, str, bool invalid (`bool` subclasses `int`: check explicitly; reuse `utils.describe_invalid_forecast_value`). Preserve legacy whole-list string normalization before validation; strings inside the parsed list remain invalid. Invalid supplied values → one error, cycle fails before solver. Absence is not rejection: an omitted `outdoor_temperature_forecast` may still use the weather-temperature fallback.
+- Select forecast rows by absolute UTC instant (`Forecast._values_at_instants`), never by wall-clock slices such as `between_time`: they drop or double the repeated hour of a fall-back day. The perfect-forecast daily profile is the one deliberate wall-time mapping (each step takes the profile value of its own wall time).
+- Load + PV = physical power, `>= 0 W` at optimizer: load clipped once after mix in `Forecast.get_load_forecast`, PV in `get_power_from_weather`. Prices signed. Outdoor temperature signed. Never apply a generic `>= 0`.
+- `load_negative`, `set_zero_min` = retrieved-history preparation only. External load = canonical non-negative consumption; never invert.
+- Raw ML prediction (`forecast-model-predict`) stays raw; clip only at the optimizer-facing boundary.
+- One time grid per request. `utils.get_forecast_start` is the only definition of the first step (UTC clock; `first`/`last` wall-aligned via the UTC offset in force); `treat_runtimeparams` reads the clock once and stores it as `passed_data.forecast_start`, which `Forecast` reuses once (a start too far from the clock raises instead of being replaced by another grid: the runtime forecasts are already aligned to it). Never floor/ceil/round an aware local timestamp, or `replace`/`tz_localize` its wall time: they raise in the repeated hour or pick the wrong occurrence. Round on the UTC clock and look up by UTC instant. Wall-clock membership tests (tariff periods via `indexer_between_time`) are the intentional exception.
+- Documentation examples that build positional inputs (plain lists, step indices such as `end_timesteps_of_each_deferrable_load`) count steps in elapsed time from the first optimization step and use `as_timestamp()` in Home Assistant templates, never wall-clock datetime subtraction; link to `docs/passing_data.md` § Step indices and other positional inputs instead of restating it.
+- Timestamp shifts never silent. Naive timestamps are read as UTC. Silent shift → wrong-but-valid-looking plan (`optim_status: Optimal`, every timestep offset by N).
 
 **Common AI hallucinations:**
 

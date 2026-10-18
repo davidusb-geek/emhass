@@ -207,6 +207,12 @@ runtimeparams = {
 }
 ```
 
+### Raw prediction versus optimizer-facing load
+
+`forecast-model-predict`, and the sensor it can publish, return the raw estimator prediction. A regression model is unconstrained, so that prediction can occasionally dip below 0 W. It is left unchanged so model evaluation sees what the model actually predicted.
+
+When the same model is used for optimization (`load_forecast_method: mlforecaster`), its prediction goes through the common optimizer-facing load check described in the [Forecast input contract](passing_data.md#forecast-input-contract): a finite negative value is clipped to 0 W with a warning, and a `NaN` or infinite value fails the optimization cycle. The clipping is a physical-domain correction for the optimizer only. It does not improve the raw forecast, so evaluate model accuracy on the raw prediction, not on the clipped load.
+
 ## The tuning method with Bayesian hyperparameter optimization
 
 With a previously fitted model, you can use the `forecast-model-tune` endpoint to tune its hyperparameters. This will be using Bayesian optimization with a wrapper of `optuna` in the `skforecast` module.

@@ -61,6 +61,8 @@ test = [
     # tests fail under aiohttp 3.13+. Cap aiohttp here (test extra only) until
     # aioresponses ships 3.13 support; production installs stay unpinned.
     "aiohttp<3.13",
+    # freezes the clock for the DST regression suite in tests/dst_1189
+    "time-machine",
 ]
 dev = ["ruff"]
 # Opt-in coordinated backend (optimization_backend = dantzig_wolfe).
