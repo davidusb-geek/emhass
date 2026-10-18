@@ -5215,6 +5215,76 @@ def check_batt_params(
     return parameter[parameter_name]
 
 
+# A dry run solves as a live run does, returns the plan, and writes nothing.
+# It is a URL of its own, not a runtime parameter: an EMHASS that predates it
+# answers 404 there, where it would ignore an unknown parameter and run live.
+DRY_RUN_URL = "/api/v1/dry-run/<action>"
+DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
+# Runtime parameters that ask for a write. A dry run refuses them rather than
+# ignore them, so a caller never believes something was saved.
+DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+
+_FLAG_TRUE = ("true", "1", "yes", "on")
+_FLAG_FALSE = ("false", "0", "no", "off", "")
+
+
+def read_flag(value: object, name: str) -> bool:
+    """Read a runtime on/off parameter strictly.
+
+    ``bool("false")`` is True, and a templated request often sends the string.
+    Booleans, 0 and 1, None, and the strings true/false, 1/0, yes/no, on/off
+    (any case) are read; anything else raises.
+
+    :param value: The value sent for the parameter.
+    :param name: The parameter's name, for the error message.
+    :return: The parameter's value.
+    :raises ValueError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _FLAG_TRUE:
+            return True
+        if text in _FLAG_FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
+    """Why a request must be refused before anything runs, or None.
+
+    On an action URL a ``dry_run`` parameter that is not false is refused:
+    that URL never honours it, and running live would replace the plan the
+    caller meant to keep. On the dry-run URL, ``dry_run`` may be left out or
+    true, and the parameters that ask for a write are refused.
+
+    :param runtimeparams: The request's runtime parameters.
+    :param dry_run: True for the dry-run URL, False for an action URL.
+    :return: The reason to refuse the request, or None.
+    """
+    try:
+        asked = read_flag(runtimeparams.get("dry_run"), "dry_run")
+        if asked and not dry_run:
+            return (
+                f"dry_run is not a runtime parameter of this URL; send the same "
+                f"body to {DRY_RUN_URL} for a dry run. Nothing was run"
+            )
+        if dry_run and "dry_run" in runtimeparams and not asked:
+            return "dry_run is false in the body of a dry run. Nothing was run"
+        if dry_run:
+            for key in DRY_RUN_REFUSED_KEYS:
+                if read_flag(runtimeparams.get(key), key):
+                    return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
+    except ValueError as exc:
+        return f"{exc}. Nothing was run"
+    return None
+
+
 class SocFractionError(ValueError):
     """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
 
