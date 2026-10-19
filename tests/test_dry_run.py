@@ -21,10 +21,12 @@ import sys
 import tempfile
 import time
 import types
+import uuid
 from contextlib import contextmanager
 from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiofiles
 import orjson
 import pandas as pd
 import pytest
@@ -382,9 +384,9 @@ def _adjusted_pv(params: dict) -> None:
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
 def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
-    """A model older than adjusted_pv_model_max_age is refitted. A live run
-    saves the new one; a dry run fits it in memory, as the live run would,
-    and leaves the saved one for the next live run."""
+    """A model older than adjusted_pv_model_max_age is refitted, live and dry
+    alike: the fit runs once either way. A live run saves the new model; a dry
+    run keeps it in memory and leaves the saved one for the next live run."""
     with _data_copy() as data_path:
         model = data_path / "adjust_pv_regressor.pkl"
         model.unlink(missing_ok=True)
@@ -393,10 +395,14 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
         old = time.time() - 48 * 3600
         os.utime(model, (old, old))
         before = _files(data_path)
-        idd, res = _run(data_path, "dayahead-optim", dry=dry, configure=_adjusted_pv)
+        fit = Forecast.adjust_pv_forecast_fit
+        with patch.object(
+            Forecast, "adjust_pv_forecast_fit", autospec=True, side_effect=fit
+        ) as spy:
+            idd, res = _run(data_path, "dayahead-optim", dry=dry, configure=_adjusted_pv)
         changed = _changed(before, _files(data_path))
     assert isinstance(res, pd.DataFrame)
-    assert getattr(idd["fcst"], "model_adjust_pv", None) is not None
+    assert spy.await_count == 1, "the stale model must be refitted, not reused"
     if dry:
         assert changed == []
     else:
@@ -404,8 +410,29 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
 
 
 # --------------------------------------------------------------------------
-# The weather caches: read on a dry run, never saved, refreshed or deleted
+# Forecast services: a dry run calls none, and plans with what live runs saved
 # --------------------------------------------------------------------------
+
+
+class _Fetched(BaseException):
+    """A forecast service was called. A BaseException, so that no fail-soft
+    `except Exception` on the way can hide the call."""
+
+
+class _NoService:
+    """An aiohttp session that raises _Fetched the moment it is used."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def get(self, url, headers=None):
+        raise _Fetched(url)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
 
 
 class _Response:
@@ -449,11 +476,11 @@ class _Session:
         return False
 
 
-def _open_meteo_payload() -> dict:
+def _open_meteo_payload(past_days: int = 1) -> dict:
     """An Open-Meteo answer in the unixtime format EMHASS asks for, covering
-    a day before now to four days after."""
+    `past_days` before now to four days after."""
     now = int(time.time()) // 900 * 900
-    times = list(range(now - 86400, now + 4 * 86400, 900))
+    times = list(range(now - past_days * 86400, now + 4 * 86400, 900))
     fields = {
         "temperature_2m": 15.0,
         "relative_humidity_2m": 60.0,
@@ -467,6 +494,28 @@ def _open_meteo_payload() -> dict:
     return {"minutely_15": {"time": times, **{k: [v] * len(times) for k, v in fields.items()}}}
 
 
+class _Records(logging.Handler):
+    """Keeps the messages logged to it."""
+
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+@contextmanager
+def _log(level: int = logging.INFO):
+    """A logger of its own at `level`, and the messages it gets."""
+    log = logging.getLogger(f"{__name__}.{uuid.uuid4().hex}")
+    log.setLevel(level)
+    log.propagate = False
+    records = _Records()
+    log.addHandler(records)
+    yield log, records.messages
+
+
 async def _forecast(data_path: pathlib.Path, dry: bool, log: logging.Logger) -> Forecast:
     """A Forecast on `data_path`, for a dry run or a live one."""
     params = await _params(data_path)
@@ -477,80 +526,182 @@ async def _forecast(data_path: pathlib.Path, dry: bool, log: logging.Logger) -> 
     return Forecast(retrieve_hass_conf, optim_conf, plant_conf, params_json, _conf(data_path), log)
 
 
-@pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
-def test_the_open_meteo_caches_are_refreshed_only_live(dry):
-    """With a stale Open-Meteo JSON cache, a stale weather cache and DEBUG
-    logging, a live run deletes the stale cache, fetches, saves the new JSON
-    and writes its debug CSV. A dry run fetches and plans with the fresh
-    forecast too, and leaves every file as it was."""
-    debug_log = logging.getLogger(f"{__name__}.debug")
-    debug_log.setLevel(logging.DEBUG)
-    debug_log.propagate = False
+def _no_saved_forecast(data_path: pathlib.Path) -> None:
+    """Remove every saved weather forecast from `data_path`."""
+    for name in (
+        "weather_forecast_data.pkl",
+        "cached-open-meteo-forecast-b.json",
+        "cached-open-meteo-covariates.json",
+    ):
+        (data_path / name).unlink(missing_ok=True)
+
+
+@contextmanager
+def _writes_spied():
+    """Every path forecast.py opens for writing."""
+    real_open = aiofiles.open
+    opened: list[str] = []
+
+    def spy(path, mode="r", *args, **kwargs):
+        if any(c in mode for c in "wax"):
+            opened.append(str(path))
+        return real_open(path, mode, *args, **kwargs)
+
+    with patch("emhass.forecast.aiofiles.open", spy):
+        yield opened
+
+
+def test_a_live_run_refreshes_a_stale_open_meteo_forecast():
+    """The control for the test below. With a stale Open-Meteo JSON cache, a
+    stale weather cache and DEBUG logging, a live run deletes the stale
+    cache, fetches once, saves the new JSON (through a temporary file, never
+    by rewriting the cache in place) and writes its debug CSV."""
     calls: list = []
     with (
         _data_copy() as data_path,
+        _log(logging.DEBUG) as (log, _),
         patch(
             "emhass.forecast.aiohttp.ClientSession",
             lambda *a, **k: _Session(_open_meteo_payload(), calls),
         ),
+        _writes_spied() as opened,
     ):
-        json_cache = data_path / "cached-open-meteo-forecast-b.json"
-        json_cache.write_bytes(orjson.dumps(_open_meteo_payload()))
-        stale = pd.DataFrame(
-            {"temp_air": [10.0, 11.0]},
-            index=pd.date_range("2020-01-01", periods=2, freq="30min", tz="UTC"),
-        )
-        (data_path / "weather_forecast_data.pkl").write_bytes(pickle.dumps(stale))
-        old = time.time() - 2 * 3600
-        os.utime(json_cache, (old, old))
-        for debug_csv in data_path.glob("debug-*.csv"):
-            debug_csv.unlink()
+        json_cache = _stale_open_meteo_caches(data_path)
         before = _files(data_path)
 
         async def fetch():
-            fcst = await _forecast(data_path, dry, debug_log)
-            return await fcst.get_weather_forecast(method="open-meteo")
+            return await (await _forecast(data_path, False, log)).get_weather_forecast(
+                method="open-meteo"
+            )
 
         weather = asyncio.run(fetch())
         changed = _changed(before, _files(data_path))
+        leftovers = list(data_path.glob("*.tmp"))
     assert isinstance(weather, pd.DataFrame) and len(weather) > 0
     assert len(calls) == 1, calls
-    if dry:
-        assert changed == []
-    else:
-        assert {
-            "cached-open-meteo-forecast-b.json",
-            "weather_forecast_data.pkl",
-            "debug-weather-forecast-open-meteo.csv",
-        } <= set(changed), changed
+    assert {
+        "cached-open-meteo-forecast-b.json",
+        "weather_forecast_data.pkl",
+        "debug-weather-forecast-open-meteo.csv",
+    } <= set(changed), changed
+    assert str(json_cache) not in opened and leftovers == []
+
+
+def _stale_open_meteo_caches(data_path: pathlib.Path) -> pathlib.Path:
+    """A two-hour-old Open-Meteo JSON cache, a weather cache that does not
+    cover the horizon, and no debug CSVs. Returns the JSON cache's path."""
+    _no_saved_forecast(data_path)
+    json_cache = data_path / "cached-open-meteo-forecast-b.json"
+    json_cache.write_bytes(orjson.dumps(_open_meteo_payload()))
+    stale = pd.DataFrame(
+        {"temp_air": [10.0, 11.0]},
+        index=pd.date_range("2020-01-01", periods=2, freq="30min", tz="UTC"),
+    )
+    (data_path / "weather_forecast_data.pkl").write_bytes(pickle.dumps(stale))
+    old = time.time() - 2 * 3600
+    os.utime(json_cache, (old, old))
+    for debug_csv in data_path.glob("debug-*.csv"):
+        debug_csv.unlink()
+    return json_cache
+
+
+def test_a_dry_run_plans_with_the_saved_open_meteo_forecast_however_old():
+    """The same stale caches, on a dry run: no call to Open-Meteo, a plan
+    from the saved forecast with a warning that says how old it is, and every
+    file left as it was."""
+    with (
+        _data_copy() as data_path,
+        _log(logging.DEBUG) as (log, messages),
+        patch("emhass.forecast.aiohttp.ClientSession", _NoService),
+    ):
+        _stale_open_meteo_caches(data_path)
+        before = _files(data_path)
+
+        async def fetch():
+            return await (await _forecast(data_path, True, log)).get_weather_forecast(
+                method="open-meteo"
+            )
+
+        weather = asyncio.run(fetch())
+        assert _changed(before, _files(data_path)) == []
+    assert isinstance(weather, pd.DataFrame) and len(weather) > 0
+    assert any("saved Open-Meteo forecast" in m and "minutes old" in m for m in messages)
+
+
+def _solcast(fcst: Forecast) -> None:
+    fcst.retrieve_hass_conf["solcast_api_key"] = "test-key"
+    fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test-roof"
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
-def test_the_covariates_cache_is_saved_only_live(dry):
-    """The ML forecaster's Open-Meteo covariates are fetched either way, and
-    cached only by a live run."""
-    payload = {"minutely_15": {"time": [], "temperature_2m": []}}
+@pytest.mark.parametrize("method", ["open-meteo", "solcast", "solar.forecast"])
+def test_with_no_saved_forecast_a_dry_run_calls_no_service(method, dry):
+    """With nothing saved, a live run calls the forecast service (the
+    control); a dry run calls none, spends no Solcast call budget, and plans as
+    if the service were down: no forecast, and a warning that says what to do."""
+    budget = MagicMock(return_value=True)
     with (
         _data_copy() as data_path,
-        patch(
-            "emhass.forecast.aiohttp.ClientSession",
-            lambda *a, **k: _Session(payload, []),
-        ),
+        _log() as (log, messages),
+        patch("emhass.forecast.aiohttp.ClientSession", _NoService),
+        patch.object(Forecast, "_solcast_rate_limit_ok", budget),
     ):
-        cache = data_path / "cached-open-meteo-covariates.json"
-        cache.unlink(missing_ok=True)
+        _no_saved_forecast(data_path)
 
         async def fetch():
-            fcst = await _forecast(data_path, dry, logger)
-            return await fcst._fetch_open_meteo_covariates_json(1, 1)
+            fcst = await _forecast(data_path, dry, log)
+            _solcast(fcst)
+            return await fcst.get_weather_forecast(method=method)
 
-        asyncio.run(fetch())
-        assert cache.exists() is not dry
+        if dry:
+            weather = asyncio.run(fetch())
+        else:
+            with pytest.raises(_Fetched):
+                asyncio.run(fetch())
+    if dry:
+        assert weather is None or weather is False
+        assert not budget.called
+        provider = {"open-meteo": "Open-Meteo", "solcast": "Solcast"}.get(method, method)
+        assert any(f"no usable {provider} forecast" in m for m in messages), messages
+
+
+@pytest.mark.parametrize("saved", [False, True], ids=["nothing-saved", "stale-saved"])
+@pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
+def test_the_covariates_are_fetched_only_live(dry, saved):
+    """The ML forecaster's Open-Meteo covariates: a live run fetches them when
+    the saved ones are stale or missing, and saves them; a dry run uses the
+    saved ones however old, or has none, and calls nothing either way."""
+    calls: list = []
+    session = _NoService if dry else (lambda *a, **k: _Session({"minutely_15": {}}, calls))
+    with (
+        _data_copy() as data_path,
+        _log() as (log, _),
+        patch("emhass.forecast.aiohttp.ClientSession", session),
+    ):
+        _no_saved_forecast(data_path)
+        cache = data_path / "cached-open-meteo-covariates.json"
+        if saved:
+            cache.write_bytes(orjson.dumps(_open_meteo_payload(past_days=3)))
+            old = time.time() - 2 * 3600
+            os.utime(cache, (old, old))
+        before = _files(data_path)
+
+        async def fetch():
+            return await (await _forecast(data_path, dry, log))._fetch_open_meteo_covariates_json(
+                1, 1
+            )
+
+        data = asyncio.run(fetch())
+        changed = _changed(before, _files(data_path))
+    if dry:
+        assert (data is not None) is saved
+        assert changed == []
+    else:
+        assert len(calls) == 1 and changed == ["cached-open-meteo-covariates.json"]
 
 
 def test_a_dry_run_does_not_save_the_weather_cache():
-    """set_cached_forecast_data, which weather_forecast_cache_only reaches on
-    a missing Solcast cache, saves nothing on a dry run."""
+    """set_cached_forecast_data saves nothing on a dry run."""
     with _data_copy() as data_path:
         cache = data_path / "weather_forecast_data.pkl"
         cache.unlink(missing_ok=True)
@@ -563,6 +714,28 @@ def test_a_dry_run_does_not_save_the_weather_cache():
         data = asyncio.run(save())
         assert not cache.exists()
     assert isinstance(data, pd.DataFrame)
+
+
+def test_a_live_run_replaces_the_weather_cache_whole():
+    """A live run writes the weather cache to a temporary file and moves it
+    into place, so a dry run reading it at the same moment sees the old cache
+    or the new one, never a partly written one."""
+    with _data_copy() as data_path, _writes_spied() as opened:
+        cache = data_path / "weather_forecast_data.pkl"
+        cache.write_bytes(pickle.dumps(pd.DataFrame({"yhat": [0.0]})))
+
+        async def save():
+            fcst = await _forecast(data_path, False, logger)
+            data = pd.DataFrame({"yhat": 1.0}, index=fcst.forecast_dates)
+            await fcst.set_cached_forecast_data(str(cache), data)
+            return data
+
+        data = asyncio.run(save())
+        saved = pickle.loads(cache.read_bytes())
+        leftovers = list(data_path.glob("*.tmp"))
+    assert opened and str(cache) not in opened
+    pd.testing.assert_frame_equal(saved, data)
+    assert leftovers == []
 
 
 # --------------------------------------------------------------------------
@@ -679,6 +852,8 @@ def test_an_action_url_runs_with_dry_run_false():
         ("naive-mpc-optim", {"dry_run": "maybe"}),
         ("naive-mpc-optim", "not json"),
         ("naive-mpc-optim", "[1, 2]"),
+        ("naive-mpc-optim", "null"),
+        ("naive-mpc-optim", '"text"'),
     ],
 )
 def test_the_dry_run_url_refuses_what_it_cannot_do(action, body):
@@ -786,6 +961,102 @@ def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run():
     assert [r["P_grid"] for r in answer["plan"]] != live["P_grid"].tolist()
 
 
+def test_an_empty_body_is_an_empty_request():
+    """No body at all is a request with no runtime parameters, as on
+    /action/<action>; it plans, and logs no error about the body."""
+    built = AsyncMock(return_value={"params": {"passed_data": {"dry_run": True}}})
+
+    async def wrapper(idd, log):
+        idd["run_record"] = last_run.snapshot("naive-mpc-optim", {}, "Optimal", False, 0.0, "1.0")
+        return _plan()
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+        patch.object(web_server, "naive_mpc_optim", wrapper),
+    ):
+
+        async def post():
+            response = await client.post("/api/v1/dry-run/naive-mpc-optim")
+            return response.status_code, await response.get_json()
+
+        status, answer = asyncio.run(post())
+    assert status == 200 and answer["errors"] == []
+    assert built.call_args.args[3] == "{}"
+
+
+def test_a_dry_run_with_no_saved_forecast_is_refused():
+    """End to end: a body without pv_power_forecast, and no forecast saved by a
+    live run. The dry run calls no service, and is refused (400): the warning
+    says what to pass, the error that the inputs could not be built."""
+    with _data_copy() as data_path:
+        _no_saved_forecast(data_path)
+        _write_params(data_path)
+        body = {k: v for k, v in FORECASTS.items() if k != "pv_power_forecast"}
+        with (
+            _web(data_path) as client,
+            _from_file(),
+            patch("emhass.forecast.aiohttp.ClientSession", _NoService),
+        ):
+
+            async def post():
+                response = await client.post("/api/v1/dry-run/dayahead-optim", json=body)
+                return response.status_code, await response.get_json()
+
+            status, answer = asyncio.run(post())
+    assert status == 400
+    _conforms(answer)
+    assert any("no usable Open-Meteo forecast" in w for w in answer["warnings"])
+    assert any("inputs could not be built" in e for e in answer["errors"])
+
+
+def test_a_dry_run_flag_left_in_saved_params_does_not_make_a_dry_run():
+    """Only the dry-run URL makes a dry run. A dry_run left in the saved
+    parameters (or the command line's --params) is dropped, so the live run
+    still writes its results."""
+
+    def stray(params: dict) -> None:
+        params["passed_data"]["dry_run"] = True
+
+    with _data_copy() as data_path:
+        before = _files(data_path)
+        idd, res = _run(data_path, "dayahead-optim", dry=False, configure=stray)
+        changed = _changed(before, _files(data_path))
+    assert isinstance(res, pd.DataFrame) and not is_dry_run(idd)
+    assert "last_run.json" in changed and "opt_res_latest.csv" in changed, changed
+
+
+@pytest.mark.parametrize("failure", ["home-assistant", "inputs"])
+def test_a_failed_setup_closes_the_home_assistant_session(failure):
+    """When the inputs cannot be built - Home Assistant's configuration is
+    unreadable, or a forecast is missing - set_input_data_dict closes the
+    session it opened before answering False."""
+    with (
+        _data_copy() as data_path,
+        patch.object(command_line.RetrieveHass, "close", AsyncMock()) as close,
+        patch.object(command_line.RetrieveHass, "get_ha_config", AsyncMock(return_value=False)),
+        patch.object(command_line, "_prepare_dayahead_optim", AsyncMock(return_value=None)),
+    ):
+
+        async def build():
+            params = await _params(data_path)
+            return await set_input_data_dict(
+                _conf(data_path),
+                "profit",
+                orjson.dumps(params).decode(),
+                orjson.dumps(FORECASTS).decode(),
+                "dayahead-optim",
+                logger,
+                get_data_from_file=failure == "inputs",
+                dry_run=True,
+            )
+
+        assert asyncio.run(build()) is False
+    close.assert_awaited_once()
+
+
 # --------------------------------------------------------------------------
 # A request's outcome is its own: concurrent requests cannot mix them up
 # --------------------------------------------------------------------------
@@ -810,6 +1081,7 @@ def _overlapping(dry_wrapper, live_wrapper):
         tempfile.TemporaryDirectory() as tmp,
         _web(pathlib.Path(tmp)) as client,
         patch.object(web_server, "_load_params_and_runtime", _loaded({})),
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
         patch.object(web_server, "set_input_data_dict", build),
         patch.object(web_server, "naive_mpc_optim", dry_wrapper),
         patch.object(web_server, "dayahead_forecast_optim", live_wrapper),

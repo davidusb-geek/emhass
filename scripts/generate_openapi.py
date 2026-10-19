@@ -299,8 +299,9 @@ def build_spec(routes: set | None = None) -> dict:
                 "description": (
                     "Takes the body of POST /action/{action_name}. Solves as that action "
                     "does, and writes no results file, entity, plan, last-run record, cache "
-                    "or model, and publishes nothing. An EMHASS without this route answers "
-                    "404, so it never runs a live solve instead."
+                    "or model, publishes nothing, and calls no forecast service: it plans "
+                    "with the forecasts in the body or those live runs saved. An EMHASS "
+                    "without this route answers 404, so it never runs a live solve instead."
                 ),
                 "externalDocs": {
                     "description": "Plan output field reference",

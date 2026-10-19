@@ -2658,6 +2658,10 @@ async def treat_runtimeparams(
             params["passed_data"][key] = value
     else:
         params["passed_data"] = default_passed_dict
+    # Only set_input_data_dict's dry_run argument, which only the dry-run URL
+    # passes, makes a dry run. A dry_run left in saved or passed params must
+    # not turn a live run into one that writes nothing.
+    params["passed_data"].pop("dry_run", None)
 
     # Capture defaults for power limits before association loop
     power_limit_defaults = {
