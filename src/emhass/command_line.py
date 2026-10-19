@@ -2316,6 +2316,43 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
+    # Close the Home Assistant session when setting up fails, by an exception
+    # or by answering False: the caller closes it only after a success.
+    opened: list[RetrieveHass] = []
+    try:
+        input_data_dict = await _set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params,
+            runtimeparams,
+            set_type,
+            logger,
+            get_data_from_file,
+            dry_run,
+            opened,
+        )
+    except BaseException:
+        for rh in opened:
+            await rh.close()
+        raise
+    if not input_data_dict:
+        for rh in opened:
+            await rh.close()
+    return input_data_dict
+
+
+async def _set_input_data_dict(
+    emhass_conf: dict,
+    costfun: str,
+    params: str,
+    runtimeparams: str,
+    set_type: str,
+    logger: logging.Logger,
+    get_data_from_file: bool | None,
+    dry_run: bool,
+    opened: list,
+) -> dict:
+    """set_input_data_dict's work. Each RetrieveHass it creates goes in ``opened``."""
     stage_times = {}
     logger.info("Setting up needed data")
     # Parse Parameters
@@ -2360,13 +2397,13 @@ async def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file,
     )
+    opened.append(rh)
     # Retrieve HA config
     if get_data_from_file:
         async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             content = await inp.read()
             _, _, _, rh.ha_config = pickle.loads(content)
     elif not await rh.get_ha_config():
-        await rh.close()
         return False
     if isinstance(params, dict):
         params_str = orjson.dumps(params).decode("utf-8")
@@ -2557,7 +2594,6 @@ async def set_input_data_dict(
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
         result = {}
     if result is None:
-        await rh.close()
         return False
     # Opt-in battery self-identification (observe/suggest). Runs alongside the
     # optimization prep for the two live optim actions; never affects the
@@ -4646,14 +4682,17 @@ async def main():
     # Add any passed params from args to params
     if args.params:
         params.update(orjson.loads(args.params))
-    # A dry run is the web server's dry-run URL. Asked for here, it is refused
-    # rather than run live, which would replace the plan the caller meant to keep.
+    # A dry run is the web server's dry-run URL. Asked for here, in the runtime
+    # parameters or in --params' passed_data, it is refused rather than run
+    # live, which would replace the plan the caller meant to keep.
     try:
         runtime = orjson.loads(args.runtimeparams) if args.runtimeparams else {}
     except orjson.JSONDecodeError:
         runtime = {}  # reported where the parameters are read
-    if isinstance(runtime, dict):
-        problem = utils.dry_run_request_problem(runtime, dry_run=False)
+    for asked in (runtime, params.get("passed_data")):
+        problem = (
+            utils.dry_run_request_problem(asked, dry_run=False) if isinstance(asked, dict) else None
+        )
         if problem:
             logger.error(problem)
             raise Exception(problem)

@@ -2934,8 +2934,12 @@ class Forecast:
         """
         # Read then close the file BEFORE any _drop_cache below: on Windows a file
         # cannot be unlinked while a handle is still open (PermissionError WinError 32).
-        async with aiofiles.open(w_forecast_cache_path, "rb") as file:
-            content = await file.read()
+        try:
+            async with aiofiles.open(w_forecast_cache_path, "rb") as file:
+                content = await file.read()
+        except FileNotFoundError:
+            # Removed since the caller saw it, by a run dropping a stale cache: no cache.
+            return None
         data = pickle.loads(content)
         if not isinstance(data, pd.DataFrame) or data.empty:
             self.logger.error("Cache file is corrupt or empty.")
