@@ -570,28 +570,8 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     """
     action_str = " >> Obtaining params: "
     logger.info(action_str)
-
-    # Load params.pkl
-    params = None
-    costfun = "profit"
-    params_path = emhass_conf["data_path"] / params_file
-
-    if params_path.exists():
-        async with aiofiles.open(str(params_path), "rb") as fid:
-            content = await fid.read()
-            try:
-                _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
-            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
-                logger.error(
-                    "params.pkl is corrupted or truncated (race condition); cannot proceed"
-                )
-                return None, None, None
-            # Set local costfun variable
-            if params.get("optim_conf") is not None:
-                costfun = params["optim_conf"].get("costfun", "profit")
-            params = orjson.dumps(params).decode()
-    else:
-        logger.error("Unable to find params.pkl file")
+    params, costfun = await _load_params(emhass_conf, logger)
+    if params is None:
         return None, None, None
 
     # Load runtime params
@@ -609,6 +589,35 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     runtimeparams = orjson.dumps(runtimeparams).decode()
 
     return params, costfun, runtimeparams
+
+
+async def _load_params(emhass_conf, logger):
+    """Load the configuration parameters saved in params.pkl.
+
+    Returns (params as a JSON string, costfun), or (None, None) on failure.
+    """
+    params = None
+    costfun = "profit"
+    params_path = emhass_conf["data_path"] / params_file
+
+    if params_path.exists():
+        async with aiofiles.open(str(params_path), "rb") as fid:
+            content = await fid.read()
+            try:
+                _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
+            except (EOFError, pickle.UnpicklingError, UnicodeDecodeError):
+                logger.error(
+                    "params.pkl is corrupted or truncated (race condition); cannot proceed"
+                )
+                return None, None
+            # Set local costfun variable
+            if params.get("optim_conf") is not None:
+                costfun = params["optim_conf"].get("costfun", "profit")
+            params = orjson.dumps(params).decode()
+    else:
+        logger.error("Unable to find params.pkl file")
+        return None, None
+    return params, costfun
 
 
 async def _handle_action_dispatch(
@@ -836,7 +845,9 @@ async def api_v1_dry_run(action_name: str):
 
     The body is the action's body. Nothing is written: no results CSV, entity
     file, plan store, last-run record, weather cache, model or publish, and
-    the OptimizationCache is left as the last live run left it. The response
+    the OptimizationCache is left as the last live run left it. No forecast
+    service is called: it plans with the forecasts in the body, or those live
+    runs saved, so it spends no provider's quota. The response
     carries the run record /api/v1/last-run would have served, the plan
     /api/v1/plan would have served, and the warnings and errors this request
     logged, and no other request's.
@@ -869,6 +880,12 @@ async def api_v1_dry_run(action_name: str):
     return response
 
 
+def _explain(message: str) -> None:
+    """Log ``message`` as the dry run's error, unless it has logged one already."""
+    if not any(level >= logging.ERROR for level, _ in _dry_run_log.get() or []):
+        app.logger.error(message)
+
+
 async def _dry_run(action_name: str) -> tuple[dict, int]:
     """Run ``action_name`` as a dry run. Returns (body, HTTP status)."""
     not_run = {"status": "not-run", "plan": None}
@@ -882,13 +899,15 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
             f"A dry run is for {', '.join(DRY_RUN_ACTIONS)}, not {action_name!r}. Nothing was run"
         )
         return not_run, 400
-    try:
-        runtime = await request.get_json(force=True)
-    except Exception as exc:  # noqa: BLE001 - a body that is not JSON
-        app.logger.error(f"The body is not JSON ({exc}). Nothing was run")
-        return not_run, 400
-    if runtime is None:
-        runtime = {}
+    raw = await request.get_data()
+    if not raw.strip():
+        runtime = {}  # no body, as /action/<action> allows
+    else:
+        try:
+            runtime = orjson.loads(raw)
+        except orjson.JSONDecodeError as exc:
+            app.logger.error(f"The body is not JSON ({exc}). Nothing was run")
+            return not_run, 400
     if not isinstance(runtime, dict):
         app.logger.error("The body must be a JSON object. Nothing was run")
         return not_run, 400
@@ -898,8 +917,11 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
     runtime.pop("dry_run", None)
 
-    params, costfun, _ = await _load_params_and_runtime(request, emhass_conf, app.logger)
+    if runtime:
+        app.logger.info(f"Passed runtime parameters: {runtime}")
+    params, costfun = await _load_params(emhass_conf, app.logger)
     if params is None:
+        _explain("The configuration could not be read. Nothing was run")
         return not_run, 400
     input_data_dict = await set_input_data_dict(
         emhass_conf,
@@ -911,6 +933,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         dry_run=True,
     )
     if not input_data_dict:
+        _explain("The inputs could not be built; see the warnings. Nothing was solved")
         return not_run, 400
     try:
         opt_res = await wrappers[action_name](input_data_dict, app.logger)
@@ -920,6 +943,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
     # False: the action stopped before the solver, e.g. on a rejected runtime
     # forecast (#1135); there is no plan.
     if not isinstance(opt_res, pd.DataFrame):
+        _explain("The run stopped before the solver; see the warnings. Nothing was solved")
         return not_run, 400
     run = input_data_dict.get("run_record")
     if run is None:

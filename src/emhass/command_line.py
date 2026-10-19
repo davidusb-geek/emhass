@@ -2366,6 +2366,7 @@ async def set_input_data_dict(
             content = await inp.read()
             _, _, _, rh.ha_config = pickle.loads(content)
     elif not await rh.get_ha_config():
+        await rh.close()
         return False
     if isinstance(params, dict):
         params_str = orjson.dumps(params).decode("utf-8")
@@ -2556,6 +2557,7 @@ async def set_input_data_dict(
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
         result = {}
     if result is None:
+        await rh.close()
         return False
     # Opt-in battery self-identification (observe/suggest). Runs alongside the
     # optimization prep for the two live optim actions; never affects the

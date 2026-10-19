@@ -25,7 +25,7 @@ An EMHASS older than 0.18.7 answers 404 at this URL. It never runs a live solve 
 | HTTP | `status` | Meaning |
 | --- | --- | --- |
 | 200 | `ok`, `infeasible` or `error` | The solver ran. `status` is what `/api/v1/last-run` would report; only an `ok` plan would have replaced `/api/v1/plan`. |
-| 400 | `not-run` | The request was refused, or the run stopped before the solver (for example on a rejected forecast). `errors` says why. |
+| 400 | `not-run` | The request was refused, or the run stopped before the solver (for example on a rejected forecast, or with no saved forecast to plan with). `errors` and `warnings` say why. |
 | 500 | `not-run` | The run failed. `errors` says why. |
 
 The JSON body ([schema](https://github.com/davidusb-geek/emhass/blob/master/docs/api/v1/dry-run.schema.json)) has:
@@ -36,6 +36,16 @@ The JSON body ([schema](https://github.com/davidusb-geek/emhass/blob/master/docs
 - `plan`: the records that `/api/v1/plan` would have served, with each row's `optim_status`. It is returned whatever the status, so you can see what an infeasible what-if gave. It is `null` when nothing was solved;
 - `warnings` and `errors`: the ones this request logged, and no other request's.
 
+## No forecast service is called
+
+A dry run calls no forecast service, so it never spends a provider's quota: not Solcast's daily calls, not solar.forecast's hourly ones, not Open-Meteo's. It plans with the forecasts in the body, or with the forecasts your live runs saved:
+
+- **Open-Meteo:** the saved forecast is used however old it is. When it is older than `open_meteo_cache_max_age`, the response has a warning with its age: a live run at that moment would fetch a fresh one. The ML forecaster's weather covariates work the same way.
+- **Solcast and solar.forecast:** the saved forecast is used, as live MPC runs with `weather_forecast_cache_only` use it.
+- **Nothing saved:** the dry run plans as if the service were down. Where a live run would then have no PV forecast, the dry run is refused (400), and the warning says what to do: pass `pv_power_forecast` in the body, or let a live run save a forecast first.
+
+For a what-if that must use exactly the forecast you mean, pass it as a list, as in [Passing data](passing_data.md).
+
 ## What a dry run leaves as it was
 
 A dry run reads every cache, model and file a live run reads, and writes none of them:
@@ -45,7 +55,7 @@ A dry run reads every cache, model and file a live run reads, and writes none of
 - no change to `/api/v1/plan` or `/api/v1/last-run`, in memory or on disk;
 - no publish to Home Assistant;
 - the in-memory `OptimizationCache` is not read or written. The next live solve gets the same cached problem, configuration and warm-start values. The dry run itself solves from a cold start;
-- the weather caches (the Open-Meteo JSON caches and `weather_forecast_data.pkl`) are not saved, refreshed or deleted. A stale cache is fetched afresh for the dry run only;
+- the weather caches (the Open-Meteo JSON caches and `weather_forecast_data.pkl`) are not saved, refreshed or deleted. A live run replaces them whole, so a dry run reading one at the same moment sees the old file or the new one;
 - a stale adjusted-PV model is refitted in memory, as the live run would refit it, and not saved. Each dry run refits it again until the next live run saves a new one;
 - battery identification does not run;
 - the page's results table (`injection_dict.pkl`) is not saved;
@@ -53,8 +63,8 @@ A dry run reads every cache, model and file a live run reads, and writes none of
 
 ## What it does not cover
 
-- Forecast services are called as in a live run. Open-Meteo, Solcast and solar.forecast fetches count against their quotas, and Solcast's daily call counter counts them. For repeatable what-ifs, pass the forecasts as lists, as in [Passing data](passing_data.md).
 - Home Assistant is read, as in a live run.
+- Like `/action/<action>`, this URL has no authentication. Keep EMHASS on a trusted network, or behind Home Assistant's ingress. A dry run uses CPU as an action does, but spends no forecast quota.
 - The machine learning actions (`forecast-model-fit` and the others), `publish-data`, `weather-forecast-cache` and the other actions have no dry run.
 - The HTTP status of a live `/action/<action>` request is still read from the shared action log. A dry run cannot change it, because its records stay out of that log.
 
@@ -62,5 +72,5 @@ A dry run reads every cache, model and file a live run reads, and writes none of
 
 So that no caller gets a live run it did not ask for, and no caller believes something was saved:
 
-- `dry_run` as a runtime parameter of `/action/<action>`, or of the command line, unless it is `false`: 400, and nothing runs. Older releases ignore the parameter and run live, so use the dry-run URL.
-- On the dry-run URL: an action without a dry run; `dry_run` set to anything but `true`; `entity_save` or `weather_forecast_cache` set to true (they ask for a write); a body that is not a JSON object. Each gives 400, and nothing runs. `weather_forecast_cache_only` is allowed: it only reads.
+- `dry_run` as a runtime parameter of `/action/<action>`, or of the command line, unless it is `false`: 400, and nothing runs. Older releases ignore the parameter and run live, so use the dry-run URL. A `dry_run` left in the saved configuration is ignored: only the dry-run URL makes a dry run.
+- On the dry-run URL: an action without a dry run; `dry_run` set to anything but `true`; `entity_save` or `weather_forecast_cache` set to true (they ask for a write); a body that is not a JSON object (`null` included; an empty body is fine). Each gives 400, and nothing runs. `weather_forecast_cache_only` is allowed: it only reads.
