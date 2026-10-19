@@ -178,7 +178,7 @@
     "/api/v1/dry-run/{action_name}": {
       "post": {
         "summary": "Solve an optimization and return the plan, writing nothing",
-        "description": "Takes the body of POST /action/{action_name}. Solves as that action does, and writes no results file, entity, plan, last-run record, cache or model, and publishes nothing. An EMHASS without this route answers 404, so it never runs a live solve instead.",
+        "description": "Takes the body of POST /action/{action_name}. Solves as that action does, and writes no results file, entity, plan, last-run record, cache or model, publishes nothing, and calls no forecast service: it plans with the forecasts in the body or those live runs saved. An EMHASS without this route answers 404, so it never runs a live solve instead.",
         "externalDocs": {
           "description": "Plan output field reference",
           "url": "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
