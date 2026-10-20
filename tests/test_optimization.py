@@ -14384,12 +14384,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             hi=21.5,
             thermal_inertia=1.0,
             prior_heat=[3.0, 3.0],
+            # A comfort target above the maximum pulls toward heating: only a
+            # priced maximum (not a dropped one) keeps the heater from adding to
+            # the excess.
+            desired_temperatures=23.0,
+            penalty_factor=10,
         )
         with self.assertLogs(logger, level="INFO") as logs:
             opt, res = self._solve_tanks([zone], outdoor=5.0, price=0.25)
         self.assertEqual(opt.optim_status, "Optimal")
         self.assertTrue(any("free gains" in line for line in logs.output))
-        self.assertGreater(res["predicted_temp_heater0"].max(), 21.5 + 0.1)
+        temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        power = res["P_deferrable0"].to_numpy(dtype=float)
+        self.assertGreater(temp.max(), 21.5 + 0.1)
+        # In flight: 3 kWh per step on 6 kWh/K, so +0.5 K in each dead-zone step.
+        self.assertAlmostEqual(temp.max(), 22.0, delta=0.02)
+        self.assertLess(power[np.where(temp[1:] > 21.5 + 0.01)[0]].max(), 1.0)
 
     def test_a_maximum_the_plan_can_keep_stays_hard(self):
         """The same house with less glass stays inside its band: nothing is priced
@@ -16545,10 +16555,37 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         base = run()
         seeded = run(prior_heat=[3000.0, 3000.0])
-        # heat_factor = heating_rate * dt / nominal = 10*0.5/3000 -> 3000 W = +5 K/step
-        self.assertGreater(
-            seeded[1], base[1] + 1.0, "per-load dead zone must honour in-flight heat"
+        # heat_factor = heating_rate * dt / nominal = 10*0.5/3000 -> 3000 W = +5 K/step.
+        # The loss of the first step depends on the start only, so the difference is
+        # exactly that (the published temperatures are rounded to 0.01 K).
+        self.assertAlmostEqual(
+            seeded[1] - base[1],
+            5.0,
+            delta=0.02,
+            msg="per-load dead zone must honour in-flight heat",
         )
+
+    def test_prior_heat_for_a_lag_clamped_to_the_horizon_uses_the_oldest_values(self):
+        """When the lag is longer than the horizon, the heat that arrives within it
+        is the oldest part of the queue, not the most recent."""
+        opt = self.create_optimization()
+        np.testing.assert_array_equal(
+            opt._resolve_prior_heat([1.0, 2.0, 3.0, 4.0], 2, "Load 0", full_lag=4), [1.0, 2.0]
+        )
+        # Without a clamp the full queue is in flight: unchanged.
+        np.testing.assert_array_equal(
+            opt._resolve_prior_heat([1.0, 2.0], 2, "Load 0", full_lag=2), [1.0, 2.0]
+        )
+        # A short list for a clamped lag is right-aligned in the full queue.
+        np.testing.assert_array_equal(
+            opt._resolve_prior_heat([3.0, 4.0], 2, "Load 0", full_lag=4), [0.0, 0.0]
+        )
+
+    def test_prior_heat_booleans_are_rejected(self):
+        """float(True) is 1.0: a boolean in prior_heat is a configuration error."""
+        opt = self.create_optimization()
+        with self.assertRaisesRegex(ValueError, "booleans"):
+            opt._resolve_prior_heat([True, 1.0], 2, "Load 0")
 
     def test_shared_tank_prior_heat_rejects_invalid_values(self):
         """prior_heat is runtime state fed from a plan or a sensor, so bad values
@@ -16579,13 +16616,21 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         trajectory above the no-prior-heat baseline."""
         _, base = self._run_shared_tank_lag()
         _, seeded = self._run_shared_tank_lag(prior_heat=[8.0, 8.0])
-        # conversion = 1/8 kWh/K, so 8 kWh in flight is +1.0 K per dead-zone step
-        self.assertGreater(
-            seeded[1],
-            base[1] + 0.5,
-            "in-flight heat from the previous run must warm the first dead-zone step",
+        # conversion = 1/8 K/kWh, so 8 kWh in flight is +1.0 K per dead-zone step. The
+        # first step's loss depends on the start only; in the second the warmer zone
+        # loses UA * dt * 1 K more: 1 + 1 - 0.125 * 0.3 * 0.5 * 1 = 1.98125 K.
+        self.assertAlmostEqual(
+            seeded[1] - base[1],
+            1.0,
+            delta=0.02,
+            msg="in-flight heat from the previous run must warm the first dead-zone step",
         )
-        self.assertGreater(seeded[2], base[2] + 0.5, "the second dead-zone step must be seeded too")
+        self.assertAlmostEqual(
+            seeded[2] - base[2],
+            2.0 - 0.125 * 0.3 * 0.5,
+            delta=0.02,
+            msg="the second dead-zone step must be seeded too",
+        )
 
     def test_shared_tank_prior_heat_without_lag_is_logged(self):
         """With no thermal_inertia there is no dead zone to seed, so prior_heat

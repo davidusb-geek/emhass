@@ -1485,6 +1485,22 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
 )
 
 
+def _prior_heat_values(series):
+    """(values, None) for a usable shared_tank_prior_heat list, else (None, why)."""
+    if isinstance(series, str) or not isinstance(series, list | tuple):
+        return None, f"must be a list of numbers, got {type(series).__name__}"
+    try:
+        # A boolean is not heat (float(True) would be 1.0).
+        if any(isinstance(v, bool) for v in series):
+            raise TypeError("boolean entry")
+        values = [float(v) for v in series]
+    except (TypeError, ValueError, OverflowError):
+        return None, f"={series!r} is not all numeric"
+    if any(v < 0 or not np.isfinite(v) for v in values):
+        return None, "must be finite and >= 0"
+    return values, None
+
+
 def _restore_configured_shared_tanks(params: dict, configured) -> None:
     """Undo the unchecked association copy of a rejected runtime tank list."""
     if configured is None:
@@ -3733,34 +3749,29 @@ async def treat_runtimeparams(
                         sorted(i for i in tank_ids if i is not None),
                     )
                     continue
-                if isinstance(series, str) or not isinstance(series, list | tuple):
+                matching = [t for t in tanks if isinstance(t, dict) and str(t.get("id")) == tank_id]
+                if len(matching) > 1:
+                    # Two tanks whose ids read the same as text (0 and "0"): the
+                    # key cannot say which one is meant.
                     logger.warning(
-                        "shared_tank_prior_heat['%s'] must be a list of numbers, got %s; ignoring.",
+                        "shared_tank_prior_heat['%s'] matches %d tanks whose ids read the "
+                        "same; ignoring.",
                         tank_id,
-                        type(series).__name__,
+                        len(matching),
                     )
                     continue
-                try:
-                    # A boolean is not heat (float(True) would be 1.0).
-                    if any(isinstance(v, bool) for v in series):
-                        raise TypeError("boolean entry")
-                    values = [float(v) for v in series]
-                except (TypeError, ValueError, OverflowError):
+                values, problem = _prior_heat_values(series)
+                if problem is not None:
+                    # A bad runtime value starts that tank cold for the run, as
+                    # documented: a configured prior_heat would be stale here.
                     logger.warning(
-                        "shared_tank_prior_heat['%s']=%r is not all numeric; ignoring.",
+                        "shared_tank_prior_heat['%s'] %s; ignoring, the tank starts cold.",
                         tank_id,
-                        series,
+                        problem,
                     )
+                    matching[0].pop("prior_heat", None)
                     continue
-                if any(v < 0 or not np.isfinite(v) for v in values):
-                    logger.warning(
-                        "shared_tank_prior_heat['%s'] must be finite and >= 0; ignoring.",
-                        tank_id,
-                    )
-                    continue
-                for tank in tanks:
-                    if isinstance(tank, dict) and str(tank.get("id")) == tank_id:
-                        tank["prior_heat"] = values
+                matching[0]["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,

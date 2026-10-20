@@ -3636,7 +3636,9 @@ class Optimization:
         # horizon still can: prior_heat is that in-flight input power (W, oldest
         # first), converted by the same heat_factor as p_deferrable. Zero when absent,
         # so a plain day-ahead solve keeps its cold-start assumption.
-        prior_heat = self._resolve_prior_heat(hc.get("prior_heat"), L, f"Load {k}")
+        prior_heat = self._resolve_prior_heat(
+            hc.get("prior_heat"), L, f"Load {k}", full_lag=int(thermal_inertia / self.time_step)
+        )
         if L > 0:
             constraints.append(
                 predicted_temp[1 : 1 + L]
@@ -3727,7 +3729,7 @@ class Optimization:
         """
         return loss_kw * self.time_step
 
-    def _resolve_prior_heat(self, raw, lag_steps, label):
+    def _resolve_prior_heat(self, raw, lag_steps, label, full_lag=None):
         """Return the length-`lag_steps` initial condition for a lagged thermal model.
 
         With `thermal_inertia` the heat produced at step t only reaches the store at
@@ -3744,6 +3746,11 @@ class Optimization:
         still in flight - and a long one keeps its last `lag_steps` entries; either
         is logged. None or empty yields zeros, i.e. exactly the previous behaviour.
         With no lag the value is ignored, which is logged too.
+
+        `full_lag` is the lag before it was clamped to the horizon. When it is
+        longer than `lag_steps`, the list is aligned to the full lag and the
+        OLDEST in-flight values are used: they are the ones that arrive within
+        the horizon.
         """
         prior = np.zeros(max(int(lag_steps), 0))
         if raw is None:
@@ -3757,9 +3764,12 @@ class Optimization:
             raise ValueError(
                 f"{label}: prior_heat must be a list of numbers, got {type(raw).__name__}"
             )
+        if any(isinstance(v, bool | np.bool_) for v in raw):
+            # float(True) would be 1.0: a boolean is not heat.
+            raise ValueError(f"{label}: prior_heat entries must be numbers, not booleans")
         try:
             vals = [float(v) for v in raw]
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(f"{label}: prior_heat entries must be numeric ({exc})") from exc
         if any(not np.isfinite(v) for v in vals):
             raise ValueError(f"{label}: prior_heat entries must be finite")
@@ -3768,21 +3778,25 @@ class Optimization:
                 f"{label}: prior_heat entries must be >= 0 (magnitude of delivered heat; "
                 "the tank's sense already sets the direction)"
             )
-        if len(vals) != prior.size:
+        # The heat in flight is a queue of the full lag; the horizon (clamped lag)
+        # sees its oldest part.
+        queue = np.zeros(max(int(full_lag or 0), prior.size))
+        if len(vals) != queue.size:
             # Not an error (a short list is expected after a restart), but the
             # alignment must not be silent: a misjudged lag shifts the heat in flight.
             self.logger.info(
                 "%s: prior_heat has %d values for a %d-step lag; %s",
                 label,
                 len(vals),
-                prior.size,
+                queue.size,
                 "using the most recent ones"
-                if len(vals) > prior.size
+                if len(vals) > queue.size
                 else "aligned to the most recent steps, earlier ones are 0",
             )
-        vals = vals[-prior.size :]
+        vals = vals[-queue.size :]
         if vals:
-            prior[prior.size - len(vals) :] = vals
+            queue[queue.size - len(vals) :] = vals
+        prior[:] = queue[: prior.size]
         return prior
 
     def _resolve_draw_off_demand(self, hc, base_loss, required_len):
@@ -4922,7 +4936,12 @@ class Optimization:
         # sense_coeff flips the SOURCE term so a cool-sense tank's sources remove heat
         # (a reversible heat pump in cooling mode lowers the tank temperature); the
         # tank->tank transfers, demand and losses keep their physical signs.
-        prior_heat = self._resolve_prior_heat(tank.get("prior_heat"), L, f"Shared tank {tank_id}")
+        prior_heat = self._resolve_prior_heat(
+            tank.get("prior_heat"),
+            L,
+            f"Shared tank {tank_id}",
+            full_lag=int(float(tank.get("thermal_inertia", 0.0)) / self.time_step),
+        )
         if L <= 0:
             constraints.append(
                 predicted_temp[1:]
