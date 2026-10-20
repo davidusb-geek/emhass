@@ -163,10 +163,6 @@ so each plan starts from reality:
 per storage id without resending the whole topology. The topology is rebuilt
 every run, so the override takes effect immediately.
 
-If a storage has `thermal_inertia`, also send the heat that is still on its way
-with `shared_tank_prior_heat`; see
-[heat_topology](../heat_topology.md#rolling-mpc).
-
 ## 4. Publish and check the results
 
 `publish-data` creates one sensor per load, by default:
