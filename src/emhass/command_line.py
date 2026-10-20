@@ -3173,9 +3173,9 @@ async def forecast_model_fit(
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        async with aiofiles.open(filename_path, "wb") as outp:
-            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
-            logger.debug("saved model to " + str(filename_path))
+        # Whole, so a run loading the model at the same moment never reads half of it.
+        await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
+        logger.debug("saved model to " + str(filename_path))
     return df_pred, df_pred_backtest, mlf
 
 
@@ -3450,9 +3450,9 @@ async def forecast_model_tune(
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        async with aiofiles.open(filename_path, "wb") as outp:
-            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
-            logger.debug("Saved model to " + str(filename_path))
+        # Whole, so a run loading the model at the same moment never reads half of it.
+        await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
+        logger.debug("Saved model to " + str(filename_path))
     return df_pred_optim, mlf
 
 

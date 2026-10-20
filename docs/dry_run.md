@@ -27,7 +27,7 @@ An EMHASS older than 0.18.7 answers 404 at this URL. It never runs a live solve 
 | 200 | `ok`, `infeasible` or `error` | The solver ran. `status` is what `/api/v1/last-run` would report; only an `ok` plan would have replaced `/api/v1/plan`. |
 | 400 | `not-run` | The request was refused, or the run stopped before the solver (for example on a rejected forecast, or with no saved forecast to plan with). `errors` and `warnings` say why. |
 | 413 | `not-run` | The body is over 16 MB (Quart's `MAX_CONTENT_LENGTH`, as for `/action/<action>`). |
-| 429 | `not-run` | Another dry run is running: one runs at a time, so a burst of dry runs never queues ahead of a live run. Retry after the `Retry-After` seconds. |
+| 429 | `not-run` | Another dry run is running: one runs at a time on an EMHASS, across all its workers (`WEB_CONCURRENCY`), so a burst of dry runs never queues ahead of a live run. Retry after the `Retry-After` seconds. |
 | 500 | `not-run` | The run failed. `errors` says why. |
 
 The JSON body ([schema](https://github.com/davidusb-geek/emhass/blob/master/docs/api/v1/dry-run.schema.json)) has:
@@ -58,7 +58,7 @@ A dry run reads every cache, model and file a live run reads, and writes none of
 - no publish to Home Assistant;
 - the in-memory `OptimizationCache` is not read or written. The next live solve gets the same cached problem, configuration and warm-start values. The dry run itself solves from a cold start;
 - the weather caches (the Open-Meteo JSON caches and `weather_forecast_data.pkl`) are not saved, refreshed or deleted. A live run replaces them whole, so a dry run reading one at the same moment sees the old file or the new one;
-- a stale adjusted-PV model is refitted in memory, as the live run would refit it, and not saved. Each dry run refits it again until the next live run saves a new one;
+- a stale adjusted-PV model is refitted in memory, as the live run would refit it, and not saved. Each dry run refits it again until the next live run saves a new one. A live run writes the model, and the ML forecaster's, whole, so a dry run loading one at the same moment never reads half of it;
 - battery identification does not run;
 - the page's results table (`injection_dict.pkl`) is not saved;
 - its log records do not go to the action log. They go to the console and to the response.

@@ -3,11 +3,13 @@
 import argparse
 import asyncio
 import contextvars
+import hashlib
 import logging
 import os
 import pickle
 import platform
 import re
+import tempfile
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -62,6 +64,8 @@ from emhass.utils import (
     inverter_power_curve_faults,
     param_to_config,
     read_flag,
+    try_lock_file,
+    unlock_file,
 )
 
 app = Quart(__name__)
@@ -114,9 +118,14 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
 
 app.logger.addHandler(_DryRunLog())
 
-# One dry run at a time: a burst of them, which cold-solve, must never queue
-# ahead of the live MPC run. One that arrives while another runs gets 429.
-_dry_run_running = asyncio.Lock()
+
+def _dry_run_slot() -> Path:
+    """The lock file that lets one dry run at a time run on this EMHASS, across
+    all its Gunicorn workers. It is outside the data folder, where a dry run
+    writes nothing, and named after that folder, so two EMHASS on one host
+    each have their own."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
 
 
 # Add custom filter for trusted HTML content
@@ -871,15 +880,22 @@ async def api_v1_dry_run(action_name: str):
     token = _dry_run_log.set(records)
     headers = {}
     try:
-        if _dry_run_running.locked():
-            app.logger.error(
-                "Another dry run is running, and one runs at a time. Retry shortly. Nothing was run"
-            )
-            body, code = {"status": "not-run", "plan": None}, 429
-            headers["Retry-After"] = "2"
-        else:
-            async with _dry_run_running:
-                body, code = await _dry_run(action_name)
+        # One dry run at a time: a burst of them, which cold-solve, must never
+        # queue ahead of the live MPC run. One that arrives while another runs,
+        # on this worker or another, gets 429.
+        with open(_dry_run_slot(), "a+") as slot:
+            if not try_lock_file(slot):
+                app.logger.error(
+                    "Another dry run is running, and one runs at a time. Retry shortly. "
+                    "Nothing was run"
+                )
+                body, code = {"status": "not-run", "plan": None}, 429
+                headers["Retry-After"] = "2"
+            else:
+                try:
+                    body, code = await _dry_run(action_name)
+                finally:
+                    unlock_file(slot)
     except HTTPException as exc:  # e.g. 413: the body is over MAX_CONTENT_LENGTH
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
