@@ -229,6 +229,26 @@
               }
             }
           },
+          "413": {
+            "description": "The body is over MAX_CONTENT_LENGTH (16 MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Another dry run is running; retry after Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            }
+          },
           "500": {
             "description": "The run failed",
             "content": {
@@ -1537,7 +1557,7 @@
               "error",
               "not-run"
             ],
-            "description": "ok, infeasible or error: the solver ran, and status is what /api/v1/last-run would report (only an ok plan would have replaced /api/v1/plan). not-run: refused (HTTP 400) or failed (HTTP 500) before a plan was made; errors says why."
+            "description": "ok, infeasible or error: the solver ran, and status is what /api/v1/last-run would report (only an ok plan would have replaced /api/v1/plan). not-run: refused (HTTP 400, 413 for a body over MAX_CONTENT_LENGTH, 429 while another dry run runs) or failed (HTTP 500) before a plan was made; errors says why."
           },
           "timestamp": {
             "type": "string",

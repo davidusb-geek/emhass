@@ -26,6 +26,8 @@ An EMHASS older than 0.18.7 answers 404 at this URL. It never runs a live solve 
 | --- | --- | --- |
 | 200 | `ok`, `infeasible` or `error` | The solver ran. `status` is what `/api/v1/last-run` would report; only an `ok` plan would have replaced `/api/v1/plan`. |
 | 400 | `not-run` | The request was refused, or the run stopped before the solver (for example on a rejected forecast, or with no saved forecast to plan with). `errors` and `warnings` say why. |
+| 413 | `not-run` | The body is over 16 MB (Quart's `MAX_CONTENT_LENGTH`, as for `/action/<action>`). |
+| 429 | `not-run` | Another dry run is running: one runs at a time, so a burst of dry runs never queues ahead of a live run. Retry after the `Retry-After` seconds. |
 | 500 | `not-run` | The run failed. `errors` says why. |
 
 The JSON body ([schema](https://github.com/davidusb-geek/emhass/blob/master/docs/api/v1/dry-run.schema.json)) has:
