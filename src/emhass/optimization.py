@@ -4384,7 +4384,8 @@ class Optimization:
         `net_out` is the heat leaving the store per step with the sources off
         (demand plus flat loss, kWh, negative for a net gain); `zone_loss` is
         UA * dt (kWh/K per step) for a state-dependent loss, else None;
-        `source_tail` is source heat already on its way (kWh per step). Returns
+        `source_tail` is source heat already on its way (kWh per step, from the
+        first step; steps past its end get none). Returns
         the largest excess, 0.0 when the bound can be kept.
         """
 
@@ -4401,7 +4402,7 @@ class Optimization:
             heat = -float(net_out[t])
             if zone_loss is not None:
                 heat -= zone_loss * (temp - float(outdoor[t]))
-            if source_tail is not None:
+            if source_tail is not None and t < len(source_tail):
                 heat += (-1.0 if is_cool else 1.0) * float(source_tail[t])
             temp += conversion * heat
             held = _hard(hold, t + 1)
@@ -5042,6 +5043,9 @@ class Optimization:
                 limit=min_temperatures_list if is_cool else max_temperatures_list,
                 n=required_len,
                 sense=tank_sense,
+                # Heat committed by earlier runs still arrives in the lag's dead
+                # zone, whatever this run decides.
+                source_tail=prior_heat,
             )
             if breach > 1e-6:
                 if is_cool:

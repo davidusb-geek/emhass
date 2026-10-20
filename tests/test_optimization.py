@@ -14370,6 +14370,27 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(temp[1:].min(), 19.5 - 0.01)
         self.assertLessEqual(temp[-1], 21.5 + 0.01)
 
+    def test_heat_already_in_flight_past_the_maximum_is_priced(self):
+        """Heat committed by earlier runs (prior_heat) still arrives in the lag's
+        dead zone whatever this run decides. When it alone carries the zone past
+        its maximum, the maximum is priced instead of making the run infeasible."""
+        zone = self._zone(
+            "house",
+            21.0,
+            [0],
+            mass=6.0,
+            ua=0.0,
+            lo=19.5,
+            hi=21.5,
+            thermal_inertia=1.0,
+            prior_heat=[3.0, 3.0],
+        )
+        with self.assertLogs(logger, level="INFO") as logs:
+            opt, res = self._solve_tanks([zone], outdoor=5.0, price=0.25)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(any("free gains" in line for line in logs.output))
+        self.assertGreater(res["predicted_temp_heater0"].max(), 21.5 + 0.1)
+
     def test_a_maximum_the_plan_can_keep_stays_hard(self):
         """The same house with less glass stays inside its band: nothing is priced
         and the maximum holds exactly as before."""
