@@ -2938,6 +2938,38 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(out["shared_thermal_tanks"][0]["prior_heat"], [0.4, 1.2])
 
+    async def test_treat_runtimeparams_bad_prior_heat_starts_the_tank_cold(self):
+        """A malformed runtime value replaces a configured prior_heat with none, so
+        the tank starts cold for the run instead of using stale heat."""
+        tank = self._manual_tank(start_temperature=50.0)
+        tank["prior_heat"] = [2.0, 2.0]
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {"shared_thermal_tanks": [tank], "shared_tank_prior_heat": {"dhw": "warm"}}
+            )
+        self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
+        self.assertTrue(any("starts cold" in m for m in log_cm.output), log_cm.output)
+
+    async def test_treat_runtimeparams_prior_heat_ambiguous_ids_are_ignored(self):
+        """Storage ids 0 and "0" pass the topology compiler (it compares raw ids)
+        but read the same as a JSON key: the value is applied to neither."""
+        storage = {"thermal_mass": 8.0, "thermal_inertia": 1.0, "start_temperature": 20.0}
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3000, "supply_temperature": 45}
+            ],
+            "storage": [{"id": 0, **storage}, {"id": "0", **storage}],
+            "flows": [{"from": "hp", "to": 0}, {"from": "hp", "to": "0"}],
+        }
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {"heat_topology": topo, "shared_tank_prior_heat": {"0": [1.0]}}
+            )
+        tanks = out["shared_thermal_tanks"]
+        self.assertEqual(len(tanks), 2)
+        self.assertTrue(all("prior_heat" not in t for t in tanks))
+        self.assertTrue(any("read the same" in m for m in log_cm.output), log_cm.output)
+
     async def test_compile_heat_topology_passes_prior_heat_through(self):
         """prior_heat is a per-step list, so the compiler must pass it through
         unconverted (the sibling zone keys are coerced to scalar floats)."""
