@@ -262,7 +262,8 @@ hard, because the plan can heat ahead for it.
 The same happens to a maximum that free heat alone breaks. Sun through the
 windows (or a warm day) can carry a heated storage past its maximum with every
 source off, and no plan can prevent that. Before each run EMHASS follows the
-storage with its sources off, held up only by its minimums; if that path lies
+storage with its sources off (heat already in flight from `prior_heat`
+included), held up only by its minimums; if that path lies
 above a maximum, the maximums of that storage are priced for that run instead
 of making it infeasible, and the log says so. The penalty is the one used for a
 storage that starts below its minimum, so no source heats into the excess. On a
