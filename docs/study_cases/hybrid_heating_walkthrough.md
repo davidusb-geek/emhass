@@ -46,35 +46,74 @@ HORIZON = 48  # 24 h at 30-minute steps
 
 heat_topology = {
     "sources": [
-        {"id": "hp_dhw", "type": "heatpump", "nominal_power": 3000,
-         "supply_temperature": 55, "carnot_efficiency": 0.45,
-         "max_supply_temperature": 55, "treat_as_semi_cont": False},
-        {"id": "hp_sh", "type": "heatpump", "nominal_power": 3000,
-         "heating_curve": {"slope": 0.6, "offset": 40, "min_supply": 30, "max_supply": 55},
-         "carnot_efficiency": 0.45, "max_supply_temperature": 55,
-         "treat_as_semi_cont": False},
-        {"id": "boiler", "type": "gas", "nominal_power": 20000, "efficiency": 0.9,
-         "cost_track": "gas", "treat_as_semi_cont": False},
+        {
+            "id": "hp_dhw",
+            "type": "heatpump",
+            "nominal_power": 3000,
+            "supply_temperature": 55,
+            "carnot_efficiency": 0.45,
+            "max_supply_temperature": 55,
+            "treat_as_semi_cont": False,
+        },
+        {
+            "id": "hp_sh",
+            "type": "heatpump",
+            "nominal_power": 3000,
+            "heating_curve": {"slope": 0.6, "offset": 40, "min_supply": 30, "max_supply": 55},
+            "carnot_efficiency": 0.45,
+            "max_supply_temperature": 55,
+            "treat_as_semi_cont": False,
+        },
+        {
+            "id": "boiler",
+            "type": "gas",
+            "nominal_power": 20000,
+            "efficiency": 0.9,
+            "cost_track": "gas",
+            "treat_as_semi_cont": False,
+        },
     ],
     "storage": [
-        {"id": "dhw", "volume": 0.2, "start_temperature": 50,
-         "min_temperature": [45], "max_temperature": [60] * HORIZON, "thermal_loss": 0.05},
-        {"id": "buffer", "volume": 0.5, "start_temperature": 40,
-         "min_temperature": [30], "max_temperature": [55] * HORIZON, "thermal_loss": 0.05},
-        {"id": "house", "thermal_mass": 8, "loss_coefficient": 0.25,
-         "start_temperature": 20.5, "min_temperature": [19.5], "max_temperature": [22] * HORIZON,
-         "desired_temperature": 20.5, "window_area": 15},
+        {
+            "id": "dhw",
+            "volume": 0.2,
+            "start_temperature": 50,
+            "min_temperature": [45],
+            "max_temperature": [60] * HORIZON,
+            "thermal_loss": 0.05,
+        },
+        {
+            "id": "buffer",
+            "volume": 0.5,
+            "start_temperature": 40,
+            "min_temperature": [30],
+            "max_temperature": [55] * HORIZON,
+            "thermal_loss": 0.05,
+        },
+        {
+            "id": "house",
+            "thermal_mass": 8,
+            "loss_coefficient": 0.25,
+            "start_temperature": 20.5,
+            "min_temperature": [19.5],
+            "max_temperature": [22] * HORIZON,
+            "desired_temperature": 20.5,
+            "window_area": 15,
+        },
     ],
     "flows": [
         {"from": "hp_dhw", "to": "dhw"},
         {"from": "hp_sh", "to": "buffer"},
         {"from": "boiler", "to": "dhw"},
-        {"from": "buffer", "to": "house", "transfer_coefficient": 0.8,
-         "max_transfer_power": 8000},
+        {"from": "buffer", "to": "house", "transfer_coefficient": 0.8, "max_transfer_power": 8000},
     ],
     "consumers": [
-        {"id": "showers", "type": "profile", "target": "dhw",
-         "profile": [0.0] * 14 + [1.5, 1.0] + [0.0] * 24 + [1.0, 1.5] + [0.0] * 6},
+        {
+            "id": "showers",
+            "type": "profile",
+            "target": "dhw",
+            "profile": [0.0] * 14 + [1.5, 1.0] + [0.0] * 24 + [1.0, 1.5] + [0.0] * 6,
+        },
     ],
     "actuator_groups": [
         {"flows": [["hp_dhw", "dhw"], ["hp_sh", "buffer"]], "mutual_exclusion": True},
@@ -119,6 +158,7 @@ text box of the configuration page:
 
 ```python
 import json
+
 print(json.dumps(heat_topology, indent=2))
 ```
 
