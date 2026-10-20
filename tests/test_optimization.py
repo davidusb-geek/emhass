@@ -16637,6 +16637,28 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         x.value = np.zeros(2)  # what a time-out without a solution leaves behind
         self.assertFalse(has(prob_no_report))
 
+        # Without the solver's report, values from an LP relaxation satisfy the
+        # constraints but not the on/off variables: those must be integral too.
+        on = cp.Variable(3, boolean=True)
+        level = cp.Variable(3, integer=True)
+        mixed = cp.Problem(cp.Minimize(cp.sum(on) + cp.sum(level)), [on <= 1, level >= 0])
+        mixed = SimpleNamespace(
+            value=0.0,
+            solver_stats=None,
+            constraints=mixed.constraints,
+            variables=mixed.variables,
+        )
+        # save_value is how a solver writes its result, without the attribute
+        # check that the .value setter applies.
+        on.save_value(np.array([0.0, 1.0, 1.0]))
+        level.save_value(np.array([0.0, 2.0, 3.0]))
+        self.assertTrue(has(mixed))
+        on.save_value(np.array([0.0, 0.5, 1.0]))
+        self.assertFalse(has(mixed))
+        on.save_value(np.array([0.0, 1.0, 1.0]))
+        level.save_value(np.array([0.0, 2.4, 3.0]))
+        self.assertFalse(has(mixed))
+
     def test_time_out_without_incumbent_is_not_published_as_optimal(self):
         """With a time limit too short to find any solution, HiGHS returns
         user_limit with value 0.0 and all variables at 0. That must not be
@@ -16714,31 +16736,28 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         feasible incumbent), the incumbent marking must apply to the problem the
         extraction reads - the refined one - so it publishes as
         'Optimal (Incumbent)' rather than being discarded as a raw user_limit.
-        The log names the remaining MIP gap."""
-        from types import SimpleNamespace
 
-        class FakeRefined:
-            def __init__(self):
-                self._status = "user_limit"
-                self.value = -12.5
-                self.solver_stats = SimpleNamespace(extra_stats=SimpleNamespace(mip_gap=0.034))
-
-            @property
-            def status(self):
-                return self._status
-
+        The re-solve runs for real and goes through the real acceptance check:
+        it is only reported as time-limited afterwards, keeping the feasible
+        solution and HiGHS' own report of it."""
         opt = self._dp_refinable_setup()
-        opt._refine_cop_with_dp = lambda *a, **k: FakeRefined()
-        with self.assertLogs(logger, level="INFO") as logs:
-            opt.perform_optimization(
-                self.df_input_data_dayahead,
-                self.p_pv_forecast.values.ravel(),
-                self.p_load_forecast.values.ravel(),
-                self.df_input_data_dayahead[opt.var_load_cost].values,
-                self.df_input_data_dayahead[opt.var_prod_price].values,
-            )
+        original_solve = cp.Problem.solve
+
+        def solve(problem, *args, **kwargs):
+            result = original_solve(problem, *args, **kwargs)
+            if opt.prob is not None and problem is not opt.prob:
+                problem._status = "user_limit"  # the DP re-solve, cut off by the limit
+            return result
+
+        with (
+            mock.patch.object(cp.Problem, "solve", autospec=True, side_effect=solve),
+            self.assertLogs(logger, level="INFO") as logs,
+        ):
+            self._solve_default_inputs(opt)
         self.assertEqual(opt.optim_status, "Optimal (Incumbent)")
-        self.assertTrue(any("MIP gap 3.40%" in line for line in logs.output), logs.output)
+        self.assertTrue(
+            any("Accepting time-limited solution" in line for line in logs.output), logs.output
+        )
 
 
 if __name__ == "__main__":

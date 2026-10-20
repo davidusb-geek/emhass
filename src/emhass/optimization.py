@@ -6799,7 +6799,9 @@ class Optimization:
         incumbent comes back as ``user_limit`` with value 0.0 and every variable
         at 0, violating the constraints. So a value is no proof. HiGHS reports the
         primal solution status (2 = feasible); for other solvers the constraints
-        are checked directly.
+        are checked directly, and so are the boolean and integer variables, which
+        are not in the constraint list: values from an LP relaxation satisfy the
+        constraints but can be fractional.
         """
         if prob is None or getattr(prob, "value", None) is None:
             return False
@@ -6814,6 +6816,24 @@ class Optimization:
                 if violation is None:
                     return False
                 if np.max(np.abs(np.atleast_1d(violation)), initial=0.0) > tol:
+                    return False
+            variables = prob.variables() if callable(getattr(prob, "variables", None)) else []
+            for variable in variables:
+                is_boolean = variable.attributes.get("boolean")
+                marked = is_boolean or variable.attributes.get("integer")
+                if not marked:
+                    continue
+                if variable.value is None:
+                    return False
+                values = np.asarray(variable.value, dtype=float)
+                if marked is not True:  # a list of index tuples
+                    values = values[tuple(np.array(marked).T)]
+                values = np.atleast_1d(values)
+                if np.max(np.abs(values - np.round(values)), initial=0.0) > tol:
+                    return False
+                if is_boolean and (
+                    np.min(values, initial=0.0) < -tol or np.max(values, initial=1.0) > 1 + tol
+                ):
                     return False
             return True
         except Exception:
