@@ -22,6 +22,10 @@ thermal configuration, so the optimization is exactly the electrical one.
 | One heat pump charging one tank or a floor slab, with a temperature-dependent COP | [Thermal battery](thermal_battery.md) (`thermal_battery`) | [Heat-pump walkthrough](study_cases/heat_pump_walkthrough.md) |
 | Several sources or several stores: a heat pump plus a gas boiler or electric booster, a DHW tank plus a buffer, a buffer feeding the house, sources on different tariffs | [Heat topology graph model](heat_topology.md) (`heat_topology`) | [Hybrid heating walkthrough](study_cases/hybrid_heating_walkthrough.md) |
 
+For a short, step-by-step start, the cookbook has two recipes on the heat
+topology: [a DHW tank with a heat pump and an electric booster](cookbook/dhw_heat_pump_with_booster.md)
+and [pre-heating the house with a heat pump](cookbook/heatpump_preheat_house.md).
+
 The first two are single-load models configured under `def_load_config`. The
 heat topology describes the system as a small graph of sources, stores and
 flows, which EMHASS compiles into deferrable loads and shared thermal tanks. It
@@ -60,7 +64,9 @@ creates one deferrable load per source-to-storage flow, numbered in the order of
 change: update `custom_deferrable_forecast_id` and
 `custom_predicted_temperature_id` accordingly. If you also have ordinary
 deferrable loads, set `extend_deferrable_loads` (see
-[Combining with other deferrable loads](heat_topology.md#combining-with-other-deferrable-loads)).
+[Combining with other deferrable loads](heat_topology.md#combining-with-other-deferrable-loads));
+without it the topology replaces them, and the log warns which loads are not
+optimized.
 
 ## Temperature-dependent COP
 
