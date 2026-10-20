@@ -5227,6 +5227,9 @@ DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
 # Runtime parameters that ask for a write. A dry run refuses them rather than
 # ignore them, so a caller never believes something was saved.
 DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+# The on/off parameters a dry run reads strictly, then passes on as booleans:
+# the forecast reads them by truthiness, and the string "false" is truthy.
+DRY_RUN_FLAGS = (*DRY_RUN_REFUSED_KEYS, "weather_forecast_cache_only")
 
 _FLAG_TRUE = ("true", "1", "yes", "on")
 _FLAG_FALSE = ("false", "0", "no", "off", "")
@@ -5281,8 +5284,8 @@ def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
         if dry_run and "dry_run" in runtimeparams and not asked:
             return "dry_run is false in the body of a dry run. Nothing was run"
         if dry_run:
-            for key in DRY_RUN_REFUSED_KEYS:
-                if read_flag(runtimeparams.get(key), key):
+            for key in DRY_RUN_FLAGS:
+                if read_flag(runtimeparams.get(key), key) and key in DRY_RUN_REFUSED_KEYS:
                     return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
     except ValueError as exc:
         return f"{exc}. Nothing was run"

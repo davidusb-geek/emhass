@@ -21,6 +21,7 @@ import yaml
 from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
+from werkzeug.exceptions import HTTPException
 
 from emhass import last_run, plan_store
 from emhass.command_line import (
@@ -44,6 +45,7 @@ from emhass.command_line import (
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     DRY_RUN_ACTIONS,
+    DRY_RUN_FLAGS,
     HEAT_TOPOLOGY_KEYS,
     SocFractionError,
     build_config,
@@ -59,6 +61,7 @@ from emhass.utils import (
     get_keys_to_mask,
     inverter_power_curve_faults,
     param_to_config,
+    read_flag,
 )
 
 app = Quart(__name__)
@@ -110,6 +113,10 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
 
 
 app.logger.addHandler(_DryRunLog())
+
+# One dry run at a time: a burst of them, which cold-solve, must never queue
+# ahead of the live MPC run. One that arrives while another runs gets 429.
+_dry_run_running = asyncio.Lock()
 
 
 # Add custom filter for trusted HTML content
@@ -854,14 +861,28 @@ async def api_v1_dry_run(action_name: str):
 
     HTTP 200: the solver ran; ``status`` says how (ok, infeasible, error).
     HTTP 400: refused, or stopped before the solver; ``status`` is "not-run".
+    HTTP 413: the body is over MAX_CONTENT_LENGTH (16 MB); ``status`` is "not-run".
+    HTTP 429: another dry run is running (one runs at a time); ``status`` is "not-run".
     HTTP 500: the run failed; ``status`` is "not-run".
 
     Schema: docs/api/v1/dry-run.schema.json (JSON Schema draft 2020-12).
     """
     records: list[tuple[int, str]] = []
     token = _dry_run_log.set(records)
+    headers = {}
     try:
-        body, code = await _dry_run(action_name)
+        if _dry_run_running.locked():
+            app.logger.error(
+                "Another dry run is running, and one runs at a time. Retry shortly. Nothing was run"
+            )
+            body, code = {"status": "not-run", "plan": None}, 429
+            headers["Retry-After"] = "2"
+        else:
+            async with _dry_run_running:
+                body, code = await _dry_run(action_name)
+    except HTTPException as exc:  # e.g. 413: the body is over MAX_CONTENT_LENGTH
+        app.logger.error(f"{exc.description} Nothing was run")
+        body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
         app.logger.exception(f"Dry run of {action_name} failed: {exc}")
         body, code = {"status": "not-run", "plan": None}, 500
@@ -877,6 +898,7 @@ async def api_v1_dry_run(action_name: str):
     response = await make_response(orjson.dumps(response_body), code)
     response.headers["Content-Type"] = "application/json"
     response.headers["Cache-Control"] = "no-store"
+    response.headers.update(headers)
     return response
 
 
@@ -916,6 +938,9 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         app.logger.error(problem)
         return not_run, 400
     runtime.pop("dry_run", None)
+    for key in DRY_RUN_FLAGS:
+        if key in runtime:
+            runtime[key] = read_flag(runtime[key], key)
 
     if runtime:
         app.logger.info(f"Passed runtime parameters: {runtime}")

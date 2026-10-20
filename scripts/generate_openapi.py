@@ -280,6 +280,14 @@ def build_spec(routes: set | None = None) -> dict:
                         "description": "Refused, or stopped before the solver",
                         **json_ct({"$ref": "#/components/schemas/DryRun"}),
                     },
+                    "413": {
+                        "description": "The body is over MAX_CONTENT_LENGTH (16 MB)",
+                        **json_ct({"$ref": "#/components/schemas/DryRun"}),
+                    },
+                    "429": {
+                        "description": "Another dry run is running; retry after Retry-After",
+                        **json_ct({"$ref": "#/components/schemas/DryRun"}),
+                    },
                     "500": {
                         "description": "The run failed",
                         **json_ct({"$ref": "#/components/schemas/DryRun"}),

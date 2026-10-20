@@ -229,6 +229,7 @@ def test_a_flag_that_cannot_be_read_raises(value):
         ({"entity_save": True}, True, True),
         ({"entity_save": "true"}, True, True),
         ({"weather_forecast_cache": True}, True, True),
+        ({"weather_forecast_cache_only": "maybe"}, True, True),
     ],
 )
 def test_which_requests_are_refused(runtime, dry, refused):
@@ -1100,6 +1101,96 @@ def test_a_failed_setup_closes_the_home_assistant_session(failure):
         else:
             assert asyncio.run(build()) is False
     close.assert_awaited_once()
+
+
+def test_an_oversized_body_is_refused_with_413():
+    """Quart caps a request body at MAX_CONTENT_LENGTH (16 MB), for this URL
+    as for /action/<action>. Over it, the dry run answers 413 - not 500 - and
+    nothing is built."""
+    big = b'{"x": "' + b"a" * (web_server.app.config["MAX_CONTENT_LENGTH"] + 1) + b'"}'
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "set_input_data_dict", AsyncMock()) as build,
+    ):
+
+        async def post():
+            response = await client.post(
+                "/api/v1/dry-run/naive-mpc-optim",
+                data=big,
+                headers={"Content-Type": "application/json"},
+            )
+            return response.status_code, await response.get_json()
+
+        status, answer = asyncio.run(post())
+    assert status == 413
+    _conforms(answer)
+    assert answer["errors"] and answer["errors"][-1].endswith("Nothing was run")
+    build.assert_not_called()
+
+
+def test_one_dry_run_runs_at_a_time():
+    """A dry run that arrives while another runs is refused with 429 and a
+    Retry-After, so a burst of dry runs never queues ahead of a live run. The
+    first one is unaffected."""
+    started, release = asyncio.Event(), asyncio.Event()
+    built = AsyncMock(return_value={"params": {"passed_data": {"dry_run": True}}})
+
+    async def wrapper(idd, log):
+        idd["run_record"] = last_run.snapshot("naive-mpc-optim", {}, "Optimal", False, 0.0, "1.0")
+        if not started.is_set():  # only the first one holds on, so a missing guard fails fast
+            started.set()
+            await release.wait()
+        return _plan()
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+        patch.object(web_server, "naive_mpc_optim", wrapper),
+    ):
+
+        async def both():
+            first = asyncio.create_task(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+            try:
+                await started.wait()
+                second = await client.post("/api/v1/dry-run/naive-mpc-optim", json={})
+            finally:
+                release.set()  # whatever happened, let the first one finish
+            first = await first
+            return (
+                (first.status_code, await first.get_json()),
+                (second.status_code, second.headers.get("Retry-After"), await second.get_json()),
+            )
+
+        (first_status, first_body), (second_status, retry, second_body) = asyncio.run(
+            asyncio.wait_for(both(), timeout=30)  # a queued second run would deadlock: fail instead
+        )
+    assert first_status == 200 and first_body["errors"] == []
+    assert second_status == 429 and retry == "2"
+    _conforms(second_body)
+    assert "one runs at a time" in second_body["errors"][-1]
+    assert built.await_count == 1
+
+
+def test_accepted_flags_reach_the_run_as_booleans():
+    """weather_forecast_cache "false" and weather_forecast_cache_only "true" are
+    read strictly and passed on as False and True: the forecast reads them by
+    truthiness, and the string "false" would otherwise force a refresh past
+    the saved forecast."""
+    built = AsyncMock(return_value=False)
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+    ):
+        body = {"weather_forecast_cache": "false", "weather_forecast_cache_only": "true"}
+        asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json=body))
+    runtime = orjson.loads(built.call_args.args[3])
+    assert runtime["weather_forecast_cache"] is False
+    assert runtime["weather_forecast_cache_only"] is True
 
 
 # --------------------------------------------------------------------------
