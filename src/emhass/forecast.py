@@ -46,7 +46,6 @@ import pickle
 import pickle as cPickle
 import re
 import tempfile
-import uuid
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -74,6 +73,7 @@ from emhass.utils import (
     describe_invalid_forecast_value,
     get_days_list,
     get_forecast_start,
+    replace_file,
     set_df_index_freq,
 )
 
@@ -102,20 +102,6 @@ dry_run_no_saved_forecast = (
     "Dry run: no usable %s forecast has been saved, and a dry run calls no forecast "
     "service. Pass pv_power_forecast in the body, or let a live run save one first."
 )
-
-
-async def _replace_file(path: str, content: str | bytes) -> None:
-    """Write ``content`` to ``path`` through a temporary file and os.replace, so a
-    reader running at the same time sees the old file or the new one, never a
-    partly written one."""
-    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    try:
-        async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
-            await f.write(content)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
 
 
 def _solcast_overlap_average(
@@ -532,7 +518,7 @@ class Forecast:
                                 "Saving response in Open-Meteo JSON cache file: %s",
                                 json_path,
                             )
-                            await _replace_file(
+                            await replace_file(
                                 json_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
                             )
                     # Successful fetch; stop retrying.
@@ -1253,7 +1239,7 @@ class Forecast:
                     async with session.get(url, headers=headers) as response:
                         response.raise_for_status()
                         data = await response.json()
-                        await _replace_file(
+                        await replace_file(
                             cache_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
                         )
             except aiohttp.ClientError:
@@ -1864,8 +1850,10 @@ class Forecast:
         if not debug and not self.dry_run:
             filename = "adjust_pv_regressor.pkl"
             filename_path = self.emhass_conf["data_path"] / filename
-            async with aiofiles.open(filename_path, "wb") as outp:
-                await outp.write(pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL))
+            # Whole, so a run loading the model at the same moment never reads half of it.
+            await replace_file(
+                filename_path, pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL)
+            )
 
     def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame) -> pd.DataFrame:
         """
@@ -3042,7 +3030,7 @@ class Forecast:
         if self.dry_run:
             self.logger.info("Dry run: the forecast is not saved to the cache.")
         else:
-            await _replace_file(w_forecast_cache_path, pickle.dumps(data))
+            await replace_file(w_forecast_cache_path, pickle.dumps(data))
             if not os.path.isfile(w_forecast_cache_path):
                 self.logger.warning("forecast data could not be saved to file.")
             else:

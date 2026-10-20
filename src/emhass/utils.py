@@ -10,6 +10,7 @@ import os
 import pathlib
 import shutil
 import time
+import uuid
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -5217,6 +5218,62 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+async def replace_file(path, content: str | bytes) -> None:
+    """Write ``content`` to ``path`` through a temporary file and os.replace, so a
+    reader running at the same time sees the old file or the new one, never a
+    partly written one."""
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
+            await f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+# A lock that one process holds and every other one - another Gunicorn worker
+# included - fails to take at once, rather than waits for.
+try:
+    import fcntl as _fcntl
+
+    def try_lock_file(f) -> bool:
+        """Lock the open file ``f`` if no other open file holds it. True if locked."""
+        try:
+            _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def unlock_file(f) -> None:
+        _fcntl.flock(f, _fcntl.LOCK_UN)
+
+except ImportError:
+    try:
+        import msvcrt as _msvcrt
+
+        def try_lock_file(f) -> bool:
+            """Lock the open file ``f`` if no other open file holds it. True if locked."""
+            f.seek(0)
+            try:
+                _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return False
+            return True
+
+        def unlock_file(f) -> None:
+            f.seek(0)
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+
+    except ImportError:  # no locking primitive: nothing to hold
+
+        def try_lock_file(f) -> bool:
+            return True
+
+        def unlock_file(f) -> None:
+            pass
 
 
 # A dry run solves as a live run does, returns the plan, and writes nothing.

@@ -415,9 +415,10 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
         os.utime(model, (old, old))
         before = _files(data_path)
         fit = Forecast.adjust_pv_forecast_fit
-        with patch.object(
-            Forecast, "adjust_pv_forecast_fit", autospec=True, side_effect=fit
-        ) as spy:
+        with (
+            patch.object(Forecast, "adjust_pv_forecast_fit", autospec=True, side_effect=fit) as spy,
+            _writes_spied() as opened,
+        ):
             idd, res = _run(data_path, "dayahead-optim", dry=dry, configure=_adjusted_pv)
         changed = _changed(before, _files(data_path))
     assert isinstance(res, pd.DataFrame)
@@ -426,6 +427,7 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
         assert changed == []
     else:
         assert "adjust_pv_regressor.pkl" in changed
+        assert str(model) not in opened, "the model must be replaced whole, not rewritten in place"
 
 
 # --------------------------------------------------------------------------
@@ -734,6 +736,69 @@ def test_a_weather_cache_removed_before_it_is_read_is_no_cache(dry):
             return await fcst.get_cached_forecast_data(str(missing))
 
         assert asyncio.run(read()) is None
+
+
+class _Model:
+    """A stand-in for MLForecaster that fits at once, and pickles."""
+
+    def __init__(self, *args, **kwargs):
+        self.fitted = True
+
+    async def fit(self, **kwargs):
+        return pd.DataFrame(), None
+
+
+def test_the_ml_forecaster_model_is_replaced_whole():
+    """forecast-model-fit writes its model to a temporary file and moves it into
+    place: a dry run with load_forecast_method mlforecaster loading the model
+    at that moment reads the old one or the new one, never half of one."""
+    with _data_copy() as data_path, _writes_spied() as opened:
+        target = data_path / "a_test_mlf.pkl"
+        target.write_bytes(pickle.dumps("old model"))
+        idd = {
+            "df_input_data": pd.DataFrame({"load": [1.0, 2.0]}),
+            "params": {
+                "passed_data": {
+                    "model_type": "a_test",
+                    "var_model": "load",
+                    "sklearn_model": "KNeighborsRegressor",
+                    "num_lags": 1,
+                    "split_date_delta": "1h",
+                    "perform_backtest": False,
+                }
+            },
+            "emhass_conf": _conf(data_path),
+        }
+        with patch.object(command_line, "MLForecaster", _Model):
+            asyncio.run(command_line.forecast_model_fit(idd, logger, debug=False))
+        saved = pickle.loads(target.read_bytes())
+        leftovers = list(data_path.glob("*.tmp"))
+    assert isinstance(saved, _Model) and saved.fitted
+    assert opened and str(target) not in opened
+    assert leftovers == []
+
+
+def test_replace_file_leaves_the_old_file_until_the_new_one_is_whole(tmp_path):
+    """Until os.replace, readers see the old content; a write that fails leaves
+    the old file as it was, and no temporary file behind."""
+    target = tmp_path / "cache.json"
+    target.write_text("old")
+    seen = []
+    real_replace = os.replace
+
+    def replace(src, dst):
+        seen.append(pathlib.Path(dst).read_text())  # what a reader sees just before
+        real_replace(src, dst)
+
+    with patch("emhass.utils.os.replace", replace):
+        asyncio.run(utils.replace_file(target, "new"))
+    assert seen == ["old"] and target.read_text() == "new"
+
+    with patch("emhass.utils.os.replace", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            asyncio.run(utils.replace_file(target, "newer"))
+    assert target.read_text() == "new"
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_a_dry_run_does_not_save_the_weather_cache():
@@ -1172,6 +1237,35 @@ def test_one_dry_run_runs_at_a_time():
     _conforms(second_body)
     assert "one runs at a time" in second_body["errors"][-1]
     assert built.await_count == 1
+
+
+def test_a_dry_run_on_another_worker_holds_the_slot():
+    """Gunicorn workers are processes, each with its own memory, so the
+    one-at-a-time rule is a lock on a file every worker opens. While another
+    worker holds it, a dry run here gets 429; once it is let go, it runs."""
+    built = AsyncMock(return_value={"params": {"passed_data": {"dry_run": True}}})
+
+    async def wrapper(idd, log):
+        idd["run_record"] = last_run.snapshot("naive-mpc-optim", {}, "Optimal", False, 0.0, "1.0")
+        return _plan()
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+        patch.object(web_server, "naive_mpc_optim", wrapper),
+    ):
+        slot = web_server._dry_run_slot()
+        assert not slot.is_relative_to(pathlib.Path(tmp)), "the slot is outside the data folder"
+        with open(slot, "a+") as other_worker:
+            assert utils.try_lock_file(other_worker)
+            try:
+                busy = asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+            finally:
+                utils.unlock_file(other_worker)
+        free = asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+    assert busy.status_code == 429 and free.status_code == 200
 
 
 def test_accepted_flags_reach_the_run_as_booleans():
