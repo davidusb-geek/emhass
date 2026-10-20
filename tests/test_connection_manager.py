@@ -37,6 +37,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         import emhass.connection_manager as cm
 
         cm._global_client = None
+        cm._lock = asyncio.Lock()
 
     async def asyncTearDown(self):
         """Clean up after each test."""
