@@ -17,7 +17,7 @@ import datetime as dt
 import pandas as pd
 import pytz
 
-UTC = dt.timezone.utc  # noqa: UP017 (dt.UTC needs Python 3.11; the project supports 3.10)
+UTC = dt.UTC
 
 STEPS = (5, 15, 30, 60)
 MODES = ("first", "nearest", "last")
