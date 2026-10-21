@@ -48,6 +48,7 @@ from emhass.command_line import (
     set_input_data_dict,
 )
 from emhass.forecast import Forecast
+from tests.fixture_clock import fixture_clock
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -95,6 +96,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.params_json = orjson.dumps(params).decode("utf-8")
 
     # Test input data for actions (using data from file)
+    @fixture_clock()
     async def test_set_input_data_dict(self):
         costfun = "profit"
         # Test dayahead
@@ -380,6 +382,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(injection_dict["table2"], str)
 
     # Test data formatting of dayahead optimization with load cost and prod price as lists
+    @fixture_clock()
     async def test_dayahead_forecast_optim(self):
         # Test dataframe output of profit dayahead optimization
         costfun = "profit"

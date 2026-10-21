@@ -29,6 +29,7 @@ from emhass.utils import (
     get_root,
     get_yaml_parse,
 )
+from tests.fixture_clock import fixture_clock
 
 # The root folder
 root = pathlib.Path(get_root(__file__, num_parent=2))
@@ -48,6 +49,11 @@ VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
 
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # The fixtures below are 48 half-hour steps; the real-clock grid is 46 or 50 on
+        # DST days, and some tests read the clock in their body, so freeze the whole test.
+        clock = fixture_clock()
+        clock.start()
+        self.addCleanup(clock.stop)
         get_data_from_file = True
         params = {}
         # Build params with default config and secrets
