@@ -6693,27 +6693,28 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_dp_resolve_acceptance_matches_relaxed_retry_policy(self):
         """The DP re-solve must accept/reject solver statuses with EXACTLY the same
-        policy as the main path (_needs_relaxed_retry): whatever the main path would
-        discard for the relaxed fallback, including a time-limited user_limit result,
-        keeps the static solve here. A single shared predicate prevents the two lists
+        policy as the main path (_needs_relaxed_retry): a time-limited user_limit
+        result with a feasible incumbent is kept on both paths, and whatever the main
+        path would discard for the relaxed fallback keeps the static solve here. A single shared predicate prevents the two lists
         drifting apart."""
-        for status, value, accept in [
-            ("optimal", 1.0, True),
-            ("optimal_inaccurate", 1.0, True),
-            ("user_limit", 1.0, False),  # time-limited: rejected, like the main path
-            ("user_limit", None, False),
-            ("infeasible", None, False),
-            ("infeasible", 1.0, False),
-            ("unbounded", 1.0, False),
-            (None, 1.0, False),
+        for status, value, feasible, accept in [
+            ("optimal", 1.0, False, True),
+            ("optimal_inaccurate", 1.0, False, True),
+            ("user_limit", 1.0, True, True),  # proven feasible incumbent: kept
+            ("user_limit", 0.0, False, False),  # time-out without a solution
+            ("user_limit", None, True, False),
+            ("infeasible", None, False, False),
+            ("infeasible", 1.0, False, False),
+            ("unbounded", 1.0, False, False),
+            (None, 1.0, False, False),
         ]:
             self.assertEqual(
-                Optimization._accept_dp_resolve(status, value),
+                Optimization._accept_dp_resolve(status, value, feasible),
                 accept,
-                f"status={status!r} value={value!r}",
+                f"status={status!r} value={value!r} feasible={feasible}",
             )
             self.assertEqual(
-                Optimization._needs_relaxed_retry(status, value),
+                Optimization._needs_relaxed_retry(status, value, feasible),
                 not accept,
                 f"main path disagrees for status={status!r} value={value!r}",
             )
@@ -8756,8 +8757,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             status = opt_res["optim_status"].iloc[0]
             self.assertIn(
                 status,
-                ["Optimal", "Optimal (Relaxed)"],
-                f"Expected Optimal or Optimal (Relaxed), got {status}",
+                ["Optimal", "Optimal (Relaxed)", "Optimal (Incumbent)"],
+                f"Expected Optimal or a fallback/incumbent status, got {status}",
             )
 
             # Check Load 0
@@ -13653,28 +13654,25 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_cap_survives_relaxed_lp_fallback(self):
         """The cap gate is a physical limit, so it must keep holding in the
-        relaxed-LP fallback (which keeps its booleans, like the tank's hard
-        min/max temperatures). Two mutually exclusive standard loads needing
-        13 h each on a 24 h horizon make the MILP provably infeasible; the
-        relaxation drops mutual exclusion and solves, but the heat pump must
-        still stay off above its max_supply_temperature."""
+        relaxed-LP fallback. The fallback is forced here (a mutex-infeasible
+        setup no longer reaches it, since mutual exclusion is kept there too);
+        the heat pump must still stay off above its max_supply_temperature while
+        the uncapped booster serves the band above it."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
         min_t = [45.0] * 48
         for i in range(28, 34):
             min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
-        self.optim_conf["number_of_deferrable_loads"] = 4
-        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000, 1000, 1000]
-        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
-        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0, 13, 13]
-        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 4
-        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
-        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
-        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
-        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
-        self.optim_conf["is_electric_load"] = [True] * 4
-        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
-        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 2
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 2
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 2
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 2
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 2
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 2
         self.optim_conf["def_load_config"] = [
             {
                 "thermal_source": {
@@ -13684,37 +13682,26 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 }
             },
             {"thermal_source": {"efficiency": 1.0}},
-            {},
-            {},
         ]
         self.optim_conf["shared_thermal_tanks"] = [
             {
                 "id": "dhw",
                 "load_ids": [0, 1],
                 "volume": 0.20,
-                "density": 1000,
-                "heat_capacity": 4.186,
                 "start_temperature": 48.0,
                 "thermal_loss": 0.0,
                 "min_temperatures": min_t,
                 "max_temperatures": [65.0] * 48,
             }
         ]
-        # Loads 2 and 3 may never run simultaneously, yet each must deliver
-        # 13 h x 1 kW: 26 h of combined runtime in a 24 h horizon. The MILP is
-        # infeasible by construction; the relaxation drops mutual exclusion.
-        self.optim_conf["deferrable_load_groups"] = [
-            {"names": ["deferrable2", "deferrable3"], "mutual_exclusion": True}
-        ]
         opt = self.create_optimization()
-        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
-        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt._needs_relaxed_retry = lambda *a, **k: True  # force the fallback
         res = opt.perform_optimization(
             self.df_input_data_dayahead,
             self.p_pv_forecast.values.ravel(),
             self.p_load_forecast.values.ravel(),
-            ulc,
-            upp,
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
         )
         self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
         booster = res["P_deferrable1"].reset_index(drop=True)
@@ -15732,7 +15719,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # whether this particular re-solve happened to be accepted.
         accepted = {}
 
-        def always_accept(status, value):
+        def always_accept(*_args):
             accepted["called"] = True
             return True
 
@@ -16669,6 +16656,304 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         tcol = [c for c in res.columns if "temp_shared_house" in c or "temp_heater" in c][0]
         return opt, res[tcol].to_numpy()
+
+    def test_mutual_exclusion_honoured_for_shared_tank_sources(self):
+        """Mutual exclusion must hold for shared-tank heat sources (issue #539).
+        Two continuous heat-pump sources feed one shared tank; a group marks them
+        mutually exclusive (one compressor cannot serve two flows at once). Demand
+        is met comfortably by a single source, so the constraint is feasible and
+        must be honoured - the two sources never run in the same timestep. (The
+        relaxed fallback is covered by
+        test_mutual_exclusion_survives_forced_relaxed_fallback.)"""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 45.0, "carnot_efficiency": 0.45}},
+            {"thermal_source": {"supply_temperature": 45.0, "carnot_efficiency": 0.45}},
+        ]
+        draw = [0.0] * 48
+        for i in range(10, 44):
+            draw[i] = 0.8
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.3,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.1,
+                "draw_off_demand": draw,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [60.0] * 48,
+            }
+        ]
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}
+        ]
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        both_active = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
+        self.assertFalse(
+            both_active.any(),
+            "Mutual exclusion violated for shared-tank sources: both fired in the same slot",
+        )
+
+    def test_mutual_exclusion_survives_relaxed_lp_fallback(self):
+        """Mutual exclusion is a physical constraint (one source cannot drive two
+        targets at once), so it must survive the relaxed-LP fallback rather than be
+        silently dropped (#539, reported by Micr0mega: a shared-tank source in a
+        mutual_exclusion group ran both loads at once). Two mutually exclusive loads
+        needing 13 h each on a 24 h horizon are infeasible by construction: because
+        the fallback keeps mutual exclusion (alongside the tank's hard min/max and
+        the max_supply_temperature cap), the run is now honestly reported Infeasible
+        instead of masked as 'Optimal (Relaxed)' with both loads scheduled at once."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # needs the uncapped booster, like the cap tests above
+        self.optim_conf["number_of_deferrable_loads"] = 4
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000, 1000, 1000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0, 13, 13]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * 4
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
+        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
+        self.optim_conf["is_electric_load"] = [True] * 4
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": 55.0,
+                    "carnot_efficiency": 0.40,
+                    "max_supply_temperature": 53.0,
+                }
+            },
+            {"thermal_source": {"efficiency": 1.0}},
+            {},
+            {},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 48.0,
+                "thermal_loss": 0.0,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        # Loads 2 and 3 may never run simultaneously, yet each must deliver
+        # 13 h x 1 kW: 26 h of combined runtime in a 24 h horizon. The MILP is
+        # infeasible by construction, and so is the fallback, which keeps mutual
+        # exclusion.
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable2", "deferrable3"], "mutual_exclusion": True}
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        # 26 h of mutually exclusive runtime cannot fit a 24 h horizon. The relaxed
+        # rebuild keeps mutual exclusion, so the run is honestly reported Infeasible
+        # rather than dropping the constraint to mask it as a (both-loads) solve.
+        self.assertEqual(opt.optim_status, "Infeasible")
+
+    def test_needs_relaxed_retry_accepts_time_limited_incumbent(self):
+        """A time-limited (user_limit) solve with a proven feasible incumbent must be
+        accepted, not discarded for the binary-relaxed fallback, where a good
+        near-optimal MILP solution would be thrown away. Unusable solves
+        (infeasible/unbounded/None, or no proven incumbent) still retry."""
+        needs = Optimization._needs_relaxed_retry
+        self.assertFalse(needs("user_limit", 12.3, feasible_incumbent=True))
+        self.assertTrue(needs("user_limit", 0.0))  # a value alone proves nothing
+        self.assertTrue(needs("user_limit", None, feasible_incumbent=True))
+        self.assertFalse(needs("optimal", 5.0))
+        self.assertTrue(needs("infeasible", None))
+        self.assertTrue(needs("infeasible", 5.0))  # infeasible always retries
+        self.assertTrue(needs("unbounded", None))
+        self.assertTrue(needs(None, None))
+
+    def test_has_feasible_incumbent(self):
+        """HiGHS reports whether a time-limited solve holds a feasible solution
+        (primal_solution_status 2); without that report the constraints are
+        checked directly."""
+        from types import SimpleNamespace
+
+        def highs_like(value, primal_status):
+            return SimpleNamespace(
+                value=value,
+                solver_stats=SimpleNamespace(
+                    extra_stats=SimpleNamespace(primal_solution_status=primal_status)
+                ),
+                constraints=[],
+            )
+
+        has = Optimization._has_feasible_incumbent
+        self.assertTrue(has(highs_like(5.0, 2)))
+        self.assertFalse(has(highs_like(0.0, 0)))
+        self.assertFalse(has(highs_like(None, 2)))
+        x = cp.Variable(2)
+        prob = cp.Problem(cp.Minimize(cp.sum(x)), [x >= 1])
+        prob.solve(solver=cp.HIGHS)
+        prob_no_report = SimpleNamespace(
+            value=prob.value, solver_stats=None, constraints=prob.constraints
+        )
+        self.assertTrue(has(prob_no_report))
+        x.value = np.zeros(2)  # what a time-out without a solution leaves behind
+        self.assertFalse(has(prob_no_report))
+
+        # Without the solver's report, values from an LP relaxation satisfy the
+        # constraints but not the on/off variables: those must be integral too.
+        on = cp.Variable(3, boolean=True)
+        level = cp.Variable(3, integer=True)
+        mixed = cp.Problem(cp.Minimize(cp.sum(on) + cp.sum(level)), [on <= 1, level >= 0])
+        mixed = SimpleNamespace(
+            value=0.0,
+            solver_stats=None,
+            constraints=mixed.constraints,
+            variables=mixed.variables,
+        )
+        # save_value is how a solver writes its result, without the attribute
+        # check that the .value setter applies.
+        on.save_value(np.array([0.0, 1.0, 1.0]))
+        level.save_value(np.array([0.0, 2.0, 3.0]))
+        self.assertTrue(has(mixed))
+        on.save_value(np.array([0.0, 0.5, 1.0]))
+        self.assertFalse(has(mixed))
+        on.save_value(np.array([0.0, 1.0, 1.0]))
+        level.save_value(np.array([0.0, 2.4, 3.0]))
+        self.assertFalse(has(mixed))
+
+    def test_time_out_without_incumbent_is_not_published_as_optimal(self):
+        """With a time limit too short to find any solution, HiGHS returns
+        user_limit with value 0.0 and all variables at 0. That must not be
+        published as 'Optimal (Incumbent)' (an all-zero plan reported as ok); it
+        goes to the relaxed fallback instead. With this limit the relaxed LP
+        times out too, so the run reports the time-out and publishes no plan."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf["lp_solver_timeout"] = 1e-6
+        opt = self.create_optimization()
+        with self.assertLogs(logger, level="WARNING") as logs:
+            res = self._solve_default_inputs(opt)
+        self.assertTrue(any("Retrying with" in line for line in logs.output), logs.output)
+        self.assertEqual(opt.optim_status, "User_Limit")
+        self.assertNotIn("P_grid", res.columns)
+
+    def test_mutual_exclusion_survives_forced_relaxed_fallback(self):
+        """The relaxed fallback keeps mutual_exclusion: two semi-continuous loads
+        in a mutual-exclusion group never run in the same step, even when the
+        fallback is forced."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [2000.0, 1500.0],
+                "operating_hours_of_each_deferrable_load": [4, 4],
+                "deferrable_load_groups": [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 2500,
+                        "mutual_exclusion": True,
+                    }
+                ],
+            }
+        )
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt = self.create_optimization()
+        opt._needs_relaxed_retry = lambda *a, **k: True  # force the fallback
+        res = self._solve_default_inputs(opt)
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        both = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
+        self.assertFalse(both.any(), "mutual exclusion dropped in the relaxed fallback")
+
+    def test_dp_resolve_time_out_without_incumbent_keeps_static_plan(self):
+        """A DP re-solve that hits its time limit before finding any solution
+        returns user_limit with every variable at 0. It must be rejected and the
+        static plan published, not the all-zero re-solve."""
+        self._dp_refinable_setup()
+        self.optim_conf["cop_solver"] = "static"
+        opt_static = self.create_optimization()
+        res_static = self._solve_default_inputs(opt_static)
+
+        halve = Optimization._dp_resolve_opts
+        with (
+            mock.patch.object(
+                Optimization,
+                "_dp_resolve_opts",
+                staticmethod(lambda opts: {**halve(opts), "time_limit": 1e-6}),
+            ),
+            self.assertLogs(logger, level="WARNING") as logs,
+        ):
+            opt = self._dp_refinable_setup()
+            res = self._solve_default_inputs(opt)
+        self.assertTrue(
+            any("re-solve status user_limit; keeping static solve" in m for m in logs.output),
+            logs.output,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertGreater(res["P_deferrable0"].sum(), 0.0)
+        np.testing.assert_allclose(
+            res["P_deferrable0"].sum(), res_static["P_deferrable0"].sum(), rtol=1e-3
+        )
+
+    def test_dp_refined_time_limited_resolve_publishes_incumbent(self):
+        """When the accepted DP re-solve is itself time-limited (user_limit with a
+        feasible incumbent), the incumbent marking must apply to the problem the
+        extraction reads - the refined one - so it publishes as
+        'Optimal (Incumbent)' rather than being discarded as a raw user_limit.
+
+        The re-solve runs for real and goes through the real acceptance check:
+        it is only reported as time-limited afterwards, keeping the feasible
+        solution and HiGHS' own report of it."""
+        opt = self._dp_refinable_setup()
+        original_solve = cp.Problem.solve
+
+        def solve(problem, *args, **kwargs):
+            result = original_solve(problem, *args, **kwargs)
+            if opt.prob is not None and problem is not opt.prob:
+                problem._status = "user_limit"  # the DP re-solve, cut off by the limit
+            return result
+
+        with (
+            mock.patch.object(cp.Problem, "solve", autospec=True, side_effect=solve),
+            self.assertLogs(logger, level="INFO") as logs,
+        ):
+            self._solve_default_inputs(opt)
+        self.assertEqual(opt.optim_status, "Optimal (Incumbent)")
+        self.assertTrue(
+            any("Accepting time-limited solution" in line for line in logs.output), logs.output
+        )
 
 
 if __name__ == "__main__":
