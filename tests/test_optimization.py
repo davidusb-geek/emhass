@@ -29,6 +29,7 @@ from emhass.utils import (
     get_root,
     get_yaml_parse,
 )
+from tests.fixture_clock import fixture_clock
 
 # The root folder
 root = pathlib.Path(get_root(__file__, num_parent=2))
@@ -48,6 +49,11 @@ VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
 
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # The fixtures below are 48 half-hour steps; the real-clock grid is 46 or 50 on
+        # DST days, and some tests read the clock in their body, so freeze the whole test.
+        clock = fixture_clock()
+        clock.start()
+        self.addCleanup(clock.stop)
         get_data_from_file = True
         params = {}
         # Build params with default config and secrets
@@ -15172,10 +15178,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(res["P_deferrable0"].sum(), 0.0)
         self.assertGreaterEqual(res["predicted_temp_heater0"].iloc[-1], 39.0)
 
-    def _buffer_feeds_house(self, cop_solver):
+    def _buffer_feeds_house(self, cop_solver, load_w=500.0):
         """A heating-curve heat pump charges a small buffer that feeds a house
         zone through a gradient-limited transfer; the house starts below its
-        target. Returns (optimization, result)."""
+        target. The household load is a constant ``load_w`` rather than the
+        clock-derived forecast: it sets the marginal price the DP sees for the
+        buffer's heat, and with it which regime the refinement ends up in (see
+        ``test_dp_refinement_caps_a_transfer_fed_zone_at_the_dp_peak``).
+        Returns (optimization, result)."""
         from emhass import utils
 
         topo = {
@@ -15239,11 +15249,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         res = opt.perform_optimization(
             self.df_input_data_dayahead,
             self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
+            np.full(48, load_w),
             np.where((hours >= 7) & (hours < 22), 0.19, 0.14),
             np.full(48, 0.05),
         )
         return opt, res
+
+    def _dp_refined_buffer_feeds_house(self, load_w):
+        """_buffer_feeds_house("dp") that also returns the hottest buffer temperature
+        the DP priced (once per DP solve) and the verdict of every re-solve
+        acceptance check. The real implementations still run; they are only observed.
+        A re-solve that is skipped or fails before solving never reaches the check, and
+        a rejected one restores the static plan, so ``[True]`` means the refined
+        solution is the one that was kept."""
+        from emhass import thermal_dp
+
+        peaks = []
+        accepted = []
+        solve_dp = thermal_dp.solve_thermal_dp
+        accept = Optimization._accept_dp_resolve
+
+        def recording_solve(*args, **kwargs):
+            res = solve_dp(*args, **kwargs)
+            peaks.append(float(np.max(res.tank_trajectory[:-1])))
+            return res
+
+        def recording_accept(status, value):
+            accepted.append(accept(status, value))
+            return accepted[-1]
+
+        with (
+            mock.patch("emhass.thermal_dp.solve_thermal_dp", side_effect=recording_solve),
+            mock.patch.object(Optimization, "_accept_dp_resolve", side_effect=recording_accept),
+        ):
+            opt, res = self._buffer_feeds_house("dp", load_w=load_w)
+        return opt, res, peaks, accepted
 
     def test_dp_refinement_does_not_starve_a_transfer_fed_zone(self):
         """The DP sees a zone fed through a gradient-limited transfer only as a
@@ -15257,9 +15297,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             return float(np.clip(20.5 - house, 0, None).sum())
 
         _, res_static = self._buffer_feeds_house("static")
-        opt, res_dp = self._buffer_feeds_house("dp")
+        opt, res_dp, peaks, accepted = self._dp_refined_buffer_feeds_house(500.0)
         self.assertEqual(opt.optim_status, "Optimal")
+        # The refinement ran and its re-solve was accepted (a skipped or rejected one
+        # leaves the static plan and would pass trivially). At this load the DP heats
+        # the buffer to its 52 C maximum, so the ceiling cannot bind: any shortfall
+        # beyond the static plan can only come from a stricter bound than the ceiling.
+        self.assertEqual(len(peaks), 1)
+        self.assertGreaterEqual(peaks[0] + 1.0, 52.0)
+        self.assertEqual(accepted, [True])
         self.assertLessEqual(shortfall(res_dp), shortfall(res_static) + 0.2)
+
+    def test_dp_refinement_caps_a_transfer_fed_zone_at_the_dp_peak(self):
+        """With a high household load the DP keeps the buffer cold, so its peak
+        plus 1 C (docs/advanced_math_model.md) is below the buffer maximum and is
+        the limit the re-solve works within, while the static plan runs the
+        buffer to its maximum. The refinement must run, stay feasible, keep the
+        buffer under that ceiling and keep both stores in their temperature
+        bounds. How much comfort the house may lose when the ceiling binds is not
+        specified, so it is not asserted here."""
+        _, res_static = self._buffer_feeds_house("static", load_w=2000.0)
+        opt, res_dp, peaks, accepted = self._dp_refined_buffer_feeds_house(2000.0)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertEqual(len(peaks), 1, "the DP refinement should run once")
+        self.assertEqual(accepted, [True], "the refined re-solve should be accepted")
+        ceiling = peaks[0] + 1.0
+        buffer_max = 52.0
+        # The fixture is in the capped regime: the ceiling is below the buffer's own
+        # maximum and below what the static plan uses. If a change moves the DP out
+        # of it, this fails instead of silently no longer testing the ceiling.
+        self.assertLess(ceiling, buffer_max)
+        self.assertGreater(res_static["predicted_temp_heater0"].max(), ceiling)
+        buffer = res_dp["predicted_temp_heater0"].to_numpy(dtype=float)[1:]
+        house = res_dp["predicted_temp_heater2"].to_numpy(dtype=float)
+        # The documented ceiling is an upper bound, not a target: the plan is only
+        # required to stay under it.
+        self.assertLessEqual(buffer.max(), ceiling + 1e-3)
+        self.assertGreaterEqual(buffer.min(), 30.0 - 1e-3)
+        self.assertGreaterEqual(house.min(), 19.0 - 1e-3)
+        self.assertLessEqual(house.max(), 23.0 + 1e-3)
 
     def test_dp_cop_refinement_noop_when_consistent(self):
         """When the static COP is already consistent with the tank temperatures the

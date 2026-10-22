@@ -26,6 +26,7 @@ from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from tests.fixture_clock import fixture_clock
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -125,16 +126,17 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             var_interp=self.retrieve_hass_conf["sensor_linear_interp"],
         )
         self.df_input_data = self.rh.df_final.copy()
-        # Create forecast Object
-        self.fcst = Forecast(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            params_json,
-            emhass_conf,
-            logger,
-            get_data_from_file=self.get_data_from_file,
-        )
+        # Create forecast Object (its grid comes from the clock; see tests/fixture_clock.py)
+        with fixture_clock():
+            self.fcst = Forecast(
+                self.retrieve_hass_conf,
+                self.optim_conf,
+                self.plant_conf,
+                params_json,
+                emhass_conf,
+                logger,
+                get_data_from_file=self.get_data_from_file,
+            )
         # The default for test is csv read
         self.df_weather_scrap = await self.fcst.get_weather_forecast(method="csv")
         self.p_pv_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
@@ -172,6 +174,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
 
     # Test weather forecast dataframe output based on saved csv file
+    @fixture_clock()
     async def test_get_weather_forecast_csv(self):
         # Test dataframe from get weather forecast
         self.df_weather_csv = await self.fcst.get_weather_forecast(method="csv")
@@ -331,6 +334,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.fcst.data_adjust_pv), len(idx))
 
     # Test output weather forecast using openmeteo with mock get request data
+    @fixture_clock()
     async def test_get_weather_forecast_openmeteo_method_mock(self):
         test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
 
@@ -935,6 +939,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(passed_time_zone, self.fcst.time_zone)
 
     # Test output weather forecast using Solcast with mock get request data
+    @fixture_clock()
     async def test_get_weather_forecast_solcast_method_mock(self):
         self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
@@ -989,6 +994,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 )
 
     # Test output weather forecast using Solcast-multiroofs with mock get request data
+    @fixture_clock()
     async def test_get_weather_forecast_solcast_multiroofs_method_mock(self):
         self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
         self.fcst.params = {
@@ -1525,6 +1531,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 os.rename(temp_path, cache_path)
 
     # Test output weather forecast using Forecast.Solar with mock get request data
+    @fixture_clock()
     async def test_get_weather_forecast_solarforecast_method_mock(self):
         test_data_path = str(
             emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
@@ -1609,6 +1616,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
 
     #  Test output weather forecast using passed runtime lists
+    @fixture_clock()
     async def test_get_forecasts_with_lists(self):
         # Load default params
         params = {}
@@ -2182,6 +2190,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
     # Test output values of weather forecast using passed runtime lists and saved sensor datalf):
+    @fixture_clock()
     async def test_get_forecasts_with_lists_special_case(self):
         # Load default params
         params = {}
@@ -2298,6 +2307,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(df_input_data["unit_prod_price"].values[0], 1)
         self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
+    @fixture_clock()
     async def test_get_power_from_weather(self):
         self.assertIsInstance(self.p_pv_forecast, pd.core.series.Series)
         self.assertIsInstance(self.p_pv_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -2357,6 +2367,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.df_weather_scrap), len(p_pv_forecast))
 
     # Test dataframe output of load forecast
+    @fixture_clock()
     async def test_get_load_forecast(self):
         p_load_forecast = await self.fcst.get_load_forecast()
         self.assertIsInstance(p_load_forecast, pd.core.series.Series)
@@ -2394,6 +2405,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.p_pv_forecast), len(p_load_forecast))
 
     # Test dataframe output of ml load forecast
+    @fixture_clock()
     async def test_get_load_forecast_mlforecaster(self):
         params = await TestForecast.get_test_params()
         params_json = orjson.dumps(params).decode("utf-8")
@@ -2451,6 +2463,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.p_pv_forecast), len(p_load_forecast))
 
     # Test load forecast with typical statistics method
+    @fixture_clock()
     async def test_get_load_forecast_typical(self):
         p_load_forecast = await self.fcst.get_load_forecast(method="typical")
         self.assertIsInstance(p_load_forecast, pd.core.series.Series)
@@ -3306,6 +3319,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # (Assuming daytime, but solar position depends on lat/lon/time.
         #  Just checking structure is usually enough for coverage).
 
+    @fixture_clock()
     def test_get_power_from_weather_single_system(self):
         """Test get_power_from_weather with a single PV system configuration."""
         # Force single string configuration (not list)
@@ -3484,6 +3498,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             return await self.fcst.get_weather_forecast(method="solcast")
 
     # Test weather_forecast_pv_quantile_bias blending (Phase 1 — forecast side only)
+    @fixture_clock()
     async def test_get_weather_forecast_solcast_pv_quantile_bias(self):
         """Verify that weather_forecast_pv_quantile_bias blends P50 and P10 correctly.
 
