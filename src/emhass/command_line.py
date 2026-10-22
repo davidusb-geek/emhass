@@ -330,6 +330,12 @@ class OptimizationCache:
             "indoor_target_temperature",  # thermal_battery runtime param
             "q_input_initial",  # thermal inertia warm-start override
             "draw_off_demand",  # hot water tank daily profile (updates heating_demand param)
+            # NOT listed here on purpose: prior_heat. Although it is per-run state
+            # (like start_temperature), it is baked into the dead-zone constraint as
+            # a raw array at build time rather than parameterized, so it is
+            # STRUCTURAL - excluding it would let a cached problem silently reuse a
+            # stale initial condition. Move it here only together with making it a
+            # cp.Parameter refreshed before each solve.
         }
         # Plant parameters that are updated dynamically (no rebuild needed)
         plant_runtime_keys = {

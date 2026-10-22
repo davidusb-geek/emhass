@@ -1305,6 +1305,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"{_range}, got {raw!r}"
                 )
             tank[_zone_key] = value
+        # prior_heat is the lag model's initial condition (thermal kWh per step
+        # already in flight from previous rolling-MPC runs), so unlike the scalars
+        # above it is a per-step list and is passed through unconverted. Usually
+        # supplied per run via runtimeparams rather than written into the topology.
+        if s.get("prior_heat") is not None:
+            tank["prior_heat"] = s["prior_heat"]
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1478,6 +1484,22 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
         "is_electric_load",
     }
 )
+
+
+def _prior_heat_values(series):
+    """(values, None) for a usable shared_tank_prior_heat list, else (None, why)."""
+    if isinstance(series, str) or not isinstance(series, list | tuple):
+        return None, f"must be a list of numbers, got {type(series).__name__}"
+    try:
+        # A boolean is not heat (float(True) would be 1.0).
+        if any(isinstance(v, bool) for v in series):
+            raise TypeError("boolean entry")
+        values = [float(v) for v in series]
+    except (TypeError, ValueError, OverflowError):
+        return None, f"={series!r} is not all numeric"
+    if any(v < 0 or not np.isfinite(v) for v in values):
+        return None, "must be finite and >= 0"
+    return values, None
 
 
 def _restore_configured_shared_tanks(params: dict, configured) -> None:
@@ -3706,6 +3728,55 @@ async def treat_runtimeparams(
                         for k in range(len(ids), final_num_def_loads)
                     ]
 
+    # Per-tank in-flight heat for a lagged tank (thermal_inertia), keyed by tank id:
+    # the thermal kWh already delivered per step by previous rolling-MPC runs but not
+    # yet arrived. Sibling of shared_tank_start_temperatures - both are per-run state,
+    # not configuration - and likewise tolerant: bad entries warn and are skipped so a
+    # flaky feed degrades to the previous cold-start behaviour instead of failing.
+    if runtimeparams and "shared_tank_prior_heat" in runtimeparams:
+        overrides = runtimeparams["shared_tank_prior_heat"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_prior_heat must be an object mapping tank id to a list "
+                "of per-step thermal kWh, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, series in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                matching = [t for t in tanks if isinstance(t, dict) and str(t.get("id")) == tank_id]
+                if len(matching) > 1:
+                    # Two tanks whose ids read the same as text (0 and "0"): the
+                    # key cannot say which one is meant.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] matches %d tanks whose ids read the "
+                        "same; ignoring.",
+                        tank_id,
+                        len(matching),
+                    )
+                    continue
+                values, problem = _prior_heat_values(series)
+                if problem is not None:
+                    # A bad runtime value starts that tank cold for the run, as
+                    # documented: a configured prior_heat would be stale here.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] %s; ignoring, the tank starts cold.",
+                        tank_id,
+                        problem,
+                    )
+                    matching[0].pop("prior_heat", None)
+                    continue
+                matching[0]["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,
