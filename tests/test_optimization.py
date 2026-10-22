@@ -16995,6 +16995,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         # The documented load numbering: three source flows, in the order of flows.
         self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 3)
+        # The actuator group reaches the optimizer as a mutual-exclusion group over
+        # the two heat-pump loads (without it, this solve runs both modes in the
+        # same step).
+        self.assertEqual(
+            optim_conf_out["deferrable_load_groups"],
+            [{"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}],
+        )
+        # The shower profile reaches the DHW tank: 5 kWh at steps 14-15 and 40-41.
+        dhw_tank = next(t for t in optim_conf_out["shared_thermal_tanks"] if t["id"] == "dhw")
+        draw_off = np.asarray(dhw_tank["draw_off_demand"], dtype=float)
+        self.assertAlmostEqual(draw_off.sum(), 5.0)
+        np.testing.assert_array_equal(np.flatnonzero(draw_off), [14, 15, 40, 41])
         opt = self.create_optimization(optim_conf=optim_conf_out)
         res = opt.perform_optimization(
             self.df_input_data_dayahead,
@@ -17017,7 +17029,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # One heat pump, two targets: never both in the same step.
         both = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
         self.assertFalse(both.any())
-        self.assertAlmostEqual(res["predicted_temp_heater0"].iloc[0], 48.0, places=1)
+        dhw = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        self.assertAlmostEqual(dhw[0], 48.0, places=1)
+        # The 1.5 kWh draw at step 15 shows as a drop of several kelvin, and the
+        # loads that heat the DHW tank replace it (without the showers they
+        # deliver about 0.15 kWh over the horizon).
+        self.assertLess(dhw[16], dhw[15] - 3.0)
+        dhw_kwh = (res["P_deferrable0"] + res["P_deferrable2"]).sum() * opt.time_step / 1000
+        self.assertGreater(dhw_kwh, 1.0)
         # Load 2 (boiler -> DHW) publishes the DHW temperature again.
         np.testing.assert_allclose(
             res["predicted_temp_heater2"], res["predicted_temp_heater0"], atol=1e-6
