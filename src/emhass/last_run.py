@@ -78,7 +78,48 @@ def record(
 
     Writes to both the in-memory cache and <data_path>/last_run.json under
     a lock. File write failure is logged-and-swallowed so a disk error never
-    breaks the caller's return path.
+    breaks the caller's return path. The snapshot is the one snapshot()
+    builds.
+    """
+    global _cache
+    snap = snapshot(
+        action,
+        stage_times,
+        optim_status,
+        infeasible,
+        duration_total_seconds,
+        schema_version,
+        error_message,
+    )
+
+    with _lock:
+        _cache = snap
+        target = _path(data_path)
+        try:
+            payload = json.dumps(snap, indent=2)
+            target.write_text(payload, encoding="utf-8")
+        except OSError as exc:
+            _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
+
+    # Return the stamped timestamp so callers (e.g. _record_optim_snapshot)
+    # can reuse the exact same instant for the plan snapshot's generated_at,
+    # keeping /api/v1/last-run and /api/v1/plan in agreement. Existing callers
+    # that ignore the return value are unaffected.
+    return snap["timestamp"]
+
+
+def snapshot(
+    action: str,
+    stage_times: dict,
+    optim_status: str,
+    infeasible: bool,
+    duration_total_seconds: float,
+    schema_version: str,
+    error_message: str | None = None,
+) -> dict:
+    """Build the snapshot of a completed optimization run, without storing it.
+
+    record() stores it for /api/v1/last-run; a dry run returns it instead.
 
     Status mapping: every status whose plan the optimizer publishes -> "ok":
     "Optimal", "Optimal_Inaccurate" (CVXPY's optimal_inaccurate), "Optimal
@@ -88,7 +129,6 @@ def record(
     on the side of caution: an unrecognised solver status is surfaced as
     "error" rather than silently classified as healthy.
     """
-    global _cache
     if optim_status in OK_OPTIM_STATUSES:
         status = "ok"
     elif optim_status == "Infeasible" or infeasible:
@@ -110,21 +150,7 @@ def record(
     snap["schema_version"] = schema_version
     snap["infeasible"] = infeasible
     snap["error_message"] = _truncate_error_message(error_message)
-
-    with _lock:
-        _cache = snap
-        target = _path(data_path)
-        try:
-            payload = json.dumps(snap, indent=2)
-            target.write_text(payload, encoding="utf-8")
-        except OSError as exc:
-            _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
-
-    # Return the stamped timestamp so callers (e.g. _record_optim_snapshot)
-    # can reuse the exact same instant for the plan snapshot's generated_at,
-    # keeping /api/v1/last-run and /api/v1/plan in agreement. Existing callers
-    # that ignore the return value are unaffected.
-    return snap["timestamp"]
+    return snap
 
 
 def read(data_path: Path) -> dict | None:

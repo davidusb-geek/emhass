@@ -262,7 +262,8 @@ hard, because the plan can heat ahead for it.
 The same happens to a maximum that free heat alone breaks. Sun through the
 windows (or a warm day) can carry a heated storage past its maximum with every
 source off, and no plan can prevent that. Before each run EMHASS follows the
-storage with its sources off, held up only by its minimums; if that path lies
+storage with its sources off (heat already in flight from `prior_heat`
+included), held up only by its minimums; if that path lies
 above a maximum, the maximums of that storage are priced for that run instead
 of making it infeasible, and the log says so. The penalty is the one used for a
 storage that starts below its minimum, so no source heats into the excess. On a
@@ -286,7 +287,8 @@ are optional; without them a storage is a water tank as before.
 | --- | --- | --- |
 | `thermal_mass` | kWh/K | Heat capacity, instead of `volume`. |
 | `loss_coefficient` | kW/K | Heat-loss coefficient UA. The loss becomes `UA * (T - outdoor)`, so a warmer zone loses more and the optimizer can pre-heat on cheap power and coast through a price peak. Cannot be combined with a `building_demand` consumer, which also models the loss to outdoor. |
-| `thermal_inertia` | hours | Delay between the storage's own source heat and the temperature response, as in the thermal model. Applied in whole timesteps (rounded down) and capped at the horizon. Transfers are not lagged, so on a storage fed only by transfers it is ignored (with a warning). Over the first lagged steps no source heat arrives, so the minimum temperature there is priced rather than hard. |
+| `thermal_inertia` | hours | Delay between the storage's own source heat and the temperature response, as in the thermal model. Applied in whole timesteps (rounded down) and capped at the horizon. Transfers are not lagged, so on a storage fed only by transfers it is ignored (with a warning). Over the first lagged steps only heat already in flight (`prior_heat`) arrives, so the minimum temperature there is priced rather than hard. |
+| `prior_heat` | kWh per step | Heat the storage's sources already produced that is still in flight because of `thermal_inertia`, oldest first. Usually sent per run with `shared_tank_prior_heat` instead; see [Rolling MPC](#rolling-mpc). |
 | `window_area`, `shgc` | m2, fraction | Solar gain through glazing from the GHI forecast (`window_area * shgc * GHI`), which offsets the zone's heating need. `shgc` defaults to `0.6`. Applied only to a zone with `loss_coefficient`, and only when the weather data has GHI (open-meteo); otherwise it is zero. |
 
 For example, a house held between 19.5 and 21.5 degrees Celsius, with a
@@ -522,6 +524,47 @@ measured storage temperature as `start_temperature` in the `heat_topology` you
 send at runtime, or send only `shared_tank_start_temperatures` (for example
 `{"dhw": 48.5}`) to override the start temperature per storage id without
 resending the topology. The solve takes a few seconds longer than a warm start.
+
+With `thermal_inertia`, heat produced at step `t` only reaches the storage at
+step `t + 1 + L`, where `L` is `thermal_inertia` divided by the time step,
+rounded down. In a one-shot day-ahead plan the first `L` steps therefore get no
+source heat, which is correct: nothing precedes the horizon. A rolling MPC run
+starts mid-flight, though: heat committed by the previous runs is still on its
+way. Without an initial condition, the temperature over those first steps does
+not depend on anything the optimizer can choose, so it keeps re-injecting heat
+and returns an Optimal plan that over-provisions heating.
+
+Pass that heat per run with `shared_tank_prior_heat`, keyed by storage id:
+
+```json
+{"shared_tank_prior_heat": {"house": [0.8, 1.4]}}
+```
+
+The values are the thermal kWh that all of the storage's sources together
+delivered in each of the last `L` steps, oldest first. Leave out heat that
+arrived through a `transfers` entry: transfers are not lagged. A shorter list
+is right-aligned (the most recent steps are the ones still in flight), a longer
+one keeps its last `L` values, and either is logged. Without a lag the value is
+ignored, which is logged too. Omitting it keeps the cold-start behaviour.
+
+A malformed runtime entry (not a list, not numeric, negative or not finite) is
+ignored with a warning, and that storage starts cold for the run. A `prior_heat`
+written into the storage configuration is checked strictly instead: the same
+values fail the run.
+
+To keep it up to date, each time an optimization time step completes, drop the
+oldest value and append the thermal kWh actually delivered during that step. If
+MPC runs more often than once per time step (for example every 5 minutes on a
+30-minute grid), resend the same list on the runs in between. Do not refill it
+from the new plan's own first `L` steps: that feeds the model its intentions
+rather than what the hardware did, which is exactly what this initial condition
+corrects. The best source is a differenced heat or energy counter on the unit
+(thermal kWh per step, or electrical kWh times that step's COP); the executed
+step of the previous plan is a usable fallback when there is no counter and the
+unit follows its setpoints closely. When differencing a counter, clamp a
+negative difference (a counter reset) to 0, and send 0 for a step whose reading
+is unavailable rather than a non-numeric value, which would drop the whole list
+for that run.
 
 ## Combining with other deferrable loads
 
