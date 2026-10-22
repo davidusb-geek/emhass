@@ -18,6 +18,8 @@ The sensor containing the load data should be specified in the parameter `sensor
 
 If you are implementing an MPC controller, then you should also need to provide some data at the optimization runtime using the key `runtimeparams`.
 
+To try a request without replacing the live plan, send the same body to `/api/v1/dry-run/<action>`: see [Dry run](dry_run.md).
+
 The valid values to pass for both forecast data and MPC-related data are explained below.
 
 ### Forecast data at runtime
