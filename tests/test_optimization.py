@@ -16955,6 +16955,93 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             any("Accepting time-limited solution" in line for line in logs.output), logs.output
         )
 
+    async def test_hybrid_heating_walkthrough_example_solves(self):
+        """The heat_topology in docs/study_cases/hybrid_heating_walkthrough.md must
+        compile and solve: a heat pump in two modes (two sources in one
+        mutual-exclusion group) + gas boiler, DHW tank + buffer feeding a house
+        zone through a transfer. The configuration is read from the page itself,
+        so the documented example cannot silently rot."""
+        page = (root / "docs" / "study_cases" / "hybrid_heating_walkthrough.md").read_text(
+            encoding="utf-8"
+        )
+        block = next(
+            b.split("```", 1)[0] for b in page.split("```python\n")[1:] if "heat_topology = {" in b
+        )
+        namespace = {}
+        exec(block, namespace)  # noqa: S102 - the documented example, from the repo
+        heat_topology = namespace["heat_topology"]
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = (
+            [2.0] * 16 + [8.0] * 16 + [4.0] * 16
+        )
+        runtimeparams = {
+            "heat_topology": heat_topology,
+            "shared_tank_start_temperatures": {"dhw": 48.0, "buffer": 41.5, "house": 20.3},
+        }
+        config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
+        params = await build_params(emhass_conf, secrets, config, logger)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
+        _, _, optim_conf_out, _ = await utils.treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        # The documented load numbering: three source flows, in the order of flows.
+        self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 3)
+        # The actuator group reaches the optimizer as a mutual-exclusion group over
+        # the two heat-pump loads (without it, this solve runs both modes in the
+        # same step).
+        self.assertEqual(
+            optim_conf_out["deferrable_load_groups"],
+            [{"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}],
+        )
+        # The shower profile reaches the DHW tank: 5 kWh at steps 14-15 and 40-41.
+        dhw_tank = next(t for t in optim_conf_out["shared_thermal_tanks"] if t["id"] == "dhw")
+        draw_off = np.asarray(dhw_tank["draw_off_demand"], dtype=float)
+        self.assertAlmostEqual(draw_off.sum(), 5.0)
+        np.testing.assert_array_equal(np.flatnonzero(draw_off), [14, 15, 40, 41])
+        opt = self.create_optimization(optim_conf=optim_conf_out)
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        # The documented columns: the house (no load) at 3 loads + position 2.
+        for col in (
+            "predicted_temp_heater0",
+            "predicted_temp_heater1",
+            "predicted_temp_heater5",
+            "P_transfer_buffer_house",
+        ):
+            self.assertIn(col, res.columns)
+        house = res["predicted_temp_heater5"].to_numpy()
+        self.assertTrue(((house >= 19.5 - 1e-6) & (house <= 22 + 1e-6))[1:].all())
+        # One heat pump, two targets: never both in the same step.
+        both = (res["P_deferrable0"] > 1.0) & (res["P_deferrable1"] > 1.0)
+        self.assertFalse(both.any())
+        dhw = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        self.assertAlmostEqual(dhw[0], 48.0, places=1)
+        # The 1.5 kWh draw at step 15 shows as a drop of several kelvin, and the
+        # loads that heat the DHW tank replace it (without the showers they
+        # deliver about 0.15 kWh over the horizon).
+        self.assertLess(dhw[16], dhw[15] - 3.0)
+        dhw_kwh = (res["P_deferrable0"] + res["P_deferrable2"]).sum() * opt.time_step / 1000
+        self.assertGreater(dhw_kwh, 1.0)
+        # Load 2 (boiler -> DHW) publishes the DHW temperature again.
+        np.testing.assert_allclose(
+            res["predicted_temp_heater2"], res["predicted_temp_heater0"], atol=1e-6
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
