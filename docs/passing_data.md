@@ -18,6 +18,8 @@ The sensor containing the load data should be specified in the parameter `sensor
 
 If you are implementing an MPC controller, then you should also need to provide some data at the optimization runtime using the key `runtimeparams`.
 
+To try a request without replacing the live plan, send the same body to `/api/v1/dry-run/<action>`: see [Dry run](dry_run.md).
+
 The valid values to pass for both forecast data and MPC-related data are explained below.
 
 ### Forecast data at runtime
@@ -52,6 +54,8 @@ The possible dictionary keys to pass data are:
 - `shared_thermal_tanks` a list of shared thermal storage objects (several sources feeding one storage), the manual flat alternative to `heat_topology`. Each tank carries `id`, `load_ids` (the deferrable-load indices of its sources), `volume` (m3), `start_temperature`, per-step `min_temperatures` / `max_temperatures`, and optionally `thermal_loss` (kW), `draw_off_demand` (kWh per step), `desired_temperatures`, `overshoot_temperature` and `sense` (`heat` or `cool`). Each load in `load_ids` needs a `def_load_config[k]` entry of the form `{"thermal_source": {...}}` with its conversion: `efficiency` (a fixed factor), or `supply_temperature` or `heating_curve` plus `carnot_efficiency` (a heat pump). This is the schema the `heat_topology` compiler produces; writing a `heat_topology` is usually simpler. When `heat_topology` is also set, the compiled topology replaces this list (with `extend_deferrable_loads: true` the runtime tanks are kept and the topology's tanks appended).
 
 - `shared_tank_start_temperatures` a per-storage start-temperature override keyed by storage id, e.g. `{"dhw": 48.5}`. It is applied after the `heat_topology` compile, so it patches manual and compiled tanks alike: the per-run equivalent of `soc_init` or `heater_start_temperatures` for an MPC loop that reads a live tank temperature sensor. Unknown ids and non-numeric values are ignored with a warning.
+
+- `shared_tank_prior_heat` per-storage heat already produced but not yet arrived because of `thermal_inertia`, keyed by storage id: thermal kWh for each of the last L steps, oldest first, e.g. `{"house": [0.8, 1.4]}`. The initial condition for the lag under rolling MPC (see [heat_topology.md](heat_topology.md)). Absent keeps the cold-start behaviour; a malformed entry is ignored with a warning.
 
 - `pv_power_forecast` for the central (P50) PV power production forecast.
 

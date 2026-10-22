@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://emhass.github.io/api/v1/dry-run.schema.json",
+  "title": "EMHASS /api/v1/dry-run/<action> response",
+  "description": "Response shape for POST /api/v1/dry-run/<action>. A dry run solves as POST /action/<action> does and writes nothing. When the solver ran (HTTP 200), the response carries the run record /api/v1/last-run would have served and the plan /api/v1/plan would have served. warnings and errors are the ones this request logged, and no other request's. See docs/dry_run.md.",
+  "type": "object",
+  "required": ["dry_run", "action", "status", "plan", "warnings", "errors"],
+  "properties": {
+    "dry_run": {
+      "const": true,
+      "description": "Always true: nothing was written."
+    },
+    "action": {
+      "type": "string",
+      "description": "The action from the URL: perfect-optim, dayahead-optim or naive-mpc-optim (any other is refused, and echoed here)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "infeasible", "error", "not-run"],
+      "description": "ok, infeasible or error: the solver ran, and status is what /api/v1/last-run would report (only an ok plan would have replaced /api/v1/plan). not-run: refused (HTTP 400, 413 for a body over MAX_CONTENT_LENGTH, 429 while another dry run runs) or failed (HTTP 500) before a plan was made; errors says why."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC instant when the run completed. Present when the solver ran."
+    },
+    "stage_times": {
+      "type": "object",
+      "additionalProperties": {"type": "number"},
+      "description": "Per-stage elapsed seconds, as in /api/v1/last-run. Present when the solver ran."
+    },
+    "duration_total_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock seconds of the run, as in /api/v1/last-run. Present when the solver ran."
+    },
+    "emhass_version": {
+      "type": "string",
+      "description": "Installed emhass package version. Present when the solver ran."
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "EMHASS_SCHEMA_VERSION; the plan columns follow docs/plan_output_schema.md at this version. Present when the solver ran."
+    },
+    "infeasible": {
+      "type": "boolean",
+      "description": "True when the solver returned Infeasible. Present when the solver ran."
+    },
+    "error_message": {
+      "type": ["string", "null"],
+      "description": "As in /api/v1/last-run. Present when the solver ran."
+    },
+    "plan": {
+      "type": ["array", "null"],
+      "items": {"type": "object"},
+      "description": "Per-timestep records, the same as /api/v1/plan's plan, with each record's optim_status. Returned whatever the status, so a caller can see what an infeasible what-if gave. Null when status is not-run."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "The warnings this request logged."
+    },
+    "errors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "The errors this request logged. When status is not-run, they say why."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "not-run"}}, "required": ["status"]},
+      "then": {"properties": {"plan": {"const": null}}},
+      "else": {
+        "required": [
+          "timestamp",
+          "stage_times",
+          "duration_total_seconds",
+          "emhass_version",
+          "schema_version",
+          "infeasible",
+          "error_message"
+        ],
+        "properties": {"plan": {"type": "array"}}
+      }
+    }
+  ]
+}
