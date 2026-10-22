@@ -454,6 +454,9 @@ Each flow pair must exactly match an entry in `flows`.
 `max_combined_power` adds a per-timestep cap on the sum of the member flows. It
 does not replace their individual `min_power` and `nominal_power` limits.
 `mutual_exclusion: true` additionally allows at most one member to be active.
+This also holds in the relaxed fallback EMHASS uses when the full problem cannot
+be solved: if one active member per timestep cannot meet the demand, the run is
+reported infeasible rather than planning two members at once.
 For semi-continuous sources, an active flow runs at its ON level (its nominal
 power, or less where `max_thermal_power` binds), so the group cap must be at
 least as large as every member that may run. For
