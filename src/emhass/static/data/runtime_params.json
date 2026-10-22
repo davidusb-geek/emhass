@@ -167,6 +167,13 @@
       "input": "object",
       "default_value": null,
       "unit": "°C"
+    },
+    "shared_tank_prior_heat": {
+      "friendly_name": "Shared tank prior heat",
+      "Description": "Per-tank heat already produced but not yet arrived because of thermal_inertia, keyed by tank id: thermal kWh for each of the last L steps, oldest first, e.g. {\"house\": [0.8, 1.4]}. The initial condition for the lag under rolling MPC. Absent keeps the cold-start behaviour. A malformed entry is ignored with a warning.",
+      "input": "object",
+      "default_value": null,
+      "unit": "kWh"
     }
   }
 }

@@ -10,6 +10,7 @@ import os
 import pathlib
 import shutil
 import time
+import uuid
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -1304,6 +1305,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"{_range}, got {raw!r}"
                 )
             tank[_zone_key] = value
+        # prior_heat is the lag model's initial condition (thermal kWh per step
+        # already in flight from previous rolling-MPC runs), so unlike the scalars
+        # above it is a per-step list and is passed through unconverted. Usually
+        # supplied per run via runtimeparams rather than written into the topology.
+        if s.get("prior_heat") is not None:
+            tank["prior_heat"] = s["prior_heat"]
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1477,6 +1484,22 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
         "is_electric_load",
     }
 )
+
+
+def _prior_heat_values(series):
+    """(values, None) for a usable shared_tank_prior_heat list, else (None, why)."""
+    if isinstance(series, str) or not isinstance(series, list | tuple):
+        return None, f"must be a list of numbers, got {type(series).__name__}"
+    try:
+        # A boolean is not heat (float(True) would be 1.0).
+        if any(isinstance(v, bool) for v in series):
+            raise TypeError("boolean entry")
+        values = [float(v) for v in series]
+    except (TypeError, ValueError, OverflowError):
+        return None, f"={series!r} is not all numeric"
+    if any(v < 0 or not np.isfinite(v) for v in values):
+        return None, "must be finite and >= 0"
+    return values, None
 
 
 def _restore_configured_shared_tanks(params: dict, configured) -> None:
@@ -2392,6 +2415,10 @@ async def treat_runtimeparams(
             params["passed_data"][key] = value
     else:
         params["passed_data"] = default_passed_dict
+    # Only set_input_data_dict's dry_run argument, which only the dry-run URL
+    # passes, makes a dry run. A dry_run left in saved or passed params must
+    # not turn a live run into one that writes nothing.
+    params["passed_data"].pop("dry_run", None)
 
     # Capture defaults for power limits before association loop
     power_limit_defaults = {
@@ -3701,6 +3728,55 @@ async def treat_runtimeparams(
                         for k in range(len(ids), final_num_def_loads)
                     ]
 
+    # Per-tank in-flight heat for a lagged tank (thermal_inertia), keyed by tank id:
+    # the thermal kWh already delivered per step by previous rolling-MPC runs but not
+    # yet arrived. Sibling of shared_tank_start_temperatures - both are per-run state,
+    # not configuration - and likewise tolerant: bad entries warn and are skipped so a
+    # flaky feed degrades to the previous cold-start behaviour instead of failing.
+    if runtimeparams and "shared_tank_prior_heat" in runtimeparams:
+        overrides = runtimeparams["shared_tank_prior_heat"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_prior_heat must be an object mapping tank id to a list "
+                "of per-step thermal kWh, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, series in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                matching = [t for t in tanks if isinstance(t, dict) and str(t.get("id")) == tank_id]
+                if len(matching) > 1:
+                    # Two tanks whose ids read the same as text (0 and "0"): the
+                    # key cannot say which one is meant.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] matches %d tanks whose ids read the "
+                        "same; ignoring.",
+                        tank_id,
+                        len(matching),
+                    )
+                    continue
+                values, problem = _prior_heat_values(series)
+                if problem is not None:
+                    # A bad runtime value starts that tank cold for the run, as
+                    # documented: a configured prior_heat would be stale here.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] %s; ignoring, the tank starts cold.",
+                        tank_id,
+                        problem,
+                    )
+                    matching[0].pop("prior_heat", None)
+                    continue
+                matching[0]["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,
@@ -5213,6 +5289,135 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+async def replace_file(path, content: str | bytes) -> None:
+    """Write ``content`` to ``path`` through a temporary file and os.replace, so a
+    reader running at the same time sees the old file or the new one, never a
+    partly written one."""
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
+            await f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+# A lock that one process holds and every other one - another Gunicorn worker
+# included - fails to take at once, rather than waits for.
+try:
+    import fcntl as _fcntl
+
+    def try_lock_file(f) -> bool:
+        """Lock the open file ``f`` if no other open file holds it. True if locked."""
+        try:
+            _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def unlock_file(f) -> None:
+        _fcntl.flock(f, _fcntl.LOCK_UN)
+
+except ImportError:
+    try:
+        import msvcrt as _msvcrt
+
+        def try_lock_file(f) -> bool:
+            """Lock the open file ``f`` if no other open file holds it. True if locked."""
+            f.seek(0)
+            try:
+                _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return False
+            return True
+
+        def unlock_file(f) -> None:
+            f.seek(0)
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+
+    except ImportError:  # no locking primitive: nothing to hold
+
+        def try_lock_file(f) -> bool:
+            return True
+
+        def unlock_file(f) -> None:
+            pass
+
+
+# A dry run solves as a live run does, returns the plan, and writes nothing.
+# It is a URL of its own, not a runtime parameter: an EMHASS that predates it
+# answers 404 there, where it would ignore an unknown parameter and run live.
+DRY_RUN_URL = "/api/v1/dry-run/<action>"
+DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
+# Runtime parameters that ask for a write. A dry run refuses them rather than
+# ignore them, so a caller never believes something was saved.
+DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+# The on/off parameters a dry run reads strictly, then passes on as booleans:
+# the forecast reads them by truthiness, and the string "false" is truthy.
+DRY_RUN_FLAGS = (*DRY_RUN_REFUSED_KEYS, "weather_forecast_cache_only")
+
+_FLAG_TRUE = ("true", "1", "yes", "on")
+_FLAG_FALSE = ("false", "0", "no", "off", "")
+
+
+def read_flag(value: object, name: str) -> bool:
+    """Read a runtime on/off parameter strictly.
+
+    ``bool("false")`` is True, and a templated request often sends the string.
+    Booleans, 0 and 1, None, and the strings true/false, 1/0, yes/no, on/off
+    (any case) are read; anything else raises.
+
+    :param value: The value sent for the parameter.
+    :param name: The parameter's name, for the error message.
+    :return: The parameter's value.
+    :raises ValueError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _FLAG_TRUE:
+            return True
+        if text in _FLAG_FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
+    """Why a request must be refused before anything runs, or None.
+
+    On an action URL a ``dry_run`` parameter that is not false is refused:
+    that URL never honours it, and running live would replace the plan the
+    caller meant to keep. On the dry-run URL, ``dry_run`` may be left out or
+    true, and the parameters that ask for a write are refused.
+
+    :param runtimeparams: The request's runtime parameters.
+    :param dry_run: True for the dry-run URL, False for an action URL.
+    :return: The reason to refuse the request, or None.
+    """
+    try:
+        asked = read_flag(runtimeparams.get("dry_run"), "dry_run")
+        if asked and not dry_run:
+            return (
+                f"dry_run is not a runtime parameter of this URL; send the same "
+                f"body to {DRY_RUN_URL} for a dry run. Nothing was run"
+            )
+        if dry_run and "dry_run" in runtimeparams and not asked:
+            return "dry_run is false in the body of a dry run. Nothing was run"
+        if dry_run:
+            for key in DRY_RUN_FLAGS:
+                if read_flag(runtimeparams.get(key), key) and key in DRY_RUN_REFUSED_KEYS:
+                    return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
+    except ValueError as exc:
+        return f"{exc}. Nothing was run"
+    return None
 
 
 class SocFractionError(ValueError):

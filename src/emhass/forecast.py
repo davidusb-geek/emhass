@@ -73,6 +73,7 @@ from emhass.utils import (
     describe_invalid_forecast_value,
     get_days_list,
     get_forecast_start,
+    replace_file,
     set_df_index_freq,
 )
 
@@ -92,6 +93,15 @@ open_meteo_request_timeout = 12
 # is made and any failure falls back to the cache immediately (no added delay).
 open_meteo_max_attempts = 3
 open_meteo_backoff_seconds = (1, 2, 4)
+
+# A dry run calls no forecast service, so it never spends a provider's quota
+# (Solcast's daily calls, solar.forecast's hourly ones), and it saves nothing, so
+# a dry run that fetched would fetch again every time. It plans with what live
+# runs saved, however old; with nothing saved it plans as if the service were down.
+dry_run_no_saved_forecast = (
+    "Dry run: no usable %s forecast has been saved, and a dry run calls no forecast "
+    "service. Pass pv_power_forecast in the body, or let a live run save one first."
+)
 
 
 def _solcast_overlap_average(
@@ -371,6 +381,13 @@ class Forecast:
             else self.forecast_dates.tz_convert(self.time_zone)
         )
 
+    @property
+    def dry_run(self) -> bool:
+        """Whether this is a dry run: it reads the weather caches and the
+        adjusted-PV model as a live run does, and saves, refreshes or deletes
+        none of them, so the next live run finds them as they were."""
+        return (self.params.get("passed_data") or {}).get("dry_run", False) is True
+
     async def get_cached_open_meteo_forecast_json(
         self, max_age: int | None = 30, forecast_days: int = 3
     ) -> dict:
@@ -443,7 +460,14 @@ class Forecast:
                     max_age,
                 )
 
-        if not use_cache:
+        if not use_cache and self.dry_run:
+            if data is not None:
+                self.logger.warning(
+                    "Dry run: planning with the saved Open-Meteo forecast, %s minutes old, "
+                    "where a live run would fetch a fresh one",
+                    json_age,
+                )
+        elif not use_cache:
             self.logger.info("Fetching a new weather forecast from Open-Meteo")
             headers = {"User-Agent": "EMHASS", "Accept": header_accept}
             # Open-Meteo has returned non-existent time over DST transitions,
@@ -494,9 +518,9 @@ class Forecast:
                                 "Saving response in Open-Meteo JSON cache file: %s",
                                 json_path,
                             )
-                            async with aiofiles.open(json_path, "w") as json_file:
-                                content = orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
-                                await json_file.write(content)
+                            await replace_file(
+                                json_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                            )
                     # Successful fetch; stop retrying.
                     break
                 except (TimeoutError, aiohttp.ClientError):
@@ -524,15 +548,22 @@ class Forecast:
         return data
 
     async def _get_weather_open_meteo(
-        self, w_forecast_cache_path: str, use_legacy_pvlib: bool
+        self, w_forecast_cache_path: str, use_legacy_pvlib: bool, skip_cache: bool = False
     ) -> pd.DataFrame:
-        """Helper to retrieve weather data from Open-Meteo or cache."""
-        if not os.path.isfile(w_forecast_cache_path):
+        """Helper to retrieve weather data from Open-Meteo or cache.
+
+        ``skip_cache`` fetches without reading the cache: it was found stale, and
+        deleted, except on a dry run, which leaves it for the next live run.
+        """
+        if skip_cache or not os.path.isfile(w_forecast_cache_path):
             data_raw = await self.get_cached_open_meteo_forecast_json(
                 self.optim_conf["open_meteo_cache_max_age"],
                 self.optim_conf["delta_forecast_daily"].days,
             )
             if data_raw is None:
+                if self.dry_run:
+                    self.logger.warning(dry_run_no_saved_forecast, "Open-Meteo")
+                    return None
                 # Cold start: the request failed and there is no JSON cache to fall back to.
                 raise ValueError("Open-Meteo returned no forecast data and no cache is available")
             data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
@@ -552,7 +583,7 @@ class Forecast:
                     "direct_normal_irradiance_instant": "dni",
                 }
             )
-            if self.logger.isEnabledFor(logging.DEBUG):
+            if self.logger.isEnabledFor(logging.DEBUG) and not self.dry_run:
                 data_15min.to_csv(
                     self.emhass_conf["data_path"] / "debug-weather-forecast-open-meteo.csv"
                 )
@@ -584,7 +615,9 @@ class Forecast:
                 self.logger.info(
                     "Stale Open-Meteo cache removed; fetching fresh forecast from API."
                 )
-                return await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
+                return await self._get_weather_open_meteo(
+                    w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
+                )
         return data
 
     def _solcast_rate_limit_ok(self, required_calls: int = 1, max_calls: int = 8) -> bool:
@@ -686,6 +719,9 @@ class Forecast:
         )
         if cached_data is not None:
             return cached_data
+        if self.dry_run:
+            self.logger.warning(dry_run_no_saved_forecast, "Solcast")
+            return False
         # Incompatible/stale cache was discarded (issue #932); fall through
         # to fetch fresh data from the Solcast API (quota-guarded below).
         if self.params["passed_data"].get("weather_forecast_cache_only", False):
@@ -817,6 +853,9 @@ class Forecast:
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
         if cached_data is not None:
             return cached_data
+        if self.dry_run:
+            self.logger.warning(dry_run_no_saved_forecast, "solar.forecast")
+            return False
         # Incompatible/stale cache was discarded (issue #932); fall through
         # to fetch fresh data from the forecast.solar API.
         # Validation and Default Setup
@@ -1167,7 +1206,16 @@ class Forecast:
                 )
                 data = None
                 use_cache = False
-        if not use_cache:
+        if not use_cache and self.dry_run:
+            if data is not None:
+                self.logger.warning(
+                    "Dry run: using the saved Open-Meteo weather covariates, %s minutes old, "
+                    "where a live run would fetch fresh ones",
+                    json_age,
+                )
+            else:
+                self.logger.warning(dry_run_no_saved_forecast, "Open-Meteo covariate")
+        elif not use_cache:
             self.logger.info("Fetching Open-Meteo weather covariates (past_days=%s)", past_days)
             headers = {"User-Agent": "EMHASS", "Accept": header_accept}
             url = (
@@ -1191,10 +1239,9 @@ class Forecast:
                     async with session.get(url, headers=headers) as response:
                         response.raise_for_status()
                         data = await response.json()
-                        async with aiofiles.open(cache_path, "w") as json_file:
-                            await json_file.write(
-                                orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
-                            )
+                        await replace_file(
+                            cache_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                        )
             except aiohttp.ClientError:
                 self.logger.error(
                     "Failed to fetch weather covariates from Open-Meteo", exc_info=True
@@ -1679,7 +1726,7 @@ class Forecast:
         """
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
-        if self.logger.isEnabledFor(logging.DEBUG):
+        if self.logger.isEnabledFor(logging.DEBUG) and not self.dry_run:
             data.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-input-data.csv"
             )
@@ -1727,7 +1774,7 @@ class Forecast:
         self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
 
         self.logger.debug("adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv)
-        if self.logger.isEnabledFor(logging.DEBUG):
+        if self.logger.isEnabledFor(logging.DEBUG) and not self.dry_run:
             self.data_adjust_pv.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-output-data.csv"
             )
@@ -1798,12 +1845,15 @@ class Forecast:
             f"PV adjust Training metrics (in-sample): RMSE = {self.rmse}, R2 = {self.r2}"
         )
 
-        # Save model
-        if not debug:
+        # Save model. A dry run keeps the model it fitted in memory only: the
+        # next live run finds the saved one as it was, and refits it as it would have.
+        if not debug and not self.dry_run:
             filename = "adjust_pv_regressor.pkl"
             filename_path = self.emhass_conf["data_path"] / filename
-            async with aiofiles.open(filename_path, "wb") as outp:
-                await outp.write(pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL))
+            # Whole, so a run loading the model at the same moment never reads half of it.
+            await replace_file(
+                filename_path, pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL)
+            )
 
     def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame) -> pd.DataFrame:
         """
@@ -1865,7 +1915,7 @@ class Forecast:
         forecast_data["adjusted_forecast"] = forecast_data["adjusted_forecast"].clip(lower=0)
 
         self.logger.debug("adjust_pv_forecast_predict forecast data:\n%s", forecast_data)
-        if self.logger.isEnabledFor(logging.DEBUG):
+        if self.logger.isEnabledFor(logging.DEBUG) and not self.dry_run:
             forecast_data.to_csv(
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-predict-forecast-data.csv"
             )
@@ -2870,20 +2920,21 @@ class Forecast:
         :rtype: pd.DataFrame | None
 
         """
-        # Read then close the file BEFORE any os.remove below: on Windows a file
+        # Read then close the file BEFORE any _drop_cache below: on Windows a file
         # cannot be unlinked while a handle is still open (PermissionError WinError 32).
-        async with aiofiles.open(w_forecast_cache_path, "rb") as file:
-            content = await file.read()
+        try:
+            async with aiofiles.open(w_forecast_cache_path, "rb") as file:
+                content = await file.read()
+        except FileNotFoundError:
+            # Removed since the caller saw it, by a run dropping a stale cache: no cache.
+            return None
         data = pickle.loads(content)
         if not isinstance(data, pd.DataFrame) or data.empty:
             self.logger.error("Cache file is corrupt or empty.")
             self.logger.error(
                 "Try running action `weather-forecast-cache` to pull new data from forecast API."
             )
-            try:
-                os.remove(w_forecast_cache_path)
-            except FileNotFoundError:
-                pass
+            self._drop_cache(w_forecast_cache_path)
             return None
         # Filter cached forecast data to match current forecast_dates start-end range
         if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
@@ -2901,10 +2952,7 @@ class Forecast:
                     "Cache does not fully cover the requested timeframe. "
                     "Removing stale Open-Meteo cache; fresh data will be fetched from the API."
                 )
-                try:
-                    os.remove(w_forecast_cache_path)
-                except FileNotFoundError:
-                    pass
+                self._drop_cache(w_forecast_cache_path)
                 return None
             else:
                 # Solcast and other rate-limited APIs: serve best-effort
@@ -2949,12 +2997,22 @@ class Forecast:
                 "fetching fresh data.",
                 self.weather_forecast_method,
             )
-            try:
-                os.remove(w_forecast_cache_path)
-            except FileNotFoundError:
-                pass
+            self._drop_cache(w_forecast_cache_path)
             return None
         return data
+
+    def _drop_cache(self, w_forecast_cache_path) -> None:
+        """Delete an unusable weather cache, so the next run fetches afresh.
+
+        A dry run deletes nothing: it treats the cache as missing, and the next
+        live run finds the file as it was and decides for itself.
+        """
+        if self.dry_run:
+            return
+        try:
+            os.remove(w_forecast_cache_path)
+        except FileNotFoundError:
+            pass
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
         r"""
@@ -2969,9 +3027,10 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        async with aiofiles.open(w_forecast_cache_path, "wb") as file:
-            content = pickle.dumps(data)
-            await file.write(content)
+        if self.dry_run:
+            self.logger.info("Dry run: the forecast is not saved to the cache.")
+        else:
+            await replace_file(w_forecast_cache_path, pickle.dumps(data))
             if not os.path.isfile(w_forecast_cache_path):
                 self.logger.warning("forecast data could not be saved to file.")
             else:
