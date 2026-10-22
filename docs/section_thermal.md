@@ -1,5 +1,85 @@
 # 🔥 Thermal Integration
 
+EMHASS can plan heat together with electricity. A domestic-hot-water (DHW) tank,
+a space-heating buffer, a pool or the thermal mass of the house is modelled as a
+temperature that the optimizer steers through the horizon, inside a comfort band
+you set. It then decides when to make heat: on cheap power or surplus PV, and not
+during a price peak, the same way it plans a battery's state of charge.
+
+## Do I need this?
+
+Only if you want EMHASS to schedule something that makes heat or cold: a heat
+pump, an electric water heater, a gas boiler, an air conditioner. If you only
+have PV, a battery and ordinary deferrable loads, skip this section. Nothing in
+it is active by default: `heat_topology` is `null` and no deferrable load has a
+thermal configuration, so the optimization is exactly the electrical one.
+
+## Which model to use
+
+| Your system | Use | Start with |
+| --- | --- | --- |
+| One device heating or cooling one room, no tank | [Deferrable load thermal model](thermal_model.md) (`thermal_config`) | the example on that page |
+| One heat pump charging one tank or a floor slab, with a temperature-dependent COP | [Thermal battery](thermal_battery.md) (`thermal_battery`) | [Heat-pump walkthrough](study_cases/heat_pump_walkthrough.md) |
+| Several sources or several stores: a heat pump plus a gas boiler or electric booster, a DHW tank plus a buffer, a buffer feeding the house, sources on different tariffs | [Heat topology graph model](heat_topology.md) (`heat_topology`) | [Hybrid heating walkthrough](study_cases/hybrid_heating_walkthrough.md) |
+
+For a short, step-by-step start, the cookbook has two recipes on the heat
+topology: [a DHW tank with a heat pump and an electric booster](cookbook/dhw_heat_pump_with_booster.md)
+and [pre-heating the house with a heat pump](cookbook/heatpump_preheat_house.md).
+
+The first two are single-load models configured under `def_load_config`. The
+heat topology describes the system as a small graph of sources, stores and
+flows, which EMHASS compiles into deferrable loads and shared thermal tanks. It
+can express most single-load setups as one-source stores; the exceptions are
+listed below.
+
+## Moving from `thermal_battery` to `heat_topology`
+
+Systems tend to grow: a second tank, a booster, a boiler. The fields map
+directly:
+
+| `thermal_battery` field | In `heat_topology` |
+| --- | --- |
+| `supply_temperature`, `heating_curve`, `carnot_efficiency` | a `heatpump` source |
+| `efficiency` (constant-efficiency mode) | an `electric` or `constant_efficiency` source; a `gas`, `oil` or `district` source only together with a `cost_track` for its fuel price, because such a source is not on the electricity bill |
+| `volume`, `density`, `heat_capacity`, `thermal_loss` | a storage entry. The defaults differ: `thermal_battery` assumes concrete (`density` 2400, `heat_capacity` 0.88), a storage assumes water (1000 and 4.186), about twice the heat capacity per m³. For a floor slab, set both explicitly. |
+| `start_temperature`, `min_temperatures`, `max_temperatures`, `min_temperature_curve`, `desired_temperatures`, `overshoot_temperature`, `penalty_factor` | the same storage entry |
+| `sense` (`heat` or `cool`) | the storage's `comfort_sense` |
+| `draw_off_demand` | a `profile` consumer on that storage |
+| `u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`, `indoor_target_temperature` (or `specific_heating_demand`, `area`, `base_temperature`, `annual_reference_hdd`), `window_area`, `shgc`, `internal_gains_factor` | a `building_demand` consumer on that storage |
+| `solar_absorption_area`, `solar_absorption_factor` | a `pool_comfort` consumer on that storage |
+| `cooling_curve` | the `heatpump` source |
+| `thermal_inertia_time_constant`, `q_input_initial` | no direct equivalent: a storage's `thermal_inertia` is a pure delay, not a low-pass filter |
+| the load's `nominal_power_of_deferrable_loads` entry | the source's `nominal_power` |
+| the load's `treat_deferrable_load_as_semi_cont` entry | the source's `treat_as_semi_cont`, which defaults to `true`: set it to `false` for a continuous load |
+| the load's `minimum_power_of_deferrable_loads`, `set_deferrable_startup_penalty` and `set_deferrable_max_startups` entries | the source's `min_power`, `startup_penalty` and `max_startups` |
+| the load's `start_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load` entries | no equivalent: a topology load may run over the whole horizon |
+
+Then remove the `thermal_battery` entry from `def_load_config`, lower
+`number_of_deferrable_loads` by one, and remove that load's entry from every
+per-load array (`nominal_power_of_deferrable_loads`,
+`operating_hours_of_each_deferrable_load`, `treat_deferrable_load_as_semi_cont`
+and the others), so the remaining loads keep matching entries. The compiler
+creates one deferrable load per source-to-storage flow, numbered in the order of
+`flows`, so the load index (and `sensor.p_deferrable{k}`) of the heat pump may
+change: update `custom_deferrable_forecast_id` and
+`custom_predicted_temperature_id` accordingly. If you also have ordinary
+deferrable loads, set `extend_deferrable_loads` (see
+[Combining with other deferrable loads](heat_topology.md#combining-with-other-deferrable-loads));
+without it the topology replaces them, and the log warns which loads are not
+optimized.
+
+## Temperature-dependent COP
+
+A heat pump's COP falls as it heats the store hotter. The optimizer plans against
+a COP at an assumed temperature; with `cop_solver: auto` it checks the plan
+against the true temperature-dependent COP afterwards and refines it only when
+the two disagree (default `static`: no refinement). This applies to heat pumps
+with a `heating_curve` (or `cooling_curve`) on a `heat_topology` storage; a
+`thermal_battery` and a fixed-supply heat pump keep their COP. `cop_solver` is a
+setting in the configuration, not a topology field. See
+[heat_topology](heat_topology.md) for when to turn it on and
+[the mathematical model](advanced_math_model.md) for how it works.
+
 ```{toctree}
 :maxdepth: 2
 thermal_model
