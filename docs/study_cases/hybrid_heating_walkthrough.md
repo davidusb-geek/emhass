@@ -203,6 +203,11 @@ so each plan starts from reality:
 per storage id without resending the whole topology. The topology is rebuilt
 every run, so the override takes effect immediately.
 
+This request keeps the saved topology, and with it the shower profile indexed
+from midnight. Unless the run starts at midnight, also send `heat_topology` in
+the request with the profile rotated to start at the current step (see the notes
+in step 1); otherwise the plan heats for showers at the wrong times.
+
 If a storage has `thermal_inertia`, also send the heat that is still on its way
 with `shared_tank_prior_heat`; see
 [heat_topology](../heat_topology.md#rolling-mpc).
@@ -219,8 +224,9 @@ with `shared_tank_prior_heat`; see
 | `sensor.temp_predicted0`, `sensor.temp_predicted1` | predicted DHW and buffer temperature (°C) | dashboards, sanity checks |
 | `sensor.temp_predicted2` | predicted DHW temperature again (load 2 heats the DHW tank too) | nothing; the same values as `sensor.temp_predicted0` |
 
-To give them your own names, pass the lists with the publish call; entries are
-matched by load index, and a load without an entry keeps its default name:
+To give them your own names, pass the lists with the publish call. Entries are
+matched by load index, and a list replaces the default names of all loads, so
+give every load an entry:
 
 ```json
 {
@@ -231,7 +237,8 @@ matched by load index, and a load without an entry keeps its default name:
   ],
   "custom_predicted_temperature_id": [
     {"entity_id": "sensor.dhw_temperature_predicted", "unit_of_measurement": "°C", "friendly_name": "DHW temperature (predicted)"},
-    {"entity_id": "sensor.buffer_temperature_predicted", "unit_of_measurement": "°C", "friendly_name": "Buffer temperature (predicted)"}
+    {"entity_id": "sensor.buffer_temperature_predicted", "unit_of_measurement": "°C", "friendly_name": "Buffer temperature (predicted)"},
+    {"entity_id": "sensor.dhw_temperature_predicted_boiler", "unit_of_measurement": "°C", "friendly_name": "DHW temperature (predicted, boiler load)"}
   ]
 }
 ```
