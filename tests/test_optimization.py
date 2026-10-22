@@ -6186,6 +6186,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "overshoot_temperature": 20.0,
             },
         ]
+        # The last step is worth ~0.15 of a ~2400 objective (nearly all of it is the
+        # comfort shortfall). The shipped lp_solver_mip_rel_gap of 0.01 is passed to
+        # HiGHS as is and lets it stop ~24 short of the optimum, so the solver may
+        # return a plan without that step. 0 does not request an exact solve either:
+        # EMHASS then omits the option and HiGHS applies its own 1e-4, which is above
+        # the ~6e-5 needed here. An explicit 1e-6 is deterministic.
+        self.optim_conf["lp_solver_mip_rel_gap"] = 1e-6
+        # EMHASS forwards the gap to HiGHS only, so do not let LP_SOLVER pick another solver.
+        env_patch = mock.patch.dict("os.environ", {"LP_SOLVER": "HIGHS"})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         opt = self.create_optimization()
         prices = self.df_input_data_dayahead[opt.var_load_cost].to_numpy(dtype=float).copy()
         prices[:] = 0.30
