@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.18.7 - 2026-10-23
+
+### Improvement
+- test: deterministic DP-refinement fixture and DST-safe fixed-clock fixtures (#1247, #1248) (@MMicieli)
+- test: use an explicit tight MIP gap in the zone-overshoot last-step test (#1246) (@MMicieli)
+- chore: align Python 3.11–3.13 support and CI (#1220 stage 1) (@MMicieli)
+- feat: keep a time-limited solve's feasible plan; keep mutual exclusion in the relaxed fallback (#539) (@snauwaertc)
+- feat: dry run: POST /api/v1/dry-run/<action> solves and returns the plan, writing nothing (@ameetdesh)
+- test: add a drift guard for config_defaults and param_definitions (@HFZR2005)
+
+### Documentation
+- docs: thermal planning guide and a hybrid heating walkthrough (#539) (@snauwaertc)
+- docs(cookbook): add Node-RED/MQTT/evcc EV charging recipe (no Home Assistant) (@OptimalNothing90)
+
+### Fix
+- fix: seed the thermal-lag dead zone with heat already in flight (prior_heat) (#539) (@snauwaertc)
+- fix: handle NaN values in power columns when formatting injection dict (@Blizzeq)
+
 ## 0.18.6 - 2026-10-16
 
 Rolling out anew version of EMHASS loaded with a bunch of fixes and improvements.
