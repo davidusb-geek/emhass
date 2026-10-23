@@ -240,6 +240,8 @@ class OptimizationCacheKey:
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
     costfun: str
+    optimization_backend: str  # cvxpy, or a coordinator over separate participants
+    site: str  # stable JSON of the site list (devices, solvers, wiring)
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
@@ -488,6 +490,8 @@ class OptimizationCache:
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
+            optimization_backend=str(optim_conf.get("optimization_backend") or "cvxpy"),
+            site=orjson.dumps(optim_conf.get("site") or [], option=orjson.OPT_SORT_KEYS).decode(),
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
@@ -2546,6 +2550,10 @@ async def _set_input_data_dict(
             for key in runtime_solver_opts:
                 if key in optim_conf:
                     opt.optim_conf[key] = optim_conf[key]
+        if opt is not None:
+            # A coordinator backend asks remote solvers to run their part of a
+            # live plan only: a dry run has no effect anywhere
+            opt.fed_dry_run = bool((params.get("passed_data") or {}).get("dry_run", False))
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,

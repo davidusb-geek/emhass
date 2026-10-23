@@ -25,6 +25,7 @@ CURATED = {
     "/api/v1/plan": {"GET"},
     "/api/v1/dry-run/{action_name}": {"POST"},
     "/healthz": {"GET"},
+    "/participant/v1/{op}": {"GET", "POST"},
 }
 
 _ATOMIC = {
@@ -54,16 +55,21 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
     so it is placed on items.default; scalars get `default` directly. title/description/
     x-unit annotate the outermost property.
     """
-    parts = input_str.split(".")
-    leaf = _base_schema(parts[-1], param)
-    dv = param.get("default_value", None)
-    if dv is not None:
-        leaf["default"] = dv
-    if param.get("maximum") is not None:
-        leaf["maximum"] = param["maximum"]
-    schema = leaf
-    for _ in parts[:-1]:  # one wrap per leading "array"
-        schema = {"type": "array", "items": schema}
+    if "schema" in param:
+        # The param's own JSON schema, when `input` (which drives the web UI's
+        # widget) is too coarse to describe it, e.g. a list of objects.
+        schema = json.loads(json.dumps(param["schema"]))
+    else:
+        parts = input_str.split(".")
+        leaf = _base_schema(parts[-1], param)
+        dv = param.get("default_value", None)
+        if dv is not None:
+            leaf["default"] = dv
+        if param.get("maximum") is not None:
+            leaf["maximum"] = param["maximum"]
+        schema = leaf
+        for _ in parts[:-1]:  # one wrap per leading "array"
+            schema = {"type": "array", "items": schema}
     if param.get("friendly_name"):
         schema["title"] = param["friendly_name"]
     desc = (param.get("Description") or "").strip()
@@ -127,6 +133,10 @@ _DRY_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "dry-run.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
+_PARTICIPANT_API = (
+    "https://github.com/ameetdesh/home-energy-optimizer/blob/main/"
+    "src/home_energy_optimizer/schemas/participant-api.v1.json"
+)
 _PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
@@ -244,6 +254,44 @@ def build_spec(routes: set | None = None) -> dict:
                     }
                 },
             }
+        },
+        "/participant/v1/{op}": {
+            "parameters": [
+                {
+                    "name": "op",
+                    "in": "path",
+                    "required": True,
+                    "schema": {
+                        "type": "string",
+                        "enum": ["describe", "baseline", "query", "commit"],
+                    },
+                }
+            ],
+            "get": {
+                "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
+                "description": (
+                    "The participant API (draft), off unless participant_api is set; every call "
+                    "presents the participant_token secret as a bearer token."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "responses": {
+                    "200": {"description": "Its description"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                },
+            },
+            "post": {
+                "summary": "baseline, query or commit (participant API, opt-in)",
+                "description": "Queries have no effect; a commit publishes the chosen plan.",
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "responses": {
+                    "200": {"description": "An answer, or whether a commit was accepted"},
+                    "400": {"description": "Not a query or commit of this API"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
+                },
+            },
         },
         "/api/v1/dry-run/{action_name}": {
             "post": {

@@ -139,6 +139,103 @@ def _cop_upper_bound(cops) -> float:
     return HEAT_PUMP_COP_MAX if isinstance(cops, cp.Parameter) else float(np.max(cops))
 
 
+def _coordinated_plan(opt, *args, **kwargs):
+    """Plan with the coordinator `optimization_backend` names.
+
+    The coordinator comes from the optional home-energy-optimizer package
+    (pip install emhass[federated]).
+
+    Args:
+        opt: The calling Optimization (its configuration, logger and time step).
+        *args, **kwargs: perform_optimization's own arguments, passed through.
+
+    Returns:
+        tuple[pandas.DataFrame | None, str | None]: The plan, with the columns
+        perform_optimization returns plus the coordinator's own (fed_*), and
+        None; or None and why not, when the package is missing or cannot plan
+        this configuration, so the caller runs the default cvxpy solver.
+    """
+    reason = _coordinated_config_problem(opt.optim_conf)
+    if reason:
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    try:
+        from home_energy_optimizer.integrations.emhass import optimize
+    except ImportError:
+        reason = "the optional extra is not installed (pip install emhass[federated])"
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    # Whatever happens in the coordinator, a plan is published: any failure
+    # is logged and the default solver plans instead, live run or dry run.
+    opt.fed_fallback_reason = None
+    try:
+        res = optimize(opt, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - the fallback is the point
+        reason = f"the coordinator raised {type(exc).__name__}: {exc}"
+        opt.logger.error(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    if res is None:
+        # The package logged why; it also says so here (home-energy-optimizer >= 0.2.4).
+        reason = getattr(opt, "fed_fallback_reason", None)
+        return None, str(reason) if reason else "the coordinator cannot plan this configuration"
+    return res, None
+
+
+def _warn_unheld_limits(opt) -> None:
+    """On a fallback, say what of `site` the default solver does not hold:
+    its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
+    own keys describe (utils.site_grid, utils.site_inverter). For deferrable
+    loads alone, deferrable_load_groups it does hold."""
+    site = opt.optim_conf.get("site")
+    if not site or utils.site_problem(site):
+        return
+    kinds = [utils.site_kind(e) for e in site]
+    held = utils.site_inverter(site)
+    if "limit" in kinds or kinds.count("node") > (1 if held else 0):
+        opt.logger.warning(
+            "optimization_backend: the default solver does not hold site's nodes and limits "
+            "(beyond the main meter and a hybrid inverter EMHASS's own model can hold); "
+            "for deferrable loads alone, deferrable_load_groups is"
+        )
+
+
+def _with_backend(res, requested: str, fallback_reason: str | None):
+    """Mark which backend made the plan in `res`: the one requested, or cvxpy
+    and why. Only with a coordinator backend requested, so a default
+    configuration's results keep exactly their columns."""
+    res["backend_requested"] = requested
+    res["backend_used"] = "cvxpy" if fallback_reason else requested
+    res["backend_fallback_reason"] = fallback_reason or ""
+    return res
+
+
+_BACKENDS = ("cvxpy", "dantzig_wolfe")
+
+
+def _coordinated_config_problem(optim_conf: dict) -> str | None:
+    """Why `optimization_backend` and `site` cannot be used as given, or None
+    if they can.
+
+    Both may come from a request as well as from the configuration, so they
+    are checked for shape and type before anything reads them: a known
+    backend, and `site` (utils.site_problem).
+
+    Args:
+        optim_conf: The optimisation configuration.
+
+    Returns:
+        str | None: The problem, for the log; None when it can be used.
+    """
+    backend = optim_conf.get("optimization_backend")
+    if backend == "admm":
+        return "admm is planned for a later release, not available yet"
+    if backend not in _BACKENDS:
+        return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
+    if optim_conf.get("site") is not None:
+        return utils.site_problem(optim_conf["site"])
+    return None
+
+
 class Optimization:
     r"""
     Optimize the deferrable load and battery energy dispatch problem using \
@@ -7027,6 +7124,20 @@ class Optimization:
         this signature already accepts the list shape today.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        # Opt-in coordinator backend (optional extra): the devices are planned as separate
+        # participants. None means it cannot plan this configuration, so cvxpy runs below.
+        backend = self.optim_conf.get("optimization_backend", "cvxpy")
+        fallback_reason = None
+        if backend not in (None, "cvxpy"):
+            inputs = {
+                k: v
+                for k, v in locals().items()
+                if k not in ("self", "_build_start_perf", "backend", "fallback_reason")
+            }
+            res, fallback_reason = _coordinated_plan(self, **inputs)
+            if res is not None:
+                return _with_backend(res, backend, None)
+            _warn_unheld_limits(self)
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
@@ -8326,6 +8437,8 @@ class Optimization:
             # explicitely set the status column so downstream functions (like get_injection_dict)
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
+            if fallback_reason:
+                _with_backend(opt_tp, backend, fallback_reason)
 
             if stage_times is not None:
                 stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -8357,6 +8470,8 @@ class Optimization:
             q_inputs=q_inputs,
             transfer_vars=solved_transfer_vars,
         )
+        if fallback_reason:
+            _with_backend(results_df, backend, fallback_reason)
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
         return results_df
