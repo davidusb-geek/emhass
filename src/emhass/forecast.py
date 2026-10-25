@@ -2586,7 +2586,9 @@ class Forecast:
                     data_last_window.index[-1],
                 )
                 return False
-            data_last_window = data_last_window.iloc[-window_size:]
+            # Restore the verified regular frequency for skforecast's recursive
+            # exogenous date grid; recorder-prepared indexes may have freq=None.
+            data_last_window = data_last_window.iloc[-window_size:].asfreq(self.freq)
             steps = len(self.forecast_dates)
 
         # Exogenous weather must cover exactly the same future grid as the
