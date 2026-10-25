@@ -2524,6 +2524,93 @@ class Forecast:
         needed_days = math.ceil(window_size / samples_per_day) + 1
         return max(days_min_load_forecast, needed_days)
 
+    def _prepare_ml_last_window(self, df: pd.DataFrame, mlf):
+        """Validate the observed history and cut the ML last window from it.
+
+        Returns ``(last_window, first_needed, warm_up, phase_shift)`` or None when the
+        history cannot be placed reliably on the optimization grid (the reason is logged).
+        """
+        data_last_window = copy.deepcopy(df)
+        data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
+        if (
+            not isinstance(data_last_window.index, pd.DatetimeIndex)
+            or data_last_window.index.tz is None
+            or not data_last_window.index.is_monotonic_increasing
+            or not data_last_window.index.is_unique
+        ):
+            self.logger.error("ML load history requires an ordered, unique, timezone-aware index")
+            return None
+
+        forecast_start = self.forecast_dates[0]
+        if forecast_start.tzinfo is None:
+            self.logger.error("ML optimization forecast grid must be timezone-aware")
+            return None
+        # Only completed buckets before the forecast start are observations. The
+        # start can be rounded up past now (method_ts_round), leaving the bucket
+        # just before it still running; the model then predicts that many extra
+        # steps from the last completed bucket and they are dropped below.
+        now = pd.Timestamp.now(tz="UTC")
+        warm_up = 0 if forecast_start <= now else math.ceil((forecast_start - now) / self.freq)
+        first_needed = forecast_start - warm_up * self.freq
+        history_utc = data_last_window.index.tz_convert("UTC")
+        data_last_window = data_last_window.loc[
+            history_utc + self.freq <= first_needed.tz_convert("UTC")
+        ]
+        window_size = self._mlf_window_size(mlf)
+        if len(data_last_window) < window_size:
+            self.logger.error(
+                "Not enough load history to fill the ML forecaster's last window: "
+                f"the model needs {window_size} samples at {self.freq} "
+                f"but only {len(data_last_window)} were retrieved. Check that the "
+                "Home Assistant recorder (or database) retains at least "
+                f"{self._mlf_required_history_days(mlf, 0)} days of history for "
+                f"{self.retrieve_hass_conf['sensor_power_load_no_var_loads']}."
+            )
+            return None
+
+        # The last window must be a regular run of whole steps ending less than
+        # one step before the last completed grid step. A sub-step difference is
+        # only the bucket phase of the retrieval backend (REST buckets sit on UTC
+        # multiples, websocket ones on local multiples, which differ in zones with
+        # a non-whole-hour UTC offset); it is a constant that is applied to the
+        # predictions, and only when the samples sit on a backend bucket lattice
+        # (UTC multiples for REST/InfluxDB/VictoriaMetrics, local wall-clock
+        # multiples for WebSocket statistics). Anything else, or a full step or
+        # more, is missing or stale history.
+        actual_window = data_last_window.index[-window_size:].tz_convert("UTC")
+        phase_shift = (first_needed - self.freq).tz_convert("UTC") - actual_window[-1]
+        last_sample = actual_window[-1]
+        on_known_lattice = (
+            last_sample.value % self.freq.value == 0
+            or last_sample.tz_convert(self.time_zone).tz_localize(None).value % self.freq.value == 0
+        )
+        if not (
+            (actual_window[1:] - actual_window[:-1] == self.freq).all()
+            and pd.Timedelta(0) <= phase_shift < self.freq
+            and (not phase_shift or on_known_lattice)
+        ):
+            self.logger.error(
+                "ML load history is missing, stale or irregular: the last %d "
+                "samples must be consecutive and end within one step of %s, "
+                "immediately before the optimization start %s; "
+                "last retrieved sample is %s. Refusing to shift predictions.",
+                window_size,
+                first_needed - self.freq,
+                first_needed,
+                data_last_window.index[-1],
+            )
+            return None
+        if phase_shift:
+            self.logger.debug(
+                "ML load history buckets sit %s before the optimization grid; "
+                "predictions are moved onto the grid by that constant.",
+                phase_shift,
+            )
+        # Restore the verified regular frequency for skforecast's recursive
+        # exogenous date grid; recorder-prepared indexes may have freq=None.
+        data_last_window = data_last_window.iloc[-window_size:].asfreq(self.freq)
+        return data_last_window, first_needed, warm_up, phase_shift
+
     async def _get_load_forecast_ml(
         self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
     ) -> pd.DataFrame | bool:
@@ -2538,88 +2625,10 @@ class Forecast:
         phase_shift = pd.Timedelta(0)
         warm_up = 0
         if use_last_window:
-            data_last_window = copy.deepcopy(df)
-            data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
-            if (
-                not isinstance(data_last_window.index, pd.DatetimeIndex)
-                or data_last_window.index.tz is None
-                or not data_last_window.index.is_monotonic_increasing
-                or not data_last_window.index.is_unique
-            ):
-                self.logger.error(
-                    "ML load history requires an ordered, unique, timezone-aware index"
-                )
+            prepared = self._prepare_ml_last_window(df, mlf)
+            if prepared is None:
                 return False
-
-            forecast_start = self.forecast_dates[0]
-            if forecast_start.tzinfo is None:
-                self.logger.error("ML optimization forecast grid must be timezone-aware")
-                return False
-            # Only completed buckets before the forecast start are observations. The
-            # start can be rounded up past now (method_ts_round), leaving the bucket
-            # just before it still running; the model then predicts that many extra
-            # steps from the last completed bucket and they are dropped below.
-            now = pd.Timestamp.now(tz="UTC")
-            warm_up = 0 if forecast_start <= now else math.ceil((forecast_start - now) / self.freq)
-            first_needed = forecast_start - warm_up * self.freq
-            history_utc = data_last_window.index.tz_convert("UTC")
-            data_last_window = data_last_window.loc[
-                history_utc + self.freq <= first_needed.tz_convert("UTC")
-            ]
-            window_size = self._mlf_window_size(mlf)
-            if len(data_last_window) < window_size:
-                self.logger.error(
-                    "Not enough load history to fill the ML forecaster's last window: "
-                    f"the model needs {window_size} samples at {self.freq} "
-                    f"but only {len(data_last_window)} were retrieved. Check that the "
-                    "Home Assistant recorder (or database) retains at least "
-                    f"{self._mlf_required_history_days(mlf, 0)} days of history for "
-                    f"{self.retrieve_hass_conf['sensor_power_load_no_var_loads']}."
-                )
-                return False
-
-            # The last window must be a regular run of whole steps ending less than
-            # one step before the last completed grid step. A sub-step difference is
-            # only the bucket phase of the retrieval backend (REST buckets sit on UTC
-            # multiples, websocket ones on local multiples, which differ in zones with
-            # a non-whole-hour UTC offset); it is a constant that is applied to the
-            # predictions, and only when the samples sit on a backend bucket lattice
-            # (UTC multiples for REST/InfluxDB/VictoriaMetrics, local wall-clock
-            # multiples for WebSocket statistics). Anything else, or a full step or
-            # more, is missing or stale history.
-            actual_window = data_last_window.index[-window_size:].tz_convert("UTC")
-            phase_shift = (first_needed - self.freq).tz_convert("UTC") - actual_window[-1]
-            last_sample = actual_window[-1]
-            on_known_lattice = (
-                last_sample.value % self.freq.value == 0
-                or last_sample.tz_convert(self.time_zone).tz_localize(None).value % self.freq.value
-                == 0
-            )
-            if not (
-                (actual_window[1:] - actual_window[:-1] == self.freq).all()
-                and pd.Timedelta(0) <= phase_shift < self.freq
-                and (not phase_shift or on_known_lattice)
-            ):
-                self.logger.error(
-                    "ML load history is missing, stale or irregular: the last %d "
-                    "samples must be consecutive and end within one step of %s, "
-                    "immediately before the optimization start %s; "
-                    "last retrieved sample is %s. Refusing to shift predictions.",
-                    window_size,
-                    first_needed - self.freq,
-                    first_needed,
-                    data_last_window.index[-1],
-                )
-                return False
-            if phase_shift:
-                self.logger.debug(
-                    "ML load history buckets sit %s before the optimization grid; "
-                    "predictions are moved onto the grid by that constant.",
-                    phase_shift,
-                )
-            # Restore the verified regular frequency for skforecast's recursive
-            # exogenous date grid; recorder-prepared indexes may have freq=None.
-            data_last_window = data_last_window.iloc[-window_size:].asfreq(self.freq)
+            data_last_window, first_needed, warm_up, phase_shift = prepared
             steps = len(self.forecast_dates) + warm_up
             expected_index = pd.date_range(start=first_needed, periods=steps, freq=self.freq)
 
