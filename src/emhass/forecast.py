@@ -2544,7 +2544,9 @@ class Forecast:
                 or not data_last_window.index.is_monotonic_increasing
                 or not data_last_window.index.is_unique
             ):
-                self.logger.error("ML load history requires an ordered, unique, timezone-aware index")
+                self.logger.error(
+                    "ML load history requires an ordered, unique, timezone-aware index"
+                )
                 return False
 
             forecast_start = self.forecast_dates[0]
