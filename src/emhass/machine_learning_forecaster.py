@@ -415,6 +415,7 @@ class MLForecaster:
         self,
         data_last_window: pd.DataFrame | None = None,
         weather_future: pd.DataFrame | None = None,
+        steps: int | None = None,
     ) -> pd.Series:
         """The predict method to generate forecasts from a previously fitted ML model.
 
@@ -427,6 +428,10 @@ class MLForecaster:
             must provide the future values of those columns over the forecast horizon (the weather \
             forecast). It is ignored when no ``weather_features`` are configured. Defaults to None.
         :type weather_future: Optional[pd.DataFrame], optional
+        :param steps: Optional prediction count for the optimization grid. When omitted,
+            preserve the saved model's usual lag-based horizon (including standalone
+            forecast-model-predict).
+        :type steps: int | None
         :return: A pandas series containing the generated forecasts.
         :rtype: pd.Series
         """
@@ -442,7 +447,9 @@ class MLForecaster:
                 )
             else:
                 data_last_window = await self.interpolate_async(data_last_window)
-                steps = self.lags_opt if self.is_tuned else self.num_lags
+                steps = (self.lags_opt if self.is_tuned else self.num_lags) if steps is None else int(steps)
+                if steps < 1:
+                    raise ValueError("Prediction steps must be positive")
                 # getattr fallback keeps models pickled before weather_features existed working.
                 weather_features = getattr(self, "weather_features", [])
                 exog = await self.generate_exog(
