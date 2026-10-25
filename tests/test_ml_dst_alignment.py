@@ -227,12 +227,64 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
             self.assertIs(await fcst._get_load_forecast_ml(history, True, model, True), False)
         self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
+    async def test_offset_off_every_bucket_lattice_is_stale_not_phase(self):
+        # 20 minutes late is on neither the UTC nor the local hourly lattice, so it
+        # cannot be a backend bucket phase: it must not be hidden as one.
+        fcst, history = self._case(
+            "Asia/Kolkata", "60min", "2026-02-20 10:00", pd.Timedelta("20min")
+        )
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertIs(
+                await fcst._get_load_forecast_ml(history, True, _Predictor(), True), False
+            )
+        self.assertIn("missing, stale or irregular", "\n".join(logs.output))
+
     async def test_history_ahead_of_the_grid_is_rejected(self):
         fcst, history = self._case(
             "Asia/Kolkata", "60min", "2026-02-20 10:00", -pd.Timedelta("20min")
         )
         # Buckets labelled later than the last completed grid step cannot be placed.
         self.assertIs(await fcst._get_load_forecast_ml(history, True, _Predictor(), True), False)
+
+
+class TestRestUnchangedSensorState(unittest.TestCase):
+    """REST history has one row per state change; its last row is the current state."""
+
+    NOW = datetime(2026, 2, 20, 10, 20, tzinfo=UTC)
+
+    def _process(self, rows, is_last_day=True, day="2026-02-20"):
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta("60min")
+        rh.logger = logging.getLogger(__name__)
+        data = [{"state": state, "last_changed": at} for state, at in rows]
+        with time_machine.travel(self.NOW, tick=False):
+            return rh._process_history_dataframe(
+                data, "sensor.load", pd.Timestamp(day, tz="UTC"), False, is_last_day
+            )
+
+    def test_unchanged_numeric_state_is_held_to_the_last_bucket_before_now(self):
+        frame = self._process(
+            [("500", "2026-02-20T00:00:00+00:00"), ("520", "2026-02-20T06:10:00+00:00")]
+        )
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 10:00", tz="UTC"))
+        self.assertTrue((frame["sensor.load"].iloc[6:] == 520.0).all())
+
+    def test_unavailable_last_state_is_not_held(self):
+        frame = self._process(
+            [("500", "2026-02-20T00:00:00+00:00"), ("unavailable", "2026-02-20T06:10:00+00:00")]
+        )
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+
+    def test_past_days_and_old_data_are_never_extended(self):
+        rows = [("500", "2026-02-19T00:00:00+00:00"), ("520", "2026-02-19T06:10:00+00:00")]
+        self.assertEqual(
+            self._process(rows, is_last_day=False, day="2026-02-19").index[-1],
+            pd.Timestamp("2026-02-19 06:00", tz="UTC"),
+        )
+        self.assertEqual(
+            self._process(rows, day="2026-02-20").index[-1],
+            pd.Timestamp("2026-02-19 06:00", tz="UTC"),
+        )
 
 
 def _utc_sine(index):
@@ -322,11 +374,12 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         with open(self.conf["data_path"] / f"{self.MODEL_TYPE}_mlf.pkl", "wb") as f:
             pickle.dump(mlf, f)
 
-    async def _setup(self, now):
+    async def _setup(self, now, method_ts_round="nearest"):
         params = await command_line_tests.TestCommandLineAsyncUtils.get_test_params()
         params["retrieve_hass_conf"]["time_zone"] = TZ_NAME
         params["retrieve_hass_conf"]["optimization_time_step"] = 60
         params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"] = "sensor.test_load"
+        params["retrieve_hass_conf"]["method_ts_round"] = method_ts_round
         params["optim_conf"]["delta_forecast_daily"] = 3
         params["optim_conf"]["set_use_pv"] = False
         params["optim_conf"]["load_forecast_method"] = "mlforecaster"
@@ -364,6 +417,19 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(frame.index.tz_convert("UTC").equals(grid.tz_convert("UTC")))
                 # One hour of shift moves this profile by up to ~52 W.
                 np.testing.assert_allclose(frame["p_load_forecast"], _utc_sine(grid), atol=15.0)
+
+    async def test_rounding_modes_align_to_the_grid(self):
+        await self._save_model()
+        for mode in ("nearest", "first", "last"):
+            for minute in (20, 40):
+                with self.subTest(mode=mode, minute=minute):
+                    now = datetime(2026, 10, 24, 10, minute, tzinfo=UTC)
+                    idd = await self._setup(now, method_ts_round=mode)
+                    self.assertTrue(idd)
+                    grid = idd["fcst"].forecast_dates
+                    frame = idd["df_input_data_dayahead"]
+                    self.assertEqual(len(frame), 73)
+                    np.testing.assert_allclose(frame["p_load_forecast"], _utc_sine(grid), atol=15.0)
 
     async def test_tuned_model_horizon_independent_of_lags_opt(self):
         await self._save_model(tuned_lags=24)
