@@ -2564,7 +2564,7 @@ class Forecast:
             first_needed = forecast_start - warm_up * self.freq
             history_utc = data_last_window.index.tz_convert("UTC")
             data_last_window = data_last_window.loc[
-                (history_utc < first_needed.tz_convert("UTC")) & (history_utc + self.freq <= now)
+                history_utc + self.freq <= first_needed.tz_convert("UTC")
             ]
             window_size = self._mlf_window_size(mlf)
             if len(data_last_window) < window_size:

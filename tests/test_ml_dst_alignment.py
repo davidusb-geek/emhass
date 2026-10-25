@@ -239,6 +239,31 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
+    async def test_completed_overlapping_bucket_is_not_a_negative_phase(self):
+        # REST/InfluxDB/VictoriaMetrics buckets sit on UTC multiples and run up to the
+        # bucket containing now; the grid start is wall-aligned ("first") or rounded.
+        for tz, freq, now, start in (
+            ("Asia/Kolkata", "60min", "2026-02-20 05:10", "2026-02-20 04:30"),
+            ("Asia/Kolkata", "60min", "2026-02-20 05:25", "2026-02-20 05:30"),
+            ("Asia/Kathmandu", "30min", "2026-02-20 10:35", "2026-02-20 10:15"),
+        ):
+            with self.subTest(tz=tz, now=now):
+                fcst, _ = self._case(tz, freq, start, pd.Timedelta(0))
+                utc_now = pd.Timestamp(now, tz="UTC")
+                index = pd.date_range(end=utc_now.floor(freq), periods=100, freq=freq)
+                history = pd.DataFrame(
+                    {fcst.var_load_new: np.arange(100, dtype=float)}, index=index.tz_convert(tz)
+                )
+                model = _Predictor()
+                with time_machine.travel(utc_now.to_pydatetime(), tick=False):
+                    result = await fcst._get_load_forecast_ml(history, True, model, True)
+                self.assertIsInstance(result, pd.DataFrame)
+                self.assertTrue(result.index.equals(fcst.forecast_dates))
+                # Only completed buckets that end by the first needed step are observations.
+                self.assertLessEqual(
+                    model.received_history_end + pd.Timedelta(freq), fcst.forecast_dates[0]
+                )
+
     async def test_history_ahead_of_the_grid_is_rejected(self):
         fcst, history = self._case(
             "Asia/Kolkata", "60min", "2026-02-20 10:00", -pd.Timedelta("20min")
@@ -252,12 +277,12 @@ class TestRestUnchangedSensorState(unittest.TestCase):
 
     NOW = datetime(2026, 2, 20, 10, 20, tzinfo=UTC)
 
-    def _process(self, rows, is_last_day=True, day="2026-02-20"):
+    def _process(self, rows, is_last_day=True, day="2026-02-20", now=None):
         rh = object.__new__(RetrieveHass)
         rh.freq = pd.Timedelta("60min")
         rh.logger = logging.getLogger(__name__)
         data = [{"state": state, "last_changed": at} for state, at in rows]
-        with time_machine.travel(self.NOW, tick=False):
+        with time_machine.travel(now or self.NOW, tick=False):
             return rh._process_history_dataframe(
                 data, "sensor.load", pd.Timestamp(day, tz="UTC"), False, is_last_day
             )
@@ -274,6 +299,25 @@ class TestRestUnchangedSensorState(unittest.TestCase):
             [("500", "2026-02-20T00:00:00+00:00"), ("unavailable", "2026-02-20T06:10:00+00:00")]
         )
         self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+
+    def test_unavailable_after_a_number_in_the_same_bucket_is_not_held(self):
+        frame = self._process(
+            [("5000", "2026-02-20T06:05:00+00:00"), ("unavailable", "2026-02-20T06:20:00+00:00")]
+        )
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+
+    def test_held_value_is_the_last_state_not_the_bucket_mean(self):
+        frame = self._process(
+            [("1000", "2026-02-20T06:00:00+00:00"), ("0", "2026-02-20T06:25:00+00:00")]
+        )
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 10:00", tz="UTC"))
+        self.assertTrue((frame["sensor.load"].iloc[-2:] == 0.0).all())
+
+    def test_no_hold_just_after_utc_midnight(self):
+        frame = self._process(
+            [("500", "2026-02-20T00:00:00+00:00")], now=datetime(2026, 2, 20, 0, 20, tzinfo=UTC)
+        )
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 00:00", tz="UTC"))
 
     def test_past_days_and_old_data_are_never_extended(self):
         rows = [("500", "2026-02-19T00:00:00+00:00"), ("520", "2026-02-19T06:10:00+00:00")]

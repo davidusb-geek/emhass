@@ -523,13 +523,14 @@ class RetrieveHass:
             .rename(columns={"state": var})
         )
         df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
+        last_state = df_tp.sort_index().iloc[-1, 0]
         df_tp = df_tp.resample(self.freq).mean()
-        return self._hold_unchanged_state(df_tp, var, day, is_last_day)
+        return self._hold_unchanged_state(df_tp, last_state, var, day, is_last_day)
 
     def _hold_unchanged_state(
-        self, df_tp: pd.DataFrame, var: str, day: pd.Timestamp, is_last_day: bool
+        self, df_tp: pd.DataFrame, last_state: float, var: str, day: pd.Timestamp, is_last_day: bool
     ) -> pd.DataFrame:
-        """Hold the sensor's last numeric state up to the last bucket before now.
+        """Hold the sensor's last numeric state up to the bucket containing now.
 
         The REST history only has a row per state change, but its last row is the
         sensor's current state, so a sensor that has not changed since then is still
@@ -537,7 +538,7 @@ class RetrieveHass:
         unavailable or unknown last state, or data not belonging to the period
         containing now, is not extended.
         """
-        if not is_last_day or df_tp.empty or pd.isna(df_tp.iloc[-1, 0]):
+        if not is_last_day or df_tp.empty or pd.isna(last_state):
             return df_tp
         day = pd.Timestamp(day)
         day = day.tz_localize("UTC") if day.tz is None else day.tz_convert("UTC")
@@ -546,7 +547,7 @@ class RetrieveHass:
         if not (day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
             return df_tp
         tail = pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
-        held = pd.DataFrame({var: df_tp.iloc[-1, 0]}, index=tail)
+        held = pd.DataFrame({var: last_state}, index=tail)
         return pd.concat([df_tp, held])
 
     async def _get_data_rest_api(
