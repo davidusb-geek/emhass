@@ -47,6 +47,7 @@
   "victoriametrics_port": 8428,
   "victoriametrics_database": "",
   "victoriametrics_metric_regex": ".+_value",
+  "victoriametrics_entity_label": "",
   "victoriametrics_use_ssl": false,
   "victoriametrics_verify_ssl": false,
   "load_negative": false,

@@ -129,7 +129,7 @@
     },
     "use_victoriametrics": {
       "friendly_name": "Use VictoriaMetrics for data retrieval",
-      "Description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label).",
+      "Description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label), or scraped from the Home Assistant Prometheus integration (see the entity label parameter).",
       "input": "boolean",
       "default_value": false,
       "unit": "none"
@@ -160,6 +160,13 @@
       "Description": "Regular expression matched against the metric name to find a sensor. Defaults to '.+_value', which matches the '<unit>_value' metrics written by the Home Assistant InfluxDB integration whatever the unit of the sensor.",
       "input": "string",
       "default_value": ".+_value",
+      "unit": "none"
+    },
+    "victoriametrics_entity_label": {
+      "friendly_name": "VictoriaMetrics entity label",
+      "Description": "Name of a label holding the full entity id (e.g. 'sensor.power_load'), for data scraped from the Home Assistant Prometheus integration: set it to 'entity' and set the metric name regex to 'homeassistant_sensor_.+'. Leave empty for data written by the Home Assistant InfluxDB integration, which is matched on its 'entity_id' and 'domain' labels.",
+      "input": "string",
+      "default_value": "",
       "unit": "none"
     },
     "victoriametrics_use_ssl": {
