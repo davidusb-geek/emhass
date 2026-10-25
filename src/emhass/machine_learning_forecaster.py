@@ -440,38 +440,32 @@ class MLForecaster:
                 raise ValueError("Model has not been fitted yet. Call fit() first.")
 
             if data_last_window is None:
-                predictions = await asyncio.to_thread(
+                return await asyncio.to_thread(
                     self.forecaster.predict,
                     steps=self.num_lags,
                     exog=self.data_test.drop(self.var_model, axis=1),
                 )
-            else:
-                data_last_window = await self.interpolate_async(data_last_window)
-                steps = (
-                    (self.lags_opt if self.is_tuned else self.num_lags)
-                    if steps is None
-                    else int(steps)
-                )
-                if steps < 1:
-                    raise ValueError("Prediction steps must be positive")
-                # getattr fallback keeps models pickled before weather_features existed working.
-                weather_features = getattr(self, "weather_features", [])
-                exog = await self.generate_exog(
-                    data_last_window,
-                    steps,
-                    self.var_model,
-                    weather_features=weather_features,
-                    weather_future=weather_future,
-                )
-
-                predictions = await asyncio.to_thread(
-                    self.forecaster.predict,
-                    steps=steps,
-                    last_window=data_last_window[self.var_model],
-                    exog=exog.drop(self.var_model, axis=1),
-                )
-
-            return predictions
+            data_last_window = await self.interpolate_async(data_last_window)
+            steps = (
+                (self.lags_opt if self.is_tuned else self.num_lags) if steps is None else int(steps)
+            )
+            if steps < 1:
+                raise ValueError("Prediction steps must be positive")
+            # getattr fallback keeps models pickled before weather_features existed working.
+            weather_features = getattr(self, "weather_features", [])
+            exog = await self.generate_exog(
+                data_last_window,
+                steps,
+                self.var_model,
+                weather_features=weather_features,
+                weather_future=weather_future,
+            )
+            return await asyncio.to_thread(
+                self.forecaster.predict,
+                steps=steps,
+                last_window=data_last_window[self.var_model],
+                exog=exog.drop(self.var_model, axis=1),
+            )
 
         except asyncio.CancelledError:
             self.logger.info("Prediction was cancelled")

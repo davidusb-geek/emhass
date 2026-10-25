@@ -25,9 +25,15 @@ from emhass.command_line import set_input_data_dict
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.retrieve_hass import RetrieveHass
-from tests import test_command_line_utils as command_line_tests
 
-emhass_conf = command_line_tests.emhass_conf
+root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+emhass_conf = {
+    "data_path": root / "data/",
+    "root_path": root / "src/emhass/",
+    "config_path": root / "config.json",
+    "defaults_path": root / "src/emhass/data/config_defaults.json",
+    "associations_path": root / "src/emhass/data/associations.csv",
+}
 
 logger, _ = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 TZ_NAME = "Europe/Berlin"
@@ -331,6 +337,12 @@ class TestRestUnchangedSensorState(unittest.TestCase):
         )
 
 
+async def _default_params():
+    config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+    _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+    return await utils.build_params(emhass_conf, secrets, config, logger)
+
+
 def _utc_sine(index):
     """A load profile that is a pure function of the absolute (UTC) instant."""
     hours = np.asarray(index.tz_convert("UTC").asi8, dtype=float) / 3.6e12
@@ -419,7 +431,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             pickle.dump(mlf, f)
 
     async def _setup(self, now, method_ts_round="nearest"):
-        params = await command_line_tests.TestCommandLineAsyncUtils.get_test_params()
+        params = await _default_params()
         params["retrieve_hass_conf"]["time_zone"] = TZ_NAME
         params["retrieve_hass_conf"]["optimization_time_step"] = 60
         params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"] = "sensor.test_load"
