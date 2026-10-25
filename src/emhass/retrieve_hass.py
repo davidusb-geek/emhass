@@ -120,6 +120,8 @@ class RetrieveHass:
         else:
             self.freq = freq
         self.time_zone = time_zone
+        # Buckets of the last REST retrieval where the sensor was unavailable or unknown
+        self.unavailable_buckets: dict[str, pd.DatetimeIndex] = {}
         if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
@@ -508,8 +510,12 @@ class RetrieveHass:
         is_first_day: bool,
         is_last_day: bool,
         hold_unchanged_tail: bool = False,
+        unavailable: list | None = None,
     ) -> pd.DataFrame | None:
-        """Helper to convert raw data to a resampled DataFrame."""
+        """Helper to convert raw data to a resampled DataFrame.
+
+        ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
+        """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
         if len(df_raw) == 0:
@@ -538,34 +544,46 @@ class RetrieveHass:
             .rename(columns={"state": var})
         )
         df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
-        last_state = df_tp.sort_index().iloc[-1, 0]
+        states = df_tp[var].sort_index()
+        last_state = states.iloc[-1]
         df_tp = df_tp.resample(self.freq).mean()
-        if not hold_unchanged_tail:
+        tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
+        if unavailable is not None:
+            unavailable.append(self._unavailable_buckets(states, df_tp[var]))
+        if not hold_unchanged_tail or pd.isna(last_state) or tail.empty:
             return df_tp
-        return self._hold_unchanged_state(df_tp, last_state, var, day, is_last_day)
+        self.logger.info(
+            f"Holding the last state of {var} for {len(tail)} bucket(s) after its last "
+            "recorded change: the history cannot show whether the sensor is still reporting."
+        )
+        return pd.concat([df_tp, pd.DataFrame({var: last_state}, index=tail)])
 
-    def _hold_unchanged_state(
-        self, df_tp: pd.DataFrame, last_state: float, var: str, day: pd.Timestamp, is_last_day: bool
-    ) -> pd.DataFrame:
-        """Hold the sensor's last numeric state up to the bucket containing now.
+    def _tail_buckets(
+        self, last_seen: pd.Timestamp, day: pd.Timestamp, is_last_day: bool
+    ) -> pd.DatetimeIndex:
+        """Buckets after the last recorded one up to the bucket containing now.
 
-        Home Assistant's history only has a row per recorded state change, plus a
-        start-of-period row, so an unchanged sensor and a stalled recorder look the
-        same: this holds the last value without proving the sensor is still
-        reporting. An unavailable or unknown last state, or data not belonging to
-        the period containing now, is not extended.
+        Home Assistant only returns a row per recorded state change, so nothing is
+        recorded after a sensor's last change. Data not belonging to the period
+        containing now has no tail.
         """
-        if not is_last_day or df_tp.empty or pd.isna(last_state):
-            return df_tp
         day = pd.Timestamp(day)
         day = day.tz_localize("UTC") if day.tz is None else day.tz_convert("UTC")
         last_bucket = pd.Timestamp.now(tz="UTC").floor(self.freq)
-        last_seen = df_tp.index[-1]
-        if not (day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
-            return df_tp
-        tail = pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
-        held = pd.DataFrame({var: last_state}, index=tail)
-        return pd.concat([df_tp, held])
+        if not (is_last_day and day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
+            return pd.DatetimeIndex([], tz="UTC")
+        return pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
+
+    def _unavailable_buckets(self, states: pd.Series, resampled: pd.Series) -> pd.DatetimeIndex:
+        """Buckets without a numeric observation while the state was unavailable/unknown.
+
+        An unavailable state lasts until the next recorded change, so it also covers
+        the empty buckets after it. Buckets that have a numeric reading of their own
+        are observed and not listed.
+        """
+        last_unavailable = states.isna().resample(self.freq).last()
+        carried = last_unavailable.ffill().fillna(False).astype(bool)
+        return resampled.index[resampled.isna().to_numpy() & carried.to_numpy()]
 
     async def _get_data_rest_api(
         self,
@@ -600,6 +618,7 @@ class RetrieveHass:
         }
         var_list = [var for var in var_list if var != ""]
         self.df_final = pd.DataFrame()
+        self.unavailable_buckets = {}
 
         days_skipped = 0
         # Concurrent fetch: run all (day, var) HTTP requests in parallel, bounded
@@ -644,6 +663,7 @@ class RetrieveHass:
                     # Fetched concurrently above; just pick the result out
                     data = results.get((day_idx, var))
                     df_resampled = None
+                    unavailable: list = []
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
@@ -652,7 +672,12 @@ class RetrieveHass:
                             is_first_day=(day_idx == 0),
                             is_last_day=(day_idx == len(days_list) - 1),
                             hold_unchanged_tail=hold_unchanged_tail,
+                            unavailable=unavailable,
                         )
+                    if unavailable:
+                        self.unavailable_buckets[var] = self.unavailable_buckets.get(
+                            var, pd.DatetimeIndex([], tz="UTC")
+                        ).union(unavailable[0])
                     if df_resampled is None:
                         missing_var = True
                         if not keep_partial_days:

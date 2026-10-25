@@ -298,6 +298,41 @@ class TestRestUnchangedSensorState(unittest.TestCase):
                 hold_unchanged_tail=hold,
             )
 
+    def _unavailable(self, rows):
+        found = []
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta("60min")
+        rh.logger = logging.getLogger(__name__)
+        data = [{"state": state, "last_changed": at} for state, at in rows]
+        with time_machine.travel(self.NOW, tick=False):
+            rh._process_history_dataframe(
+                data,
+                "sensor.load",
+                pd.Timestamp("2026-02-20", tz="UTC"),
+                False,
+                True,
+                unavailable=found,
+            )
+        return [at.strftime("%H:%M") for at in found[0]]
+
+    def test_unavailable_state_marks_the_buckets_it_covers(self):
+        rows = [
+            ("500", "2026-02-20T00:00:00+00:00"),
+            ("unavailable", "2026-02-20T02:10:00+00:00"),
+            ("510", "2026-02-20T05:30:00+00:00"),
+        ]
+        # Only buckets without a numeric reading of their own while unavailable count; the
+        # empty bucket before it (01:00) just follows the earlier numeric state.
+        self.assertEqual(self._unavailable(rows), ["02:00", "03:00", "04:00"])
+
+    def test_unavailable_blip_inside_an_observed_bucket_is_not_flagged(self):
+        rows = [
+            ("500", "2026-02-20T00:00:00+00:00"),
+            ("unavailable", "2026-02-20T02:10:00+00:00"),
+            ("530", "2026-02-20T02:40:00+00:00"),
+        ]
+        self.assertEqual(self._unavailable(rows), [])
+
     def test_other_consumers_keep_the_unextended_history(self):
         """Without the opt-in flag the retrieved history is exactly the recorded rows."""
         rows = [("500", "2026-02-20T00:00:00+00:00"), ("520", "2026-02-20T06:10:00+00:00")]
@@ -385,14 +420,15 @@ class _RecorderRetrieveHass:
         self.freq = freq
         self.time_zone = time_zone
         self.df_final = None
+        self.unavailable_buckets = {}
 
     async def get_data(self, days_list, var_list, **kwargs):
         type(self).get_data_kwargs = kwargs
         self._var = var_list[0]
         end = pd.Timestamp.now(tz="UTC").floor(self.freq)
-        index = pd.date_range(end=end, periods=self.days * 24, freq=self.freq).tz_convert(
-            self.time_zone
-        )
+        index = pd.date_range(
+            end=end, periods=pd.Timedelta(days=self.days) // self.freq, freq=self.freq
+        ).tz_convert(self.time_zone)
         values = _utc_sine(index)
         values[-1] = -9999.0  # the still-running bucket holds a partial value
         frame = pd.DataFrame({self._var: values}, index=index)
@@ -474,6 +510,8 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
         recorded = {}
 
         class _Rh:
+            unavailable_buckets = {}
+
             def __init__(self, *args):
                 pass
 
@@ -499,6 +537,46 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self._hass_load_flag("naive"))
 
 
+def _ha_history(rows):
+    """Mock of the Home Assistant /history/period response for one sensor.
+
+    Like the real API it returns the recorded changes inside the requested day, led by
+    a row stamped at the day's start that carries the state in force before it.
+    """
+
+    async def fetch(self, session, url, headers, var, day, is_first_day):
+        start = pd.Timestamp(day)
+        start = start.tz_localize("UTC") if start.tz is None else start.tz_convert("UTC")
+        before = [state for at, state in rows if at < start]
+        out = [(start, before[-1])] if before else []
+        out += [(at, state) for at, state in rows if start <= at < start + pd.Timedelta(days=1)]
+        return [{"state": state, "last_changed": at.isoformat()} for at, state in out] or None
+
+    return fetch
+
+
+def _ha_rows(now, freq_min, *, last_change=None, unavailable=None):
+    """State changes of a load following ``_utc_sine``: one per step up to ``last_change``.
+
+    ``unavailable`` is ``(start, end)``; one unavailable state is recorded at ``start`` and
+    the numeric changes resume at ``end`` (``None``: still unavailable).
+    """
+    step = pd.Timedelta(minutes=freq_min)
+    now = pd.Timestamp(now)
+    index = pd.date_range(
+        (now - pd.Timedelta(days=8)).floor("D"), last_change or now.floor(step), freq=step
+    )
+    rows = [(at, f"{value:.6f}") for at, value in zip(index, _utc_sine(index))]
+    if unavailable:
+        begin, end = unavailable
+        rows = [
+            (at, state) for at, state in rows if not (begin <= at and (end is None or at < end))
+        ]
+        rows.append((begin, "unavailable"))
+        rows.sort(key=lambda row: row[0])
+    return rows
+
+
 class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
     """The production path: set_input_data_dict -> Forecast.get_load_forecast -> pickled model."""
 
@@ -518,8 +596,12 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         _RecorderRetrieveHass.gap_back = None
         _RecorderRetrieveHass.days = 6
 
-    async def _save_model(self, *, num_lags=72, tuned_lags=None, weather=False):
-        index = pd.date_range("2026-01-01", periods=24 * 20, freq="1h", tz=TZ_NAME)
+    async def _save_model(
+        self, *, num_lags=72, tuned_lags=None, weather=False, freq_min=60, time_zone=TZ_NAME
+    ):
+        index = pd.date_range(
+            "2026-01-01", periods=20 * 24 * 60 // freq_min, freq=f"{freq_min}min", tz=time_zone
+        )
         data = pd.DataFrame({"sensor.test_load": _utc_sine(index)}, index=index)
         kwargs = {}
         if weather:
@@ -542,10 +624,22 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         with open(self.conf["data_path"] / f"{self.MODEL_TYPE}_mlf.pkl", "wb") as f:
             pickle.dump(mlf, f)
 
-    async def _setup(self, now, method_ts_round="nearest"):
+    async def _setup(
+        self,
+        now,
+        method_ts_round="nearest",
+        *,
+        time_zone=TZ_NAME,
+        freq_min=60,
+        recorder=_RecorderRetrieveHass,
+        rest_rows=None,
+    ):
+        """Run dayahead-optim input preparation; ``rest_rows`` replays a mocked HA REST history."""
         params = await _default_params()
-        params["retrieve_hass_conf"]["time_zone"] = TZ_NAME
-        params["retrieve_hass_conf"]["optimization_time_step"] = 60
+        params["retrieve_hass_conf"]["time_zone"] = time_zone
+        params["retrieve_hass_conf"]["optimization_time_step"] = freq_min
+        params["retrieve_hass_conf"]["hass_url"] = "http://ha.invalid/"
+        params["retrieve_hass_conf"]["long_lived_token"] = "token"
         params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"] = "sensor.test_load"
         params["retrieve_hass_conf"]["method_ts_round"] = method_ts_round
         params["optim_conf"]["delta_forecast_daily"] = 3
@@ -560,8 +654,9 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
 
         with (
             time_machine.travel(now, tick=False),
-            patch.object(forecast_module, "RetrieveHass", _RecorderRetrieveHass),
+            patch.object(forecast_module, "RetrieveHass", recorder or RetrieveHass),
             patch.object(RetrieveHass, "get_ha_config", no_ha_config),
+            patch.object(RetrieveHass, "_fetch_history_data", _ha_history(rest_rows or [])),
         ):
             return await set_input_data_dict(
                 self.conf,
@@ -647,3 +742,105 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(logger, "ERROR") as logs:
             self.assertFalse(await self._setup(self.CASES[0][1]))
         self.assertIn("Not enough load history", "\n".join(logs.output))
+
+    # -- mocked Home Assistant REST history through RetrieveHass, preparation and ML ------
+
+    async def _rest(self, now, freq_min=60, rows=None, **kwargs):
+        rows = _ha_rows(now, freq_min) if rows is None else rows
+        return await self._setup(now, recorder=None, rest_rows=rows, freq_min=freq_min, **kwargs)
+
+    @staticmethod
+    def _atol(freq_min):
+        """Well below the change a one-step shift makes to the sine profile."""
+        return 0.3 * 200.0 * 2 * np.pi * freq_min / 1440.0
+
+    async def test_rest_history_aligns_at_every_resolution_across_dst(self):
+        for freq_min in (5, 15, 30, 60):
+            await self._save_model(freq_min=freq_min, num_lags=1440 // freq_min)
+            for name, now, steps in self.CASES[1:]:
+                with self.subTest(freq_min=freq_min, case=name):
+                    idd = await self._rest(now, freq_min)
+                    self.assertTrue(idd, "dayahead-optim input preparation failed")
+                    frame = idd["df_input_data_dayahead"]
+                    grid = idd["fcst"].forecast_dates
+                    self.assertEqual(len(frame), steps * 60 // freq_min)
+                    np.testing.assert_allclose(
+                        frame["p_load_forecast"], _utc_sine(grid), atol=self._atol(freq_min)
+                    )
+
+    async def test_rest_history_rounding_modes_and_weather(self):
+        await self._save_model(weather=True, freq_min=15, num_lags=96)
+
+        async def weather_for(self_, index, features):
+            return pd.DataFrame({"temp_air": np.full(len(index), 12.0)}, index=index)
+
+        for mode in ("nearest", "first", "last"):
+            for minute in (20, 40):
+                with self.subTest(mode=mode, minute=minute):
+                    now = datetime(2026, 10, 24, 10, minute, tzinfo=UTC)
+                    with patch.object(Forecast, "get_weather_covariates", weather_for):
+                        idd = await self._rest(now, 15, method_ts_round=mode)
+                    self.assertTrue(idd)
+                    grid = idd["fcst"].forecast_dates
+                    np.testing.assert_allclose(
+                        idd["df_input_data_dayahead"]["p_load_forecast"],
+                        _utc_sine(grid),
+                        atol=self._atol(15),
+                    )
+
+    async def test_unchanged_sensor_is_held_and_logged(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        rows = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-20 03:00", tz="UTC"))
+        with self.assertLogs(logger, "INFO") as logs:
+            idd = await self._rest(now, rows=rows)
+        self.assertTrue(idd)
+        self.assertEqual(len(idd["df_input_data_dayahead"]), 72)
+        self.assertIn("cannot show whether the sensor is still reporting", "\n".join(logs.output))
+
+    async def test_stopped_recorder_cannot_be_told_from_an_unchanged_sensor(self):
+        """Documented limitation: the history API carries no freshness information."""
+        await self._save_model()
+        now = self.CASES[0][1]
+        stopped = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        unchanged = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        self.assertEqual(stopped, unchanged)
+        self.assertTrue(await self._rest(now, rows=stopped))
+
+    async def test_unavailable_sensor_is_not_interpolated_into_the_model_input(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        at = lambda hours: pd.Timestamp(now).floor("h") - pd.Timedelta(hours=hours)  # noqa: E731
+        refused = {
+            # The history then ends before the optimization start: stale.
+            "unavailable_until_now": ((at(5), None), "missing, stale or irregular"),
+            "recovered_inside_the_window": ((at(10), at(6)), "unavailable or unknown"),
+        }
+        for name, (window, message) in refused.items():
+            with self.subTest(case=name):
+                with self.assertLogs(logger, "ERROR") as logs:
+                    idd = await self._rest(now, rows=_ha_rows(now, 60, unavailable=window))
+                self.assertFalse(idd)
+                self.assertIn(message, "\n".join(logs.output))
+        with self.subTest(case="older_than_the_window"):
+            await self._save_model(num_lags=24)
+            idd = await self._rest(now, rows=_ha_rows(now, 60, unavailable=(at(60), at(40))))
+            self.assertTrue(idd)
+
+    async def test_phase_adjustment_is_logged_and_cannot_hide_missing_history(self):
+        zone = "Asia/Kathmandu"
+        await self._save_model(time_zone=zone)
+        now = datetime(2026, 2, 20, 11, 20, tzinfo=UTC)
+        with self.assertLogs(logger, "INFO") as logs:
+            idd = await self._rest(now, method_ts_round="first", time_zone=zone)
+        self.assertTrue(idd)
+        self.assertIn("predictions are moved onto the grid", "\n".join(logs.output))
+        grid = idd["fcst"].forecast_dates
+        np.testing.assert_allclose(
+            idd["df_input_data_dayahead"]["p_load_forecast"], _utc_sine(grid), atol=self._atol(60)
+        )
+        # A recorder that lost its last completed steps is still refused in this zone.
+        _RecorderRetrieveHass.drop_last = 3
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(await self._setup(now, "first", time_zone=zone))
+        self.assertIn("missing, stale or irregular", "\n".join(logs.output))

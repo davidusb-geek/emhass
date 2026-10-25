@@ -2313,6 +2313,9 @@ class Forecast:
                 days_list, var_list, hold_unchanged_tail=(method == "mlforecaster")
             ):
                 return False
+        # Interpolation below fills unavailable intervals; remember them so the ML path
+        # does not take them for observed history.
+        self._load_unavailable = getattr(rh, "unavailable_buckets", {}).get(self.var_load)
         if not rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=self.retrieve_hass_conf["load_negative"],
@@ -2602,8 +2605,19 @@ class Forecast:
                 data_last_window.index[-1],
             )
             return None
+        unavailable = getattr(self, "_load_unavailable", None)
+        if unavailable is not None and actual_window.isin(unavailable).any():
+            self.logger.error(
+                "ML load history is missing, stale or irregular: %s was unavailable or "
+                "unknown during %d of the last %d samples, which would be interpolated "
+                "into the model's input. Refusing to forecast from invented observations.",
+                self.var_load,
+                actual_window.isin(unavailable).sum(),
+                window_size,
+            )
+            return None
         if phase_shift:
-            self.logger.debug(
+            self.logger.info(
                 "ML load history buckets sit %s before the optimization grid; "
                 "predictions are moved onto the grid by that constant.",
                 phase_shift,
