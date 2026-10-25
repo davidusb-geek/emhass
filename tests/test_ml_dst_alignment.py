@@ -5,15 +5,32 @@ the optimization-facing ML path with controlled model predictions and history.
 """
 
 import logging
+import pathlib
+import pickle
+import tempfile
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
+import orjson
 import pandas as pd
 import pytz
+import time_machine
 
+from emhass import forecast as forecast_module
+from emhass import utils
+from emhass.command_line import set_input_data_dict
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
+from emhass.retrieve_hass import RetrieveHass
+from tests import test_command_line_utils as command_line_tests
+
+emhass_conf = command_line_tests.emhass_conf
+
+logger, _ = utils.get_logger(__name__, emhass_conf, save_to_file=False)
+TZ_NAME = "Europe/Berlin"
 
 
 class _Predictor:
@@ -62,9 +79,7 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
         fcst.var_load_new = "sensor.test_load_positive"
         fcst.retrieve_hass_conf = {"sensor_power_load_no_var_loads": fcst.var_load}
         fcst.logger = logging.getLogger(__name__)
-        history_index = pd.date_range(
-            end=start - cls.FREQ, periods=100, freq=cls.FREQ
-        )
+        history_index = pd.date_range(end=start - cls.FREQ, periods=100, freq=cls.FREQ)
         history = pd.DataFrame(
             {fcst.var_load_new: np.arange(len(history_index), dtype=float) + 500},
             index=history_index,
@@ -108,7 +123,9 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
     async def test_irregular_recent_history_rejected(self):
         fcst, history = self._case("2026-02-20 12:00")
         model = _Predictor()
-        result = await fcst._get_load_forecast_ml(history.drop(history.index[-5]), True, model, True)
+        result = await fcst._get_load_forecast_ml(
+            history.drop(history.index[-5]), True, model, True
+        )
         self.assertIs(result, False)
         self.assertIsNone(model.received_steps)
 
@@ -167,3 +184,176 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(old), 72)
         adjusted = await mlf.predict(observations, steps=73)
         self.assertEqual(len(adjusted), 73)
+
+
+def _utc_sine(index):
+    """A load profile that is a pure function of the absolute (UTC) instant."""
+    hours = np.asarray(index.tz_convert("UTC").asi8, dtype=float) / 3.6e12
+    return 500.0 + 200.0 * np.sin(2 * np.pi * hours / 24.0)
+
+
+class _RecorderRetrieveHass:
+    """RetrieveHass stand-in replaying a recorder around the frozen clock.
+
+    The history ends at the (partial) bucket containing "now", like a live Home
+    Assistant retrieval. ``drop_last`` simulates a stale recorder and ``gap_back``
+    a missing interval inside the model's last window.
+    """
+
+    days = 6
+    drop_last = 0
+    gap_back = None
+
+    def __init__(self, hass_url, long_lived_token, freq, time_zone, params, emhass_conf, logger):
+        self.freq = freq
+        self.time_zone = time_zone
+        self.df_final = None
+
+    async def get_data(self, days_list, var_list, **kwargs):
+        self._var = var_list[0]
+        end = pd.Timestamp.now(tz="UTC").floor(self.freq)
+        index = pd.date_range(end=end, periods=self.days * 24, freq=self.freq).tz_convert(
+            self.time_zone
+        )
+        values = _utc_sine(index)
+        values[-1] = -9999.0  # the still-running bucket holds a partial value
+        frame = pd.DataFrame({self._var: values}, index=index)
+        if self.drop_last:
+            frame = frame.iloc[: -self.drop_last]
+        if self.gap_back is not None:
+            frame = frame.drop(frame.index[-self.gap_back])
+        self.df_final = frame
+        return True
+
+    def prepare_data(self, var_load, **kwargs):
+        self.df_final = self.df_final.rename(columns={self._var: var_load + "_positive"})
+        return True
+
+
+class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
+    """The production path: set_input_data_dict -> Forecast.get_load_forecast -> pickled model."""
+
+    CASES = (
+        ("ordinary", datetime(2026, 2, 20, 11, 20, tzinfo=UTC), 72),
+        ("spring", datetime(2026, 3, 28, 11, 20, tzinfo=UTC), 71),
+        ("autumn", datetime(2026, 10, 24, 10, 20, tzinfo=UTC), 73),
+    )
+    MODEL_TYPE = "dst_alignment_e2e"
+
+    async def asyncSetUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.conf = dict(emhass_conf)
+        self.conf["data_path"] = pathlib.Path(self._tmp.name)
+        _RecorderRetrieveHass.drop_last = 0
+        _RecorderRetrieveHass.gap_back = None
+        _RecorderRetrieveHass.days = 6
+
+    async def _save_model(self, *, num_lags=72, tuned_lags=None, weather=False):
+        index = pd.date_range("2026-01-01", periods=24 * 20, freq="1h", tz=TZ_NAME)
+        data = pd.DataFrame({"sensor.test_load": _utc_sine(index)}, index=index)
+        kwargs = {}
+        if weather:
+            data["temp_air"] = 10.0 + np.arange(len(index)) % 5
+            kwargs["weather_features"] = ["temp_air"]
+        mlf = MLForecaster(
+            data,
+            self.MODEL_TYPE,
+            "sensor.test_load",
+            "LinearRegression",
+            num_lags,
+            self.conf,
+            logger,
+            **kwargs,
+        )
+        await mlf.fit()
+        if tuned_lags is not None:
+            mlf.is_tuned = True
+            mlf.lags_opt = tuned_lags
+        with open(self.conf["data_path"] / f"{self.MODEL_TYPE}_mlf.pkl", "wb") as f:
+            pickle.dump(mlf, f)
+
+    async def _setup(self, now):
+        params = await command_line_tests.TestCommandLineAsyncUtils.get_test_params()
+        params["retrieve_hass_conf"]["time_zone"] = TZ_NAME
+        params["retrieve_hass_conf"]["optimization_time_step"] = 60
+        params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"] = "sensor.test_load"
+        params["optim_conf"]["delta_forecast_daily"] = 3
+        params["optim_conf"]["set_use_pv"] = False
+        params["optim_conf"]["load_forecast_method"] = "mlforecaster"
+        params["optim_conf"]["set_use_battery"] = False
+        runtime = {"model_type": self.MODEL_TYPE}
+
+        async def no_ha_config(self_):
+            self_.ha_config = {}
+            return True
+
+        with (
+            time_machine.travel(now, tick=False),
+            patch.object(forecast_module, "RetrieveHass", _RecorderRetrieveHass),
+            patch.object(RetrieveHass, "get_ha_config", no_ha_config),
+        ):
+            return await set_input_data_dict(
+                self.conf,
+                "profit",
+                orjson.dumps(params).decode(),
+                orjson.dumps(runtime).decode(),
+                "dayahead-optim",
+                logger,
+                get_data_from_file=False,
+            )
+
+    async def test_calendar_day_horizon_and_utc_alignment(self):
+        await self._save_model()
+        for name, now, steps in self.CASES:
+            with self.subTest(case=name):
+                idd = await self._setup(now)
+                self.assertTrue(idd, "dayahead-optim input preparation failed")
+                frame = idd["df_input_data_dayahead"]
+                self.assertEqual(len(frame), steps)
+                grid = idd["fcst"].forecast_dates
+                self.assertTrue(frame.index.tz_convert("UTC").equals(grid.tz_convert("UTC")))
+                # One hour of shift moves this profile by up to ~52 W.
+                np.testing.assert_allclose(frame["p_load_forecast"], _utc_sine(grid), atol=15.0)
+
+    async def test_tuned_model_horizon_independent_of_lags_opt(self):
+        await self._save_model(tuned_lags=24)
+        idd = await self._setup(self.CASES[2][1])
+        self.assertTrue(idd)
+        self.assertEqual(len(idd["df_input_data_dayahead"]), 73)
+
+    async def test_weather_covariate_model_on_autumn_grid(self):
+        await self._save_model(weather=True)
+        seen = []
+
+        async def weather_for(self_, index, features):
+            seen.append(index)
+            return pd.DataFrame({"temp_air": np.full(len(index), 12.0)}, index=index)
+
+        with patch.object(Forecast, "get_weather_covariates", weather_for):
+            idd = await self._setup(self.CASES[2][1])
+        self.assertTrue(idd)
+        self.assertEqual(len(idd["df_input_data_dayahead"]), 73)
+        self.assertEqual({len(i) for i in seen}, {73})
+
+    async def test_recorder_without_partial_bucket_is_accepted(self):
+        await self._save_model()
+        _RecorderRetrieveHass.drop_last = 1  # only the still-running bucket is absent
+        self.assertTrue(await self._setup(self.CASES[0][1]))
+
+    async def test_stale_history_fails_closed(self):
+        await self._save_model()
+        for drop in (2, 3):  # last completed bucket(s) missing
+            with self.subTest(dropped_buckets=drop):
+                _RecorderRetrieveHass.drop_last = drop
+                self.assertFalse(await self._setup(self.CASES[0][1]))
+
+    async def test_missing_interval_in_last_window_fails_closed(self):
+        await self._save_model()
+        _RecorderRetrieveHass.gap_back = 10
+        self.assertFalse(await self._setup(self.CASES[0][1]))
+
+    async def test_insufficient_history_fails_closed(self):
+        await self._save_model()
+        _RecorderRetrieveHass.days = 2
+        self.assertFalse(await self._setup(self.CASES[0][1]))

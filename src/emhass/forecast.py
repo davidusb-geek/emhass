@@ -2595,9 +2595,7 @@ class Forecast:
 
         # Exogenous weather must cover exactly the same future grid as the
         # predictor, including the repeated hour of an autumn DST change.
-        weather_future = await self._build_weather_future(
-            data_last_window, mlf, steps=steps
-        )
+        weather_future = await self._build_weather_future(data_last_window, mlf, steps=steps)
         if use_last_window:
             forecast_out = await mlf.predict(
                 data_last_window, weather_future=weather_future, steps=steps
