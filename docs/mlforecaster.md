@@ -213,6 +213,12 @@ runtimeparams = {
 
 When the same model is used for optimization (`load_forecast_method: mlforecaster`), its prediction goes through the common optimizer-facing load check described in the [Forecast input contract](passing_data.md#forecast-input-contract): a finite negative value is clipped to 0 W with a warning, and a `NaN` or infinite value fails the optimization cycle. The clipping is a physical-domain correction for the optimizer only. It does not improve the raw forecast, so evaluate model accuracy on the raw prediction, not on the clipped load.
 
+### Using the model for optimization (`load_forecast_method: mlforecaster`)
+
+During `dayahead-optim` and `naive-mpc-optim` the model predicts exactly the optimization time grid, whatever the model's `num_lags` or tuned `lags_opt`. A local calendar-day window can therefore contain more or fewer steps than a fixed number (for example 71, 72 or 73 hourly steps across a daylight saving time change), and the predictions are matched to the grid by their actual timestamps. The model lags only determine how much recent history is needed.
+
+That history must be complete: the last `num_lags` (or window size) optimization steps before the forecast start must all be present, with no gap and ending immediately before the forecast start. The still-running interval at the forecast start is never used as observed history. If the history is missing, stale or irregular (for example the Home Assistant recorder has not yet written the latest interval), the optimization is refused with an error in the log instead of producing a load forecast shifted in time. `forecast-model-predict` is unchanged.
+
 ## The tuning method with Bayesian hyperparameter optimization
 
 With a previously fitted model, you can use the `forecast-model-tune` endpoint to tune its hyperparameters. This will be using Bayesian optimization with a wrapper of `optuna` in the `skforecast` module.

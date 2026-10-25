@@ -447,7 +447,11 @@ class MLForecaster:
                 )
             else:
                 data_last_window = await self.interpolate_async(data_last_window)
-                steps = (self.lags_opt if self.is_tuned else self.num_lags) if steps is None else int(steps)
+                steps = (
+                    (self.lags_opt if self.is_tuned else self.num_lags)
+                    if steps is None
+                    else int(steps)
+                )
                 if steps < 1:
                     raise ValueError("Prediction steps must be positive")
                 # getattr fallback keeps models pickled before weather_features existed working.
