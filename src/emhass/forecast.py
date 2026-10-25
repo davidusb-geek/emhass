@@ -2536,6 +2536,7 @@ class Forecast:
         data_last_window = None
         steps = None
         phase_shift = pd.Timedelta(0)
+        warm_up = 0
         if use_last_window:
             data_last_window = copy.deepcopy(df)
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
@@ -2554,11 +2555,16 @@ class Forecast:
             if forecast_start.tzinfo is None:
                 self.logger.error("ML optimization forecast grid must be timezone-aware")
                 return False
-            # Recorder history can contain the still-running first forecast bucket.
-            # A past last bucket is equally dangerous: positional relabelling would
-            # silently give an apparently valid but time-shifted load forecast.
+            # Only completed buckets before the forecast start are observations. The
+            # start can be rounded up past now (method_ts_round), leaving the bucket
+            # just before it still running; the model then predicts that many extra
+            # steps from the last completed bucket and they are dropped below.
+            now = pd.Timestamp.now(tz="UTC")
+            warm_up = 0 if forecast_start <= now else math.ceil((forecast_start - now) / self.freq)
+            first_needed = forecast_start - warm_up * self.freq
+            history_utc = data_last_window.index.tz_convert("UTC")
             data_last_window = data_last_window.loc[
-                data_last_window.index.tz_convert("UTC") < forecast_start.tz_convert("UTC")
+                (history_utc < first_needed.tz_convert("UTC")) & (history_utc + self.freq <= now)
             ]
             window_size = self._mlf_window_size(mlf)
             if len(data_last_window) < window_size:
@@ -2577,12 +2583,22 @@ class Forecast:
             # only the bucket phase of the retrieval backend (REST buckets sit on UTC
             # multiples, websocket ones on local multiples, which differ in zones with
             # a non-whole-hour UTC offset); it is a constant that is applied to the
-            # predictions. Anything of a full step or more is missing or stale history.
+            # predictions, and only when the samples sit on a backend bucket lattice
+            # (UTC multiples for REST/InfluxDB/VictoriaMetrics, local wall-clock
+            # multiples for WebSocket statistics). Anything else, or a full step or
+            # more, is missing or stale history.
             actual_window = data_last_window.index[-window_size:].tz_convert("UTC")
-            phase_shift = (forecast_start - self.freq).tz_convert("UTC") - actual_window[-1]
+            phase_shift = (first_needed - self.freq).tz_convert("UTC") - actual_window[-1]
+            last_sample = actual_window[-1]
+            on_known_lattice = (
+                last_sample.value % self.freq.value == 0
+                or last_sample.tz_convert(self.time_zone).tz_localize(None).value % self.freq.value
+                == 0
+            )
             if not (
                 (actual_window[1:] - actual_window[:-1] == self.freq).all()
                 and pd.Timedelta(0) <= phase_shift < self.freq
+                and (not phase_shift or on_known_lattice)
             ):
                 self.logger.error(
                     "ML load history is missing, stale or irregular: the last %d "
@@ -2590,8 +2606,8 @@ class Forecast:
                     "immediately before the optimization start %s; "
                     "last retrieved sample is %s. Refusing to shift predictions.",
                     window_size,
-                    forecast_start - self.freq,
-                    forecast_start,
+                    first_needed - self.freq,
+                    first_needed,
                     data_last_window.index[-1],
                 )
                 return False
@@ -2604,7 +2620,8 @@ class Forecast:
             # Restore the verified regular frequency for skforecast's recursive
             # exogenous date grid; recorder-prepared indexes may have freq=None.
             data_last_window = data_last_window.iloc[-window_size:].asfreq(self.freq)
-            steps = len(self.forecast_dates)
+            steps = len(self.forecast_dates) + warm_up
+            expected_index = pd.date_range(start=first_needed, periods=steps, freq=self.freq)
 
         # Exogenous weather must cover exactly the same future grid as the
         # predictor, including the repeated hour of an autumn DST change.
@@ -2627,24 +2644,22 @@ class Forecast:
                 or forecast_out.index.tz is None
                 or len(forecast_out) != steps
                 or not forecast_out.index.is_unique
-                or not forecast_out.index.tz_convert("UTC").equals(
-                    self.forecast_dates.tz_convert("UTC")
-                )
+                or not forecast_out.index.tz_convert("UTC").equals(expected_index.tz_convert("UTC"))
             ):
                 self.logger.error(
                     "ML prediction timestamps/count do not match the optimization grid: "
                     "expected %d steps from %s to %s; got %s steps. "
                     "Refusing positional timestamp reassignment.",
                     steps,
-                    self.forecast_dates[0],
-                    self.forecast_dates[-1],
+                    expected_index[0],
+                    expected_index[-1],
                     len(forecast_out) if forecast_out is not None else 0,
                 )
                 return False
             # Match by actual UTC instant, retaining the optimization site's
             # timezone for downstream PV/load dataframe joins.
             forecast_out = forecast_out.tz_convert(self.forecast_dates.tz)
-            return forecast_out.loc[self.forecast_dates].rename("yhat").to_frame()
+            return forecast_out.iloc[warm_up:].loc[self.forecast_dates].rename("yhat").to_frame()
 
         # Legacy explicit non-live/debug mode predicts from the trained model's
         # test data and maps values onto the caller's requested forecast grid.
