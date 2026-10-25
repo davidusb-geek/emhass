@@ -1,0 +1,41 @@
+name: Temporary ML DST validation (remove before PR)
+on:
+  push:
+    branches:
+      - fix/ml-dst-horizon-utc-alignment-20261025
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: EMHASS pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: windows-latest, python: "3.12" }
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --python "${{ matrix.python }}" --extra test
+      - name: Focused ML DST regressions
+        run: uv run --python "${{ matrix.python }}" pytest -q tests/test_ml_dst_alignment.py
+      - name: Full regression suite
+        run: uv run --python "${{ matrix.python }}" pytest -q tests/
+
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check .
+      - run: uvx ruff format --check --diff
