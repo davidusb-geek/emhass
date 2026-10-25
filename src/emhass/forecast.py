@@ -2420,14 +2420,14 @@ class Forecast:
         return yhat.to_frame(name="yhat")
 
     async def _build_weather_future(
-        self, data_last_window: pd.DataFrame, mlf
+        self, data_last_window: pd.DataFrame, mlf, steps: int | None = None
     ) -> pd.DataFrame | None:
         """Build the future-weather DataFrame required by a weather-trained MLForecaster.
 
-        Returns a DataFrame aligned to the model's forecast horizon (``mlf.lags_opt`` when tuned,
-        ``mlf.num_lags`` otherwise) containing the weather covariate columns the model was trained
-        with, or ``None`` when the model was trained without weather features or when
-        ``data_last_window`` is None.
+        Returns a DataFrame covering ``steps`` future intervals when supplied;
+        otherwise uses the model's existing lag-based horizon. The default preserves
+        standalone ``forecast-model-predict`` behaviour. Returns None when weather
+        covariates are not configured or there is no last window.
 
         Factoring out this block avoids identical horizon-construction code in both
         ``_get_load_forecast_ml`` and ``command_line.forecast_model_predict``.
@@ -2436,6 +2436,7 @@ class Forecast:
             future date range.
         :type data_last_window: pd.DataFrame
         :param mlf: A fitted (and optionally tuned) ``MLForecaster`` instance.
+        :param steps: Optional optimization-grid horizon in timesteps.
         :return: Future weather DataFrame, or None.
         :rtype: pd.DataFrame | None
         """
@@ -2454,7 +2455,8 @@ class Forecast:
                 "_build_weather_future: could not infer a regular frequency from "
                 "data_last_window.index — ensure the index has a uniform step size."
             )
-        steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
+        if steps is None:
+            steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
         future_index = pd.date_range(
             start=data_last_window.index[-1] + window_freq,
             periods=steps,
@@ -2525,16 +2527,36 @@ class Forecast:
     async def _get_load_forecast_ml(
         self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
     ) -> pd.DataFrame | bool:
-        """Helper for ML forecast.
+        """Predict on the real optimization grid, never by relabelling ML timestamps.
 
-        ``mlf`` is the already-loaded model: ``get_load_forecast`` reads the
-        pickle before the history retrieval (see ``_load_mlf_model``) so the
-        retrieval window can be sized from the model's lag requirement.
+        The optimization path uses the forecast's actual local-calendar-day grid;
+        saved-model lags size the *history* window, not the number of predictions.
+        Standalone/model-test behaviour without a live last window stays unchanged.
         """
         data_last_window = None
+        steps = None
         if use_last_window:
             data_last_window = copy.deepcopy(df)
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
+            if (
+                not isinstance(data_last_window.index, pd.DatetimeIndex)
+                or data_last_window.index.tz is None
+                or not data_last_window.index.is_monotonic_increasing
+                or not data_last_window.index.is_unique
+            ):
+                self.logger.error("ML load history requires an ordered, unique, timezone-aware index")
+                return False
+
+            forecast_start = self.forecast_dates[0]
+            if forecast_start.tzinfo is None:
+                self.logger.error("ML optimization forecast grid must be timezone-aware")
+                return False
+            # Recorder history can contain the still-running first forecast bucket.
+            # A past last bucket is equally dangerous: positional relabelling would
+            # silently give an apparently valid but time-shifted load forecast.
+            data_last_window = data_last_window.loc[
+                data_last_window.index.tz_convert("UTC") < forecast_start.tz_convert("UTC")
+            ]
             window_size = self._mlf_window_size(mlf)
             if len(data_last_window) < window_size:
                 self.logger.error(
@@ -2546,34 +2568,79 @@ class Forecast:
                     f"{self.retrieve_hass_conf['sensor_power_load_no_var_loads']}."
                 )
                 return False
-        # When the model was trained with weather covariates, supply the future weather over the
-        # forecast horizon so the recursive predict has the exog columns it expects.
-        weather_future = await self._build_weather_future(data_last_window, mlf)
-        forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
-        self.logger.debug(
-            "Number of ML predict forcast data generated (lags_opt): "
-            + str(len(forecast_out.index))
+
+            expected_window = pd.date_range(
+                end=forecast_start - self.freq,
+                periods=window_size,
+                freq=self.freq,
+            )
+            actual_window = data_last_window.index[-window_size:]
+            if not actual_window.tz_convert("UTC").equals(expected_window.tz_convert("UTC")):
+                self.logger.error(
+                    "ML load history is missing, stale or irregular: the last %d "
+                    "samples must end at %s, immediately before the optimization start %s; "
+                    "last retrieved sample is %s. Refusing to shift predictions.",
+                    window_size,
+                    expected_window[-1],
+                    forecast_start,
+                    data_last_window.index[-1],
+                )
+                return False
+            data_last_window = data_last_window.iloc[-window_size:]
+            steps = len(self.forecast_dates)
+
+        # Exogenous weather must cover exactly the same future grid as the
+        # predictor, including the repeated hour of an autumn DST change.
+        weather_future = await self._build_weather_future(
+            data_last_window, mlf, steps=steps
         )
-        self.logger.debug(
-            "Number of forcast dates obtained (prediction_horizon): "
-            + str(len(self.forecast_dates))
-        )
+        if use_last_window:
+            forecast_out = await mlf.predict(
+                data_last_window, weather_future=weather_future, steps=steps
+            )
+        else:
+            # Preserve the existing explicit model-training/debug prediction mode.
+            forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
+
+        if use_last_window:
+            if (
+                not isinstance(forecast_out, pd.Series)
+                or not isinstance(forecast_out.index, pd.DatetimeIndex)
+                or forecast_out.index.tz is None
+                or len(forecast_out) != steps
+                or not forecast_out.index.is_unique
+                or not forecast_out.index.tz_convert("UTC").equals(
+                    self.forecast_dates.tz_convert("UTC")
+                )
+            ):
+                self.logger.error(
+                    "ML prediction timestamps/count do not match the optimization grid: "
+                    "expected %d steps from %s to %s; got %s steps. "
+                    "Refusing positional timestamp reassignment.",
+                    steps,
+                    self.forecast_dates[0],
+                    self.forecast_dates[-1],
+                    len(forecast_out) if forecast_out is not None else 0,
+                )
+                return False
+            # Match by actual UTC instant, retaining the optimization site's
+            # timezone for downstream PV/load dataframe joins.
+            forecast_out = forecast_out.tz_convert(self.forecast_dates.tz)
+            return forecast_out.loc[self.forecast_dates].rename("yhat").to_frame()
+
+        # Legacy explicit non-live/debug mode predicts from the trained model's
+        # test data and maps values onto the caller's requested forecast grid.
         if len(self.forecast_dates) < len(forecast_out.index):
-            forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+            forecast_out = forecast_out.iloc[: len(self.forecast_dates)]
         elif len(self.forecast_dates) > len(forecast_out.index):
             self.logger.error(
-                "Unable to obtain: "
-                + str(len(self.forecast_dates))
-                + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters"
+                "ML model test prediction is shorter than the requested grid: "
+                "%d values available, %d required",
+                len(forecast_out.index),
+                len(self.forecast_dates),
             )
             return False
-        data_dict = {
-            "ts": self.forecast_dates,
-            "yhat": forecast_out.values.tolist(),
-        }
-        data = pd.DataFrame.from_dict(data_dict)
-        data.set_index("ts", inplace=True)
-        return data.copy().loc[self.forecast_dates]
+        return pd.DataFrame({"yhat": forecast_out.to_numpy()}, index=self.forecast_dates)
 
     def _get_load_forecast_csv(self, csv_path: str) -> pd.DataFrame:
         """Helper to retrieve load data from CSV."""
