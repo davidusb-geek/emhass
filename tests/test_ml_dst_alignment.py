@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import orjson
@@ -283,15 +283,35 @@ class TestRestUnchangedSensorState(unittest.TestCase):
 
     NOW = datetime(2026, 2, 20, 10, 20, tzinfo=UTC)
 
-    def _process(self, rows, is_last_day=True, day="2026-02-20", now=None):
+    def _process(self, rows, is_last_day=True, day="2026-02-20", now=None, hold=True):
         rh = object.__new__(RetrieveHass)
         rh.freq = pd.Timedelta("60min")
         rh.logger = logging.getLogger(__name__)
         data = [{"state": state, "last_changed": at} for state, at in rows]
         with time_machine.travel(now or self.NOW, tick=False):
             return rh._process_history_dataframe(
-                data, "sensor.load", pd.Timestamp(day, tz="UTC"), False, is_last_day
+                data,
+                "sensor.load",
+                pd.Timestamp(day, tz="UTC"),
+                False,
+                is_last_day,
+                hold_unchanged_tail=hold,
             )
+
+    def test_other_consumers_keep_the_unextended_history(self):
+        """Without the opt-in flag the retrieved history is exactly the recorded rows."""
+        rows = [("500", "2026-02-20T00:00:00+00:00"), ("520", "2026-02-20T06:10:00+00:00")]
+        frame = self._process(rows, hold=False)
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+        held = self._process(rows)
+        pd.testing.assert_frame_equal(held.loc[: frame.index[-1]], frame, check_names=False)
+
+    def test_stalled_recorder_is_indistinguishable_from_an_unchanged_sensor(self):
+        """The history API carries no freshness: the tail is a documented assumption."""
+        rows = [("500", "2026-02-20T00:00:00+00:00")]
+        frame = self._process(rows)
+        self.assertEqual(frame.index[-1], pd.Timestamp("2026-02-20 10:00", tz="UTC"))
+        self.assertTrue((frame["sensor.load"] == 500.0).all())
 
     def test_unchanged_numeric_state_is_held_to_the_last_bucket_before_now(self):
         frame = self._process(
@@ -367,6 +387,7 @@ class _RecorderRetrieveHass:
         self.df_final = None
 
     async def get_data(self, days_list, var_list, **kwargs):
+        type(self).get_data_kwargs = kwargs
         self._var = var_list[0]
         end = pd.Timestamp.now(tz="UTC").floor(self.freq)
         index = pd.date_range(end=end, periods=self.days * 24, freq=self.freq).tz_convert(
@@ -385,6 +406,42 @@ class _RecorderRetrieveHass:
     def prepare_data(self, var_load, **kwargs):
         self.df_final = self.df_final.rename(columns={self._var: var_load + "_positive"})
         return True
+
+
+class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
+    """Only the ML load retrieval opts in; get_data passes the flag to REST only."""
+
+    async def _rest_kwargs(self, **kwargs):
+        rh = object.__new__(RetrieveHass)
+        rh.use_influxdb = rh.use_victoriametrics = rh.use_websocket = False
+        rh.logger = logging.getLogger(__name__)
+        with patch.object(
+            RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=True)
+        ) as rest:
+            await rh.get_data(pd.date_range("2026-02-20", periods=1, tz="UTC"), ["s"], **kwargs)
+        return rest.call_args.kwargs
+
+    async def test_default_does_not_hold(self):
+        self.assertFalse((await self._rest_kwargs())["hold_unchanged_tail"])
+
+    async def test_flag_reaches_the_rest_path(self):
+        self.assertTrue((await self._rest_kwargs(hold_unchanged_tail=True))["hold_unchanged_tail"])
+
+    async def test_websocket_fallback_keeps_the_flag(self):
+        rh = object.__new__(RetrieveHass)
+        rh.use_influxdb = rh.use_victoriametrics = False
+        rh.use_websocket = True
+        rh.logger = logging.getLogger(__name__)
+        with (
+            patch.object(RetrieveHass, "get_data_websocket", new=AsyncMock(return_value=False)),
+            patch.object(
+                RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=True)
+            ) as rest,
+        ):
+            await rh.get_data(
+                pd.date_range("2026-02-20", periods=1, tz="UTC"), ["s"], hold_unchanged_tail=True
+            )
+        self.assertTrue(rest.call_args.kwargs["hold_unchanged_tail"])
 
 
 class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
@@ -467,6 +524,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             with self.subTest(case=name):
                 idd = await self._setup(now)
                 self.assertTrue(idd, "dayahead-optim input preparation failed")
+                self.assertTrue(_RecorderRetrieveHass.get_data_kwargs["hold_unchanged_tail"])
                 frame = idd["df_input_data_dayahead"]
                 self.assertEqual(len(frame), steps)
                 grid = idd["fcst"].forecast_dates

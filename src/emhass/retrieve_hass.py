@@ -345,6 +345,7 @@ class RetrieveHass:
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
+        hold_unchanged_tail: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -372,6 +373,8 @@ class RetrieveHass:
             sensor doesn't cost other sensors days they did have data for. \
             Defaults to False
         :type keep_partial_days: bool, optional
+        :param hold_unchanged_tail: Only applies to the REST API path. When True,             the last numeric state of the final requested day is held up to the             bucket containing now, because Home Assistant only returns a row per             recorded state change. This is not evidence that the sensor is still             reporting. Defaults to False
+        :type hold_unchanged_tail: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -396,6 +399,7 @@ class RetrieveHass:
                     significant_changes_only,
                     test_url,
                     keep_partial_days=keep_partial_days,
+                    hold_unchanged_tail=hold_unchanged_tail,
                 )
             return success
 
@@ -407,6 +411,7 @@ class RetrieveHass:
             significant_changes_only,
             test_url,
             keep_partial_days=keep_partial_days,
+            hold_unchanged_tail=hold_unchanged_tail,
         )
 
     def _build_history_url(
@@ -492,7 +497,13 @@ class RetrieveHass:
             return None
 
     def _process_history_dataframe(
-        self, data: list, var: str, day: pd.Timestamp, is_first_day: bool, is_last_day: bool
+        self,
+        data: list,
+        var: str,
+        day: pd.Timestamp,
+        is_first_day: bool,
+        is_last_day: bool,
+        hold_unchanged_tail: bool = False,
     ) -> pd.DataFrame | None:
         """Helper to convert raw data to a resampled DataFrame."""
         df_raw = pd.DataFrame.from_dict(data)
@@ -525,6 +536,8 @@ class RetrieveHass:
         df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
         last_state = df_tp.sort_index().iloc[-1, 0]
         df_tp = df_tp.resample(self.freq).mean()
+        if not hold_unchanged_tail:
+            return df_tp
         return self._hold_unchanged_state(df_tp, last_state, var, day, is_last_day)
 
     def _hold_unchanged_state(
@@ -532,11 +545,11 @@ class RetrieveHass:
     ) -> pd.DataFrame:
         """Hold the sensor's last numeric state up to the bucket containing now.
 
-        The REST history only has a row per state change, but its last row is the
-        sensor's current state, so a sensor that has not changed since then is still
-        valid. InfluxDB and VictoriaMetrics hold the state the same way. An
-        unavailable or unknown last state, or data not belonging to the period
-        containing now, is not extended.
+        Home Assistant's history only has a row per recorded state change, plus a
+        start-of-period row, so an unchanged sensor and a stalled recorder look the
+        same: this holds the last value without proving the sensor is still
+        reporting. An unavailable or unknown last state, or data not belonging to
+        the period containing now, is not extended.
         """
         if not is_last_day or df_tp.empty or pd.isna(last_state):
             return df_tp
@@ -558,6 +571,7 @@ class RetrieveHass:
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
+        hold_unchanged_tail: bool = False,
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
@@ -633,6 +647,7 @@ class RetrieveHass:
                             day,
                             is_first_day=(day_idx == 0),
                             is_last_day=(day_idx == len(days_list) - 1),
+                            hold_unchanged_tail=hold_unchanged_tail,
                         )
                     if df_resampled is None:
                         missing_var = True
