@@ -863,7 +863,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         await self._save_model(num_lags=48)
         now = self.CASES[0][1]
         begin = pd.Timestamp("2026-02-19 22:30", tz="UTC")
-        end = pd.Timestamp("2026-02-20 00:10", tz="UTC")
+        end = pd.Timestamp("2026-02-20 00:00", tz="UTC")
         with self.assertLogs(logger, "ERROR") as logs:
             idd = await self._rest(now, rows=_ha_rows(now, 60, unavailable=(begin, end)))
         self.assertFalse(idd)
