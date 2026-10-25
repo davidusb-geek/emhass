@@ -330,8 +330,38 @@ class TestRestUnchangedSensorState(unittest.TestCase):
             ("500", "2026-02-20T00:00:00+00:00"),
             ("unavailable", "2026-02-20T02:10:00+00:00"),
             ("530", "2026-02-20T02:40:00+00:00"),
+            ("540", "2026-02-20T05:30:00+00:00"),
         ]
         self.assertEqual(self._unavailable(rows), [])
+
+    def test_bucket_ending_unavailable_after_a_reading_is_observed(self):
+        rows = [
+            ("500", "2026-02-20T00:00:00+00:00"),
+            ("510", "2026-02-20T01:05:00+00:00"),
+            ("unavailable", "2026-02-20T01:20:00+00:00"),
+            ("520", "2026-02-20T03:30:00+00:00"),
+        ]
+        self.assertEqual(self._unavailable(rows), ["02:00"])
+
+    def test_outage_at_the_end_of_a_past_day_covers_the_rest_of_that_day(self):
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta("60min")
+        rh.logger = logging.getLogger(__name__)
+        found = []
+        rows = [
+            {"state": "500", "last_changed": "2026-02-19T00:00:00+00:00"},
+            {"state": "unavailable", "last_changed": "2026-02-19T22:30:00+00:00"},
+        ]
+        with time_machine.travel(self.NOW, tick=False):
+            rh._process_history_dataframe(
+                rows,
+                "sensor.load",
+                pd.Timestamp("2026-02-19", tz="UTC"),
+                False,
+                False,
+                unavailable=found,
+            )
+        self.assertEqual([at.strftime("%H:%M") for at in found[0]], ["22:00", "23:00"])
 
     def test_other_consumers_keep_the_unextended_history(self):
         """Without the opt-in flag the retrieved history is exactly the recorded rows."""
@@ -798,13 +828,15 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(idd["df_input_data_dayahead"]), 72)
         self.assertIn("cannot show whether the sensor is still reporting", "\n".join(logs.output))
 
-    async def test_stopped_recorder_cannot_be_told_from_an_unchanged_sensor(self):
-        """Documented limitation: the history API carries no freshness information."""
+    async def test_stopped_recorder_is_accepted_like_an_unchanged_sensor(self):
+        """Documented limitation: the history API carries no freshness information.
+
+        A recorder that stopped yesterday returns the same rows as a sensor that has not
+        changed since, so the held history is accepted.
+        """
         await self._save_model()
         now = self.CASES[0][1]
         stopped = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
-        unchanged = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
-        self.assertEqual(stopped, unchanged)
         self.assertTrue(await self._rest(now, rows=stopped))
 
     async def test_unavailable_sensor_is_not_interpolated_into_the_model_input(self):
@@ -813,7 +845,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         at = lambda hours: pd.Timestamp(now).floor("h") - pd.Timedelta(hours=hours)  # noqa: E731
         refused = {
             # The history then ends before the optimization start: stale.
-            "unavailable_until_now": ((at(5), None), "missing, stale or irregular"),
+            "unavailable_until_now": ((at(5), None), "must be consecutive"),
             "recovered_inside_the_window": ((at(10), at(6)), "unavailable or unknown"),
         }
         for name, (window, message) in refused.items():
@@ -826,6 +858,16 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             await self._save_model(num_lags=24)
             idd = await self._rest(now, rows=_ha_rows(now, 60, unavailable=(at(60), at(40))))
             self.assertTrue(idd)
+
+    async def test_outage_across_utc_midnight_is_not_interpolated(self):
+        await self._save_model(num_lags=48)
+        now = self.CASES[0][1]
+        begin = pd.Timestamp("2026-02-19 22:30", tz="UTC")
+        end = pd.Timestamp("2026-02-20 00:10", tz="UTC")
+        with self.assertLogs(logger, "ERROR") as logs:
+            idd = await self._rest(now, rows=_ha_rows(now, 60, unavailable=(begin, end)))
+        self.assertFalse(idd)
+        self.assertIn("unavailable or unknown", "\n".join(logs.output))
 
     async def test_phase_adjustment_is_logged_and_cannot_hide_missing_history(self):
         zone = "Asia/Kathmandu"

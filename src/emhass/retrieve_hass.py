@@ -549,7 +549,13 @@ class RetrieveHass:
         df_tp = df_tp.resample(self.freq).mean()
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
-            unavailable.append(self._unavailable_buckets(states, df_tp[var]))
+            day_end = pd.Timestamp(day).tz_convert("UTC") + pd.Timedelta(days=1) - self.freq
+            after = (
+                tail
+                if is_last_day
+                else pd.date_range(df_tp.index[-1] + self.freq, day_end, freq=self.freq)
+            )
+            unavailable.append(self._unavailable_buckets(states, df_tp[var], after))
         if not hold_unchanged_tail or pd.isna(last_state) or tail.empty:
             return df_tp
         self.logger.info(
@@ -574,16 +580,20 @@ class RetrieveHass:
             return pd.DatetimeIndex([], tz="UTC")
         return pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
 
-    def _unavailable_buckets(self, states: pd.Series, resampled: pd.Series) -> pd.DatetimeIndex:
+    def _unavailable_buckets(
+        self, states: pd.Series, resampled: pd.Series, after: pd.DatetimeIndex
+    ) -> pd.DatetimeIndex:
         """Buckets without a numeric observation while the state was unavailable/unknown.
 
         An unavailable state lasts until the next recorded change, so it also covers
-        the empty buckets after it. Buckets that have a numeric reading of their own
-        are observed and not listed.
+        the empty buckets after it, and ``after`` (the buckets this day's frame lacks
+        after its last row) when the last recorded state is unavailable. Buckets that
+        have a numeric reading of their own are observed and not listed.
         """
-        last_unavailable = states.isna().resample(self.freq).last()
-        carried = last_unavailable.ffill().fillna(False).astype(bool)
-        return resampled.index[resampled.isna().to_numpy() & carried.to_numpy()]
+        last_unavailable = states.isna().resample(self.freq).last().astype("boolean")
+        carried = last_unavailable.ffill().fillna(False).to_numpy(dtype=bool)
+        buckets = resampled.index[resampled.isna().to_numpy() & carried]
+        return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
 
     async def _get_data_rest_api(
         self,
