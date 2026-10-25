@@ -546,7 +546,7 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_data(self, days_list, var_list, **kwargs):
-                recorded.update(kwargs)
+                recorded["hold_unchanged_tail"] = kwargs["hold_unchanged_tail"]
                 return False
 
         fcst = object.__new__(Forecast)
@@ -599,9 +599,7 @@ def _ha_rows(now, freq_min, *, last_change=None, unavailable=None):
     rows = [(at, f"{value:.6f}") for at, value in zip(index, _utc_sine(index))]
     if unavailable:
         begin, end = unavailable
-        rows = [
-            (at, state) for at, state in rows if not (begin <= at and (end is None or at < end))
-        ]
+        rows = [(at, state) for at, state in rows if begin > at or (end is not None and at >= end)]
         rows.append((begin, "unavailable"))
         rows.sort(key=lambda row: row[0])
     return rows
