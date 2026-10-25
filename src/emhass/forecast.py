@@ -1282,10 +1282,11 @@ class Forecast:
                 data = None
             times = ((data or {}).get("minutely_15") or {}).get("time")
             # Open-Meteo bounds the span with the UTC offset in force at its start, so across a
-            # DST change it can end an hour early; the forecast-API rows overlap the last day.
+            # DST change it can end an hour early. Only the end is given slack: the forecast-API
+            # rows overlap the last day.
             if data is not None and not (
                 times
-                and times[0] <= span_start + 3600
+                and times[0] <= span_start
                 and times[-1] >= span_end - 86400
                 and self._covariate_cache_matches_location(data, self.lat, self.lon)
             ):
@@ -1315,19 +1316,23 @@ class Forecast:
             + quote(str(self.time_zone), safe="")
             + "&timeformat=unixtime"
         )
+        timeout = aiohttp.ClientTimeout(total=open_meteo_request_timeout)
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     response.raise_for_status()
                     data = await response.json()
-                    await replace_file(
-                        cache_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
-                    )
-        except aiohttp.ClientError:
+        except (TimeoutError, aiohttp.ClientError, ValueError):
             self.logger.error(
                 "Failed to fetch historical weather covariates from Open-Meteo", exc_info=True
             )
-            data = None
+            return None
+        try:
+            await replace_file(cache_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+        except OSError:
+            self.logger.warning(
+                "Could not save the Open-Meteo historical covariate cache", exc_info=True
+            )
         return data
 
     async def get_weather_covariates(
@@ -1364,23 +1369,37 @@ class Forecast:
         data_raw = await self._fetch_open_meteo_covariates_json(past_days, forecast_days)
         if not data_raw or "minutely_15" not in data_raw:
             raise ValueError("Open-Meteo returned no minutely_15 weather covariate data")
-        frames = [pd.DataFrame.from_dict(data_raw["minutely_15"])]
-        if span_past_days > past_days:
+        # Open-Meteo returns null where it has no data: the forecast API does so for the oldest
+        # weeks of a long past_days window. Null rows are dropped so they never shadow real ones.
+        frames = [
+            pd.DataFrame.from_dict(data_raw["minutely_15"]).set_index("time").dropna(how="all")
+        ]
+        # Request history up to the day the forecast-API values actually start, so the two join
+        # without a gap whatever span the (possibly cached) forecast response covers.
+        first = (
+            now
+            if frames[0].empty
+            else pd.Timestamp(frames[0].index.min(), unit="s", tz="UTC").tz_convert(self.time_zone)
+        )
+        if index.min() < first:
             start_date = index.min().tz_convert(self.time_zone).strftime("%Y-%m-%d")
-            end_date = (now - pd.Timedelta(days=past_days)).strftime("%Y-%m-%d")
+            end_date = first.strftime("%Y-%m-%d")
             historical = await self._fetch_open_meteo_historical_covariates_json(
                 start_date, end_date
             )
             if historical and "minutely_15" in historical:
                 # Listed after the forecast-API rows, so those win where the two overlap.
-                frames.append(pd.DataFrame.from_dict(historical["minutely_15"]))
-        weather = pd.concat(frames, ignore_index=True)
-        weather["time"] = pd.to_datetime(weather["time"], unit="s", utc=True).dt.tz_convert(
-            self.time_zone
-        )
-        weather = weather.set_index("time").rename(columns=self.OPEN_METEO_COVARIATE_VARS)
+                frames.append(
+                    pd.DataFrame.from_dict(historical["minutely_15"])
+                    .set_index("time")
+                    .dropna(how="all")
+                )
+        weather = pd.concat(frames)
+        weather.index = pd.to_datetime(weather.index, unit="s", utc=True).tz_convert(self.time_zone)
+        weather = weather.rename(columns=self.OPEN_METEO_COVARIATE_VARS)
         # Drop any duplicate timestamps (e.g. DST edges) and sort, so the reindex below is safe.
         weather = weather[~weather.index.duplicated(keep="first")].sort_index()
+        observed = weather.index
         # Derived thermal-demand covariates (computed even if temp itself was not requested).
         if "temp_air" in weather.columns:
             comfort = self.WEATHER_COVARIATE_COMFORT_TEMP_C
@@ -1394,17 +1413,26 @@ class Forecast:
         aligned = weather.reindex(combined_index)
         aligned = aligned.interpolate(method="linear", axis=0, limit_direction="both")
         aligned = aligned.reindex(index).ffill().bfill()
-        # Rows outside the retrieved weather can only repeat its nearest value: a model fitted on
-        # them learns from a constant, so report how many there are.
-        outside = int(((index < weather.index.min()) | (index > weather.index.max())).sum())
-        if outside:
+        # Rows more than an hour from any real value (outside the retrieved span, or in a gap or
+        # null stretch of it) are interpolated or repeat the nearest value: a model fitted on them
+        # learns from made-up weather, so report how many there are.
+        if len(observed):
+            local = index.tz_convert(self.time_zone)
+            pos = observed.searchsorted(local)
+            before = observed[np.clip(pos - 1, 0, len(observed) - 1)]
+            after = observed[np.clip(pos, 0, len(observed) - 1)]
+            distance = np.minimum(
+                np.abs((local - before).to_numpy()), np.abs((after - local).to_numpy())
+            )
+            uncovered = int((distance > np.timedelta64(1, "h")).sum())
+        else:
+            uncovered = len(index)
+        if uncovered:
             self.logger.warning(
-                "%s of %s weather covariate rows are outside the Open-Meteo data (%s to %s) "
-                "and repeat its nearest value",
-                outside,
+                "%s of %s weather covariate rows are more than an hour from any Open-Meteo value "
+                "and are interpolated or repeat the nearest one",
+                uncovered,
                 len(index),
-                weather.index.min(),
-                weather.index.max(),
             )
         return aligned[list(weather_features)]
 

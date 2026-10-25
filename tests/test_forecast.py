@@ -789,7 +789,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         ):
             await self.fcst.get_weather_covariates(index, ["temp_air"])
         self.assertTrue(
-            any("outside the Open-Meteo data" in line for line in logs.output),
+            any("more than an hour from any Open-Meteo value" in line for line in logs.output),
             f"expected the back-fill warning in logs, got: {logs.output}",
         )
 
@@ -842,6 +842,185 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     )
         session_cls.assert_called_once()
         self.assertIsNone(result)
+
+    async def test_get_weather_covariates_ends_history_where_forecast_rows_start(self):
+        """History is requested up to the day the forecast-API rows start, wherever that is.
+
+        A cached forecast response may start a day later than a fresh 93-day one; the
+        historical request must then extend to that day so no gap is left between the two.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        tz = self.fcst.time_zone
+        now = pd.Timestamp.now(tz=tz)
+        index = pd.date_range(
+            end=pd.Timestamp.now(tz="UTC").floor("30min"), periods=200 * 48, freq="30min"
+        ).tz_convert(tz)
+        late_start = (now - pd.Timedelta(days=self.fcst.OPEN_METEO_MAX_PAST_DAYS - 1)).normalize()
+        recent = pd.date_range(start=late_start, end=now + pd.Timedelta(days=1), freq="15min")
+        older = pd.date_range(start=index[0].normalize(), end=late_start, freq="15min")
+        unix = lambda r: [int(t.timestamp()) for t in r]  # noqa: E731
+        historical = AsyncMock(
+            return_value=self._covariates_payload(unix(older), [15.0] * len(older))
+        )
+        with (
+            patch.object(
+                self.fcst,
+                "_fetch_open_meteo_covariates_json",
+                AsyncMock(
+                    return_value=self._covariates_payload(unix(recent), [20.0] * len(recent))
+                ),
+            ),
+            patch.object(self.fcst, "_fetch_open_meteo_historical_covariates_json", historical),
+            self.assertNoLogs(self.fcst.logger, level="WARNING"),
+        ):
+            await self.fcst.get_weather_covariates(index, ["temp_air"])
+        historical.assert_awaited_once_with(
+            index[0].strftime("%Y-%m-%d"), late_start.strftime("%Y-%m-%d")
+        )
+
+    async def test_get_weather_covariates_fills_forecast_api_nulls_from_history(self):
+        """Null forecast-API rows are replaced by historical values, not interpolated.
+
+        The forecast API returns null for the oldest weeks of a long past_days window (about
+        24 of 92 days, measured). History must be requested up to its first real value and win
+        over those nulls.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        tz = self.fcst.time_zone
+        now = pd.Timestamp.now(tz=tz)
+        index = pd.date_range(
+            end=pd.Timestamp.now(tz="UTC").floor("30min"), periods=200 * 48, freq="30min"
+        ).tz_convert(tz)
+        reach = (now - pd.Timedelta(days=self.fcst.OPEN_METEO_MAX_PAST_DAYS)).normalize()
+        real_from = reach + pd.Timedelta(days=24)
+        recent = pd.date_range(start=reach, end=now + pd.Timedelta(days=1), freq="15min")
+        forecast = self._covariates_payload(
+            [int(t.timestamp()) for t in recent], [20.0] * len(recent)
+        )
+        for name, values in forecast["minutely_15"].items():
+            if name != "time":
+                forecast["minutely_15"][name] = [
+                    None if t < real_from else v for t, v in zip(recent, values, strict=True)
+                ]
+        older = pd.date_range(start=index[0].normalize(), end=real_from, freq="15min")
+        historical = AsyncMock(
+            return_value=self._covariates_payload(
+                [int(t.timestamp()) for t in older], [15.0] * len(older)
+            )
+        )
+        with (
+            patch.object(
+                self.fcst, "_fetch_open_meteo_covariates_json", AsyncMock(return_value=forecast)
+            ),
+            patch.object(self.fcst, "_fetch_open_meteo_historical_covariates_json", historical),
+            self.assertNoLogs(self.fcst.logger, level="WARNING"),
+        ):
+            covariates = await self.fcst.get_weather_covariates(index, ["temp_air"])
+        historical.assert_awaited_once_with(
+            index[0].strftime("%Y-%m-%d"), real_from.strftime("%Y-%m-%d")
+        )
+        null_region = covariates.loc[
+            (covariates.index >= reach) & (covariates.index < real_from), "temp_air"
+        ]
+        self.assertTrue((null_region == 15.0).all(), "forecast-API nulls must take history values")
+
+    async def test_get_weather_covariates_warns_on_null_stretch(self):
+        """Rows inside a null stretch of the Open-Meteo data are reported, not silently filled."""
+        from unittest.mock import AsyncMock, patch
+
+        index = self.fcst.forecast_dates
+        full = pd.date_range(
+            start=index[0] - 4 * self.fcst.freq, end=index[-1], freq="15min", tz=index.tz
+        )
+        payload = self._covariates_payload([int(t.timestamp()) for t in full], [18.0] * len(full))
+        middle = slice(len(full) // 3, 2 * len(full) // 3)  # several hours with no values
+        for values in payload["minutely_15"].values():
+            if values is not payload["minutely_15"]["time"]:
+                values[middle] = [None] * len(values[middle])
+        with (
+            patch.object(
+                self.fcst, "_fetch_open_meteo_covariates_json", AsyncMock(return_value=payload)
+            ),
+            patch.object(
+                self.fcst,
+                "_fetch_open_meteo_historical_covariates_json",
+                AsyncMock(return_value=None),
+            ),
+            self.assertLogs(self.fcst.logger, level="WARNING") as logs,
+        ):
+            covariates = await self.fcst.get_weather_covariates(index, ["temp_air"])
+        self.assertFalse(covariates.isna().any().any())
+        self.assertTrue(
+            any("more than an hour from any Open-Meteo value" in line for line in logs.output),
+            f"expected the coverage warning in logs, got: {logs.output}",
+        )
+
+    async def test_historical_covariate_cache_starting_late_is_refetched(self):
+        """A historical cache that starts even one step after the requested start is not served."""
+        from unittest.mock import patch
+
+        tz = self.fcst.time_zone
+        span = pd.date_range("2026-01-28 00:15", "2026-03-01 23:45", freq="15min", tz=tz)
+        cached = self._covariates_payload(
+            [int(t.timestamp()) for t in span],
+            [15.0] * len(span),
+            lat=self.fcst.lat,
+            lon=self.fcst.lon,
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-historical-covariates.json"
+                with open(cache_path, "wb") as f:
+                    f.write(orjson.dumps(cached))
+                with patch("emhass.forecast.aiohttp.ClientSession") as session_cls:
+                    session_cls.side_effect = aiohttp.ClientError("network down")
+                    result = await self.fcst._fetch_open_meteo_historical_covariates_json(
+                        "2026-01-28", "2026-02-20"
+                    )
+        session_cls.assert_called_once()
+        self.assertIsNone(result)
+
+    async def test_historical_covariates_failed_request_returns_none(self):
+        """A timeout or a malformed body ends the historical fetch with None, not an exception."""
+        from unittest.mock import patch
+
+        for error in (TimeoutError("slow"), ValueError("malformed JSON")):
+            with self.subTest(error=type(error).__name__):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with (
+                        patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}),
+                        patch("emhass.forecast.aiohttp.ClientSession", side_effect=error),
+                    ):
+                        result = await self.fcst._fetch_open_meteo_historical_covariates_json(
+                            "2026-01-28", "2026-02-20"
+                        )
+                self.assertIsNone(result)
+
+    async def test_historical_covariates_kept_when_cache_write_fails(self):
+        """Fetched historical covariates are returned even when the cache cannot be written."""
+        from unittest.mock import AsyncMock, patch
+
+        tz = self.fcst.time_zone
+        span = pd.date_range("2026-01-28", "2026-02-20 23:45", freq="15min", tz=tz)
+        payload = self._covariates_payload([int(t.timestamp()) for t in span], [15.0] * len(span))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}),
+                patch("emhass.forecast.replace_file", AsyncMock(side_effect=OSError("disk full"))),
+                aioresponses() as mocked,
+            ):
+                mocked.get(
+                    re.compile(r"^https://historical-forecast-api\.open-meteo\.com/"),
+                    payload=payload,
+                )
+                with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                    result = await self.fcst._fetch_open_meteo_historical_covariates_json(
+                        "2026-01-28", "2026-02-20"
+                    )
+        self.assertEqual(result, payload)
+        self.assertTrue(any("Could not save" in line for line in logs.output))
 
     async def test_historical_covariates_dry_run_calls_no_service(self):
         """A dry run without a covering historical cache returns None and fetches nothing."""
