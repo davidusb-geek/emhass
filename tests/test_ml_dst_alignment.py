@@ -186,6 +186,55 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(adjusted), 73)
 
 
+class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
+    """Zones with a non-whole-hour UTC offset put history buckets on another phase."""
+
+    @staticmethod
+    def _case(tz, freq, start_utc, history_offset):
+        tz = pytz.timezone(tz)
+        freq = pd.Timedelta(freq)
+        start = pd.Timestamp(start_utc, tz="UTC").tz_convert(tz)
+        fcst = object.__new__(Forecast)
+        fcst.forecast_dates = pd.date_range(start=start, periods=6, freq=freq)
+        fcst.time_zone = tz
+        fcst.freq = freq
+        fcst.var_load = "sensor.test_load"
+        fcst.var_load_new = "sensor.test_load_positive"
+        fcst.retrieve_hass_conf = {"sensor_power_load_no_var_loads": fcst.var_load}
+        fcst.logger = logging.getLogger(__name__)
+        index = pd.date_range(end=start - freq - history_offset, periods=100, freq=freq)
+        history = pd.DataFrame({fcst.var_load_new: np.arange(100, dtype=float)}, index=index)
+        return fcst, history
+
+    async def test_sub_step_phase_is_aligned_to_the_grid(self):
+        for tz, freq, offset in (
+            ("Asia/Kolkata", "60min", "30min"),
+            ("Asia/Kathmandu", "30min", "15min"),
+            ("Asia/Kathmandu", "60min", "45min"),
+        ):
+            with self.subTest(tz=tz, freq=freq, offset=offset):
+                fcst, history = self._case(tz, freq, "2026-02-20 10:00", pd.Timedelta(offset))
+                model = _Predictor()
+                result = await fcst._get_load_forecast_ml(history, True, model, True)
+                self.assertIsInstance(result, pd.DataFrame)
+                self.assertTrue(result.index.equals(fcst.forecast_dates))
+                self.assertEqual(model.received_steps, 6)
+
+    async def test_full_step_lag_is_stale_whatever_the_phase(self):
+        fcst, history = self._case("Asia/Kolkata", "60min", "2026-02-20 10:00", pd.Timedelta("1h"))
+        model = _Predictor()
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertIs(await fcst._get_load_forecast_ml(history, True, model, True), False)
+        self.assertIn("missing, stale or irregular", "\n".join(logs.output))
+
+    async def test_history_ahead_of_the_grid_is_rejected(self):
+        fcst, history = self._case(
+            "Asia/Kolkata", "60min", "2026-02-20 10:00", -pd.Timedelta("20min")
+        )
+        # Buckets labelled later than the last completed grid step cannot be placed.
+        self.assertIs(await fcst._get_load_forecast_ml(history, True, _Predictor(), True), False)
+
+
 def _utc_sine(index):
     """A load profile that is a pure function of the absolute (UTC) instant."""
     hours = np.asarray(index.tz_convert("UTC").asi8, dtype=float) / 3.6e12
@@ -346,14 +395,20 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         for drop in (2, 3):  # last completed bucket(s) missing
             with self.subTest(dropped_buckets=drop):
                 _RecorderRetrieveHass.drop_last = drop
-                self.assertFalse(await self._setup(self.CASES[0][1]))
+                with self.assertLogs(logger, "ERROR") as logs:
+                    self.assertFalse(await self._setup(self.CASES[0][1]))
+                self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
     async def test_missing_interval_in_last_window_fails_closed(self):
         await self._save_model()
         _RecorderRetrieveHass.gap_back = 10
-        self.assertFalse(await self._setup(self.CASES[0][1]))
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(await self._setup(self.CASES[0][1]))
+        self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
     async def test_insufficient_history_fails_closed(self):
         await self._save_model()
         _RecorderRetrieveHass.days = 2
-        self.assertFalse(await self._setup(self.CASES[0][1]))
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(await self._setup(self.CASES[0][1]))
+        self.assertIn("Not enough load history", "\n".join(logs.output))

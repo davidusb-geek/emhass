@@ -2535,6 +2535,7 @@ class Forecast:
         """
         data_last_window = None
         steps = None
+        phase_shift = pd.Timedelta(0)
         if use_last_window:
             data_last_window = copy.deepcopy(df)
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
@@ -2571,23 +2572,35 @@ class Forecast:
                 )
                 return False
 
-            expected_window = pd.date_range(
-                end=forecast_start - self.freq,
-                periods=window_size,
-                freq=self.freq,
-            )
-            actual_window = data_last_window.index[-window_size:]
-            if not actual_window.tz_convert("UTC").equals(expected_window.tz_convert("UTC")):
+            # The last window must be a regular run of whole steps ending less than
+            # one step before the last completed grid step. A sub-step difference is
+            # only the bucket phase of the retrieval backend (REST buckets sit on UTC
+            # multiples, websocket ones on local multiples, which differ in zones with
+            # a non-whole-hour UTC offset); it is a constant that is applied to the
+            # predictions. Anything of a full step or more is missing or stale history.
+            actual_window = data_last_window.index[-window_size:].tz_convert("UTC")
+            phase_shift = (forecast_start - self.freq).tz_convert("UTC") - actual_window[-1]
+            if not (
+                (actual_window[1:] - actual_window[:-1] == self.freq).all()
+                and pd.Timedelta(0) <= phase_shift < self.freq
+            ):
                 self.logger.error(
                     "ML load history is missing, stale or irregular: the last %d "
-                    "samples must end at %s, immediately before the optimization start %s; "
+                    "samples must be consecutive and end within one step of %s, "
+                    "immediately before the optimization start %s; "
                     "last retrieved sample is %s. Refusing to shift predictions.",
                     window_size,
-                    expected_window[-1],
+                    forecast_start - self.freq,
                     forecast_start,
                     data_last_window.index[-1],
                 )
                 return False
+            if phase_shift:
+                self.logger.debug(
+                    "ML load history buckets sit %s before the optimization grid; "
+                    "predictions are moved onto the grid by that constant.",
+                    phase_shift,
+                )
             # Restore the verified regular frequency for skforecast's recursive
             # exogenous date grid; recorder-prepared indexes may have freq=None.
             data_last_window = data_last_window.iloc[-window_size:].asfreq(self.freq)
@@ -2605,6 +2618,9 @@ class Forecast:
             forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
 
         if use_last_window:
+            if isinstance(forecast_out, pd.Series) and phase_shift:
+                forecast_out = forecast_out.copy()
+                forecast_out.index = forecast_out.index + phase_shift
             if (
                 not isinstance(forecast_out, pd.Series)
                 or not isinstance(forecast_out.index, pd.DatetimeIndex)
