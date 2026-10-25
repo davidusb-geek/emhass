@@ -409,7 +409,7 @@ class _RecorderRetrieveHass:
 
 
 class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
-    """Only the ML load retrieval opts in; get_data passes the flag to REST only."""
+    """Only the mlforecaster load retrieval opts in; get_data passes the flag to REST only."""
 
     async def _rest_kwargs(self, **kwargs):
         rh = object.__new__(RetrieveHass)
@@ -442,6 +442,61 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
                 pd.date_range("2026-02-20", periods=1, tz="UTC"), ["s"], hold_unchanged_tail=True
             )
         self.assertTrue(rest.call_args.kwargs["hold_unchanged_tail"])
+
+    async def test_rest_path_extends_the_final_day_only_when_asked(self):
+        rows = [
+            {"state": "500", "last_changed": "2026-02-20T00:00:00+00:00"},
+            {"state": "520", "last_changed": "2026-02-20T06:10:00+00:00"},
+        ]
+        for hold, last in ((True, "2026-02-20 10:00"), (False, "2026-02-20 06:00")):
+            with self.subTest(hold=hold):
+                rh = object.__new__(RetrieveHass)
+                rh.freq = pd.Timedelta("60min")
+                rh.long_lived_token = "token"
+                rh.hass_url = "http://ha.invalid/"
+                rh.ssl_verify = True
+                rh.logger = logging.getLogger(__name__)
+                with (
+                    time_machine.travel(datetime(2026, 2, 20, 10, 20, tzinfo=UTC), tick=False),
+                    patch.object(
+                        RetrieveHass, "_fetch_history_data", new=AsyncMock(return_value=rows)
+                    ),
+                ):
+                    ok = await rh._get_data_rest_api(
+                        pd.date_range("2026-02-20", periods=1, tz="UTC"),
+                        ["sensor.load"],
+                        hold_unchanged_tail=hold,
+                    )
+                self.assertTrue(ok)
+                self.assertEqual(rh.df_final.index[-1], pd.Timestamp(last, tz="UTC"))
+
+    async def _hass_load_flag(self, method):
+        recorded = {}
+
+        class _Rh:
+            def __init__(self, *args):
+                pass
+
+            async def get_data(self, days_list, var_list, **kwargs):
+                recorded.update(kwargs)
+                return False
+
+        fcst = object.__new__(Forecast)
+        fcst.logger = logging.getLogger(__name__)
+        fcst.var_load = "sensor.load"
+        fcst.time_zone = pytz.timezone(TZ_NAME)
+        fcst.freq = pd.Timedelta("60min")
+        fcst.params = {}
+        fcst.emhass_conf = {}
+        fcst.retrieve_hass_conf = {"hass_url": "u", "long_lived_token": "t"}
+        fcst.get_data_from_file = False
+        with patch.object(forecast_module, "RetrieveHass", _Rh):
+            self.assertFalse(await fcst._prepare_hass_load_data(3, method))
+        return recorded["hold_unchanged_tail"]
+
+    async def test_only_the_ml_load_retrieval_holds(self):
+        self.assertTrue(await self._hass_load_flag("mlforecaster"))
+        self.assertFalse(await self._hass_load_flag("naive"))
 
 
 class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):

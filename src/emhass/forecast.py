@@ -2309,7 +2309,9 @@ class Forecast:
                 self.var_load_new = self.var_load + "_positive"
         else:
             days_list = get_days_list(days_min_load_forecast)
-            if not await rh.get_data(days_list, var_list, hold_unchanged_tail=True):
+            if not await rh.get_data(
+                days_list, var_list, hold_unchanged_tail=(method == "mlforecaster")
+            ):
                 return False
         if not rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
