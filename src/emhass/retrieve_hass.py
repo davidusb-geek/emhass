@@ -373,7 +373,11 @@ class RetrieveHass:
             sensor doesn't cost other sensors days they did have data for. \
             Defaults to False
         :type keep_partial_days: bool, optional
-        :param hold_unchanged_tail: Only applies to the REST API path. When True,             the last numeric state of the final requested day is held up to the             bucket containing now, because Home Assistant only returns a row per             recorded state change. This is not evidence that the sensor is still             reporting. Defaults to False
+        :param hold_unchanged_tail: Only applies to the REST API path. When True, \
+            the last numeric state of the final requested day is held up to the \
+            bucket containing now, because Home Assistant only returns a row per \
+            recorded state change. This is not evidence that the sensor is still \
+            reporting. Defaults to False
         :type hold_unchanged_tail: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
