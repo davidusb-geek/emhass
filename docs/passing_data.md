@@ -592,6 +592,32 @@ Each sensor is retrieved with `avg_over_time(<selector>[<optimization_time_step>
 As with InfluxDB, if `use_victoriametrics` is set in `config.json` the parameters given at runtime in the POST payload (for example `historic_days_to_retrieve`) still take precedence, so make sure the fit/predict automations pass consistent values. When both `use_influxdb` and `use_victoriametrics` are enabled InfluxDB is used and a warning is logged.
 ```
 
+### Series scraped from the Prometheus integration
+
+If VictoriaMetrics already scrapes the Home Assistant [Prometheus integration](https://www.home-assistant.io/integrations/prometheus/), EMHASS can read that history directly, without also feeding the `influxdb` integration. Those series name the metric after the domain, device class and unit, and keep the full entity id in an `entity` label:
+
+```text
+homeassistant_sensor_power_w{entity="sensor.power_load", domain="sensor", friendly_name="Power load"}
+```
+
+Set `victoriametrics_entity_label` to `entity` so that the whole entity id is matched against that label (instead of the `entity_id` and `domain` labels described above), and point `victoriametrics_metric_regex` at the sensor metrics:
+
+```json
+{
+  "use_victoriametrics": true,
+  "victoriametrics_host": "192.168.1.10",
+  "victoriametrics_port": 8428,
+  "victoriametrics_database": "",
+  "victoriametrics_metric_regex": "homeassistant_sensor_.+",
+  "victoriametrics_entity_label": "entity"
+}
+```
+
+- Keep the `homeassistant_sensor_` prefix in the regex. The integration also exports `homeassistant_entity_available`, `homeassistant_last_updated_time_seconds` and `homeassistant_state_change_*` for every entity, with the same `entity` label.
+- Leave `victoriametrics_database` empty: scraped series carry no `db` label.
+- Units are not converted. A power sensor exported in kW (`homeassistant_sensor_power_kw`) is read in kW, so rescale it with an arithmetic expression such as `{{'sensor.grid_power' * 1000}}`.
+- A label that changes value over time, such as a renamed `friendly_name`, starts a new series under the same metric name. EMHASS joins series that share a metric name, so the history stays continuous. If both series have samples in the bucket where the change happened, the first value is kept and a duplicate timestamps warning is logged.
+
 
 ## Passing in secret parameters
 Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 
