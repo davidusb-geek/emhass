@@ -445,6 +445,8 @@ class _RecorderRetrieveHass:
     days = 6
     drop_last = 0
     gap_back = None
+    traveller = None  # time_machine coordinates of the running test
+    advance_to = None  # clock moved to once the history has been read
 
     def __init__(self, hass_url, long_lived_token, freq, time_zone, params, emhass_conf, logger):
         self.freq = freq
@@ -467,6 +469,8 @@ class _RecorderRetrieveHass:
         if self.gap_back is not None:
             frame = frame.drop(frame.index[-self.gap_back])
         self.df_final = frame
+        if self.advance_to is not None:
+            self.traveller.move_to(self.advance_to)
         return True
 
     def prepare_data(self, var_load, **kwargs):
@@ -623,6 +627,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         _RecorderRetrieveHass.drop_last = 0
         _RecorderRetrieveHass.gap_back = None
         _RecorderRetrieveHass.days = 6
+        _RecorderRetrieveHass.advance_to = None
 
     async def _save_model(
         self, *, num_lags=72, tuned_lags=None, weather=False, freq_min=60, time_zone=TZ_NAME
@@ -681,11 +686,12 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             return True
 
         with (
-            time_machine.travel(now, tick=False),
+            time_machine.travel(now, tick=False) as traveller,
             patch.object(forecast_module, "RetrieveHass", recorder or RetrieveHass),
             patch.object(RetrieveHass, "get_ha_config", no_ha_config),
             patch.object(RetrieveHass, "_fetch_history_data", _ha_history(rest_rows or [])),
         ):
+            _RecorderRetrieveHass.traveller = traveller
             return await set_input_data_dict(
                 self.conf,
                 "profit",
@@ -884,3 +890,34 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(logger, "ERROR") as logs:
             self.assertFalse(await self._setup(now, "first", time_zone=zone))
         self.assertIn("missing, stale or irregular", "\n".join(logs.output))
+
+    async def test_step_boundary_crossed_after_the_history_is_read(self):
+        """A bucket still running when the history was read is never an observation.
+
+        The retrieval takes place just before a step boundary and ML preparation just
+        after it; the forecast grid was captured before the boundary.
+        """
+        cases = (
+            ("autumn", datetime(2026, 10, 25, 0, 59, 50, tzinfo=UTC)),
+            ("spring", datetime(2026, 3, 29, 0, 59, 50, tzinfo=UTC)),
+            ("ordinary", datetime(2026, 2, 20, 10, 59, 50, tzinfo=UTC)),
+        )
+        for freq_min in (5, 60):
+            await self._save_model(freq_min=freq_min, num_lags=1440 // freq_min)
+            for name, now in cases:
+                with self.subTest(freq_min=freq_min, case=name):
+                    boundary = pd.Timestamp(now).ceil(f"{freq_min}min")
+                    _RecorderRetrieveHass.advance_to = (
+                        boundary + pd.Timedelta(seconds=5)
+                    ).to_pydatetime()
+                    idd = await self._setup(now, freq_min=freq_min)
+                    self.assertTrue(idd)
+                    grid = idd["fcst"].forecast_dates
+                    self.assertEqual(grid[0], boundary.tz_convert(TZ_NAME))
+                    # The still-running bucket holds -9999 W: taking it for a completed one
+                    # would put the error in the first forecast steps.
+                    np.testing.assert_allclose(
+                        idd["df_input_data_dayahead"]["p_load_forecast"],
+                        _utc_sine(grid),
+                        atol=self._atol(freq_min),
+                    )

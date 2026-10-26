@@ -2296,6 +2296,9 @@ class Forecast:
             self.emhass_conf,
             self.logger,
         )
+        # Buckets ending after this instant were still running when the history was read,
+        # however long the retrieval or the following steps take.
+        self._load_observed_until = pd.Timestamp.now(tz="UTC")
         if self.get_data_from_file:
             filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
             async with aiofiles.open(filename_path, "rb") as inp:
@@ -2554,7 +2557,7 @@ class Forecast:
         # start can be rounded up past now (method_ts_round), leaving the bucket
         # just before it still running; the model then predicts that many extra
         # steps from the last completed bucket and they are dropped below.
-        now = pd.Timestamp.now(tz="UTC")
+        now = getattr(self, "_load_observed_until", None) or pd.Timestamp.now(tz="UTC")
         warm_up = 0 if forecast_start <= now else math.ceil((forecast_start - now) / self.freq)
         first_needed = forecast_start - warm_up * self.freq
         history_utc = data_last_window.index.tz_convert("UTC")
