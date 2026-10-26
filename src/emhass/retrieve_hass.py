@@ -379,7 +379,8 @@ class RetrieveHass:
             the last numeric state of the final requested day is held up to the \
             bucket containing now, because Home Assistant only returns a row per \
             recorded state change. This is not evidence that the sensor is still \
-            reporting. Defaults to False
+            reporting. It also records the unavailable buckets in \
+            ``unavailable_buckets``; other calls do not. Defaults to False
         :type hold_unchanged_tail: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
@@ -678,7 +679,8 @@ class RetrieveHass:
                     # Fetched concurrently above; just pick the result out
                     data = results.get((day_idx, var))
                     df_resampled = None
-                    unavailable: list = []
+                    # Outages are only tracked for the ML opt-in; other callers skip the work.
+                    unavailable: list | None = [] if hold_unchanged_tail else None
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
