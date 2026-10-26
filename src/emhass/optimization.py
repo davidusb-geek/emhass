@@ -8079,11 +8079,10 @@ class Optimization:
                     f"lp_solver_mip_rel_gap={mip_gap} exceeds 1.0 (100%), clamping to 1.0"
                 )
                 mip_gap = 1.0
-            if mip_gap > 0:
-                solver_opts["mip_rel_gap"] = float(mip_gap)
-                self.logger.debug(f"MIP gap tolerance set to {mip_gap:.1%}")
-            else:
-                self.logger.debug("MIP gap tolerance disabled (exact optimal)")
+            # Always pass the option: omitting it lets HiGHS use its own
+            # non-zero default, even when exact optimality was requested.
+            solver_opts["mip_rel_gap"] = float(mip_gap)
+            self.logger.debug(f"MIP gap tolerance set to {mip_gap:.1%}")
 
         # Stage-timer breadcrumb: end of build phase, start of solve phase.
         _solve_start_perf = time.perf_counter() if stage_times is not None else 0.0

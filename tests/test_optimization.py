@@ -11,6 +11,7 @@ from unittest import mock
 
 import aiofiles
 import cvxpy as cp
+import highspy
 import numpy as np
 import orjson
 import pandas as pd
@@ -9188,6 +9189,28 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_values_reach_highs_through_cvxpy(self):
+        """CVXPY must pass both exact-optimal and shipped MIP gaps through to HiGHS."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        original_run = highspy.Highs.run
+        effective_gaps = []
+
+        def record_gap(highs, *args, **kwargs):
+            effective_gaps.append(highs.getOptionValue("mip_rel_gap")[1])
+            return original_run(highs, *args, **kwargs)
+
+        with mock.patch.dict("os.environ", {"LP_SOLVER": "HIGHS"}):
+            with mock.patch.object(highspy.Highs, "run", new=record_gap):
+                for configured_gap in (0.0, 0.01):
+                    self.optim_conf["lp_solver_mip_rel_gap"] = configured_gap
+                    opt = self.create_optimization()
+                    result = opt.perform_dayahead_forecast_optim(
+                        self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
+                    )
+                    self.assertIsInstance(result, type(pd.DataFrame()))
+                    self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                    self.assertEqual(effective_gaps[-1], configured_gap)
 
     def test_mip_gap_zero_exact_optimal(self):
         """Test that MIP gap 0 gives exact optimal solution."""
