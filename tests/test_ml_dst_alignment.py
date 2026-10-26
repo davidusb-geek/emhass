@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
@@ -25,6 +26,7 @@ from emhass.command_line import set_input_data_dict
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.retrieve_hass import RetrieveHass
+from emhass.retrieve_hass import hass_url as supervisor_hass_url
 
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {
@@ -303,6 +305,12 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
         )
         # Buckets labelled later than the last completed grid step cannot be placed.
         self.assertIs(await fcst._get_load_forecast_ml(history, True, _Predictor(), True), False)
+
+
+def _live(state="520", reported="2026-02-20T10:15:00+00:00", changed="2026-02-20T06:10:00+00:00"):
+    """A /api/states object; None values are left out."""
+    live = {"state": state, "last_reported": reported, "last_changed": changed}
+    return {key: value for key, value in live.items() if value is not None}
 
 
 class TestRestUnchangedSensorState(unittest.TestCase):
@@ -590,6 +598,9 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
                     patch.object(
                         RetrieveHass, "_fetch_history_data", new=AsyncMock(return_value=rows)
                     ),
+                    patch.object(
+                        RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value=_live())
+                    ),
                 ):
                     ok = await rh._get_data_rest_api(
                         pd.date_range("2026-02-20", periods=1, tz="UTC"),
@@ -626,6 +637,13 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
                         RetrieveHass, "_fetch_history_data", new=AsyncMock(return_value=rows)
                     ),
                     patch.object(rh, "_process_history_dataframe", side_effect=spy),
+                    patch.object(
+                        RetrieveHass,
+                        "_fetch_live_state",
+                        new=AsyncMock(
+                            return_value=_live("510", changed="2026-02-20T05:30:00+00:00")
+                        ),
+                    ),
                 ):
                     ok = await rh._get_data_rest_api(
                         pd.date_range("2026-02-20", periods=1, tz="UTC"),
@@ -693,6 +711,15 @@ def _ha_history(rows):
     return fetch
 
 
+def _ha_live_state(live):
+    """Mock of the /api/states response (None: the request failed)."""
+
+    async def fetch(self, session, entity_id, headers):
+        return live
+
+    return fetch
+
+
 def _step_weather(index):
     """Discontinuous covariate: a function of the absolute instant, changing every 3 UTC hours."""
     return 10.0 + 10.0 * ((_utc_hours(index) // 3) % 2)
@@ -720,6 +747,17 @@ def _ha_rows(now, freq_min, *, last_change=None, unavailable=None, profile=_utc_
         rows.append((begin, "unavailable"))
         rows.sort(key=lambda row: row[0])
     return rows
+
+
+def _ha_live(rows, now, *, reported_ago=pd.Timedelta(minutes=1), changed=None, state=None):
+    """The /api/states object of a healthy sensor whose recorded changes are ``rows``."""
+    last_at, last_state = rows[-1]
+    reported = pd.Timestamp(now) - reported_ago
+    return {
+        "state": last_state if state is None else state,
+        "last_changed": (last_at if changed is None else changed).isoformat(),
+        "last_reported": reported.isoformat(),
+    }
 
 
 class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
@@ -779,6 +817,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         freq_min=60,
         recorder=_RecorderRetrieveHass,
         rest_rows=None,
+        live=None,
     ):
         """Run dayahead-optim input preparation; ``rest_rows`` replays a mocked HA REST history."""
         params = await _default_params()
@@ -803,6 +842,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             patch.object(forecast_module, "RetrieveHass", recorder or RetrieveHass),
             patch.object(RetrieveHass, "get_ha_config", no_ha_config),
             patch.object(RetrieveHass, "_fetch_history_data", _ha_history(rest_rows or [])),
+            patch.object(RetrieveHass, "_fetch_live_state", _ha_live_state(live)),
         ):
             _RecorderRetrieveHass.traveller = traveller
             return await set_input_data_dict(
@@ -892,9 +932,14 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
 
     # -- mocked Home Assistant REST history through RetrieveHass, preparation and ML ------
 
-    async def _rest(self, now, freq_min=60, rows=None, **kwargs):
+    async def _rest(self, now, freq_min=60, rows=None, live="healthy", **kwargs):
+        """``live="healthy"`` is a sensor reporting now whose last change is the last row."""
         rows = _ha_rows(now, freq_min) if rows is None else rows
-        return await self._setup(now, recorder=None, rest_rows=rows, freq_min=freq_min, **kwargs)
+        if live == "healthy":
+            live = _ha_live(rows, now)
+        return await self._setup(
+            now, recorder=None, rest_rows=rows, freq_min=freq_min, live=live, **kwargs
+        )
 
     @staticmethod
     def _atol(freq_min):
@@ -945,24 +990,59 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(idd["df_input_data_dayahead"]), 72)
         self.assertIn("cannot show whether the sensor is still reporting", "\n".join(logs.output))
 
-    async def test_stopped_recorder_is_accepted_like_an_unchanged_sensor(self):
-        """Documented limitation: the history API carries no freshness information.
-
-        A recorder that stopped yesterday returns the same rows as a sensor that has not
-        changed since, so the held history is accepted.
-        """
+    async def test_recorder_outage_with_an_unchanged_sensor_is_a_documented_limit(self):
+        """The history API does not expose last_reported, so a recorder that stopped while
+        the sensor kept its value (nothing was lost) cannot be told from a healthy one."""
         await self._save_model()
         now = self.CASES[0][1]
-        stopped = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
-        self.assertTrue(await self._rest(now, rows=stopped))
+        rows = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        self.assertTrue(await self._rest(now, rows=rows))
+
+    async def test_stopped_sensor_is_refused(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        rows = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        live = _ha_live(rows, now, reported_ago=pd.Timedelta(hours=20))
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(await self._rest(now, rows=rows, live=live))
+        self.assertIn("stopped reporting", "\n".join(logs.output))
+
+    async def test_stale_recorder_with_a_reporting_sensor_is_refused(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        rows = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        changed = pd.Timestamp(now).floor("h") - pd.Timedelta(hours=3)  # never recorded
+        with self.assertLogs(logger, "ERROR") as logs:
+            idd = await self._rest(now, rows=rows, live=_ha_live(rows, now, changed=changed))
+        self.assertFalse(idd)
+        self.assertIn("recorder has not stored", "\n".join(logs.output))
+
+    async def test_change_before_the_last_day_start_that_was_never_recorded_is_refused(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        rows = _ha_rows(now, 60, last_change=pd.Timestamp("2026-02-19 08:00", tz="UTC"))
+        changed = pd.Timestamp("2026-02-19 18:00", tz="UTC")  # never recorded, value 700.0
+        live = _ha_live(rows, now, changed=changed, state="700.0")
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(await self._rest(now, rows=rows, live=live))
+        self.assertIn("recorder has not stored", "\n".join(logs.output))
+
+    async def test_missing_or_failed_live_state_is_refused(self):
+        await self._save_model()
+        now = self.CASES[0][1]
+        rows = _ha_rows(now, 60)
+        no_reported = {k: v for k, v in _ha_live(rows, now).items() if k != "last_reported"}
+        for name, live in (("request failed", None), ("no last_reported", no_reported)):
+            with self.subTest(case=name), self.assertLogs(logger, "ERROR"):
+                self.assertFalse(await self._rest(now, rows=rows, live=live))
 
     async def test_unavailable_sensor_is_not_interpolated_into_the_model_input(self):
         await self._save_model()
         now = self.CASES[0][1]
         at = lambda hours: pd.Timestamp(now).floor("h") - pd.Timedelta(hours=hours)  # noqa: E731
         refused = {
-            # The history then ends before the optimization start: stale.
-            "unavailable_until_now": ((at(5), None), "must be consecutive"),
+            # Still unavailable now: the live state is not a number, refused before the model.
+            "unavailable_until_now": ((at(5), None), "not a finite number"),
             "recovered_inside_the_window": ((at(10), at(6)), "unavailable or unknown"),
         }
         for name, (window, message) in refused.items():
@@ -1066,7 +1146,13 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         rows = _ha_rows(now, 60, profile=_step_load)
         with patch.object(Forecast, "get_weather_covariates", weather_for):
             idd = await self._setup(
-                now, rounding, time_zone=zone, recorder=None, rest_rows=rows, freq_min=60
+                now,
+                rounding,
+                time_zone=zone,
+                recorder=None,
+                rest_rows=rows,
+                freq_min=60,
+                live=_ha_live(rows, now),
             )
         self.assertTrue(idd)
         grid = idd["fcst"].forecast_dates
@@ -1099,3 +1185,228 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             "Australia/Adelaide", datetime(2026, 4, 4, 7, 20, tzinfo=UTC), "first"
         )
         self.assertEqual(len(grid), 73)
+
+
+class _FakeResponse:
+    def __init__(self, status=200, payload=None, error=None):
+        self.status, self.payload, self.error = status, payload, error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def json(self):
+        if self.error:
+            raise self.error
+        return self.payload
+
+
+class _FakeSession:
+    def __init__(self, response=None, error=None):
+        self.response, self.error, self.urls = response, error, []
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class TestLiveFreshnessOfRestLoadHistory(unittest.IsolatedAsyncioTestCase):
+    """The ML REST load retrieval needs live evidence that the sensor is still reporting
+    and that the recorder holds its latest completed change."""
+
+    # Running bucket 10:00; the last completed one starts at 09:00.
+    NOW = pd.Timestamp("2026-02-20 10:20", tz="UTC")
+    LAST_ROW = pd.Timestamp("2026-02-20 06:10", tz="UTC")
+
+    @staticmethod
+    def _rh():
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta("60min")
+        rh.hass_url = "http://ha.invalid/"
+        rh.ssl_verify = True
+        rh.long_lived_token = "token"
+        rh.logger = logging.getLogger(__name__)
+        return rh
+
+    def _verdict(self, live, last_row=LAST_ROW, state="520"):
+        recorded = None if last_row is None else (last_row, state)
+        return self._rh()._live_state_is_fresh("sensor.load", live, recorded, self.NOW)
+
+    def test_a_constant_reading_that_is_still_reported_is_fresh(self):
+        # Unchanged since yesterday: last_changed is old and the history's only row is the
+        # one stamped at the start of the requested day, so last_reported is the evidence.
+        live = _live("500", changed="2026-02-19T18:00:00+00:00")
+        day_start = pd.Timestamp("2026-02-20 00:00", tz="UTC")
+        self.assertTrue(self._verdict(live, day_start, state="500"))
+
+    def test_a_change_before_the_day_start_row_that_was_not_recorded_is_rejected(self):
+        # The recorder stopped yesterday at 520; the sensor went to 700 at 18:00 and keeps
+        # reporting it. The day-start row is newer than that change but holds the old value.
+        live = _live("700", changed="2026-02-19T18:00:00+00:00")
+        day_start = pd.Timestamp("2026-02-20 00:00", tz="UTC")
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(self._verdict(live, day_start, state="520"))
+        self.assertIn("recorder has not stored", "\n".join(logs.output))
+
+    def test_a_recorded_state_that_is_not_a_number_does_not_match_the_live_value(self):
+        live = _live("500", changed="2026-02-19T18:00:00+00:00")
+        day_start = pd.Timestamp("2026-02-20 00:00", tz="UTC")
+        for state in ("unavailable", "unknown", "", None):
+            with self.subTest(state=state), self.assertLogs(logger, "ERROR"):
+                self.assertFalse(self._verdict(live, day_start, state=state))
+
+    def test_reporting_within_the_last_completed_bucket_is_enough(self):
+        self.assertTrue(self._verdict(_live(reported="2026-02-20T09:00:00+00:00")))
+
+    def test_a_sensor_that_stopped_reporting_is_rejected(self):
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(self._verdict(_live(reported="2026-02-20T08:59:59+00:00")))
+        self.assertIn("stopped reporting", "\n".join(logs.output))
+
+    def test_last_changed_and_last_updated_are_not_reporting_evidence(self):
+        live = _live(reported=None, changed="2026-02-20T10:10:00+00:00")
+        live["last_updated"] = "2026-02-20T10:10:00+00:00"
+        with self.assertLogs(logger, "ERROR"):
+            self.assertFalse(self._verdict(live))
+
+    def test_a_stale_recorder_with_a_live_sensor_is_rejected(self):
+        live = _live(changed="2026-02-20T09:30:00+00:00")
+        with self.assertLogs(logger, "ERROR") as logs:
+            self.assertFalse(self._verdict(live))
+        self.assertIn("recorder has not stored", "\n".join(logs.output))
+
+    def test_the_recorder_holding_the_latest_change_is_fresh(self):
+        # Home Assistant timestamps of one change may differ by a fraction of a second.
+        live = _live(changed="2026-02-20T09:30:00.4+00:00")
+        self.assertTrue(self._verdict(live, pd.Timestamp("2026-02-20 09:30:00", tz="UTC")))
+        live = _live(changed="2026-02-20T09:30:02+00:00")
+        with self.assertLogs(logger, "ERROR"):
+            self.assertFalse(self._verdict(live, pd.Timestamp("2026-02-20 09:30:00", tz="UTC")))
+
+    def test_changes_the_recorder_may_not_have_committed_yet_are_tolerated(self):
+        for changed in ("2026-02-20T10:05:00+00:00", "2026-02-20T09:59:55+00:00"):
+            with self.subTest(changed=changed):
+                self.assertTrue(self._verdict(_live(changed=changed)))
+
+    def test_missing_or_invalid_evidence_is_rejected(self):
+        for name, live in (
+            ("no live state", None),
+            ("no last_reported", _live(reported=None)),
+            ("no last_changed", _live(changed=None)),
+            ("unparseable last_reported", _live(reported="not-a-time")),
+            ("unavailable", _live("unavailable")),
+            ("unknown", _live("unknown")),
+            ("not a number", _live("on")),
+            ("not finite", _live("nan")),
+            ("infinite", _live("inf")),
+            ("no state", {"last_reported": "2026-02-20T10:15:00+00:00"}),
+        ):
+            with self.subTest(case=name), self.assertLogs(logger, "ERROR"):
+                self.assertFalse(self._verdict(live))
+
+    async def test_live_state_request_failures_yield_none(self):
+        for name, session in (
+            ("server error", _FakeSession(_FakeResponse(status=500))),
+            ("unauthorized", _FakeSession(_FakeResponse(status=401))),
+            ("not found", _FakeSession(_FakeResponse(status=404))),
+            ("bad json", _FakeSession(_FakeResponse(error=ValueError("bad json")))),
+            ("connection", _FakeSession(error=aiohttp.ClientConnectionError("down"))),
+            ("timeout", _FakeSession(error=TimeoutError())),
+        ):
+            with self.subTest(case=name), self.assertLogs(logger, "ERROR"):
+                self.assertIsNone(await self._rh()._fetch_live_state(session, "sensor.load", {}))
+
+    async def test_a_response_that_is_not_an_object_yields_none(self):
+        session = _FakeSession(_FakeResponse(payload=["not", "an", "object"]))
+        self.assertIsNone(await self._rh()._fetch_live_state(session, "sensor.load", {}))
+
+    async def test_live_state_is_read_from_the_states_endpoint(self):
+        payload = _live()
+        for url, expected in (
+            ("http://ha.invalid/", "http://ha.invalid/api/states/sensor.load"),
+            ("http://ha.invalid", "http://ha.invalid/api/states/sensor.load"),
+            (supervisor_hass_url, supervisor_hass_url + "/states/sensor.load"),
+        ):
+            with self.subTest(url=url):
+                rh = self._rh()
+                rh.hass_url = url
+                session = _FakeSession(_FakeResponse(payload=payload))
+                self.assertEqual(await rh._fetch_live_state(session, "sensor.load", {}), payload)
+                self.assertEqual(session.urls, [expected])
+
+    async def _retrieve(self, live, *, hold):
+        rows = [
+            {"state": "500", "last_changed": "2026-02-20T00:00:00+00:00"},
+            {"state": "520", "last_changed": "2026-02-20T06:10:00+00:00"},
+        ]
+        rh = self._rh()
+        live_mock = AsyncMock(return_value=live)
+        with (
+            time_machine.travel(self.NOW.to_pydatetime(), tick=False),
+            patch.object(RetrieveHass, "_fetch_history_data", new=AsyncMock(return_value=rows)),
+            patch.object(RetrieveHass, "_fetch_live_state", new=live_mock),
+        ):
+            ok = await rh._get_data_rest_api(
+                pd.date_range("2026-02-20", periods=1, tz="UTC"),
+                ["sensor.load"],
+                hold_unchanged_tail=hold,
+            )
+        return ok, rh, live_mock
+
+    async def test_ml_retrieval_with_fresh_evidence_succeeds(self):
+        ok, rh, live_mock = await self._retrieve(_live(), hold=True)
+        self.assertTrue(ok)
+        live_mock.assert_awaited_once()
+        self.assertEqual(rh.df_final.index[-1], pd.Timestamp("2026-02-20 10:00", tz="UTC"))
+
+    async def test_ml_retrieval_is_refused_for_a_stopped_sensor(self):
+        live = _live(reported="2026-02-20T05:00:00+00:00")
+        with self.assertLogs(logger, "ERROR"):
+            ok, _, _ = await self._retrieve(live, hold=True)
+        self.assertFalse(ok)
+
+    async def test_ml_retrieval_is_refused_for_a_stale_recorder_with_a_live_sensor(self):
+        live = _live(changed="2026-02-20T09:30:00+00:00")
+        with self.assertLogs(logger, "ERROR"):
+            ok, _, _ = await self._retrieve(live, hold=True)
+        self.assertFalse(ok)
+
+    async def test_ml_retrieval_is_refused_without_a_live_state(self):
+        with self.assertLogs(logger, "ERROR"):
+            ok, _, _ = await self._retrieve(None, hold=True)
+        self.assertFalse(ok)
+
+    async def test_a_run_that_straddles_a_bucket_boundary_is_judged_at_its_start(self):
+        # The history is read in the 09:00 bucket; the fetch ends after 10:00. A change at
+        # 09:59:40 lies after the history's snapshot, so it is not a recorder omission.
+        rows = [
+            {"state": "500", "last_changed": "2026-02-20T00:00:00+00:00"},
+            {"state": "520", "last_changed": "2026-02-20T06:10:00+00:00"},
+        ]
+        live = _live(reported="2026-02-20T10:00:05+00:00", changed="2026-02-20T09:59:40+00:00")
+        rh = self._rh()
+        with time_machine.travel(pd.Timestamp("2026-02-20 09:59:30", tz="UTC"), tick=False) as t:
+
+            async def slow_history(*args, **kwargs):
+                t.move_to(pd.Timestamp("2026-02-20 10:00:10", tz="UTC"))
+                return rows
+
+            with (
+                patch.object(RetrieveHass, "_fetch_history_data", new=slow_history),
+                patch.object(RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value=live)),
+            ):
+                ok = await rh._get_data_rest_api(
+                    pd.date_range("2026-02-20", periods=1, tz="UTC"),
+                    ["sensor.load"],
+                    hold_unchanged_tail=True,
+                )
+        self.assertTrue(ok)
+
+    async def test_other_retrievals_do_not_read_the_live_state(self):
+        ok, _, live_mock = await self._retrieve(None, hold=False)
+        self.assertTrue(ok)
+        live_mock.assert_not_awaited()

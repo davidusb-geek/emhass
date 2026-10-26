@@ -31,6 +31,11 @@ _metadata_lock = asyncio.Lock()
 
 header_accept = "application/json"
 header_auth = "Bearer"
+# The recorder commits in batches (Home Assistant's default commit_interval is 5 s); a change
+# this close to the running bucket may not be stored yet and is not counted as missing.
+_RECORDER_COMMIT_GRACE = pd.Timedelta(seconds=10)
+# Rounding of the timestamps Home Assistant returns for the same change.
+_TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
 
@@ -601,6 +606,108 @@ class RetrieveHass:
         buckets = resampled.index[resampled.isna().to_numpy() & carried]
         return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
 
+    async def _fetch_live_state(
+        self, session: aiohttp.ClientSession, entity_id: str, headers: dict
+    ) -> dict | None:
+        """The entity's current state object from ``/api/states``, or None on any failure."""
+        if self.hass_url == hass_url:  # Supervisor API
+            url = f"{self.hass_url}/states/{entity_id}"
+        else:
+            url = f"{self.hass_url.rstrip('/')}/api/states/{entity_id}"
+        try:
+            async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
+                if response.status != 200:
+                    self.logger.error(
+                        f"Home Assistant returned HTTP {response.status} for the live state of "
+                        f"{entity_id}; its freshness cannot be verified."
+                    )
+                    return None
+                live = await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            self.logger.error(
+                f"Could not read the live state of {entity_id} to verify its freshness: {exc}"
+            )
+            return None
+        return live if isinstance(live, dict) else None
+
+    def _live_state_is_fresh(
+        self,
+        var: str,
+        live: dict | None,
+        last_recorded: tuple[pd.Timestamp, Any] | None,
+        now: pd.Timestamp,
+    ) -> bool:
+        """Whether the live state shows the sensor still reporting and the recorder up to date.
+
+        Two independent pieces of evidence, both required (a missing or invalid one fails):
+
+        - Reporting: ``last_reported`` (not ``last_changed``/``last_updated``, which stay put
+          for an unchanged sensor) lies within the last completed bucket or later, and the
+          live state is a finite number. A constant reading passes while the sensor keeps
+          reporting it.
+        - Recorder: when the live sensor last changed before the running bucket, the newest
+          recorded row (the one stamped at the start of the last requested day included)
+          must hold the live value, and the live change must not be newer than that row.
+          Otherwise the recorder has not persisted a change, however fresh the sensor.
+          Home Assistant's history API does not expose ``last_reported``, so this detects
+          a recorder that missed a change, not one that is merely idle; a change that
+          returns to the recorded value is not visible either.
+        """
+        if live is None:
+            self.logger.error(
+                f"No live state for {var}: its reporting freshness cannot be verified, so the "
+                "load history is rejected."
+            )
+            return False
+        try:
+            value = float(live["state"])
+            reported = pd.Timestamp(live["last_reported"])
+            changed = pd.Timestamp(live["last_changed"])
+        except (KeyError, TypeError, ValueError):
+            value = reported = changed = None
+        if value is None or not np.isfinite(value) or pd.isna(reported) or pd.isna(changed):
+            self.logger.error(
+                f"The live state of {var} is not a finite number with valid last_reported and "
+                "last_changed timestamps (last_reported needs Home Assistant 2024.3 or newer); "
+                "its freshness cannot be verified, so the load history is rejected."
+            )
+            return False
+        reported, changed = self._as_utc(reported), self._as_utc(changed)
+        running = now.floor(self.freq)
+        if reported < running - self.freq:
+            self.logger.error(
+                f"{var} stopped reporting: last reported {reported}, but a fresh load history "
+                f"needs a report since {running - self.freq}. The load history is rejected."
+            )
+            return False
+        if last_recorded is not None and changed < running - _RECORDER_COMMIT_GRACE:
+            recorded_at, recorded_state = last_recorded
+            try:
+                same_value = bool(np.isclose(float(recorded_state), value, rtol=1e-9, atol=1e-9))
+            except (TypeError, ValueError):
+                same_value = False
+            if not same_value or changed - recorded_at > _TIMESTAMP_TOLERANCE:
+                self.logger.error(
+                    f"The Home Assistant history of {var} ends at {recorded_at} with "
+                    f"{recorded_state!r}, but the sensor changed at {changed} to {value}: the "
+                    "recorder has not stored that change. The load history is rejected."
+                )
+                return False
+        return True
+
+    @staticmethod
+    def _last_recorded_row(
+        results: dict[tuple[int, str], Any], n_days: int, var: str
+    ) -> tuple[pd.Timestamp, Any] | None:
+        """The newest retrieved row of ``var`` as (``last_changed``, state)."""
+        latest = None
+        for day_idx in range(n_days):
+            for row in results.get((day_idx, var)) or []:
+                at = RetrieveHass._as_utc(pd.Timestamp(row["last_changed"]))
+                if latest is None or at >= latest[0]:
+                    latest = (at, row["state"])
+        return latest
+
     async def _get_data_rest_api(
         self,
         days_list: pd.date_range,
@@ -655,6 +762,9 @@ class RetrieveHass:
                 )
             return day_idx, var, data
 
+        # The instant the history is read: a change after the running bucket it starts in
+        # is never counted as missing, however long the retrieval takes.
+        observed_at = pd.Timestamp.now(tz="UTC")
         async with aiohttp.ClientSession() as session:
             tasks = [
                 _fetch_one(day_idx, day, var)
@@ -669,6 +779,19 @@ class RetrieveHass:
                 if data is False:
                     return False
                 results[(day_idx, var)] = data
+
+            if hold_unchanged_tail:
+                # ML load retrieval: the history alone cannot show a stopped sensor or a
+                # recorder that missed a change, so require live evidence for each sensor.
+                for var in var_list:
+                    live = await self._fetch_live_state(session, var, headers)
+                    if not self._live_state_is_fresh(
+                        var,
+                        live,
+                        self._last_recorded_row(results, len(days_list), var),
+                        observed_at,
+                    ):
+                        return False
 
             partial_days = 0
             for day_idx, day in enumerate(days_list):
