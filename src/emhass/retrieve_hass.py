@@ -549,7 +549,7 @@ class RetrieveHass:
         df_tp = df_tp.resample(self.freq).mean()
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
-            day_end = pd.Timestamp(day).tz_convert("UTC") + pd.Timedelta(days=1) - self.freq
+            day_end = self._as_utc(day) + pd.Timedelta(days=1) - self.freq
             after = (
                 tail
                 if is_last_day
@@ -564,6 +564,12 @@ class RetrieveHass:
         )
         return pd.concat([df_tp, pd.DataFrame({var: last_state}, index=tail)])
 
+    @staticmethod
+    def _as_utc(day: pd.Timestamp) -> pd.Timestamp:
+        """A requested day as a UTC timestamp; a naive one is read as UTC."""
+        day = pd.Timestamp(day)
+        return day.tz_localize("UTC") if day.tz is None else day.tz_convert("UTC")
+
     def _tail_buckets(
         self, last_seen: pd.Timestamp, day: pd.Timestamp, is_last_day: bool
     ) -> pd.DatetimeIndex:
@@ -573,8 +579,7 @@ class RetrieveHass:
         recorded after a sensor's last change. Data not belonging to the period
         containing now has no tail.
         """
-        day = pd.Timestamp(day)
-        day = day.tz_localize("UTC") if day.tz is None else day.tz_convert("UTC")
+        day = self._as_utc(day)
         last_bucket = pd.Timestamp.now(tz="UTC").floor(self.freq)
         if not (is_last_day and day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
             return pd.DatetimeIndex([], tz="UTC")
