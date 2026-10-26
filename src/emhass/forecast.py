@@ -2622,7 +2622,7 @@ class Forecast:
         if phase_shift:
             self.logger.info(
                 "ML load history buckets sit %s before the optimization grid; "
-                "predictions are moved onto the grid by that constant.",
+                "each grid step is the time-weighted mean of the two predicted buckets it overlaps.",
                 phase_shift,
             )
         # Restore the verified regular frequency for skforecast's recursive
@@ -2648,8 +2648,12 @@ class Forecast:
             if prepared is None:
                 return False
             data_last_window, first_needed, warm_up, phase_shift = prepared
-            steps = len(self.forecast_dates) + warm_up
-            expected_index = pd.date_range(start=first_needed, periods=steps, freq=self.freq)
+            # Predictions sit on the history's own bucket lattice, ``phase_shift`` before the
+            # grid; with a phase one more step is predicted to blend onto the grid below.
+            steps = len(self.forecast_dates) + warm_up + (1 if phase_shift else 0)
+            expected_index = pd.date_range(
+                start=first_needed - phase_shift, periods=steps, freq=self.freq
+            )
 
         # Exogenous weather must cover exactly the same future grid as the
         # predictor, including the repeated hour of an autumn DST change.
@@ -2663,9 +2667,6 @@ class Forecast:
             forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
 
         if use_last_window:
-            if isinstance(forecast_out, pd.Series) and phase_shift:
-                forecast_out = forecast_out.copy()
-                forecast_out.index = forecast_out.index + phase_shift
             if (
                 not isinstance(forecast_out, pd.Series)
                 or not isinstance(forecast_out.index, pd.DatetimeIndex)
@@ -2684,6 +2685,17 @@ class Forecast:
                     len(forecast_out) if forecast_out is not None else 0,
                 )
                 return False
+            if phase_shift:
+                # A grid step overlaps two buckets of the history lattice: the one starting
+                # ``phase_shift`` before it and the next. Each prediction is the mean over its
+                # own bucket (with its own covariates), so the grid step is their time-weighted
+                # mean; nothing is relabelled.
+                weight = phase_shift / self.freq
+                forecast_out = pd.Series(
+                    (1 - weight) * forecast_out.to_numpy()[:-1]
+                    + weight * forecast_out.to_numpy()[1:],
+                    index=forecast_out.index[:-1] + phase_shift,
+                )
             # Match by actual UTC instant, retaining the optimization site's
             # timezone for downstream PV/load dataframe joins.
             forecast_out = forecast_out.tz_convert(self.forecast_dates.tz)

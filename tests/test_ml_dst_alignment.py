@@ -224,7 +224,11 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
                 result = await fcst._get_load_forecast_ml(history, True, model, True)
                 self.assertIsInstance(result, pd.DataFrame)
                 self.assertTrue(result.index.equals(fcst.forecast_dates))
-                self.assertEqual(model.received_steps, 6)
+                # One more bucket is predicted; each grid step is the time-weighted mean of
+                # the two lattice buckets it overlaps (the predictor returns 0, 1, 2, ...).
+                self.assertEqual(model.received_steps, 7)
+                weight = pd.Timedelta(offset) / pd.Timedelta(freq)
+                np.testing.assert_allclose(result["yhat"], np.arange(6) + weight)
 
     async def test_full_step_lag_is_stale_whatever_the_phase(self):
         fcst, history = self._case("Asia/Kolkata", "60min", "2026-02-20 10:00", pd.Timedelta("1h"))
@@ -363,6 +367,29 @@ class TestRestUnchangedSensorState(unittest.TestCase):
             )
         self.assertEqual([at.strftime("%H:%M") for at in found[0]], ["22:00", "23:00"])
 
+    def test_a_naive_requested_day_is_read_as_utc(self):
+        """Days built without a time zone were accepted before the unavailable bookkeeping."""
+        rows = [("500", "2026-02-20T00:00:00+00:00"), ("unavailable", "2026-02-20T06:10:00+00:00")]
+        for is_last_day in (False, True):
+            with self.subTest(is_last_day=is_last_day):
+                found = []
+                data = [{"state": state, "last_changed": at} for state, at in rows]
+                rh = object.__new__(RetrieveHass)
+                rh.freq = pd.Timedelta("60min")
+                rh.logger = logging.getLogger(__name__)
+                with time_machine.travel(self.NOW, tick=False):
+                    frame = rh._process_history_dataframe(
+                        data,
+                        "sensor.load",
+                        pd.Timestamp("2026-02-20"),
+                        False,
+                        is_last_day,
+                        hold_unchanged_tail=True,
+                        unavailable=found,
+                    )
+                self.assertEqual(frame.index[0], pd.Timestamp("2026-02-20 00:00", tz="UTC"))
+                self.assertEqual(found[0][0], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+
     def test_other_consumers_keep_the_unextended_history(self):
         """Without the opt-in flag the retrieved history is exactly the recorded rows."""
         rows = [("500", "2026-02-20T00:00:00+00:00"), ("520", "2026-02-20T06:10:00+00:00")]
@@ -428,9 +455,14 @@ async def _default_params():
     return await utils.build_params(emhass_conf, secrets, config, logger)
 
 
+def _utc_hours(index):
+    """Hours since the epoch, whatever the index resolution (pandas 3 defaults to microseconds)."""
+    return np.asarray((index.tz_convert("UTC") - pd.Timestamp(0, tz="UTC")) / pd.Timedelta(hours=1))
+
+
 def _utc_sine(index):
     """A load profile that is a pure function of the absolute (UTC) instant."""
-    hours = np.asarray(index.tz_convert("UTC").asi8, dtype=float) / 3.6e12
+    hours = _utc_hours(index)
     return 500.0 + 200.0 * np.sin(2 * np.pi * hours / 24.0)
 
 
@@ -589,7 +621,16 @@ def _ha_history(rows):
     return fetch
 
 
-def _ha_rows(now, freq_min, *, last_change=None, unavailable=None):
+def _step_weather(index):
+    """Discontinuous covariate: a function of the absolute instant, changing every 3 UTC hours."""
+    return 10.0 + 10.0 * ((_utc_hours(index) // 3) % 2)
+
+
+def _step_load(index):
+    return 300.0 + 4.0 * _step_weather(index)
+
+
+def _ha_rows(now, freq_min, *, last_change=None, unavailable=None, profile=_utc_sine):
     """State changes of a load following ``_utc_sine``: one per step up to ``last_change``.
 
     ``unavailable`` is ``(start, end)``; one unavailable state is recorded at ``start`` and
@@ -600,7 +641,7 @@ def _ha_rows(now, freq_min, *, last_change=None, unavailable=None):
     index = pd.date_range(
         (now - pd.Timedelta(days=8)).floor("D"), last_change or now.floor(step), freq=step
     )
-    rows = [(at, f"{value:.6f}") for at, value in zip(index, _utc_sine(index))]
+    rows = [(at, f"{value:.6f}") for at, value in zip(index, profile(index))]
     if unavailable:
         begin, end = unavailable
         rows = [(at, state) for at, state in rows if begin > at or (end is not None and at >= end)]
@@ -880,7 +921,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(logger, "INFO") as logs:
             idd = await self._rest(now, method_ts_round="first", time_zone=zone)
         self.assertTrue(idd)
-        self.assertIn("predictions are moved onto the grid", "\n".join(logs.output))
+        self.assertIn("time-weighted mean", "\n".join(logs.output))
         grid = idd["fcst"].forecast_dates
         np.testing.assert_allclose(
             idd["df_input_data_dayahead"]["p_load_forecast"], _utc_sine(grid), atol=self._atol(60)
@@ -921,3 +962,48 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
                         _utc_sine(grid),
                         atol=self._atol(freq_min),
                     )
+
+    async def test_phase_correction_keeps_covariates_on_the_physical_interval(self):
+        """Discontinuous weather and a load that follows it, in a zone with a 15 min phase.
+
+        The truth for a grid step is the load averaged over that step. Moving the model's
+        output by the phase without blending the neighbouring lattice step would put the
+        weather change a quarter of a step away from where it happened.
+        """
+        zone = "Asia/Kathmandu"
+        index = pd.date_range("2026-01-01", periods=20 * 24, freq="60min", tz=zone)
+        data = pd.DataFrame(
+            {"sensor.test_load": _step_load(index), "temp_air": _step_weather(index)}, index=index
+        )
+        mlf = MLForecaster(
+            data,
+            self.MODEL_TYPE,
+            "sensor.test_load",
+            "LinearRegression",
+            2,
+            self.conf,
+            logger,
+            weather_features=["temp_air"],
+        )
+        await mlf.fit()
+        with open(self.conf["data_path"] / f"{self.MODEL_TYPE}_mlf.pkl", "wb") as f:
+            pickle.dump(mlf, f)
+
+        async def weather_for(self_, index, features):
+            return pd.DataFrame({"temp_air": _step_weather(index)}, index=index)
+
+        now = datetime(2026, 2, 20, 11, 20, tzinfo=UTC)
+        rows = _ha_rows(now, 60, profile=_step_load)
+        with patch.object(Forecast, "get_weather_covariates", weather_for):
+            idd = await self._setup(
+                now, "first", time_zone=zone, recorder=None, rest_rows=rows, freq_min=60
+            )
+        self.assertTrue(idd)
+        grid = idd["fcst"].forecast_dates
+        minutes = pd.date_range(grid[0], grid[-1] + pd.Timedelta("59min"), freq="1min")
+        truth = pd.Series(_step_load(minutes), index=minutes).resample("60min").mean()
+        np.testing.assert_allclose(
+            idd["df_input_data_dayahead"]["p_load_forecast"].to_numpy(),
+            truth.reindex(grid).to_numpy(),
+            atol=1.0,
+        )
