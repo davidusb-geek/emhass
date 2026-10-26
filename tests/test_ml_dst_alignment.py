@@ -252,10 +252,12 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
     async def test_completed_overlapping_bucket_is_not_a_negative_phase(self):
         # REST/InfluxDB/VictoriaMetrics buckets sit on UTC multiples and run up to the
         # bucket containing now; the grid start is wall-aligned ("first") or rounded.
-        for tz, freq, now, start in (
-            ("Asia/Kolkata", "60min", "2026-02-20 05:10", "2026-02-20 04:30"),
-            ("Asia/Kolkata", "60min", "2026-02-20 05:25", "2026-02-20 05:30"),
-            ("Asia/Kathmandu", "30min", "2026-02-20 10:35", "2026-02-20 10:15"),
+        # The last case is (warm-up steps, weight of the later bucket) of the blend.
+        for tz, freq, now, start, warm_up, weight in (
+            ("Asia/Kolkata", "60min", "2026-02-20 05:10", "2026-02-20 04:30", 0, 0.5),
+            ("Asia/Kolkata", "60min", "2026-02-20 05:25", "2026-02-20 05:30", 1, 0.5),
+            ("Asia/Kathmandu", "30min", "2026-02-20 10:35", "2026-02-20 10:15", 0, 0.5),
+            ("Asia/Kathmandu", "60min", "2026-02-20 11:20", "2026-02-20 10:45", 0, 0.75),
         ):
             with self.subTest(tz=tz, now=now):
                 fcst, _ = self._case(tz, freq, start, pd.Timedelta(0))
@@ -269,6 +271,8 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
                     result = await fcst._get_load_forecast_ml(history, True, model, True)
                 self.assertIsInstance(result, pd.DataFrame)
                 self.assertTrue(result.index.equals(fcst.forecast_dates))
+                # The predictor returns 0, 1, 2, ...: the warm-up steps are dropped after blending.
+                np.testing.assert_allclose(result["yhat"], np.arange(warm_up, warm_up + 6) + weight)
                 # Only completed buckets that end by the first needed step are observations.
                 self.assertLessEqual(
                     model.received_history_end + pd.Timedelta(freq), fcst.forecast_dates[0]
@@ -367,28 +371,32 @@ class TestRestUnchangedSensorState(unittest.TestCase):
             )
         self.assertEqual([at.strftime("%H:%M") for at in found[0]], ["22:00", "23:00"])
 
-    def test_a_naive_requested_day_is_read_as_utc(self):
+    def _naive_day(self, is_last_day):
         """Days built without a time zone were accepted before the unavailable bookkeeping."""
         rows = [("500", "2026-02-20T00:00:00+00:00"), ("unavailable", "2026-02-20T06:10:00+00:00")]
-        for is_last_day in (False, True):
-            with self.subTest(is_last_day=is_last_day):
-                found = []
-                data = [{"state": state, "last_changed": at} for state, at in rows]
-                rh = object.__new__(RetrieveHass)
-                rh.freq = pd.Timedelta("60min")
-                rh.logger = logging.getLogger(__name__)
-                with time_machine.travel(self.NOW, tick=False):
-                    frame = rh._process_history_dataframe(
-                        data,
-                        "sensor.load",
-                        pd.Timestamp("2026-02-20"),
-                        False,
-                        is_last_day,
-                        hold_unchanged_tail=True,
-                        unavailable=found,
-                    )
-                self.assertEqual(frame.index[0], pd.Timestamp("2026-02-20 00:00", tz="UTC"))
-                self.assertEqual(found[0][0], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+        found = []
+        data = [{"state": state, "last_changed": at} for state, at in rows]
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta("60min")
+        rh.logger = logging.getLogger(__name__)
+        with time_machine.travel(self.NOW, tick=False):
+            frame = rh._process_history_dataframe(
+                data,
+                "sensor.load",
+                pd.Timestamp("2026-02-20"),
+                False,
+                is_last_day,
+                hold_unchanged_tail=True,
+                unavailable=found,
+            )
+        self.assertEqual(frame.index[0], pd.Timestamp("2026-02-20 00:00", tz="UTC"))
+        self.assertEqual(found[0][0], pd.Timestamp("2026-02-20 06:00", tz="UTC"))
+
+    def test_a_naive_requested_day_is_read_as_utc_on_a_past_day(self):
+        self._naive_day(False)
+
+    def test_a_naive_requested_day_is_read_as_utc_on_the_last_day(self):
+        self._naive_day(True)
 
     def test_other_consumers_keep_the_unextended_history(self):
         """Without the opt-in flag the retrieved history is exactly the recorded rows."""
