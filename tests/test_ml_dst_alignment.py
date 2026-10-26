@@ -971,14 +971,13 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
                         atol=self._atol(freq_min),
                     )
 
-    async def test_phase_correction_keeps_covariates_on_the_physical_interval(self):
-        """Discontinuous weather and a load that follows it, in a zone with a 15 min phase.
+    async def _check_blend_against_truth(self, zone, now, rounding):
+        """Discontinuous weather and a load that follows it, on a grid offset from the history.
 
         The truth for a grid step is the load averaged over that step. Moving the model's
         output by the phase without blending the neighbouring lattice step would put the
-        weather change a quarter of a step away from where it happened.
+        weather change away from where it happened.
         """
-        zone = "Asia/Kathmandu"
         index = pd.date_range("2026-01-01", periods=20 * 24, freq="60min", tz=zone)
         data = pd.DataFrame(
             {"sensor.test_load": _step_load(index), "temp_air": _step_weather(index)}, index=index
@@ -1000,11 +999,10 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         async def weather_for(self_, index, features):
             return pd.DataFrame({"temp_air": _step_weather(index)}, index=index)
 
-        now = datetime(2026, 2, 20, 11, 20, tzinfo=UTC)
         rows = _ha_rows(now, 60, profile=_step_load)
         with patch.object(Forecast, "get_weather_covariates", weather_for):
             idd = await self._setup(
-                now, "first", time_zone=zone, recorder=None, rest_rows=rows, freq_min=60
+                now, rounding, time_zone=zone, recorder=None, rest_rows=rows, freq_min=60
             )
         self.assertTrue(idd)
         grid = idd["fcst"].forecast_dates
@@ -1015,3 +1013,25 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             truth.reindex(grid).to_numpy(),
             atol=1.0,
         )
+        return grid
+
+    async def test_phase_correction_keeps_covariates_on_the_physical_interval(self):
+        grid = await self._check_blend_against_truth(
+            "Asia/Kathmandu", datetime(2026, 2, 20, 11, 20, tzinfo=UTC), "first"
+        )
+        self.assertEqual(len(grid), 72)
+
+    async def test_phase_with_a_warm_up_step_keeps_the_physical_interval(self):
+        # "last" rounds the start up to 12:15 UTC, past now (11:20): one warm-up step is
+        # predicted from the last completed bucket and dropped after the blend.
+        now = datetime(2026, 2, 20, 11, 20, tzinfo=UTC)
+        grid = await self._check_blend_against_truth("Asia/Kathmandu", now, "last")
+        self.assertGreater(grid[0].tz_convert("UTC"), pd.Timestamp(now))
+
+    async def test_phase_across_a_dst_change_keeps_the_physical_interval(self):
+        # Adelaide (UTC+10:30 -> +09:30 on 2026-04-05) puts the hourly grid 30 min off the
+        # UTC history lattice both before and after the change; the horizon spans it.
+        grid = await self._check_blend_against_truth(
+            "Australia/Adelaide", datetime(2026, 4, 4, 7, 20, tzinfo=UTC), "first"
+        )
+        self.assertEqual(len(grid), 73)
