@@ -85,6 +85,8 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
         fcst.var_load_new = "sensor.test_load_positive"
         fcst.retrieve_hass_conf = {"sensor_power_load_no_var_loads": fcst.var_load}
         fcst.logger = logging.getLogger(__name__)
+        # The history was read at the forecast start: no warm-up, whatever the real clock.
+        fcst._load_observed_until = start.tz_convert("UTC")
         history_index = pd.date_range(end=start - cls.FREQ, periods=100, freq=cls.FREQ)
         history = pd.DataFrame(
             {fcst.var_load_new: np.arange(len(history_index), dtype=float) + 500},
@@ -108,6 +110,20 @@ class TestMlDstAndTimestampAlignment(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(result), count)
                 self.assertTrue(result.index.equals(fcst.forecast_dates))
                 self.assertTrue(result["yhat"].notna().all())
+
+    async def test_fixture_results_do_not_depend_on_the_real_clock(self):
+        for clock in ("2000-01-01", "2026-02-20 12:00", "2040-01-01"):
+            for date, count in (("2026-02-20 12:00", 72), ("2026-10-24 12:00", 73)):
+                with self.subTest(clock=clock, date=date):
+                    fcst, history = self._case(date)
+                    model = _Predictor()
+                    with time_machine.travel(
+                        pd.Timestamp(clock, tz="UTC").to_pydatetime(), tick=False
+                    ):
+                        result = await fcst._get_load_forecast_ml(history, True, model, True)
+                    self.assertIsInstance(result, pd.DataFrame)
+                    self.assertEqual(model.received_steps, count)
+                    self.assertEqual(model.received_history_end, fcst.forecast_dates[0] - self.FREQ)
 
     async def test_current_forecast_bucket_excluded_from_training_window(self):
         fcst, history = self._case("2026-10-24 12:00")
@@ -196,7 +212,8 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
     """Zones with a non-whole-hour UTC offset put history buckets on another phase."""
 
     @staticmethod
-    def _case(tz, freq, start_utc, history_offset):
+    def _case(tz, freq, start_utc, history_offset, clock_race=False):
+        """``clock_race`` leaves the cutoff to the (frozen) clock instead of the grid start."""
         tz = pytz.timezone(tz)
         freq = pd.Timedelta(freq)
         start = pd.Timestamp(start_utc, tz="UTC").tz_convert(tz)
@@ -208,6 +225,8 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
         fcst.var_load_new = "sensor.test_load_positive"
         fcst.retrieve_hass_conf = {"sensor_power_load_no_var_loads": fcst.var_load}
         fcst.logger = logging.getLogger(__name__)
+        if not clock_race:
+            fcst._load_observed_until = start.tz_convert("UTC")
         index = pd.date_range(end=start - freq - history_offset, periods=100, freq=freq)
         history = pd.DataFrame({fcst.var_load_new: np.arange(100, dtype=float)}, index=index)
         return fcst, history
@@ -260,7 +279,7 @@ class TestHistoryBucketPhase(unittest.IsolatedAsyncioTestCase):
             ("Asia/Kathmandu", "60min", "2026-02-20 11:20", "2026-02-20 10:45", 0, 0.75),
         ):
             with self.subTest(tz=tz, now=now):
-                fcst, _ = self._case(tz, freq, start, pd.Timedelta(0))
+                fcst, _ = self._case(tz, freq, start, pd.Timedelta(0), clock_race=True)
                 utc_now = pd.Timestamp(now, tz="UTC")
                 index = pd.date_range(end=utc_now.floor(freq), periods=100, freq=freq)
                 history = pd.DataFrame(
@@ -579,6 +598,51 @@ class TestHoldFlagThreading(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertTrue(ok)
                 self.assertEqual(rh.df_final.index[-1], pd.Timestamp(last, tz="UTC"))
+
+    async def test_outages_are_tracked_only_for_the_ml_opt_in(self):
+        rows = [
+            {"state": "500", "last_changed": "2026-02-20T00:00:00+00:00"},
+            {"state": "unavailable", "last_changed": "2026-02-20T02:10:00+00:00"},
+            {"state": "510", "last_changed": "2026-02-20T05:30:00+00:00"},
+        ]
+        for hold in (True, False):
+            with self.subTest(hold=hold):
+                rh = object.__new__(RetrieveHass)
+                rh.freq = pd.Timedelta("60min")
+                rh.long_lived_token = "token"
+                rh.hass_url = "http://ha.invalid/"
+                rh.ssl_verify = True
+                rh.logger = logging.getLogger(__name__)
+                process = rh._process_history_dataframe
+                seen = []
+
+                def spy(*args, _process=process, _seen=seen, **kwargs):
+                    _seen.append(kwargs["unavailable"])
+                    return _process(*args, **kwargs)
+
+                with (
+                    time_machine.travel(datetime(2026, 2, 20, 10, 20, tzinfo=UTC), tick=False),
+                    patch.object(
+                        RetrieveHass, "_fetch_history_data", new=AsyncMock(return_value=rows)
+                    ),
+                    patch.object(rh, "_process_history_dataframe", side_effect=spy),
+                ):
+                    ok = await rh._get_data_rest_api(
+                        pd.date_range("2026-02-20", periods=1, tz="UTC"),
+                        ["sensor.load"],
+                        hold_unchanged_tail=hold,
+                    )
+                self.assertTrue(ok)
+                if hold:
+                    self.assertEqual(len(seen), 1)
+                    self.assertIsInstance(seen[0], list)
+                    self.assertEqual(
+                        [at.strftime("%H:%M") for at in rh.unavailable_buckets["sensor.load"]],
+                        ["02:00", "03:00", "04:00"],
+                    )
+                else:
+                    self.assertEqual(seen, [None])
+                    self.assertEqual(rh.unavailable_buckets, {})
 
     async def _hass_load_flag(self, method):
         recorded = {}
