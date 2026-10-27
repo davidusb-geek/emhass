@@ -15274,8 +15274,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             peaks.append(float(np.max(res.tank_trajectory[:-1])))
             return res
 
-        def recording_accept(status, value):
-            accepted.append(accept(status, value))
+        def recording_accept(status, value, *args, **kwargs):
+            accepted.append(accept(status, value, *args, **kwargs))
             return accepted[-1]
 
         with (
