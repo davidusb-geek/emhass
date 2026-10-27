@@ -440,10 +440,21 @@ class MLForecaster:
                 raise ValueError("Model has not been fitted yet. Call fit() first.")
 
             if data_last_window is None:
+                exog = self.data_test.drop(self.var_model, axis=1)
+                if steps is None:
+                    return await asyncio.to_thread(
+                        self.forecaster.predict, steps=self.num_lags, exog=exog
+                    )
+                steps = int(steps)
+                if steps < 1:
+                    raise ValueError("Prediction steps must be positive")
+                if steps > len(exog):
+                    raise ValueError(
+                        f"Prediction steps ({steps}) exceed the {len(exog)} rows of "
+                        "stored exogenous data; pass data_last_window for a longer horizon"
+                    )
                 return await asyncio.to_thread(
-                    self.forecaster.predict,
-                    steps=self.num_lags,
-                    exog=self.data_test.drop(self.var_model, axis=1),
+                    self.forecaster.predict, steps=steps, exog=exog.iloc[:steps]
                 )
             data_last_window = await self.interpolate_async(data_last_window)
             steps = (
