@@ -1255,9 +1255,15 @@ class TestLiveFreshnessOfRestLoadHistory(unittest.IsolatedAsyncioTestCase):
     def test_a_recorded_state_that_is_not_a_number_does_not_match_the_live_value(self):
         live = _live("500", changed="2026-02-19T18:00:00+00:00")
         day_start = pd.Timestamp("2026-02-20 00:00", tz="UTC")
-        for state in ("unavailable", "unknown", "", None):
+
+        def rejected(state):
             with self.subTest(state=state), self.assertLogs(logger, "ERROR"):
                 self.assertFalse(self._verdict(live, day_start, state=state))
+
+        rejected("unavailable")
+        rejected("unknown")
+        rejected("")
+        rejected(None)
 
     def test_reporting_within_the_last_completed_bucket_is_enough(self):
         self.assertTrue(self._verdict(_live(reported="2026-02-20T09:00:00+00:00")))
@@ -1288,25 +1294,27 @@ class TestLiveFreshnessOfRestLoadHistory(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self._verdict(live, pd.Timestamp("2026-02-20 09:30:00", tz="UTC")))
 
     def test_changes_the_recorder_may_not_have_committed_yet_are_tolerated(self):
-        for changed in ("2026-02-20T10:05:00+00:00", "2026-02-20T09:59:55+00:00"):
-            with self.subTest(changed=changed):
-                self.assertTrue(self._verdict(_live(changed=changed)))
+        with self.subTest(changed="2026-02-20T10:05:00+00:00"):
+            self.assertTrue(self._verdict(_live(changed="2026-02-20T10:05:00+00:00")))
+        with self.subTest(changed="2026-02-20T09:59:55+00:00"):
+            self.assertTrue(self._verdict(_live(changed="2026-02-20T09:59:55+00:00")))
 
     def test_missing_or_invalid_evidence_is_rejected(self):
-        for name, live in (
-            ("no live state", None),
-            ("no last_reported", _live(reported=None)),
-            ("no last_changed", _live(changed=None)),
-            ("unparseable last_reported", _live(reported="not-a-time")),
-            ("unavailable", _live("unavailable")),
-            ("unknown", _live("unknown")),
-            ("not a number", _live("on")),
-            ("not finite", _live("nan")),
-            ("infinite", _live("inf")),
-            ("no state", {"last_reported": "2026-02-20T10:15:00+00:00"}),
-        ):
+
+        def rejected(name, live):
             with self.subTest(case=name), self.assertLogs(logger, "ERROR"):
                 self.assertFalse(self._verdict(live))
+
+        rejected("no live state", None)
+        rejected("no last_reported", _live(reported=None))
+        rejected("no last_changed", _live(changed=None))
+        rejected("unparseable last_reported", _live(reported="not-a-time"))
+        rejected("unavailable", _live("unavailable"))
+        rejected("unknown", _live("unknown"))
+        rejected("not a number", _live("on"))
+        rejected("not finite", _live("nan"))
+        rejected("infinite", _live("inf"))
+        rejected("no state", {"last_reported": "2026-02-20T10:15:00+00:00"})
 
     async def test_live_state_request_failures_yield_none(self):
         for name, session in (
