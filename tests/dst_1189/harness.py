@@ -117,8 +117,12 @@ class Env:
         runtimeparams: dict,
         action: str,
         forecast_now: pd.Timestamp | None = None,
+        get_data_from_file: bool = False,
     ):
         """set_input_data_dict under a frozen clock. Returns (idd, error_repr).
+
+        ``get_data_from_file`` reads the history from ``test_df_final.pkl`` in ``data_path``
+        instead of Home Assistant (perfect-optim).
 
         ``forecast_now`` makes ``pd.Timestamp.now()`` (what Forecast.__init__ reads) report a
         different instant than the frozen ``datetime.now()`` (what treat_runtimeparams reads),
@@ -146,6 +150,7 @@ class Env:
                         orjson.dumps(runtimeparams).decode(),
                         action,
                         LOG,
+                        get_data_from_file=get_data_from_file,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - the error is the observation
