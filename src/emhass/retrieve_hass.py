@@ -383,9 +383,13 @@ class RetrieveHass:
         :param hold_unchanged_tail: Only applies to the REST API path. When True, \
             the last numeric state of the final requested day is held up to the \
             bucket containing now, because Home Assistant only returns a row per \
-            recorded state change. This is not evidence that the sensor is still \
-            reporting. It also records the unavailable buckets in \
-            ``unavailable_buckets``; other calls do not. Defaults to False
+            recorded state change. The history alone is not evidence that the \
+            sensor is still reporting, so enabling this option also requires live \
+            Home Assistant ``/api/states`` freshness and recorder-consistency \
+            validation for every requested sensor. The two cannot be requested \
+            separately, and retrieval fails closed (returns False) when that \
+            verification cannot be established. It also records the unavailable \
+            buckets in ``unavailable_buckets``; other calls do not. Defaults to False
         :type hold_unchanged_tail: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
