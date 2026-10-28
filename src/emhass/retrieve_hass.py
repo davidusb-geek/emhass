@@ -31,6 +31,11 @@ _metadata_lock = asyncio.Lock()
 
 header_accept = "application/json"
 header_auth = "Bearer"
+# The recorder commits in batches (Home Assistant's default commit_interval is 5 s); a change
+# this close to the running bucket may not be stored yet and is not counted as missing.
+_RECORDER_COMMIT_GRACE = pd.Timedelta(seconds=10)
+# Rounding of the timestamps Home Assistant returns for the same change.
+_TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
 
@@ -120,6 +125,8 @@ class RetrieveHass:
         else:
             self.freq = freq
         self.time_zone = time_zone
+        # Buckets of the last REST retrieval where the sensor was unavailable or unknown
+        self.unavailable_buckets: dict[str, pd.DatetimeIndex] = {}
         if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
@@ -345,6 +352,7 @@ class RetrieveHass:
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
+        hold_unchanged_tail: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -372,6 +380,17 @@ class RetrieveHass:
             sensor doesn't cost other sensors days they did have data for. \
             Defaults to False
         :type keep_partial_days: bool, optional
+        :param hold_unchanged_tail: Only applies to the REST API path. When True, \
+            the last numeric state of the final requested day is held up to the \
+            bucket containing now, because Home Assistant only returns a row per \
+            recorded state change. The history alone is not evidence that the \
+            sensor is still reporting, so enabling this option also requires live \
+            Home Assistant ``/api/states`` freshness and recorder-consistency \
+            validation for every requested sensor. The two cannot be requested \
+            separately, and retrieval fails closed (returns False) when that \
+            verification cannot be established. It also records the unavailable \
+            buckets in ``unavailable_buckets``; other calls do not. Defaults to False
+        :type hold_unchanged_tail: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -396,6 +415,7 @@ class RetrieveHass:
                     significant_changes_only,
                     test_url,
                     keep_partial_days=keep_partial_days,
+                    hold_unchanged_tail=hold_unchanged_tail,
                 )
             return success
 
@@ -407,6 +427,7 @@ class RetrieveHass:
             significant_changes_only,
             test_url,
             keep_partial_days=keep_partial_days,
+            hold_unchanged_tail=hold_unchanged_tail,
         )
 
     def _build_history_url(
@@ -492,9 +513,19 @@ class RetrieveHass:
             return None
 
     def _process_history_dataframe(
-        self, data: list, var: str, day: pd.Timestamp, is_first_day: bool, is_last_day: bool
+        self,
+        data: list,
+        var: str,
+        day: pd.Timestamp,
+        is_first_day: bool,
+        is_last_day: bool,
+        hold_unchanged_tail: bool = False,
+        unavailable: list | None = None,
     ) -> pd.DataFrame | None:
-        """Helper to convert raw data to a resampled DataFrame."""
+        """Helper to convert raw data to a resampled DataFrame.
+
+        ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
+        """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
         if len(df_raw) == 0:
@@ -523,8 +554,163 @@ class RetrieveHass:
             .rename(columns={"state": var})
         )
         df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
+        states = df_tp[var].sort_index()
+        last_state = states.iloc[-1]
         df_tp = df_tp.resample(self.freq).mean()
-        return df_tp
+        tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
+        if unavailable is not None:
+            day_end = self._as_utc(day) + pd.Timedelta(days=1) - self.freq
+            after = (
+                tail
+                if is_last_day
+                else pd.date_range(df_tp.index[-1] + self.freq, day_end, freq=self.freq)
+            )
+            unavailable.append(self._unavailable_buckets(states, df_tp[var], after))
+        if not hold_unchanged_tail or pd.isna(last_state) or tail.empty:
+            return df_tp
+        self.logger.info(
+            f"Holding the last state of {var} for {len(tail)} bucket(s) after its last "
+            "recorded change: the history cannot show whether the sensor is still reporting."
+        )
+        return pd.concat([df_tp, pd.DataFrame({var: last_state}, index=tail)])
+
+    @staticmethod
+    def _as_utc(day: pd.Timestamp) -> pd.Timestamp:
+        """A requested day as a UTC timestamp; a naive one is read as UTC."""
+        day = pd.Timestamp(day)
+        return day.tz_localize("UTC") if day.tz is None else day.tz_convert("UTC")
+
+    def _tail_buckets(
+        self, last_seen: pd.Timestamp, day: pd.Timestamp, is_last_day: bool
+    ) -> pd.DatetimeIndex:
+        """Buckets after the last recorded one up to the bucket containing now.
+
+        Home Assistant only returns a row per recorded state change, so nothing is
+        recorded after a sensor's last change. Data not belonging to the period
+        containing now has no tail.
+        """
+        day = self._as_utc(day)
+        last_bucket = pd.Timestamp.now(tz="UTC").floor(self.freq)
+        if not (is_last_day and day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
+            return pd.DatetimeIndex([], tz="UTC")
+        return pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
+
+    def _unavailable_buckets(
+        self, states: pd.Series, resampled: pd.Series, after: pd.DatetimeIndex
+    ) -> pd.DatetimeIndex:
+        """Buckets without a numeric observation while the state was unavailable/unknown.
+
+        An unavailable state lasts until the next recorded change, so it also covers
+        the empty buckets after it, and ``after`` (the buckets this day's frame lacks
+        after its last row) when the last recorded state is unavailable. Buckets that
+        have a numeric reading of their own are observed and not listed.
+        """
+        last_unavailable = states.isna().resample(self.freq).last().astype("boolean")
+        carried = last_unavailable.ffill().fillna(False).to_numpy(dtype=bool)
+        buckets = resampled.index[resampled.isna().to_numpy() & carried]
+        return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
+
+    async def _fetch_live_state(
+        self, session: aiohttp.ClientSession, entity_id: str, headers: dict
+    ) -> dict | None:
+        """The entity's current state object from ``/api/states``, or None on any failure."""
+        if self.hass_url == hass_url:  # Supervisor API
+            url = f"{self.hass_url}/states/{entity_id}"
+        else:
+            url = f"{self.hass_url.rstrip('/')}/api/states/{entity_id}"
+        try:
+            async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
+                if response.status != 200:
+                    self.logger.error(
+                        f"Home Assistant returned HTTP {response.status} for the live state of "
+                        f"{entity_id}; its freshness cannot be verified."
+                    )
+                    return None
+                live = await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            self.logger.error(
+                f"Could not read the live state of {entity_id} to verify its freshness: {exc}"
+            )
+            return None
+        return live if isinstance(live, dict) else None
+
+    def _live_state_is_fresh(
+        self,
+        var: str,
+        live: dict | None,
+        last_recorded: tuple[pd.Timestamp, Any] | None,
+        now: pd.Timestamp,
+    ) -> bool:
+        """Whether the live state shows the sensor still reporting and the recorder up to date.
+
+        Two independent pieces of evidence, both required (a missing or invalid one fails):
+
+        - Reporting: ``last_reported`` (not ``last_changed``/``last_updated``, which stay put
+          for an unchanged sensor) lies within the last completed bucket or later, and the
+          live state is a finite number. A constant reading passes while the sensor keeps
+          reporting it.
+        - Recorder: when the live sensor last changed before the running bucket, the newest
+          recorded row (the one stamped at the start of the last requested day included)
+          must hold the live value, and the live change must not be newer than that row.
+          Otherwise the recorder has not persisted a change, however fresh the sensor.
+          Home Assistant's history API does not expose ``last_reported``, so this detects
+          a recorder that missed a change, not one that is merely idle; a change that
+          returns to the recorded value is not visible either.
+        """
+        if live is None:
+            self.logger.error(
+                f"No live state for {var}: its reporting freshness cannot be verified, so the "
+                "load history is rejected."
+            )
+            return False
+        try:
+            value = float(live["state"])
+            reported = pd.Timestamp(live["last_reported"])
+            changed = pd.Timestamp(live["last_changed"])
+        except (KeyError, TypeError, ValueError):
+            value = reported = changed = None
+        if value is None or not np.isfinite(value) or pd.isna(reported) or pd.isna(changed):
+            self.logger.error(
+                f"The live state of {var} is not a finite number with valid last_reported and "
+                "last_changed timestamps (last_reported needs Home Assistant 2024.3 or newer); "
+                "its freshness cannot be verified, so the load history is rejected."
+            )
+            return False
+        reported, changed = self._as_utc(reported), self._as_utc(changed)
+        running = now.floor(self.freq)
+        if reported < running - self.freq:
+            self.logger.error(
+                f"{var} stopped reporting: last reported {reported}, but a fresh load history "
+                f"needs a report since {running - self.freq}. The load history is rejected."
+            )
+            return False
+        if last_recorded is not None and changed < running - _RECORDER_COMMIT_GRACE:
+            recorded_at, recorded_state = last_recorded
+            try:
+                same_value = bool(np.isclose(float(recorded_state), value, rtol=1e-9, atol=1e-9))
+            except (TypeError, ValueError):
+                same_value = False
+            if not same_value or changed - recorded_at > _TIMESTAMP_TOLERANCE:
+                self.logger.error(
+                    f"The Home Assistant history of {var} ends at {recorded_at} with "
+                    f"{recorded_state!r}, but the sensor changed at {changed} to {value}: the "
+                    "recorder has not stored that change. The load history is rejected."
+                )
+                return False
+        return True
+
+    @staticmethod
+    def _last_recorded_row(
+        results: dict[tuple[int, str], Any], n_days: int, var: str
+    ) -> tuple[pd.Timestamp, Any] | None:
+        """The newest retrieved row of ``var`` as (``last_changed``, state)."""
+        latest = None
+        for day_idx in range(n_days):
+            for row in results.get((day_idx, var)) or []:
+                at = RetrieveHass._as_utc(pd.Timestamp(row["last_changed"]))
+                if latest is None or at >= latest[0]:
+                    latest = (at, row["state"])
+        return latest
 
     async def _get_data_rest_api(
         self,
@@ -534,6 +720,7 @@ class RetrieveHass:
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
+        hold_unchanged_tail: bool = False,
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
@@ -558,6 +745,7 @@ class RetrieveHass:
         }
         var_list = [var for var in var_list if var != ""]
         self.df_final = pd.DataFrame()
+        self.unavailable_buckets = {}
 
         days_skipped = 0
         # Concurrent fetch: run all (day, var) HTTP requests in parallel, bounded
@@ -578,6 +766,9 @@ class RetrieveHass:
                 )
             return day_idx, var, data
 
+        # The instant the history is read: a change after the running bucket it starts in
+        # is never counted as missing, however long the retrieval takes.
+        observed_at = pd.Timestamp.now(tz="UTC")
         async with aiohttp.ClientSession() as session:
             tasks = [
                 _fetch_one(day_idx, day, var)
@@ -593,6 +784,19 @@ class RetrieveHass:
                     return False
                 results[(day_idx, var)] = data
 
+            if hold_unchanged_tail:
+                # ML load retrieval: the history alone cannot show a stopped sensor or a
+                # recorder that missed a change, so require live evidence for each sensor.
+                for var in var_list:
+                    live = await self._fetch_live_state(session, var, headers)
+                    if not self._live_state_is_fresh(
+                        var,
+                        live,
+                        self._last_recorded_row(results, len(days_list), var),
+                        observed_at,
+                    ):
+                        return False
+
             partial_days = 0
             for day_idx, day in enumerate(days_list):
                 day_frames = []
@@ -602,6 +806,8 @@ class RetrieveHass:
                     # Fetched concurrently above; just pick the result out
                     data = results.get((day_idx, var))
                     df_resampled = None
+                    # Outages are only tracked for the ML opt-in; other callers skip the work.
+                    unavailable: list | None = [] if hold_unchanged_tail else None
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
@@ -609,7 +815,13 @@ class RetrieveHass:
                             day,
                             is_first_day=(day_idx == 0),
                             is_last_day=(day_idx == len(days_list) - 1),
+                            hold_unchanged_tail=hold_unchanged_tail,
+                            unavailable=unavailable,
                         )
+                    if unavailable:
+                        self.unavailable_buckets[var] = self.unavailable_buckets.get(
+                            var, pd.DatetimeIndex([], tz="UTC")
+                        ).union(unavailable[0])
                     if df_resampled is None:
                         missing_var = True
                         if not keep_partial_days:
