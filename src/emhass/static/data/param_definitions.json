@@ -175,7 +175,9 @@
       "input": "boolean",
       "default_value": false,
       "unit": "none"
-    },
+    },ML forecaster weather covariate columns",
+      "Description": "Optional list of weather covariate columns to feed the 'mlforecaster' load forecast model as exogenous inputs, in addition to the always-present calendar features. Useful when the load is weather-dependent (e.g. a heat pump). Leave empty to disable (default). Supported values: temp_air, relative_humidity, cloud_cover, wind_speed, ghi, direct_radiation, diffuse_radiation, precipitation, heating_degree, cooling_degree. The values are sourced from the Open-Meteo weather forecast; heating_degree/cooling_degree are derived from the temperature.",
+      "input": "array.string",
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
@@ -352,14 +354,14 @@
     },
     "inverter_efficiency_dc_ac": {
       "friendly_name": "Hybrid inverter efficency DC to AC",
-      "Description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100)",
+      "Description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100)",
       "input": "float",
       "default_value": 1.0,
       "unit": "fraction"
     },
     "inverter_efficiency_ac_dc": {
       "friendly_name": "Hybrid inverter efficency AC to DC",
-      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
+      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100)",
       "input": "float",
       "default_value": 1.0,
       "unit": "fraction"
@@ -775,7 +777,7 @@
     },
     "battery_dynamic_max": {
       "friendly_name": "Maximum percentage of battery discharge per hour",
-      "Description": "The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
+      "Description": "Accepts values between 0 and 1. The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": 0.9,
       "unit": "fraction",
@@ -836,21 +838,21 @@
     },
     "battery_charge_efficiency": {
       "friendly_name": "Battery charge efficiency",
-      "Description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, Accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.95,
       "unit": "fraction"
     },
     "battery_nominal_energy_capacity": {
       "friendly_name": "Battery total capacity",
-      "Description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.int",
       "default_value": 5000,
       "unit": "Wh"
     },
     "battery_minimum_state_of_charge": {
       "friendly_name": "Minimum Battery charge percentage",
-      "Description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "Accepts values between 0 and 1. The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.3,
       "maximum": 1,
@@ -858,7 +860,7 @@
     },
     "battery_maximum_state_of_charge": {
       "friendly_name": "Maximum Battery charge percentage",
-      "Description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "Accepts values between 0 and 1. The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.9,
       "maximum": 1,
@@ -866,7 +868,7 @@
     },
     "battery_target_state_of_charge": {
       "friendly_name": "Battery desired percentage after optimization",
-      "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
+      "Description": "Accepts values between 0 and 1. The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
       "input": "array.float",
       "default_value": 0.6,
       "maximum": 1,
