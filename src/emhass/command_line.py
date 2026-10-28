@@ -3044,6 +3044,12 @@ async def naive_mpc_optim(
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
     soc_target = input_data_dict["params"]["passed_data"].get("soc_target", None)
     soc_target_timestep = input_data_dict["params"]["passed_data"].get("soc_target_timestep", None)
+    battery_availability = input_data_dict["params"]["passed_data"].get(
+        "battery_availability", None
+    )
+    battery_discharge_energy_max = input_data_dict["params"]["passed_data"].get(
+        "battery_discharge_energy_max", None
+    )
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
     capacity_charge_window = input_data_dict["params"]["passed_data"].get(
         "capacity_charge_window", None
@@ -3076,6 +3082,8 @@ async def naive_mpc_optim(
             soc_final,
             soc_target=soc_target,
             soc_target_timestep=soc_target_timestep,
+            battery_availability=battery_availability,
+            battery_discharge_energy_max=battery_discharge_energy_max,
             current_period_peak=current_period_peak,
             capacity_charge_window=capacity_charge_window,
             capacity_charge_consideration=capacity_charge_consideration,
