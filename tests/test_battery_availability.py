@@ -85,12 +85,19 @@ class TestBatteryAvailability(unittest.TestCase):
         self.assertGreater(np.abs(res["P_batt_0"].to_numpy()).max(), 1.0)
 
     def test_partial_availability_scales_power(self):
+        dis_cap = 0.95 * 0.5 * 7000
+        chg_cap = (1 / 0.95) * 0.5 * 11000
+        # Without the mask the schedule goes beyond half power, so the bounds
+        # below can only hold because the ceilings are applied.
+        free = build_optimization(plant_overrides=HOUSE_AND_EV)
+        p_free = run(free, soc_final=[0.5, 0.4])["P_batt_1"].to_numpy()
+        self.assertTrue(p_free.max() > dis_cap + 1.0 or p_free.min() < -chg_cap - 1.0)
         opt = build_optimization(plant_overrides=HOUSE_AND_EV)
         res = run(opt, battery_availability=[1, 0.5], soc_final=[0.5, 0.4])
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         p1 = res["P_batt_1"].to_numpy()
-        self.assertTrue((p1 <= 0.95 * 0.5 * 7000 + 1e-3).all())
-        self.assertTrue((p1 >= -(1 / 0.95) * 0.5 * 11000 - 1e-3).all())
+        self.assertTrue((p1 <= dis_cap + 1e-3).all())
+        self.assertTrue((p1 >= -chg_cap - 1e-3).all())
 
     def test_departure_target_defaults_to_last_connected_step(self):
         """soc_target[1] without a timestep is required at the last connected
@@ -109,6 +116,24 @@ class TestBatteryAvailability(unittest.TestCase):
         self.assertGreaterEqual(soc1[7], 0.8 - 1e-4)
         np.testing.assert_allclose(soc1[8:], soc1[7], atol=1e-6)
         np.testing.assert_allclose(opt.param_soc_target_floor[0].value, 0.0)
+        # the floor sits at the departure step, not at the horizon end
+        floor1 = opt.param_soc_target_floor[1].value
+        self.assertAlmostEqual(floor1[7], 0.8 * 60000)
+        self.assertEqual(int(np.count_nonzero(floor1)), 1)
+
+    def test_departure_target_with_explicit_timestep_list(self):
+        opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+        res = run(
+            opt,
+            soc_init=[0.5, 0.3],
+            soc_final=[0.5, 0.6],
+            soc_target=[None, 0.6],
+            soc_target_timestep=[None, 4],
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertGreaterEqual(res["SOC_opt_1"].to_numpy()[4], 0.6 - 1e-4)
+        self.assertAlmostEqual(opt.param_soc_target_floor[1].value[4], 0.6 * 60000)
+        self.assertEqual(int(np.count_nonzero(opt.param_soc_target_floor[1].value)), 1)
 
     def test_discharge_energy_budget_is_respected(self):
         """Expensive second half makes V2G attractive; the budget caps it."""
@@ -127,6 +152,35 @@ class TestBatteryAvailability(unittest.TestCase):
         self.assertIn(capped.optim_status, VALID_OPTIMAL_STATUSES)
         dis = np.clip(res["P_batt_1"].to_numpy(), 0, None).sum() * 0.5 / 0.95
         self.assertLessEqual(dis, budget + 1e-3)
+        # the cap binds: V2G is worth more than the budget allows
+        self.assertAlmostEqual(dis, budget, delta=1.0)
+
+    def test_high_soc_with_budget_alone_stays_feasible(self):
+        """A fully available battery above soc_max whose discharge budget is
+        too small to come down must not make the LP infeasible."""
+        opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+        run(
+            opt,
+            soc_init=[0.5, 0.95],
+            soc_final=[0.5, 0.9],
+            battery_discharge_energy_max=[None, 1000],
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(opt.param_soc_high_required[1].value, 0.0)
+
+    def test_recovery_stays_required_when_the_window_allows_it(self):
+        """A partly available EV below soc_min that CAN recover while plugged
+        in keeps the minimum SOC enforced."""
+        opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+        res = run(
+            opt,
+            soc_init=[0.5, 0.15],
+            soc_final=[0.5, 0.3],
+            battery_availability=[None, [1] * 6 + [0] * (N - 6)],
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(opt.param_soc_low_required[1].value, 1.0)
+        self.assertGreaterEqual(res["SOC_opt_1"].to_numpy()[5], 0.2 - 1e-4)
 
     def test_absent_ev_below_min_soc_stays_feasible(self):
         """An EV that is not connected at all, with soc_init below soc_min,
@@ -151,10 +205,35 @@ class TestBatteryAvailability(unittest.TestCase):
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         np.testing.assert_allclose(res["P_batt_1"].to_numpy(), 0.0, atol=1e-6)
 
+    def test_car_returns_after_a_masked_run(self):
+        """[1, 0] followed by no availability input restores full ceilings."""
+        opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+        run(opt, battery_availability=[1, 0])
+        run(opt)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        np.testing.assert_allclose(opt.param_batt_charge_ceiling[1].value, 11000)
+        np.testing.assert_allclose(opt.param_batt_discharge_ceiling[1].value, 7000)
+
     def test_wrong_length_raises(self):
         opt = build_optimization(plant_overrides=HOUSE_AND_EV)
         with self.assertRaises(ValueError):
             run(opt, battery_availability=[1, 1, 1])
+
+    def test_invalid_values_raise(self):
+        """A percentage, a negative value, text or a negative budget are
+        rejected instead of silently clipped."""
+        cases = (
+            {"battery_availability": [None, 50]},
+            {"battery_availability": [None, [1] * 6 + [-1] * 6]},
+            {"battery_availability": [None, "plugged"]},
+            {"battery_discharge_energy_max": [None, -5]},
+            {"battery_discharge_energy_max": [None, "lots"]},
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+                with self.assertRaises(ValueError):
+                    run(opt, **kwargs)
 
     def test_single_battery_flat_series(self):
         opt = build_optimization()
@@ -165,7 +244,7 @@ class TestBatteryAvailability(unittest.TestCase):
             p_load,
             N,
             soc_init=0.5,
-            soc_final=0.5,
+            soc_final=0.3,
             def_total_hours=[],
             def_total_timestep=[],
             def_start_timestep=[],
@@ -174,6 +253,8 @@ class TestBatteryAvailability(unittest.TestCase):
         )
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         np.testing.assert_allclose(res["P_batt"].to_numpy()[:6], 0.0, atol=1e-6)
+        # read as a time series, not as "unavailable": it works in the second half
+        self.assertGreater(np.abs(res["P_batt"].to_numpy()[6:]).max(), 1.0)
 
 
 class TestBackwardCompatibility(unittest.TestCase):
@@ -223,6 +304,18 @@ class TestBackwardCompatibility(unittest.TestCase):
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         for k in range(2):
             self.assertTrue(np.all(opt.param_batt_charge_ceiling[k].value > 0))
+
+    def test_dayahead_after_masked_mpc_resets_the_ceilings(self):
+        """Same object (the cached production case): a dayahead run after an
+        MPC run with the car absent must not inherit the zero ceilings."""
+        opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+        run(opt, battery_availability=[1, 0])
+        p_pv, p_load, df_input = scenario()
+        opt.perform_dayahead_forecast_optim(
+            df_input, p_pv, p_load, soc_init=[0.5, 0.5], soc_final=[0.5, 0.5]
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        np.testing.assert_allclose(opt.param_batt_charge_ceiling[1].value, 11000)
 
 
 if __name__ == "__main__":

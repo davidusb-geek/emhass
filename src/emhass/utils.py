@@ -2924,15 +2924,16 @@ async def treat_runtimeparams(
 
             params["passed_data"]["soc_init"] = _passthrough_soc_runtime("soc_init")
             params["passed_data"]["soc_final"] = _passthrough_soc_runtime("soc_final")
-            params["passed_data"]["soc_target"] = (
-                float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
-            )
+            params["passed_data"]["soc_target"] = _passthrough_soc_runtime("soc_target")
             for soc_name in ("soc_init", "soc_final", "soc_target"):
                 reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
+            # A per-battery list (naive-mpc-optim) passes through unchanged so a
+            # runtimeparams blob shared with naive-mpc-optim does not crash here.
+            soc_target_timestep = runtimeparams.get("soc_target_timestep")
             params["passed_data"]["soc_target_timestep"] = (
-                int(runtimeparams["soc_target_timestep"])
-                if "soc_target_timestep" in runtimeparams
-                else None
+                soc_target_timestep
+                if soc_target_timestep is None or isinstance(soc_target_timestep, list)
+                else int(soc_target_timestep)
             )
             # Capacity-tariff peak floor: read it here too so dayahead-optim honours
             # the already-incurred billing-period peak instead of minimising the
