@@ -2026,6 +2026,17 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_final"], 1.0)
         self.assertEqual(plant_conf_out["battery_maximum_state_of_charge"], 1.0)
 
+    async def test_treat_runtimeparams_dayahead_passes_per_battery_soc_target(self):
+        """A runtimeparams blob shared with naive-mpc-optim (per-battery soc_target
+        lists) must not crash dayahead-optim."""
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"soc_target": [None, 0.8], "soc_target_timestep": [None, 5]},
+            "dayahead-optim",
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["soc_target"], [None, 0.8])
+        self.assertEqual(params_out["passed_data"]["soc_target_timestep"], [None, 5])
+
     async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
         """A percentage saved in the plant config fails even when the request adds nothing."""
         params = await TestUtils.get_test_params()

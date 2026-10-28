@@ -470,12 +470,9 @@ class Optimization:
         be (re)created whenever the horizon length changes. Called from __init__
         and when resizing the optimization problem.
 
-        One vector per battery (#610), list of length self.n_batt: the target
-        itself is not yet a per-battery runtime input, so every battery's floor
-        is fed the identical target fraction, applied against ITS OWN capacity
-        in perform_optimization. The per-battery Parameter exists now so a
-        future per-battery target only has to change the value each entry
-        receives, not the model structure.
+        One vector per battery (#610), list of length self.n_batt. A bare
+        soc_target is applied to every battery against ITS OWN capacity; a
+        per-battery list sets (or skips, with None) each battery's floor.
         """
         self.param_soc_target_floor = [
             cp.Parameter(self.num_timesteps, nonneg=True, name=f"soc_target_floor_{k}")
@@ -530,8 +527,10 @@ class Optimization:
         """Normalise the ``battery_availability`` runtime input.
 
         Returns a list of ``self.n_batt`` numpy arrays of length ``n`` with
-        values clipped to ``[0, 1]`` (1 = connected at full power, 0 = not
-        connected, a fraction scales both power limits for that step).
+        values in ``[0, 1]`` (1 = connected at full power, 0 = not connected, a
+        fraction scales both power limits for that step). A value outside
+        ``[0, 1]`` (for instance a percentage) or a non-numeric value raises
+        ValueError; NaN reads as 1.
 
         Accepted shapes: ``None`` (always available), a scalar (broadcast to
         every battery and step), or a list with one entry per battery where
@@ -544,23 +543,34 @@ class Optimization:
         def _series(entry, k):
             if entry is None:
                 return np.ones(n)
-            if isinstance(entry, list | tuple | np.ndarray):
-                arr = np.asarray(entry, dtype=float).ravel()
-                if arr.size == 0:
-                    return np.ones(n)
-                if arr.size != n:
-                    self.logger.warning(
-                        f"battery_availability[{k}] has {arr.size} values for a "
-                        f"{n}-step horizon; padding/truncating to the horizon."
-                    )
-                    if arr.size < n:
-                        arr = np.concatenate([arr, np.full(n - arr.size, arr[-1])])
-                    else:
-                        arr = arr[:n]
-            else:
-                arr = np.full(n, float(entry))
+            try:
+                if isinstance(entry, list | tuple | np.ndarray):
+                    arr = np.asarray(entry, dtype=float).ravel()
+                else:
+                    arr = np.full(n, float(entry))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"battery_availability[{k}] must be a number or a list of "
+                    f"numbers in [0, 1], got {entry!r}"
+                ) from exc
+            if arr.size == 0:
+                return np.ones(n)
             arr = np.nan_to_num(arr, nan=1.0)
-            return np.clip(arr, 0.0, 1.0)
+            if np.any(arr < 0.0) or np.any(arr > 1.0):
+                raise ValueError(
+                    f"battery_availability[{k}] must be a fraction in [0, 1] (NOT "
+                    f"percent), got values in [{arr.min()}, {arr.max()}]"
+                )
+            if arr.size != n:
+                self.logger.warning(
+                    f"battery_availability[{k}] has {arr.size} values for a "
+                    f"{n}-step horizon; padding/truncating to the horizon."
+                )
+                if arr.size < n:
+                    arr = np.concatenate([arr, np.full(n - arr.size, arr[-1])])
+                else:
+                    arr = arr[:n]
+            return arr
 
         if value is None:
             return [np.ones(n) for _ in range(self.n_batt)]
@@ -1504,7 +1514,9 @@ class Optimization:
             ),
         }
 
-    def _normalize_soc_arg(self, value: float | list | None) -> list:
+    def _normalize_soc_arg(
+        self, value: float | list | None, name: str = "soc_init/soc_final"
+    ) -> list:
         """
         Normalise a perform_optimization soc_init/soc_final argument into a
         length self.n_batt list (#610). A bare float (or None) broadcasts to
@@ -1516,10 +1528,10 @@ class Optimization:
         """
         if value is None:
             return [None] * self.n_batt
-        if isinstance(value, list):
+        if isinstance(value, list | tuple):
             if len(value) != self.n_batt:
                 raise ValueError(
-                    f"soc_init/soc_final list must have {self.n_batt} entries "
+                    f"{name} list must have {self.n_batt} entries "
                     f"(number_of_batteries), got {len(value)}"
                 )
             return list(value)
@@ -7143,9 +7155,8 @@ class Optimization:
         caps the energy each battery may deliver over the horizon (Wh, battery
         side; ``None`` = no cap). ``soc_target``/``soc_target_timestep`` accept a
         per-battery list too; a battery with a target but no timestep gets it at
-        its last connected timestep (the departure), and when its availability
-        ends inside the horizon and no ``soc_final`` was passed for it, its
-        ``soc_final`` defaults to that target.
+        its last connected timestep (the departure); pass that battery's
+        ``soc_final`` equal to the target, since its SOC is frozen afterwards.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Dynamic Resizing
@@ -7245,7 +7256,9 @@ class Optimization:
         avail_list = None
         if self.optim_conf["set_use_battery"]:
             avail_list = self._normalize_battery_availability(battery_availability, n_steps)
-            energy_max_list = self._normalize_soc_arg(battery_discharge_energy_max)
+            energy_max_list = self._normalize_soc_arg(
+                battery_discharge_energy_max, "battery_discharge_energy_max"
+            )
             for k in range(self.n_batt):
                 chg_k = float(batt_conf["charge_power_max"][k])
                 dis_k = float(batt_conf["discharge_power_max"][k])
@@ -7254,14 +7267,19 @@ class Optimization:
                 unreachable = dis_k * self.time_step * n_steps + 1.0
                 if energy_max_list[k] is None:
                     self.param_batt_discharge_energy_max[k].value = unreachable
-                else:
-                    self.param_batt_discharge_energy_max[k].value = min(
-                        max(float(energy_max_list[k]), 0.0), unreachable
+                    continue
+                try:
+                    budget_k = float(energy_max_list[k])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"battery_discharge_energy_max[{k}] must be a number (Wh) or "
+                        f"null, got {energy_max_list[k]!r}"
+                    ) from exc
+                if not budget_k >= 0.0:
+                    raise ValueError(
+                        f"battery_discharge_energy_max[{k}] must be >= 0 Wh, got {budget_k}"
                     )
-            # soc_final defaults to the SOC target for a battery whose
-            # availability ends inside the horizon: after departure its SOC is
-            # frozen, so the end-of-horizon SOC IS the departure SOC.
-            soc_final_explicit = [v is not None for v in self._normalize_soc_arg(soc_final)]
+                self.param_batt_discharge_energy_max[k].value = min(budget_k, unreachable)
 
         # Optional intermediate SOC target (issue #553).
         # Reset the floor on EVERY call so a target from a previous run is
@@ -7277,8 +7295,8 @@ class Optimization:
         for k in range(self.n_batt):
             self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
         if self.optim_conf["set_use_battery"] and soc_target is not None:
-            target_list = self._normalize_soc_arg(soc_target)
-            timestep_list = self._normalize_soc_arg(soc_target_timestep)
+            target_list = self._normalize_soc_arg(soc_target, "soc_target")
+            timestep_list = self._normalize_soc_arg(soc_target_timestep, "soc_target_timestep")
             for k in range(self.n_batt):
                 if target_list[k] is None:
                     continue
@@ -7324,8 +7342,15 @@ class Optimization:
                 floor = np.zeros(self.num_timesteps)
                 floor[k_target] = soc_target_clamped * cap_k
                 self.param_soc_target_floor[k].value = floor
-                if not soc_final_explicit[k] and avail_k[-1] == 0:
-                    soc_final_list[k] = soc_target_clamped
+                # After departure the SOC is frozen, so the end-of-horizon SOC
+                # IS the departure SOC: a lower soc_final only adds a constant
+                # terminal penalty and hides the intent. Point the caller at it.
+                if avail_k[-1] == 0 and soc_final_list[k] < soc_target_clamped - 1e-6:
+                    self.logger.warning(
+                        f"Battery {k}: soc_final={soc_final_list[k]} is below the departure "
+                        f"soc_target={soc_target_clamped}; pass soc_final equal to the "
+                        "target for a battery that leaves inside the horizon."
+                    )
                 self.logger.debug(
                     f"Battery {k}: intermediate SOC target enabled: SoC >= "
                     f"{soc_target_clamped} by timestep {k_target} (requested "
@@ -7550,9 +7575,13 @@ class Optimization:
                 self.param_soc_low_required[k].value = 1.0 if low_gap_wh > 0 else 0.0
                 self.param_soc_high_required[k].value = 1.0 if high_gap_wh > 0 else 0.0
                 # A partly available battery (EV) can only recover into its SOC
-                # band while connected. When the gap exceeds what its window
-                # allows, leave it outside the band instead of going infeasible.
-                if avail_list is not None and np.any(avail_list[k] < 1):
+                # band while connected, and a discharge budget caps how far it
+                # can come down. When the gap exceeds what the window or the
+                # budget allows, leave it outside the band instead of going
+                # infeasible.
+                if avail_list is not None and (
+                    np.any(avail_list[k] < 1) or energy_max_list[k] is not None
+                ):
                     chg_reach = float(np.sum(self.param_batt_charge_ceiling[k].value))
                     dis_reach = float(np.sum(self.param_batt_discharge_ceiling[k].value))
                     dis_reach = min(
@@ -7567,6 +7596,11 @@ class Optimization:
                         )
                         self.param_soc_low_required[k].value = 0.0
                     if high_gap_wh > dis_reach + 1e-6:
+                        self.logger.warning(
+                            f"Battery {k}: soc_init={soc_init_list[k]} is above soc_max and "
+                            "cannot recover inside its availability window or discharge "
+                            "budget; the maximum SOC is not enforced for it in this run."
+                        )
                         self.param_soc_high_required[k].value = 0.0
 
         # Update Window Mask Parameters for Deferrable Loads
@@ -8707,8 +8741,8 @@ class Optimization:
         prediction_horizon: int,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
-        soc_target: float | None = None,
-        soc_target_timestep: int | None = None,
+        soc_target: float | list | None = None,
+        soc_target_timestep: int | list | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
         capacity_charge_consideration: list | None = None,
@@ -8753,13 +8787,15 @@ class Optimization:
         :param soc_target: An optional intermediate minimum battery SOC (fraction in [0, 1]) that \
             must be reached by ``soc_target_timestep``, after which the battery is free to \
             discharge again. When ``None`` (the default) no intermediate target is imposed and \
-            behaviour is unchanged. See issue #553.
-        :type soc_target: float
+            behaviour is unchanged. See issue #553. A list gives one target per battery \
+            (``None`` = no target for that battery).
+        :type soc_target: float | list
         :param soc_target_timestep: The 0-based horizon timestep by which ``soc_target`` must be \
             met. The index refers to the SoC *after* that timestep's flow. Defaults to the last \
             timestep when ``soc_target`` is given but this is ``None``. Ignored when \
-            ``soc_target`` is ``None``.
-        :type soc_target_timestep: int
+            ``soc_target`` is ``None``. Per battery as a list; a ``None`` entry puts \
+            that battery's target at its last available timestep.
+        :type soc_target_timestep: int | list
         :param current_period_peak: Optional peak grid import (in Watts) already \
             incurred during the current billing period. When the capacity charge \
             (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
@@ -8848,6 +8884,13 @@ class Optimization:
         :type def_start_timestep: list
         :param def_end_timestep: The timestep before which each deferrable load should operate.
         :type def_end_timestep: list
+        :param battery_availability: Optional per-battery availability, a fraction in \
+            [0, 1] per timestep that scales the battery's power limits (0 = not \
+            connected, SOC frozen). See ``_normalize_battery_availability``.
+        :type battery_availability: float | list, optional
+        :param battery_discharge_energy_max: Optional per-battery cap (Wh, battery \
+            side) on the energy the battery may deliver over the horizon.
+        :type battery_discharge_energy_max: float | list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
