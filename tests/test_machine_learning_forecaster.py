@@ -155,6 +155,24 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(df_pred, pd.Series)
 
+    async def test_predict_without_window_honours_explicit_steps(self):
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
+        default = await mlf.predict()
+        self.assertEqual(len(default), mlf.num_lags)
+        steps = mlf.num_lags + 5
+        self.assertLessEqual(steps, len(mlf.data_test))
+        explicit = await mlf.predict(steps=steps)
+        self.assertEqual(len(explicit), steps)
+        shorter = await mlf.predict(steps=3)
+        self.assertEqual(len(shorter), 3)
+        # The shared first steps agree with the default horizon.
+        pd.testing.assert_series_equal(explicit.iloc[: len(default)], default)
+        with self.assertRaises(ValueError):
+            await mlf.predict(steps=0)
+        with self.assertRaises(ValueError):
+            await mlf.predict(steps=len(mlf.data_test) + 1)
+
     async def test_mlforecaster_tune(self):
         mlf = self._get_standard_mlf()
         await self._fit_standard_mlf(mlf)
