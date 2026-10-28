@@ -273,6 +273,36 @@ rest_command:
 The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
 ```
 
+### Batteries that are not always connected: EV / V2G availability windows (naive-mpc-optim)
+
+With `number_of_batteries > 1` one of the batteries can be an electric vehicle on a bidirectional (V2G / V2H) charger. Such a battery is only part of the system while the car is plugged in, it must reach a charge level by the time the driver leaves, and the car itself usually limits how much and how deep it may be discharged. Three optional runtime keys (only used by `naive-mpc-optim`) model this without changing `number_of_batteries` between runs, so the problem structure, the optimization cache and the published per-battery sensors stay the same whether the car is there or not:
+
+- `battery_availability`: one entry per battery. Each entry is `null` (always available, the default), a number, or a list with one value per timestep. A value is a fraction in `[0, 1]` that scales that battery's `battery_charge_power_max` and `battery_discharge_power_max` for that timestep: `1` = connected at full power, `0` = not connected. While a battery is unavailable it neither charges nor discharges, so its SOC stays frozen. A list shorter than the horizon is padded with its last value. With a single battery a flat list is read as its time series.
+- `battery_discharge_energy_max`: one entry per battery, the maximum energy (Wh, battery side) the battery may deliver over the horizon, or `null` for no cap. Use it for a V2G warranty or cycle budget (for example a car whose manufacturer allows a fixed number of discharged kWh over its lifetime).
+- `soc_target` / `soc_target_timestep` (see the previous section) also accept one entry per battery. A battery with a target but no timestep (`null`) gets the target at its **last available timestep**, i.e. the departure. Because the SOC is frozen after departure, also pass `soc_final` for that battery equal to the target, so the end-of-horizon SOC agrees with it.
+
+A minimum SOC below which the car refuses to discharge is the per-battery `battery_minimum_state_of_charge`; a lower discharge power accepted by the car is the per-battery `battery_discharge_power_max`. If a battery starts below its minimum SOC and cannot recover into its band inside its availability window (for instance a car that is not plugged in at all), the minimum is not enforced for it in that run instead of making the problem infeasible.
+
+Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged in for the next 72 quarter-hours, must leave at 84 %, may discharge at most 11 kW and at most 10 kWh, and never below 20 %:
+
+```json
+{
+  "number_of_batteries": 2,
+  "battery_nominal_energy_capacity": [36160, 75000],
+  "battery_charge_power_max": [17600, 25000],
+  "battery_discharge_power_max": [19200, 11000],
+  "battery_minimum_state_of_charge": [0.1, 0.2],
+  "battery_maximum_state_of_charge": [1.0, 0.9],
+  "soc_init": [0.78, 0.71],
+  "soc_final": [0.5, 0.84],
+  "battery_availability": [null, [1, 1, 1, "... 72 ones, then zeros ..."]],
+  "soc_target": [null, 0.84],
+  "battery_discharge_energy_max": [null, 10000]
+}
+```
+
+When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
+
 ### Capping the demand charge at the peak already incurred (naive-mpc-optim and dayahead-optim)
 
 EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)). With `capacity_charge_interval_timesteps = 1` (default), it prices the highest eligible positive-import timestep; with `N > 1`, it prices the highest eligible completed tariff-interval average described below.
