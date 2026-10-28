@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import pickle
+from unittest import mock
 
 import pandas as pd
 import pytest
@@ -151,6 +152,21 @@ def test_missing_history_skips_only_its_own_window():
     idd = _perfect_input("Europe/Berlin", 30, first_day, drop=[missing])
     res = idd["opt"].perform_perfect_forecast_optim(_with_prices(idd, 30), idd["days_list"])
     assert list(res.index.tz_convert("UTC")) == list(perfect_window_instants(first_day, 1, 30))
+
+
+def test_irregular_window_with_the_right_row_count_is_skipped():
+    """One step missing and another duplicated keep the row count right but not the spacing: that
+    window (the fall-back day) is skipped with a warning, the window before it is still solved."""
+    first_day = pd.Timestamp("2026-10-24", tz="UTC")
+    idd = _perfect_input("Europe/Berlin", 30, first_day)
+    df = _with_prices(idd, 30)
+    missing, duplicated = pd.Timestamp("2026-10-25T00:30Z"), pd.Timestamp("2026-10-25T01:00Z")
+    df = pd.concat([df.drop(missing), df.loc[[duplicated]]])
+    with mock.patch.object(idd["opt"].logger, "warning") as warning:
+        res = idd["opt"].perform_perfect_forecast_optim(df, idd["days_list"])
+
+    assert list(res.index.tz_convert("UTC")) == list(perfect_window_instants(first_day, 1, 30))
+    assert sum("Skipping day" in call.args[0] for call in warning.call_args_list) == 1
 
 
 def test_history_on_a_local_midnight_grid_is_still_solved():

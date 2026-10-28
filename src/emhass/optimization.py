@@ -8383,7 +8383,7 @@ class Optimization:
         # local calendar day, so a DST change inside it is just 23 or 25 local hours. A window is
         # selected by UTC instant and needs no rounding (rounding an aware local timestamp raises
         # in a repeated hour), so any history grid works, UTC or local-midnight anchored; a window
-        # that does not hold all its steps is skipped.
+        # that does not hold all its steps, exactly one freq apart, is skipped.
         self.days_list_tz = days_list[:-1].tz_convert(self.time_zone)  # Without today
         self.opt_res = pd.DataFrame()
 
@@ -8407,9 +8407,10 @@ class Optimization:
                 (df_input_data.index >= day_start)
                 & (df_input_data.index < day_start + self.time_delta)
             ].sort_index()
-            if len(data_tp) != int(self.time_delta / self.freq):
+            steps = data_tp.index.to_series().diff().iloc[1:]
+            if len(data_tp) != int(self.time_delta / self.freq) or (steps != self.freq).any():
                 self.logger.warning(
-                    f"Skipping day {day} as some timestamps are missing in the data."
+                    f"Skipping day {day} as its timestamps are missing, duplicated or irregular."
                 )
                 continue  # Skip this day and move to the next iteration
 
