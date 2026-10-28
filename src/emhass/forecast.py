@@ -237,6 +237,10 @@ class Forecast:
     WEATHER_COVARIATE_COMFORT_TEMP_C = 18.0
     # Names accepted in ``mlforecaster_weather_features`` (friendly weather names + derived).
     SUPPORTED_WEATHER_COVARIATES = tuple(OPEN_METEO_COVARIATE_VARS.values()) + DERIVED_COVARIATES
+    # Furthest the Open-Meteo forecast API reaches back (``past_days`` is accepted up to 93).
+    # Older training history comes from its Historical Forecast API, which archives the same
+    # forecast models, so the model is trained on the same kind of data it is later fed.
+    OPEN_METEO_MAX_PAST_DAYS = 93
 
     def __init__(
         self,
@@ -1250,6 +1254,87 @@ class Forecast:
                     self.logger.warning("Returning old cached covariate data as a fallback")
         return data
 
+    async def _fetch_open_meteo_historical_covariates_json(
+        self, start_date: str, end_date: str
+    ) -> dict | None:
+        """Fetch (and cache) Open-Meteo Historical Forecast ``minutely_15`` covariates for a span.
+
+        Serves the part of a training window older than the forecast API reaches. Archived
+        forecasts do not change, so the cache is reused at any age while it covers the requested
+        dates for the configured site. A dry run only reads the cache. A failed fetch returns None
+        rather than a cache that does not cover the span.
+
+        :param start_date: First local date to return, as ``YYYY-MM-DD``.
+        :param end_date: Last local date to return, as ``YYYY-MM-DD``.
+        """
+        cache_path = os.path.abspath(
+            self.emhass_conf["data_path"] / "cached-open-meteo-historical-covariates.json"
+        )
+        span_start = pd.Timestamp(start_date, tz=self.time_zone).timestamp()
+        span_end = (pd.Timestamp(end_date, tz=self.time_zone) + pd.Timedelta(days=1)).timestamp()
+        data = None
+        if os.path.exists(cache_path):
+            try:
+                async with aiofiles.open(cache_path) as json_file:
+                    data = orjson.loads(await json_file.read())
+            except (orjson.JSONDecodeError, OSError):
+                self.logger.warning("Open-Meteo historical covariate cache is unreadable")
+                data = None
+            times = ((data or {}).get("minutely_15") or {}).get("time")
+            # Open-Meteo bounds the span with the UTC offset in force at its start, so across a
+            # DST change it can end an hour early. Only the end is given slack: the forecast-API
+            # rows overlap the last day.
+            if data is not None and not (
+                times
+                and times[0] <= span_start
+                and times[-1] >= span_end - 86400
+                and self._covariate_cache_matches_location(data, self.lat, self.lon)
+            ):
+                data = None
+        if data is not None:
+            return data
+        if self.dry_run:
+            self.logger.warning(dry_run_no_saved_forecast, "Open-Meteo historical covariate")
+            return None
+        self.logger.info(
+            "Fetching Open-Meteo historical weather covariates (%s to %s)", start_date, end_date
+        )
+        headers = {"User-Agent": "EMHASS", "Accept": header_accept}
+        url = (
+            "https://historical-forecast-api.open-meteo.com/v1/forecast?"
+            + "latitude="
+            + str(round(self.lat, 2))
+            + "&longitude="
+            + str(round(self.lon, 2))
+            + "&minutely_15="
+            + ",".join(self.OPEN_METEO_COVARIATE_VARS.keys())
+            + "&start_date="
+            + start_date
+            + "&end_date="
+            + end_date
+            + "&timezone="
+            + quote(str(self.time_zone), safe="")
+            + "&timeformat=unixtime"
+        )
+        timeout = aiohttp.ClientTimeout(total=open_meteo_request_timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+        except (TimeoutError, aiohttp.ClientError, ValueError):
+            self.logger.error(
+                "Failed to fetch historical weather covariates from Open-Meteo", exc_info=True
+            )
+            return None
+        try:
+            await replace_file(cache_path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+        except OSError:
+            self.logger.warning(
+                "Could not save the Open-Meteo historical covariate cache", exc_info=True
+            )
+        return data
+
     async def get_weather_covariates(
         self, index: pd.DatetimeIndex, weather_features: list[str]
     ) -> pd.DataFrame:
@@ -1275,21 +1360,46 @@ class Forecast:
                 f"Unsupported mlforecaster_weather_features {unsupported}. Supported values are: "
                 f"{list(self.SUPPORTED_WEATHER_COVARIATES)}"
             )
-        # Size the fetch window from the requested index, clamped to Open-Meteo's 92-day past limit.
+        # Size the fetch window from the requested index. The forecast API covers the recent past
+        # and the future; history older than it reaches comes from the Historical Forecast API.
         now = pd.Timestamp.now(tz=self.time_zone)
         span_past_days = max(0, (now.normalize() - index.min()).days + 1)
-        past_days = int(min(92, span_past_days))
+        past_days = int(min(self.OPEN_METEO_MAX_PAST_DAYS, span_past_days))
         forecast_days = max(1, (index.max().normalize() - now.normalize()).days + 1)
         data_raw = await self._fetch_open_meteo_covariates_json(past_days, forecast_days)
         if not data_raw or "minutely_15" not in data_raw:
             raise ValueError("Open-Meteo returned no minutely_15 weather covariate data")
-        weather = pd.DataFrame.from_dict(data_raw["minutely_15"])
-        weather["time"] = pd.to_datetime(weather["time"], unit="s", utc=True).dt.tz_convert(
-            self.time_zone
+        # Open-Meteo returns null where it has no data: the forecast API does so for the oldest
+        # weeks of a long past_days window. Null rows are dropped so they never shadow real ones.
+        frames = [
+            pd.DataFrame.from_dict(data_raw["minutely_15"]).set_index("time").dropna(how="all")
+        ]
+        # Request history up to the day the forecast-API values actually start, so the two join
+        # without a gap whatever span the (possibly cached) forecast response covers.
+        first = (
+            now
+            if frames[0].empty
+            else pd.Timestamp(frames[0].index.min(), unit="s", tz="UTC").tz_convert(self.time_zone)
         )
-        weather = weather.set_index("time").rename(columns=self.OPEN_METEO_COVARIATE_VARS)
+        if index.min() < first:
+            start_date = index.min().tz_convert(self.time_zone).strftime("%Y-%m-%d")
+            end_date = first.strftime("%Y-%m-%d")
+            historical = await self._fetch_open_meteo_historical_covariates_json(
+                start_date, end_date
+            )
+            if historical and "minutely_15" in historical:
+                # Listed after the forecast-API rows, so those win where the two overlap.
+                frames.append(
+                    pd.DataFrame.from_dict(historical["minutely_15"])
+                    .set_index("time")
+                    .dropna(how="all")
+                )
+        weather = pd.concat(frames)
+        weather.index = pd.to_datetime(weather.index, unit="s", utc=True).tz_convert(self.time_zone)
+        weather = weather.rename(columns=self.OPEN_METEO_COVARIATE_VARS)
         # Drop any duplicate timestamps (e.g. DST edges) and sort, so the reindex below is safe.
         weather = weather[~weather.index.duplicated(keep="first")].sort_index()
+        observed = weather.index
         # Derived thermal-demand covariates (computed even if temp itself was not requested).
         if "temp_air" in weather.columns:
             comfort = self.WEATHER_COVARIATE_COMFORT_TEMP_C
@@ -1303,6 +1413,27 @@ class Forecast:
         aligned = weather.reindex(combined_index)
         aligned = aligned.interpolate(method="linear", axis=0, limit_direction="both")
         aligned = aligned.reindex(index).ffill().bfill()
+        # Rows more than an hour from any real value (outside the retrieved span, or in a gap or
+        # null stretch of it) are interpolated or repeat the nearest value: a model fitted on them
+        # learns from made-up weather, so report how many there are.
+        if len(observed):
+            local = index.tz_convert(self.time_zone)
+            pos = observed.searchsorted(local)
+            before = observed[np.clip(pos - 1, 0, len(observed) - 1)]
+            after = observed[np.clip(pos, 0, len(observed) - 1)]
+            distance = np.minimum(
+                np.abs((local - before).to_numpy()), np.abs((after - local).to_numpy())
+            )
+            uncovered = int((distance > np.timedelta64(1, "h")).sum())
+        else:
+            uncovered = len(index)
+        if uncovered:
+            self.logger.warning(
+                "%s of %s weather covariate rows are more than an hour from any Open-Meteo value "
+                "and are interpolated or repeat the nearest one",
+                uncovered,
+                len(index),
+            )
         return aligned[list(weather_features)]
 
     def cloud_cover_to_irradiance(
