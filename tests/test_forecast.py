@@ -174,6 +174,18 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             "params": params_json,
         }
 
+    def _assert_index_starts_at_forecast_start(self, fcst, df):
+        """The forecast grid starts at ``start_forecast`` and strictly increases.
+
+        The first step is ``start_forecast`` itself, so ``start_forecast < ts``
+        does not hold for every row. Checking the first row and the ordering
+        rejects an empty or shifted index.
+        """
+        self.assertGreater(len(df), 0)
+        self.assertEqual(df.index[0], fcst.start_forecast)
+        self.assertTrue(df.index.is_monotonic_increasing)
+        self.assertTrue(df.index.is_unique)
+
     # Test weather forecast dataframe output based on saved csv file
     @fixture_clock()
     async def test_get_weather_forecast_csv(self):
@@ -186,7 +198,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.df_weather_csv.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
         self.assertEqual(self.df_weather_csv.index.tz, self.fcst.time_zone)
-        self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_csv.index)
+        self._assert_index_starts_at_forecast_start(self.fcst, self.df_weather_csv)
         self.assertEqual(
             len(self.df_weather_csv),
             int(
@@ -377,7 +389,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
-            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_openmeteo.index)
+            self._assert_index_starts_at_forecast_start(self.fcst, df_weather_openmeteo)
             self.assertEqual(
                 len(df_weather_openmeteo),
                 int(
@@ -1481,7 +1493,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+            self._assert_index_starts_at_forecast_start(self.fcst, df_weather_scrap)
             self.assertEqual(
                 len(df_weather_scrap),
                 int(
@@ -1532,7 +1544,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+            self._assert_index_starts_at_forecast_start(self.fcst, df_weather_scrap)
             self.assertEqual(
                 len(df_weather_scrap),
                 int(
@@ -2073,9 +2085,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     pd.core.dtypes.dtypes.DatetimeTZDtype,
                 )
                 self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
-                self.assertTrue(
-                    self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index
-                )
+                self._assert_index_starts_at_forecast_start(self.fcst, df_weather_solarforecast)
                 self.assertEqual(
                     len(df_weather_solarforecast),
                     int(
@@ -2295,7 +2305,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(p_pv_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(p_pv_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(p_pv_forecast.index.tz, fcst.time_zone)
-        self.assertTrue(fcst.start_forecast < ts for ts in p_pv_forecast.index)
+        self._assert_index_starts_at_forecast_start(fcst, p_pv_forecast)
         self.assertEqual(p_pv_forecast.values[0][0], 1)
         self.assertEqual(p_pv_forecast.values[-1][0], 48)
         # Get load forecast with list, check dataframe output
@@ -2589,7 +2599,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(p_pv_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(p_pv_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(p_pv_forecast.index.tz, fcst.time_zone)
-        self.assertTrue(fcst.start_forecast < ts for ts in p_pv_forecast.index)
+        self._assert_index_starts_at_forecast_start(fcst, p_pv_forecast)
         self.assertEqual(len(p_pv_forecast), expected_last)
         self.assertEqual(p_pv_forecast.values[0][0], 1)
         self.assertEqual(p_pv_forecast.values[-1][0], expected_last)
