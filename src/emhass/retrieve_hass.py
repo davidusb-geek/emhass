@@ -66,6 +66,10 @@ VM_MAX_POINTS_PER_REQUEST = 10000
 # the label and a name regex means EMHASS does not need to know the unit of every sensor.
 VM_DEFAULT_METRIC_REGEX = ".+_value"
 
+# A PromQL label name. Unlike a label value it cannot be quoted, so
+# ``victoriametrics_entity_label`` is checked against this before it enters a selector.
+VM_LABEL_NAME_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
 
 class RetrieveHass:
     r"""
@@ -201,6 +205,17 @@ class RetrieveHass:
             self.victoriametrics_metric_regex = (
                 vm_conf.get("victoriametrics_metric_regex", "") or VM_DEFAULT_METRIC_REGEX
             )
+            self.victoriametrics_entity_label = (
+                vm_conf.get("victoriametrics_entity_label", "") or ""
+            ).strip()
+            if self.victoriametrics_entity_label and not VM_LABEL_NAME_PATTERN.fullmatch(
+                self.victoriametrics_entity_label
+            ):
+                self.logger.error(
+                    f"Invalid victoriametrics_entity_label '{self.victoriametrics_entity_label}', "
+                    "matching on the entity_id and domain labels instead"
+                )
+                self.victoriametrics_entity_label = ""
             self.victoriametrics_use_ssl = vm_conf.get("victoriametrics_use_ssl", False)
             self.victoriametrics_verify_ssl = vm_conf.get("victoriametrics_verify_ssl", False)
             if self.use_influxdb:
@@ -1227,18 +1242,29 @@ class RetrieveHass:
         with its ``entity_id`` (object id) and ``domain`` labels. ``victoriametrics_database``
         adds a ``db`` label filter when set (VictoriaMetrics attaches it from the ``?db=``
         write parameter unless started with ``-influxSkipDatabaseLabel``).
+
+        When ``victoriametrics_entity_label`` is set, the full entity id (domain included)
+        is matched against that one label instead. That is the layout of series scraped
+        from the Home Assistant Prometheus integration, e.g.
+        ``homeassistant_sensor_power_w{entity="sensor.power_load", domain="sensor"}``.
         """
 
         def _quote(value: str) -> str:
             return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-        domain, _, entity_id = sensor.rpartition(".")
-        matchers = [
-            f"entity_id={_quote(entity_id)}",
-            f"__name__=~{_quote(self.victoriametrics_metric_regex)}",
-        ]
-        if domain:
-            matchers.append(f"domain={_quote(domain)}")
+        if self.victoriametrics_entity_label:
+            matchers = [
+                f"{self.victoriametrics_entity_label}={_quote(sensor)}",
+                f"__name__=~{_quote(self.victoriametrics_metric_regex)}",
+            ]
+        else:
+            domain, _, entity_id = sensor.rpartition(".")
+            matchers = [
+                f"entity_id={_quote(entity_id)}",
+                f"__name__=~{_quote(self.victoriametrics_metric_regex)}",
+            ]
+            if domain:
+                matchers.append(f"domain={_quote(domain)}")
         if self.victoriametrics_database:
             matchers.append(f"db={_quote(self.victoriametrics_database)}")
         return "{" + ",".join(matchers) + "}"
