@@ -225,6 +225,15 @@ def test_runtime_table_broadcasts_per_battery():
 CHARGE_MAX = 5000
 CAP = 10000
 SOLVER_DERATING = [[0.5, 0.4], [0.9, 0.2]]
+# Flat prices tie every ordering of the same energy, so which plan the solver
+# returns is arbitrary and differs between CVXPY/HiGHS versions and seeds.
+# Strictly rising prices make "charge as early as the limits allow" the unique
+# optimum, so the ceilings (not tie-breaking) decide the plan.
+RISING_PRICES = [0.01, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+# The model keeps a step's starting SOC a recovery_margin (1e-6 of the capacity
+# here) clear of a threshold and MIP integrality tolerance blurs it further, so
+# a plan may sit this close to a threshold and be classed on either side.
+SOC_TOL = 1e-4
 
 
 def build_optimization(plant_overrides=None) -> Optimization:
@@ -317,12 +326,15 @@ def _scenario():
     return df_input, p_pv, p_load
 
 
-def _solve(with_derating: bool):
-    overrides = {DERATING_PARAM: SOLVER_DERATING} if with_derating else {}
+def _solve(table=None, soc_init=0.1, soc_final=1.0, prices=None):
+    """Solve the day-ahead plan; ``table`` is the derating value, None leaves it unset."""
+    overrides = {} if table is None else {DERATING_PARAM: table}
     opt = build_optimization(plant_overrides=overrides)
     df_input, p_pv, p_load = _scenario()
+    if prices is not None:
+        df_input["unit_load_cost"] = prices
     opt_res = opt.perform_dayahead_forecast_optim(
-        df_input, p_pv, p_load, soc_init=0.1, soc_final=1.0
+        df_input, p_pv, p_load, soc_init=soc_init, soc_final=soc_final
     )
     assert opt.optim_status in VALID_OPTIMAL_STATUSES
     return opt_res
@@ -335,92 +347,85 @@ def _soc_at_step_start(opt_res, soc_init):
 
 
 def test_charge_power_respects_the_limit_for_the_soc_it_starts_at():
-    """Check every scheduled charge; band coverage is enforced separately."""
-    opt_res = _solve(with_derating=True)
+    """Every scheduled charge stays under the ceiling of the SOC its step starts at.
+
+    Flat prices leave the plan to the solver, so this checks whichever optimal
+    plan comes back. That the ceilings actually bind is what
+    test_each_soc_band_ceiling_binds is for.
+    """
+    opt_res = _solve(SOLVER_DERATING)
     soc_start = _soc_at_step_start(opt_res, 0.1)
     charge = -opt_res["P_batt"].to_numpy()  # charging is negative in P_batt
     tol = 1.0  # W
 
+    assert (charge > tol).any(), "the plan never charges, so it proves nothing"
     for soc, power in zip(soc_start, charge, strict=True):
         if power <= tol:
             continue  # not charging in this step
-        if soc >= 0.9:
+        if soc >= 0.9 + SOC_TOL:
             assert power <= 0.2 * CHARGE_MAX + tol
-        elif soc >= 0.5:
+        elif soc >= 0.5 + SOC_TOL:
             assert power <= 0.4 * CHARGE_MAX + tol
         else:
             assert power <= CHARGE_MAX + tol
 
 
 @pytest.mark.parametrize(
-    "soc_init,soc_final,expected_fraction",
+    "soc_init,soc_final,fractions",
     [
-        (0.10, 0.40, 1.0),  # below first threshold: full charge power
-        (0.60, 0.80, 0.4),  # 50% band: 40% power
-        (0.92, 0.98, 0.2),  # 90% band: 20% power
-        (0.85, 0.97, 0.4),  # first step crosses 90%; next step uses 20%
+        (0.10, 0.40, [1.0]),  # below the first threshold: full charge power
+        (0.51, 0.80, [0.4]),  # just above the 50% threshold
+        (0.60, 0.80, [0.4]),  # inside the 50% band
+        (0.92, 0.98, [0.2]),  # above the highest threshold
+        (0.85, 0.97, [0.4]),  # starts below 90% and ends above it: still the 50% band
+        (0.49, 0.85, [1.0, 0.4]),  # starts just below 50%: full power, then the 50% band
     ],
 )
-def test_each_soc_band_ceiling_binds(soc_init, soc_final, expected_fraction):
-    """A uniquely cheapest first step makes the SOC-dependent ceiling bind.
+def test_each_soc_band_ceiling_binds(soc_init, soc_final, fractions):
+    """Rising prices make the leading steps charge as hard as the model allows.
 
-    Flat prices admit equally optimal charging schedules; asserting that the
-    solver happens to charge above 90% in such a schedule is not a regression
-    test. Here the cheapest first interval makes charging up to the relevant
-    ceiling preferable to postponing it. Compare with derating disabled so
-    that a missing or weakened ceiling is detected.
+    The cheapest interval is worth filling to the limit (the energy is used or
+    avoided at a dearer price later), so the charge in each leading step equals
+    its SOC band's ceiling. Without the derating table the same step charges
+    harder, which makes the comparison fail if the ceiling is missing or relaxed.
     """
-    df_input, p_pv, p_load = _scenario()
-    df_input["unit_load_cost"] = [0.01, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+    tapered = _solve(SOLVER_DERATING, soc_init, soc_final, RISING_PRICES)
+    flat = _solve(None, soc_init, soc_final, RISING_PRICES)
 
-    def solve(derating):
-        overrides = {DERATING_PARAM: SOLVER_DERATING} if derating else {}
-        opt = build_optimization(plant_overrides=overrides)
-        result = opt.perform_dayahead_forecast_optim(
-            df_input, p_pv, p_load, soc_init=soc_init, soc_final=soc_final
-        )
-        assert opt.optim_status in VALID_OPTIMAL_STATUSES
-        return result
-
-    tapered = solve(derating=True)
-    flat = solve(derating=False)
-    first_charge = -tapered["P_batt"].iloc[0]
-    flat_first_charge = -flat["P_batt"].iloc[0]
-    ceiling = expected_fraction * CHARGE_MAX
-
-    # Non-vacuous: the first interval actively charges at the expected ceiling.
-    assert first_charge == pytest.approx(ceiling, abs=1.0)
-    if expected_fraction == 1.0:
-        assert flat_first_charge == pytest.approx(CHARGE_MAX, abs=1.0)
-    else:
-        assert flat_first_charge > ceiling + 1.0
-
-    # Charging across a threshold is limited by SOC at STEP START, not end.
-    if soc_init == 0.85:
-        assert tapered["SOC_opt"].iloc[0] > 0.9
-        second_charge = -tapered["P_batt"].iloc[1]
-        assert 1.0 < second_charge <= 0.2 * CHARGE_MAX + 1.0
-
-
+    for step, fraction in enumerate(fractions):
+        ceiling = fraction * CHARGE_MAX
+        assert -tapered["P_batt"].iloc[step] == pytest.approx(ceiling, abs=1.0)
+        if fraction == 1.0:
+            assert -flat["P_batt"].iloc[step] == pytest.approx(ceiling, abs=1.0)
+        else:
+            assert -flat["P_batt"].iloc[step] > ceiling + 1.0, "ceiling never bites here"
 
 
 def test_derating_spreads_the_fill_over_more_timesteps():
-    flat = _solve(with_derating=False)
-    tapered = _solve(with_derating=True)
-    flat_steps = int((-flat["P_batt"] > 1.0).sum())
-    tapered_steps = int((-tapered["P_batt"] > 1.0).sum())
-    assert tapered_steps > flat_steps
+    """Under rising prices both plans fill as early as they can, so the derated
+    one reaches full later and pays more. (Under flat prices the number of
+    charging steps is a tie the solver may break either way.)"""
+    flat = _solve(prices=RISING_PRICES)
+    tapered = _solve(SOLVER_DERATING, prices=RISING_PRICES)
+
+    def steps_to_full(opt_res):
+        full = opt_res["SOC_opt"].to_numpy() >= 1.0 - SOC_TOL
+        assert full.any(), "the battery never fills"
+        return int(np.argmax(full))
+
+    assert steps_to_full(tapered) > steps_to_full(flat)
     assert -tapered["P_batt"].min() <= -flat["P_batt"].min() + 1.0
+    # cost_profit is negative for money spent: removing options can only cost more.
+    assert tapered["cost_profit"].sum() < flat["cost_profit"].sum() - 1e-3
 
 
 def test_empty_table_leaves_the_plan_untouched():
     """The feature is inert unless the table is configured."""
-    without_key = _solve(with_derating=False)
-    opt = build_optimization(plant_overrides={DERATING_PARAM: []})
-    df_input, p_pv, p_load = _scenario()
-    empty_table = opt.perform_dayahead_forecast_optim(
-        df_input, p_pv, p_load, soc_init=0.1, soc_final=1.0
-    )
+    without_key = _solve(prices=RISING_PRICES)
+    empty_table = _solve([], prices=RISING_PRICES)
     np.testing.assert_allclose(
         empty_table["P_batt"].to_numpy(), without_key["P_batt"].to_numpy(), atol=1e-6
     )
+    # Control: a real table moves this plan, so the equality above can fail.
+    derated = _solve(SOLVER_DERATING, prices=RISING_PRICES)
+    assert not np.allclose(derated["P_batt"].to_numpy(), without_key["P_batt"].to_numpy(), atol=1.0)
