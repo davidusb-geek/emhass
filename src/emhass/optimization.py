@@ -8589,9 +8589,12 @@ class Optimization:
 
         """
         self.logger.info("Perform optimization for perfect forecast scenario")
-        self.days_list_tz = days_list.tz_convert(self.time_zone).round(self.freq)[
-            :-1
-        ]  # Converted to tz and without the current day (today)
+        # Each window is ``time_delta`` of elapsed time from a UTC midnight of days_list, not a
+        # local calendar day, so a DST change inside it is just 23 or 25 local hours. A window is
+        # selected by UTC instant and needs no rounding (rounding an aware local timestamp raises
+        # in a repeated hour), so any history grid works, UTC or local-midnight anchored; a window
+        # that does not hold all its steps, exactly one freq apart, is skipped.
+        self.days_list_tz = days_list[:-1].tz_convert(self.time_zone)  # Without today
         self.opt_res = pd.DataFrame()
 
         # List to collect results for faster one-time concatenation
@@ -8609,32 +8612,18 @@ class Optimization:
             self.logger.info(
                 "Solving for day: " + str(day.day) + "-" + str(day.month) + "-" + str(day.year)
             )
-            # Prepare data
-            if day.tzinfo is None:
-                day = day.replace(tzinfo=self.time_zone)  # Assign timezone if naive
-            else:
-                day = day.astimezone(self.time_zone)
-            day_start = day
-            day_end = day + self.time_delta - self.freq
-            if day_start.tzinfo != day_end.tzinfo:
+            day_start = day.tz_convert("UTC")
+            data_tp = df_input_data.loc[
+                (df_input_data.index >= day_start)
+                & (df_input_data.index < day_start + self.time_delta)
+            ].sort_index()
+            steps = data_tp.index.to_series().diff().iloc[1:]
+            if len(data_tp) != int(self.time_delta / self.freq) or (steps != self.freq).any():
                 self.logger.warning(
-                    f"Skipping day {day} as days have different timezone, probably because of DST."
-                )
-                continue  # Skip this day and move to the next iteration
-            else:
-                day_start = day_start.astimezone(self.time_zone).isoformat()
-                day_end = day_end.astimezone(self.time_zone).isoformat()
-                # Generate the date range for the current day
-                day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
-            # Check if all timestamps in the range exist in the DataFrame index
-            if not day_range.isin(df_input_data.index).all():
-                self.logger.warning(
-                    f"Skipping day {day} as some timestamps are missing in the data."
+                    f"Skipping day {day} as its timestamps are missing, duplicated or irregular."
                 )
                 continue  # Skip this day and move to the next iteration
 
-            # If all timestamps exist, proceed with the data preparation
-            data_tp = df_input_data.copy().loc[day_range]
             p_pv = data_tp[self.var_pv].values
             p_load = data_tp[self.var_load_new].values
             unit_load_cost = data_tp[self.var_load_cost].values  # currency/kWh
