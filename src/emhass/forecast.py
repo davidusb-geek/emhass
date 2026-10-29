@@ -881,6 +881,12 @@ class Forecast:
                         else:
                             total_data = total_data + data_tmp
                         break
+                    except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:
+                        self.logger.error(
+                            "Solcast returned a non-retryable response (HTTP %s)",
+                            getattr(exc, "status", "?"),
+                        )
+                        return False
                     except forecast_transport_errors:
                         self.logger.error(
                             "Failed to fetch weather forecast from Solcast (attempt %s/%s)",
@@ -889,7 +895,7 @@ class Forecast:
                             exc_info=True,
                         )
                         if attempt >= solcast_max_attempts:
-                            raise
+                            return False
                         # The first attempt for every roof was reserved up front.
                         # A retry is another provider call and must fit under the cap.
                         # The failed attempt still propagates: a timeout is not a
@@ -899,7 +905,7 @@ class Forecast:
                                 "Solcast daily API call limit reached (safety cap). "
                                 "Skipping retry to preserve quota."
                             )
-                            raise
+                            return False
                         backoff = solcast_backoff_seconds[
                             min(attempt - 1, len(solcast_backoff_seconds) - 1)
                         ]
@@ -961,6 +967,7 @@ class Forecast:
                 for attempt in range(1, forecast_solar_max_attempts + 1):
                     try:
                         async with session.get(url, headers=headers) as response:
+                            response.raise_for_status()
                             data_raw = await response.json()
                             data_dict = {
                                 "ts": list(data_raw["result"]["watts"].keys()),
@@ -984,6 +991,12 @@ class Forecast:
                             data_tmp = data_tmp.fillna(0.0)
                         array_data = data_tmp
                         break
+                    except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:
+                        self.logger.error(
+                            "forecast.solar returned a non-retryable response (HTTP %s)",
+                            getattr(exc, "status", "?"),
+                        )
+                        return False
                     except forecast_transport_errors:
                         self.logger.error(
                             "Failed to fetch solar weather forecast (attempt %s/%s)",
@@ -992,7 +1005,7 @@ class Forecast:
                             exc_info=True,
                         )
                         if attempt >= forecast_solar_max_attempts:
-                            raise
+                            return False
                         backoff = forecast_solar_backoff_seconds[
                             min(attempt - 1, len(forecast_solar_backoff_seconds) - 1)
                         ]
