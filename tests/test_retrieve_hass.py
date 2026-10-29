@@ -1079,10 +1079,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
-    def _vm_query_side_effect(entity_data, calls=None, keep_metric_name=True):
+    def _vm_query_side_effect(
+        entity_data, calls=None, keep_metric_name=True, entity_label="entity_id"
+    ):
         """Build a ``_vm_query_range`` side_effect emulating VictoriaMetrics.
 
-        :param entity_data: mapping of entity_id label -> list of series, each a tuple
+        :param entity_data: mapping of entity label value -> list of series, each a tuple
             ``(metric_name, [(bucket_start_iso, value), ...])``. Timestamps are given as
             the START of the bucket (the label EMHASS must produce); the fake server
             returns them the way VictoriaMetrics does, at the END of the
@@ -1091,12 +1093,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         :param calls: optional list collecting ``(query, start, end, step)`` per call.
         :param keep_metric_name: emulate MetricsQL (``__name__`` kept through
             ``avg_over_time``, the default) or a plain PromQL backend that drops it.
+        :param entity_label: label the selector locates the entity with (``entity_id``
+            for InfluxDB-integration data, ``entity`` for Prometheus-integration data).
         """
 
         async def query_side_effect(session, query, start_s, end_s, step_s):
             if calls is not None:
                 calls.append((query, start_s, end_s, step_s))
-            entity_id = query.split('entity_id="')[1].split('"')[0]
+            entity_id = query.split(f'{{{entity_label}="')[1].split('"')[0]
             result = []
             for metric_name, points in entity_data.get(entity_id, []):
                 values = []
@@ -1105,7 +1109,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                     if start_s <= ts <= end_s:
                         values.append([ts, str(value)])
                 if values:
-                    metric = {"entity_id": entity_id, "domain": "sensor"}
+                    metric = {entity_label: entity_id, "domain": "sensor"}
                     if keep_metric_name:
                         metric["__name__"] = metric_name
                     result.append({"metric": metric, "values": values})
@@ -1125,6 +1129,28 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rh._vm_selector("power_a"), '{entity_id="power_a",__name__=~"W_value"}')
         # Quotes and backslashes in a value cannot break out of the matcher
         self.assertIn('entity_id="a\\"b\\\\c"', rh._vm_selector('sensor.a"b\\c'))
+
+    def test_vm_selector_entity_label(self):
+        """With an entity label the full entity id is matched on that label alone."""
+        rh = self._make_vm_rh(
+            victoriametrics_database="",
+            victoriametrics_metric_regex="homeassistant_sensor_.+",
+            victoriametrics_entity_label=" entity ",
+        )
+        self.assertEqual(
+            rh._vm_selector("sensor.power_a"),
+            '{entity="sensor.power_a",__name__=~"homeassistant_sensor_.+"}',
+        )
+        self.assertIn('entity="sensor.a\\"b\\\\c"', rh._vm_selector('sensor.a"b\\c'))
+        # The database filter still applies when configured
+        rh = self._make_vm_rh(victoriametrics_entity_label="entity")
+        self.assertTrue(rh._vm_selector("sensor.power_a").endswith(',db="homeassistant"}'))
+        # A label name cannot be quoted, so an invalid one is refused with an error and
+        # the entity_id/domain matching is used instead
+        with self.assertLogs(logger, level="ERROR") as logs:
+            rh = self._make_vm_rh(victoriametrics_entity_label='entity="x"} or vector(1) #')
+        self.assertIn("Invalid victoriametrics_entity_label", logs.output[0])
+        self.assertTrue(rh._vm_selector("sensor.power_a").startswith('{entity_id="power_a",'))
 
     def test_vm_connection_settings(self):
         """Host/port/ssl/auth settings map onto the HTTP client arguments."""
@@ -1188,6 +1214,47 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(end_s, int(pd.Timestamp("2023-04-02T00:00:00Z").timestamp()))
         self.assertTrue(query.startswith("avg_over_time({entity_id="))
         self.assertTrue(query.endswith("}[1800s])"))
+
+    async def test_get_data_victoriametrics_entity_label(self):
+        """Prometheus-integration series are read through the entity label, and series
+        split by a label change (same metric name) are joined into one history."""
+        rh = self._make_vm_rh(
+            victoriametrics_database="",
+            victoriametrics_metric_regex="homeassistant_sensor_.+",
+            victoriametrics_entity_label="entity",
+        )
+        calls = []
+        side_effect = self._vm_query_side_effect(
+            {
+                "sensor.power_photovoltaics": [
+                    (
+                        "homeassistant_sensor_power_w",
+                        [("2023-04-01T10:00:00Z", 1500.0), ("2023-04-01T10:30:00Z", 1800.0)],
+                    )
+                ],
+                "sensor.power_load_no_var_loads": [
+                    ("homeassistant_sensor_power_w", [("2023-04-01T10:00:00Z", 500.0)]),
+                    ("homeassistant_sensor_power_w", [("2023-04-01T10:30:00Z", 450.0)]),
+                ],
+            },
+            calls,
+            entity_label="entity",
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.power_photovoltaics", "sensor.power_load_no_var_loads"]
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(await rh.get_data(days_list, var_list))
+        df = rh.df_final
+        self.assertEqual(list(df.columns), var_list)
+        self.assertEqual(len(df), 28)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[0]], 1500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[1]], 500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][var_list[1]], 450.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 23:30:00+00:00"][var_list[1]], 450.0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(
+            calls[0][0].startswith('avg_over_time({entity="sensor.power_photovoltaics",')
+        )
 
     async def test_get_data_victoriametrics_fill_previous(self):
         """Empty buckets are forward-filled like InfluxDB FILL(previous)."""
