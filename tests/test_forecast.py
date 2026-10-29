@@ -2155,8 +2155,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         finally:
             forecast_module.forecast_solar_backoff_seconds = original_backoff
 
-    async def test_solar_forecast_transport_error_all_attempts_raise(self):
-        """A forecast.solar outage raises after the retries and does not write the cache."""
+    async def test_solar_forecast_transport_error_all_attempts_returns_false(self):
+        """A forecast.solar outage returns False after retries and does not write the cache."""
         self._solar_forecast_plants(1)
         self.fcst.params["passed_data"]["weather_forecast_cache"] = True
         url_pattern = re.compile(r"https://api\.forecast\.solar/estimate/.*")
@@ -2168,9 +2168,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 with aioresponses() as mocked:
                     for _ in range(forecast_module.forecast_solar_max_attempts):
                         mocked.get(url_pattern, exception=TimeoutError())
-                    with self.assertRaises(TimeoutError):
-                        await self.fcst._get_weather_solar_forecast(cache_path)
+                    res = await self.fcst._get_weather_solar_forecast(cache_path)
                     total_calls = sum(len(v) for v in mocked.requests.values())
+                self.assertFalse(res)
                 self.assertEqual(total_calls, forecast_module.forecast_solar_max_attempts)
                 self.assertFalse(
                     os.path.exists(cache_path),
@@ -3429,11 +3429,15 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_solcast_transport_error_retries_then_succeeds(self):
         """A connection error is retried, and each retry reserves one more provider call."""
         self._solcast_retry_setup()
+        # Use a period_end within the fixture's forecast grid (pinned at 2025-03-22 12:00 UTC)
+        # so the successful response contributes a nonzero forecast value.
+        mid = self.fcst.forecast_dates[len(self.fcst.forecast_dates) // 2]
+        period_end = (mid + self.fcst.freq).astimezone("UTC").isoformat()
         payload = {
             "forecasts": [
                 {
-                    "period_end": "2026-08-22T10:00:00.0000000Z",
-                    "period": "PT30M",
+                    "period_end": period_end,
+                    "period": f"PT{int(self.fcst.freq.total_seconds() / 60)}M",
                     "pv_estimate": 0.5,
                 }
             ]
@@ -3450,6 +3454,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 total_calls = sum(len(v) for v in mocked.requests.values())
             self.assertIsInstance(res, pd.DataFrame)
             self.assertIn("yhat", res.columns)
+            self.assertGreater(
+                res.loc[mid, "yhat"], 0, "successful response must contribute nonzero yhat"
+            )
             self.assertEqual(total_calls, forecast_module.solcast_max_attempts)
             # One reservation up front, plus one per retry before the success.
             self.assertEqual(self._read_solcast_counter(), forecast_module.solcast_max_attempts)
@@ -3468,16 +3475,16 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             with aioresponses() as mocked:
                 mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
                 mocked.get(url_pattern, payload={"forecasts": []})
-                with self.assertRaises(aiohttp.ClientConnectionError):
-                    await self.fcst.get_weather_forecast(method="solcast")
+                res = await self.fcst.get_weather_forecast(method="solcast")
                 total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertFalse(res)
             self.assertEqual(total_calls, 1)
             self.assertEqual(self._read_solcast_counter(), 8)
         finally:
             forecast_module.solcast_backoff_seconds = original_backoff
 
-    async def test_solcast_transport_error_all_attempts_raise(self):
-        """Every transport attempt failing raises rather than returning an empty forecast."""
+    async def test_solcast_transport_error_all_attempts_returns_false(self):
+        """Every transport attempt failing returns False so callers follow the failure path."""
         self._solcast_retry_setup()
         url_pattern = re.compile(r"https://api\.solcast\.com\.au/.*")
         original_backoff = forecast_module.solcast_backoff_seconds
@@ -3486,9 +3493,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             with aioresponses() as mocked:
                 for _ in range(forecast_module.solcast_max_attempts):
                     mocked.get(url_pattern, exception=TimeoutError())
-                with self.assertRaises(TimeoutError):
-                    await self.fcst.get_weather_forecast(method="solcast")
+                res = await self.fcst.get_weather_forecast(method="solcast")
                 total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertFalse(res)
             self.assertEqual(total_calls, forecast_module.solcast_max_attempts)
             self.assertEqual(self._read_solcast_counter(), forecast_module.solcast_max_attempts)
         finally:
