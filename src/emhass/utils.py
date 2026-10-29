@@ -2840,6 +2840,15 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
             )
+            # Per-battery availability window (EV / V2G) and discharge energy
+            # budget. Runtime-only, default None (always available, no budget);
+            # shape validation happens in Optimization.perform_optimization.
+            params["passed_data"]["battery_availability"] = runtimeparams.get(
+                "battery_availability", None
+            )
+            params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
+                "battery_discharge_energy_max", None
+            )
             # Peak grid import already incurred this billing period (issue #623,
             # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
             # Coercion/validation happens in Optimization.perform_optimization.
@@ -2915,15 +2924,16 @@ async def treat_runtimeparams(
 
             params["passed_data"]["soc_init"] = _passthrough_soc_runtime("soc_init")
             params["passed_data"]["soc_final"] = _passthrough_soc_runtime("soc_final")
-            params["passed_data"]["soc_target"] = (
-                float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
-            )
+            params["passed_data"]["soc_target"] = _passthrough_soc_runtime("soc_target")
             for soc_name in ("soc_init", "soc_final", "soc_target"):
                 reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
+            # A per-battery list (naive-mpc-optim) passes through unchanged so a
+            # runtimeparams blob shared with naive-mpc-optim does not crash here.
+            soc_target_timestep = runtimeparams.get("soc_target_timestep")
             params["passed_data"]["soc_target_timestep"] = (
-                int(runtimeparams["soc_target_timestep"])
-                if "soc_target_timestep" in runtimeparams
-                else None
+                soc_target_timestep
+                if soc_target_timestep is None or isinstance(soc_target_timestep, list)
+                else int(soc_target_timestep)
             )
             # Capacity-tariff peak floor: read it here too so dayahead-optim honours
             # the already-incurred billing-period peak instead of minimising the
@@ -4881,6 +4891,8 @@ async def build_params(
         "soc_final": None,
         "soc_target": None,
         "soc_target_timestep": None,
+        "battery_availability": None,
+        "battery_discharge_energy_max": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
         "capacity_charge_consideration": None,
