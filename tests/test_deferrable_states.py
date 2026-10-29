@@ -9,6 +9,7 @@ attribute. They do not require any optional extra.
 
 import pathlib
 import unittest
+from unittest.mock import AsyncMock, MagicMock
 
 import pandas as pd
 
@@ -75,6 +76,47 @@ class TestDeferrableStateInterpretation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schedule[0]["value"], "on")
         self.assertEqual(schedule[-1]["value"], "off")
         self.assertIn("date", schedule[0])
+
+    async def test_publish_states_with_sequence_load(self):
+        """A sequence load (list nominal power) is labelled against its peak power."""
+        from emhass.command_line import PublishContext, _publish_deferrable_states
+
+        rh = MagicMock()
+        rh.post_data = AsyncMock(return_value=(None, None))
+        custom_state = [
+            {
+                "entity_id": f"sensor.p_deferrable{k}_state",
+                "device_class": "enum",
+                "unit_of_measurement": "",
+                "friendly_name": f"Deferrable Load {k} Command",
+            }
+            for k in range(2)
+        ]
+        ctx = PublishContext(
+            input_data_dict={
+                "rh": rh,
+                "optim_conf": {
+                    "publish_deferrable_load_states": True,
+                    "number_of_deferrable_loads": 2,
+                    "nominal_power_of_deferrable_loads": [[2000.0, 2000.0, 600.0], 1500.0],
+                },
+            },
+            params={"passed_data": {"custom_deferrable_state_id": custom_state}},
+            idx=0,
+            common_kwargs={},
+            logger=logger,
+        )
+        index = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+        opt_res = pd.DataFrame(
+            {"P_deferrable0": [0.0, 2000.0, 600.0], "P_deferrable1": [1500.0, 0.0, 0.0]},
+            index=index,
+        )
+        await _publish_deferrable_states(ctx, opt_res)
+        self.assertEqual(rh.post_data.await_count, 2)
+        states0 = rh.post_data.await_args_list[0].args[0]
+        states1 = rh.post_data.await_args_list[1].args[0]
+        self.assertEqual(states0.tolist(), ["off", "on", "variable"])
+        self.assertEqual(states1.tolist(), ["on", "off", "off"])
 
 
 if __name__ == "__main__":
