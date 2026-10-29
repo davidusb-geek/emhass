@@ -385,38 +385,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz=time_zone)
         return df_input_data, days_list
 
-    def _run_perfect_forecast_capturing_prob_ids(self, df_input_data, days_list):
-        """Run a perfect-forecast optimization, recording id(opt.prob) once per day."""
+    def _run_perfect_forecast_capturing_probs(self, df_input_data, days_list):
+        """Run a perfect-forecast optimization, keeping the opt.prob solved each day.
+
+        The objects themselves, not their id(): a freed problem's address can be reused by
+        the next one, which would make a rebuilt problem look like the same one."""
         opt = self.create_optimization(
             var_load_cost="unit_load_cost", var_prod_price="unit_prod_price"
         )
-        prob_ids = []
+        probs = []
         orig = type(opt).perform_optimization
 
         def _capture(self, *args, **kwargs):
             result = orig(self, *args, **kwargs)
-            prob_ids.append(id(self.prob))
+            probs.append(self.prob)
             return result
 
         opt.perform_optimization = _capture.__get__(opt, type(opt))
         res = opt.perform_perfect_forecast_optim(df_input_data, days_list)
-        return res, prob_ids
+        return res, probs
 
     def test_perfect_forecast_rebuilds_problem_per_day_with_shared_tank(self):
         """A shared tank bakes its physics (COP, losses, temperatures) in as constants
         when the problem is first built, so re-using the problem across the days of a
         perfect-forecast run silently re-solves day 2 against day 1's weather (#970)."""
         df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=True)
-        res, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+        res, probs = self._run_perfect_forecast_capturing_probs(df_input_data, days_list)
 
-        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
+        self.assertEqual(len(probs), 2, "Expected exactly two solved days")
         day1 = res.loc["2024-01-01"]
         day2 = res.loc["2024-01-02"]
         self.assertIn(day1["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
         self.assertIn(day2["optim_status"].iloc[0], VALID_OPTIMAL_STATUSES)
-        self.assertNotEqual(
-            prob_ids[0],
-            prob_ids[1],
+        self.assertIsNot(
+            probs[0],
+            probs[1],
             "The problem must be rebuilt for day 2 so the shared tank sees day 2's weather",
         )
         p_def_day1 = day1["P_deferrable0"].to_numpy()
@@ -431,12 +434,12 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """Without shared thermal tanks the warm-start problem re-use must survive:
         the per-day rebuild guard is only for shared tanks."""
         df_input_data, days_list = self._perfect_forecast_two_day_scenario(shared_tank=False)
-        _, prob_ids = self._run_perfect_forecast_capturing_prob_ids(df_input_data, days_list)
+        _, probs = self._run_perfect_forecast_capturing_probs(df_input_data, days_list)
 
-        self.assertEqual(len(prob_ids), 2, "Expected exactly two solved days")
-        self.assertEqual(
-            prob_ids[0],
-            prob_ids[1],
+        self.assertEqual(len(probs), 2, "Expected exactly two solved days")
+        self.assertIs(
+            probs[0],
+            probs[1],
             "An ordinary deferrable load must keep re-using the built problem",
         )
 
@@ -15274,8 +15277,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             peaks.append(float(np.max(res.tank_trajectory[:-1])))
             return res
 
-        def recording_accept(status, value):
-            accepted.append(accept(status, value))
+        def recording_accept(status, value, *args, **kwargs):
+            accepted.append(accept(status, value, *args, **kwargs))
             return accepted[-1]
 
         with (
