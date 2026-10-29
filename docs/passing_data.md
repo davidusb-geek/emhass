@@ -303,6 +303,26 @@ Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged i
 
 When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
 
+### Deferrable loads that are not always available (naive-mpc-optim)
+
+A deferrable load can have steps in which it must not run, or may run only at reduced power: a heat pump switched to manual mode or outside its operating range, a boiler whose fuel is not released, a charger that is shared with something else. The optional runtime key `def_availability` (only used by `naive-mpc-optim`) has the same shape and validation as `battery_availability` above:
+
+- One entry per deferrable load, in the order of `nominal_power_of_deferrable_loads` (for a `heat_topology`, the order of its source-to-storage flows, i.e. the index of `P_deferrable<k>`). Each entry is `null` (always available, the default), a number, or a list with one value per timestep. With a single deferrable load a flat list is read as its time series.
+- A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected) that scales the load's nominal power for that timestep: `1` = full power, `0` = the load must not run. A list shorter than the horizon is padded with its last value.
+- `0` is a hard limit: it wins over everything that would otherwise force the load on (`def_current_state` with a single-constant load, the rest of a minimum on-time, `def_current_power`). Such a forced run ends at the first step the load cannot run.
+- A semi-continuous load runs at its ON level or not at all, so for it any value below `1` blocks the step. A fraction is a power ceiling for a continuous load (and for a load with a minimum power, as long as the ceiling stays above that minimum).
+- The operating requirement (`operating_hours_of_each_deferrable_load` / `operating_timesteps_of_each_deferrable_load`) must still fit into the available steps, as it must fit into a window set with `start_timesteps_of_each_deferrable_load` / `end_timesteps_of_each_deferrable_load`.
+
+The mask is a parameter of the optimization problem, so changing it between runs does not rebuild the problem.
+
+Example: two deferrable loads; the second must not run for the first 4 timesteps and only at half power for the next 2:
+
+```json
+{
+  "def_availability": [null, [0, 0, 0, 0, 0.5, 0.5, 1]]
+}
+```
+
 ### Capping the demand charge at the peak already incurred (naive-mpc-optim and dayahead-optim)
 
 EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)). With `capacity_charge_interval_timesteps = 1` (default), it prices the highest eligible positive-import timestep; with `N > 1`, it prices the highest eligible completed tariff-interval average described below.
