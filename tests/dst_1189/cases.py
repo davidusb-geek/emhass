@@ -198,3 +198,10 @@ def forecast_grid_points(now_utc: pd.Timestamp, zone: str, step: int, mode: str,
         pts.append(t)
         t += s
     return pts
+
+
+def perfect_window_instants(first_day: pd.Timestamp, windows: int, step: int) -> pd.DatetimeIndex:
+    """perfect-optim: ``windows`` consecutive windows of 24 elapsed hours, the first starting at
+    the UTC midnight ``first_day``. A window that contains a DST change still has 24 hours of
+    steps (23 or 25 local hours), so the instants are plain UTC arithmetic."""
+    return pd.date_range(first_day, periods=windows * 1440 // step, freq=f"{step}min", tz="UTC")
