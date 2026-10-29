@@ -650,14 +650,14 @@
             "default": 1.0,
             "title": "Hybrid inverter efficency DC to AC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (unit: fraction)"
           },
           "inverter_efficiency_ac_dc": {
             "type": "number",
             "default": 1.0,
             "title": "Hybrid inverter efficency AC to DC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100) (unit: fraction)"
           },
           "inverter_power_curve_dc_ac": {
             "type": "array",
@@ -1113,7 +1113,7 @@
             "default": 0.9,
             "title": "Maximum percentage of battery discharge per hour",
             "x-unit": "fraction",
-            "description": "The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration. (unit: fraction)"
+            "description": "Accepts values between 0 and 1. The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration. (unit: fraction)"
           },
           "battery_dynamic_min": {
             "type": "number",
@@ -1192,7 +1192,7 @@
             },
             "title": "Battery charge efficiency",
             "x-unit": "fraction",
-            "description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
+            "description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, Accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_nominal_energy_capacity": {
             "type": "array",
@@ -1202,7 +1202,7 @@
             },
             "title": "Battery total capacity",
             "x-unit": "Wh",
-            "description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: Wh)"
+            "description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: Wh)"
           },
           "battery_minimum_state_of_charge": {
             "type": "array",
@@ -1213,7 +1213,7 @@
             },
             "title": "Minimum Battery charge percentage",
             "x-unit": "fraction",
-            "description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
+            "description": "Accepts values between 0 and 1. The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_maximum_state_of_charge": {
             "type": "array",
@@ -1224,7 +1224,7 @@
             },
             "title": "Maximum Battery charge percentage",
             "x-unit": "fraction",
-            "description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
+            "description": "Accepts values between 0 and 1. The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_target_state_of_charge": {
             "type": "array",
@@ -1235,7 +1235,7 @@
             },
             "title": "Battery desired percentage after optimization",
             "x-unit": "fraction",
-            "description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain. (unit: fraction)"
+            "description": "Accepts values between 0 and 1. The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain. (unit: fraction)"
           },
           "battery_stress_cost": {
             "type": "array",
