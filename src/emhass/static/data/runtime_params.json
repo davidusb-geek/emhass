@@ -35,6 +35,20 @@
       "default_value": null,
       "unit": "timesteps"
     },
+    "battery_availability": {
+      "friendly_name": "Battery availability (EV / V2G)",
+      "Description": "Optional, one entry per battery: null (always available), a number, or a list with one value per timestep. Each value is a fraction in [0,1] (NOT percent) that scales the battery's charge and discharge power limits; 0 = not connected, its SOC is then frozen. A soc_target without timestep applies at the battery's last available timestep (the departure). Defaults to always available, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "fraction"
+    },
+    "battery_discharge_energy_max": {
+      "friendly_name": "Battery discharge energy budget (EV / V2G)",
+      "Description": "Optional, one entry per battery: the maximum energy (Wh, battery side) the battery may deliver over the horizon, or null for no cap, e.g. a V2G warranty budget. Applies to one run: pass the budget that is still left on every call. Must be >= 0. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "Wh"
+    },
     "current_period_peak": {
       "friendly_name": "Current billing-period peak grid import",
       "Description": "Optional peak grid import already incurred during the current billing period, in Watts, used to floor the demand/capacity charge so the optimisation does not chase a new peak below one already locked in this period. Only the import above this value is worth shaving. Only effective when capacity_cost_per_kw > 0; ignored otherwise. Defaults to no floor (None -> 0.0) so behaviour is unchanged when omitted. A negative, non-finite (NaN/inf) or non-numeric value is ignored with a warning. Used by naive-mpc-optim and dayahead-optim. With capacity_charge_interval_timesteps=1 use the highest eligible positive-import timestep; with N>1 current_period_peak must be expressed in the same measurement basis as the epigraph - the highest eligible already-completed tariff measurement-interval average. The currently open interval is represented by capacity_charge_current_interval_history (naive-mpc-optim only), not current_period_peak. When capacity_cost_per_kw is a list of K rates (issue #540 Part B) this must be a list of exactly K entries (one incumbent per component, independently validated) rather than a single value; a non-list or wrong-length value is ignored for every component with one warning, never partially applied. See issue #623 and passing_data.md.",

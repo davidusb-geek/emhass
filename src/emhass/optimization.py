@@ -366,6 +366,10 @@ class Optimization:
         # Optional intermediate SOC target parameters (issue #553)
         self._init_soc_target_params()
 
+        # Per-battery availability windows and discharge energy budget
+        # (EV / V2G battery that is not always connected)
+        self._init_battery_availability_params()
+
         # Generic multi-component capacity/demand charges (issue #540 Part B).
         # A LIST ``capacity_cost_per_kw`` (len >= 2, after canonicalisation)
         # selects K independent capacity/demand components priced in ONE
@@ -466,12 +470,9 @@ class Optimization:
         be (re)created whenever the horizon length changes. Called from __init__
         and when resizing the optimization problem.
 
-        One vector per battery (#610), list of length self.n_batt: the target
-        itself is not yet a per-battery runtime input, so every battery's floor
-        is fed the identical target fraction, applied against ITS OWN capacity
-        in perform_optimization. The per-battery Parameter exists now so a
-        future per-battery target only has to change the value each entry
-        receives, not the model structure.
+        One vector per battery (#610), list of length self.n_batt. A bare
+        soc_target is applied to every battery against ITS OWN capacity; a
+        per-battery list sets (or skips, with None) each battery's floor.
         """
         self.param_soc_target_floor = [
             cp.Parameter(self.num_timesteps, nonneg=True, name=f"soc_target_floor_{k}")
@@ -479,6 +480,112 @@ class Optimization:
         ]
         for k in range(self.n_batt):
             self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
+
+    def _init_battery_availability_params(self) -> None:
+        """Initialize CVXPY parameters for per-battery availability windows.
+
+        A battery that is not always connected (an EV on a bidirectional
+        charger, V2G/V2H) is modelled as battery k with a per-timestep power
+        ceiling. ``param_batt_charge_ceiling[k]`` and
+        ``param_batt_discharge_ceiling[k]`` are horizon vectors in W, with the
+        same battery-side convention as battery_charge/discharge_power_max.
+        ``param_batt_discharge_energy_max[k]`` caps the energy battery k may
+        deliver over the horizon (Wh, battery side), e.g. a V2G warranty or
+        cycle budget.
+
+        The ``availability * power_max`` product is formed numerically at
+        set-time (as for ``param_soc_target_floor``), so the problem stays DPP /
+        warm-start safe. The defaults are the plain power limits and a budget
+        the battery cannot reach, which makes all three constraints redundant:
+        behaviour is unchanged unless a runtime value is passed. They are
+        vector params, so they are re-created on every horizon resize.
+        """
+        charge_list = self._batt_list(self.plant_conf, "battery_charge_power_max", default=0)
+        discharge_list = self._batt_list(self.plant_conf, "battery_discharge_power_max", default=0)
+        self.param_batt_charge_ceiling = [
+            cp.Parameter(self.num_timesteps, nonneg=True, name=f"batt_charge_ceiling_{k}")
+            for k in range(self.n_batt)
+        ]
+        self.param_batt_discharge_ceiling = [
+            cp.Parameter(self.num_timesteps, nonneg=True, name=f"batt_discharge_ceiling_{k}")
+            for k in range(self.n_batt)
+        ]
+        self.param_batt_discharge_energy_max = [
+            cp.Parameter(nonneg=True, name=f"batt_discharge_energy_max_{k}")
+            for k in range(self.n_batt)
+        ]
+        for k in range(self.n_batt):
+            chg = float(charge_list[k] or 0)
+            dis = float(discharge_list[k] or 0)
+            self.param_batt_charge_ceiling[k].value = np.full(self.num_timesteps, chg)
+            self.param_batt_discharge_ceiling[k].value = np.full(self.num_timesteps, dis)
+            self.param_batt_discharge_energy_max[k].value = (
+                dis * self.time_step * self.num_timesteps + 1.0
+            )
+
+    def _normalize_battery_availability(self, value, n: int) -> list:
+        """Normalise the ``battery_availability`` runtime input.
+
+        Returns a list of ``self.n_batt`` numpy arrays of length ``n`` with
+        values in ``[0, 1]`` (1 = connected at full power, 0 = not connected, a
+        fraction scales both power limits for that step). A value outside
+        ``[0, 1]`` (for instance a percentage) or a non-numeric value raises
+        ValueError; NaN reads as 1.
+
+        Accepted shapes: ``None`` (always available), a scalar (broadcast to
+        every battery and step), or a list with one entry per battery where
+        each entry is ``None``, a scalar or a per-timestep list. At
+        ``number_of_batteries == 1`` a flat list of numbers is read as the
+        time series of battery 0. A time series shorter than the horizon is
+        padded with its last value, a longer one is truncated.
+        """
+
+        def _series(entry, k):
+            if entry is None:
+                return np.ones(n)
+            try:
+                if isinstance(entry, list | tuple | np.ndarray):
+                    arr = np.asarray(entry, dtype=float).ravel()
+                else:
+                    arr = np.full(n, float(entry))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"battery_availability[{k}] must be a number or a list of "
+                    f"numbers in [0, 1], got {entry!r}"
+                ) from exc
+            if arr.size == 0:
+                return np.ones(n)
+            arr = np.nan_to_num(arr, nan=1.0)
+            if np.any(arr < 0.0) or np.any(arr > 1.0):
+                raise ValueError(
+                    f"battery_availability[{k}] must be a fraction in [0, 1] (NOT "
+                    f"percent), got values in [{arr.min()}, {arr.max()}]"
+                )
+            if arr.size != n:
+                self.logger.warning(
+                    f"battery_availability[{k}] has {arr.size} values for a "
+                    f"{n}-step horizon; padding/truncating to the horizon."
+                )
+                if arr.size < n:
+                    arr = np.concatenate([arr, np.full(n - arr.size, arr[-1])])
+                else:
+                    arr = arr[:n]
+            return arr
+
+        if value is None:
+            return [np.ones(n) for _ in range(self.n_batt)]
+        if not isinstance(value, list | tuple | np.ndarray):
+            return [_series(value, k) for k in range(self.n_batt)]
+        value = list(value)
+        nested = any(isinstance(v, list | tuple | np.ndarray) or v is None for v in value)
+        if self.n_batt == 1 and not nested and len(value) != 1:
+            return [_series(value, 0)]
+        if len(value) != self.n_batt:
+            raise ValueError(
+                f"battery_availability must have {self.n_batt} entries "
+                f"(number_of_batteries), got {len(value)}"
+            )
+        return [_series(value[k], k) for k in range(self.n_batt)]
 
     def _init_current_period_peak_param(self) -> None:
         """Initialize the CVXPY parameter for the peak grid import already
@@ -1407,7 +1514,9 @@ class Optimization:
             ),
         }
 
-    def _normalize_soc_arg(self, value: float | list | None) -> list:
+    def _normalize_soc_arg(
+        self, value: float | list | None, name: str = "soc_init/soc_final"
+    ) -> list:
         """
         Normalise a perform_optimization soc_init/soc_final argument into a
         length self.n_batt list (#610). A bare float (or None) broadcasts to
@@ -1419,10 +1528,10 @@ class Optimization:
         """
         if value is None:
             return [None] * self.n_batt
-        if isinstance(value, list):
+        if isinstance(value, list | tuple):
             if len(value) != self.n_batt:
                 raise ValueError(
-                    f"soc_init/soc_final list must have {self.n_batt} entries "
+                    f"{name} list must have {self.n_batt} entries "
                     f"(number_of_batteries), got {len(value)}"
                 )
             return list(value)
@@ -3255,6 +3364,17 @@ class Optimization:
             # Charge limit based on binary E[k] (1-E[k])
             # p_sto_neg[k] >= -1/eff * max * (1-E[k])  --> (p_sto_neg is negative)
             constraints.append(p_sto_neg[k] >= -(1 / eff_chg) * max_chg * (1 - E[k]))
+
+            # Availability window (EV / V2G): per-timestep power ceilings.
+            # Redundant at their defaults (the plain power limits); zero while
+            # the battery is not connected, which freezes its SoC.
+            constraints.append(p_sto_pos[k] <= eff_dis * self.param_batt_discharge_ceiling[k])
+            constraints.append(p_sto_neg[k] >= -(1 / eff_chg) * self.param_batt_charge_ceiling[k])
+            # Energy delivered by this battery over the horizon (Wh, battery side)
+            constraints.append(
+                cp.sum(p_sto_pos[k]) * (self.time_step / eff_dis)
+                <= self.param_batt_discharge_energy_max[k]
+            )
 
             # SOC Constraints (Vectorized Accumulation)
 
@@ -6994,8 +7114,8 @@ class Optimization:
         unit_prod_price: np.array,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
-        soc_target: float | None = None,
-        soc_target_timestep: int | None = None,
+        soc_target: float | list | None = None,
+        soc_target_timestep: int | list | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
         capacity_charge_consideration: list | None = None,
@@ -7008,6 +7128,8 @@ class Optimization:
         min_power_of_deferrable_loads: list | None = None,
         debug: bool | None = False,
         stage_times: dict[str, float] | None = None,
+        battery_availability: float | list | None = None,
+        battery_discharge_energy_max: float | list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
@@ -7025,6 +7147,16 @@ class Optimization:
         ``number_of_batteries`` entries (#610); passing per-battery values
         through from command_line.py at runtime is command_line.py's job -
         this signature already accepts the list shape today.
+
+        ``battery_availability`` (see _normalize_battery_availability) scales
+        each battery's charge/discharge power limit per timestep, so a battery
+        that is only connected part of the horizon (an EV) can be modelled
+        without changing ``number_of_batteries``. ``battery_discharge_energy_max``
+        caps the energy each battery may deliver over the horizon (Wh, battery
+        side; ``None`` = no cap). ``soc_target``/``soc_target_timestep`` accept a
+        per-battery list too; a battery with a target but no timestep gets it at
+        its last connected timestep (the departure); pass that battery's
+        ``soc_final`` equal to the target, since its SOC is frozen afterwards.
         """
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Dynamic Resizing
@@ -7053,6 +7185,9 @@ class Optimization:
 
             # Re-initialize the intermediate SOC target mask with the new horizon (#553)
             self._init_soc_target_params()
+
+            # Re-initialize the per-battery availability ceilings with the new horizon
+            self._init_battery_availability_params()
 
             # Re-initialize the capacity-charge window mask with the new horizon
             # (issue #623, Phase 3) - it is a vector param, so unlike the scalar
@@ -7115,6 +7250,37 @@ class Optimization:
             soc_init_list = None
             soc_final_list = None
 
+        # Per-battery availability (EV / V2G). Resolved first because the SOC
+        # target below defaults its timestep to the last connected step.
+        n_steps = self.num_timesteps
+        avail_list = None
+        if self.optim_conf["set_use_battery"]:
+            avail_list = self._normalize_battery_availability(battery_availability, n_steps)
+            energy_max_list = self._normalize_soc_arg(
+                battery_discharge_energy_max, "battery_discharge_energy_max"
+            )
+            for k in range(self.n_batt):
+                chg_k = float(batt_conf["charge_power_max"][k])
+                dis_k = float(batt_conf["discharge_power_max"][k])
+                self.param_batt_charge_ceiling[k].value = avail_list[k] * chg_k
+                self.param_batt_discharge_ceiling[k].value = avail_list[k] * dis_k
+                unreachable = dis_k * self.time_step * n_steps + 1.0
+                if energy_max_list[k] is None:
+                    self.param_batt_discharge_energy_max[k].value = unreachable
+                    continue
+                try:
+                    budget_k = float(energy_max_list[k])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"battery_discharge_energy_max[{k}] must be a number (Wh) or "
+                        f"null, got {energy_max_list[k]!r}"
+                    ) from exc
+                if not budget_k >= 0.0:
+                    raise ValueError(
+                        f"battery_discharge_energy_max[{k}] must be >= 0 Wh, got {budget_k}"
+                    )
+                self.param_batt_discharge_energy_max[k].value = min(budget_k, unreachable)
+
         # Optional intermediate SOC target (issue #553).
         # Reset the floor on EVERY call so a target from a previous run is
         # cleared (the constraint is then a no-op). When a target is requested,
@@ -7123,21 +7289,33 @@ class Optimization:
         # elsewhere). The np multiply happens here at set-time, so the problem
         # stays DPP / warm-start safe.
         #
-        # #610: soc_target itself is not yet a per-battery runtime input, so
-        # the identical target FRACTION is applied to every battery's floor,
-        # each against ITS OWN capacity/charge-power (param_soc_target_floor
-        # is already a per-battery Parameter list, so a future per-battery
-        # target only needs to change the value each entry receives).
+        # soc_target and soc_target_timestep accept a bare value (broadcast to
+        # every battery, the #553 behaviour) or one entry per battery; a None
+        # entry means no target for that battery.
+        for k in range(self.n_batt):
+            self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
         if self.optim_conf["set_use_battery"] and soc_target is not None:
-            soc_target_raw = float(soc_target)
+            target_list = self._normalize_soc_arg(soc_target, "soc_target")
+            timestep_list = self._normalize_soc_arg(soc_target_timestep, "soc_target_timestep")
             for k in range(self.n_batt):
+                if target_list[k] is None:
+                    continue
+                soc_target_raw = float(target_list[k])
                 soc_min_k = batt_conf["soc_min"][k]
                 soc_max_k = batt_conf["soc_max"][k]
                 soc_target_clamped = min(max(soc_target_raw, soc_min_k), soc_max_k)
-                if soc_target_timestep is None:
-                    k_target = self.num_timesteps - 1
+                avail_k = avail_list[k]
+                connected = np.flatnonzero(avail_k > 0)
+                if connected.size == 0:
+                    self.logger.warning(
+                        f"Battery {k}: soc_target={soc_target_raw} ignored, the battery "
+                        "is not available at any timestep of the horizon."
+                    )
+                    continue
+                if timestep_list[k] is None:
+                    k_target = int(connected[-1])
                 else:
-                    k_target = min(max(int(float(soc_target_timestep)), 0), self.num_timesteps - 1)
+                    k_target = min(max(int(float(timestep_list[k])), 0), self.num_timesteps - 1)
                 # Observability: warn (do not change the constraint) when the request
                 # was out of range or appears unreachable in time given charge power.
                 if soc_target_raw < soc_min_k or soc_target_raw > soc_max_k:
@@ -7146,34 +7324,38 @@ class Optimization:
                         f"[{soc_min_k}, {soc_max_k}], clamping to soc_target={soc_target_clamped}"
                     )
                 cap_k = batt_conf["cap"][k]
-                # Max stored-energy gain per step is battery_charge_power_max * time_step:
-                # the charge constraint caps grid-side power at max_chg / eff so the
-                # battery-side energy added (grid * eff) is max_chg * time_step, i.e. the
+                # Max stored-energy gain per step is the charge ceiling * time_step:
+                # the charge constraint caps grid-side power at ceiling / eff so the
+                # battery-side energy added (grid * eff) is ceiling * time_step, i.e. the
                 # charge efficiency cancels. (Do not multiply by efficiency again here, or
                 # the bound under-estimates reach and warns spuriously when eff < 1.)
-                reach = (
-                    soc_init_list[k]
-                    + (batt_conf["charge_power_max"][k] * self.time_step * (k_target + 1)) / cap_k
-                )
+                charge_ceiling = avail_k[: k_target + 1] * batt_conf["charge_power_max"][k]
+                reach = soc_init_list[k] + float(np.sum(charge_ceiling)) * self.time_step / cap_k
                 if soc_target_clamped > reach + 1e-6:
                     self.logger.warning(
                         f"Battery {k}: intermediate soc_target={soc_target_clamped} may be "
                         f"unreachable by timestep {k_target}: from "
                         f"soc_init={soc_init_list[k]} the maximum reachable SoC is "
-                        f"~{reach:.3f} given battery_charge_power_max; the optimization "
-                        "may be infeasible."
+                        f"~{reach:.3f} given battery_charge_power_max and "
+                        "battery_availability; the optimization may be infeasible."
                     )
                 floor = np.zeros(self.num_timesteps)
                 floor[k_target] = soc_target_clamped * cap_k
                 self.param_soc_target_floor[k].value = floor
+                # After departure the SOC is frozen, so the end-of-horizon SOC
+                # IS the departure SOC: a lower soc_final only adds a constant
+                # terminal penalty and hides the intent. Point the caller at it.
+                if avail_k[-1] == 0 and soc_final_list[k] < soc_target_clamped - 1e-6:
+                    self.logger.warning(
+                        f"Battery {k}: soc_final={soc_final_list[k]} is below the departure "
+                        f"soc_target={soc_target_clamped}; pass soc_final equal to the "
+                        "target for a battery that leaves inside the horizon."
+                    )
                 self.logger.debug(
                     f"Battery {k}: intermediate SOC target enabled: SoC >= "
                     f"{soc_target_clamped} by timestep {k_target} (requested "
-                    f"soc_target={soc_target}, soc_target_timestep={soc_target_timestep})."
+                    f"soc_target={target_list[k]}, soc_target_timestep={timestep_list[k]})."
                 )
-        else:
-            for k in range(self.n_batt):
-                self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
 
         # Capacity / demand charge runtime inputs: the already-incurred
         # incumbent peak (issue #623 Phase 2), the tariff demand-window mask
@@ -7392,6 +7574,34 @@ class Optimization:
                 self.param_soc_high_gap[k].value = high_gap_wh
                 self.param_soc_low_required[k].value = 1.0 if low_gap_wh > 0 else 0.0
                 self.param_soc_high_required[k].value = 1.0 if high_gap_wh > 0 else 0.0
+                # A partly available battery (EV) can only recover into its SOC
+                # band while connected, and a discharge budget caps how far it
+                # can come down. When the gap exceeds what the window or the
+                # budget allows, leave it outside the band instead of going
+                # infeasible.
+                if avail_list is not None and (
+                    np.any(avail_list[k] < 1) or energy_max_list[k] is not None
+                ):
+                    chg_reach = float(np.sum(self.param_batt_charge_ceiling[k].value))
+                    dis_reach = float(np.sum(self.param_batt_discharge_ceiling[k].value))
+                    dis_reach = min(
+                        dis_reach * self.time_step,
+                        float(self.param_batt_discharge_energy_max[k].value),
+                    )
+                    if low_gap_wh > chg_reach * self.time_step + 1e-6:
+                        self.logger.warning(
+                            f"Battery {k}: soc_init={soc_init_list[k]} is below soc_min and "
+                            "cannot recover inside its availability window; the minimum "
+                            "SOC is not enforced for it in this run."
+                        )
+                        self.param_soc_low_required[k].value = 0.0
+                    if high_gap_wh > dis_reach + 1e-6:
+                        self.logger.warning(
+                            f"Battery {k}: soc_init={soc_init_list[k]} is above soc_max and "
+                            "cannot recover inside its availability window or discharge "
+                            "budget; the maximum SOC is not enforced for it in this run."
+                        )
+                        self.param_soc_high_required[k].value = 0.0
 
         # Update Window Mask Parameters for Deferrable Loads
         # This allows warm-starting even when time windows change
@@ -8519,8 +8729,8 @@ class Optimization:
         prediction_horizon: int,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
-        soc_target: float | None = None,
-        soc_target_timestep: int | None = None,
+        soc_target: float | list | None = None,
+        soc_target_timestep: int | list | None = None,
         current_period_peak: float | None = None,
         capacity_charge_window: list | None = None,
         capacity_charge_consideration: list | None = None,
@@ -8530,6 +8740,8 @@ class Optimization:
         def_start_timestep: list | None = None,
         def_end_timestep: list | None = None,
         stage_times: dict[str, float] | None = None,
+        battery_availability: float | list | None = None,
+        battery_discharge_energy_max: float | list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -8563,13 +8775,15 @@ class Optimization:
         :param soc_target: An optional intermediate minimum battery SOC (fraction in [0, 1]) that \
             must be reached by ``soc_target_timestep``, after which the battery is free to \
             discharge again. When ``None`` (the default) no intermediate target is imposed and \
-            behaviour is unchanged. See issue #553.
-        :type soc_target: float
+            behaviour is unchanged. See issue #553. A list gives one target per battery \
+            (``None`` = no target for that battery).
+        :type soc_target: float | list
         :param soc_target_timestep: The 0-based horizon timestep by which ``soc_target`` must be \
             met. The index refers to the SoC *after* that timestep's flow. Defaults to the last \
             timestep when ``soc_target`` is given but this is ``None``. Ignored when \
-            ``soc_target`` is ``None``.
-        :type soc_target_timestep: int
+            ``soc_target`` is ``None``. Per battery as a list; a ``None`` entry puts \
+            that battery's target at its last available timestep.
+        :type soc_target_timestep: int | list
         :param current_period_peak: Optional peak grid import (in Watts) already \
             incurred during the current billing period. When the capacity charge \
             (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
@@ -8658,6 +8872,13 @@ class Optimization:
         :type def_start_timestep: list
         :param def_end_timestep: The timestep before which each deferrable load should operate.
         :type def_end_timestep: list
+        :param battery_availability: Optional per-battery availability, a fraction in \
+            [0, 1] per timestep that scales the battery's power limits (0 = not \
+            connected, SOC frozen). See ``_normalize_battery_availability``.
+        :type battery_availability: float | list, optional
+        :param battery_discharge_energy_max: Optional per-battery cap (Wh, battery \
+            side) on the energy the battery may deliver over the horizon.
+        :type battery_discharge_energy_max: float | list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -8708,6 +8929,8 @@ class Optimization:
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
             stage_times=stage_times,
+            battery_availability=battery_availability,
+            battery_discharge_energy_max=battery_discharge_energy_max,
         )
         return self.opt_res
 
