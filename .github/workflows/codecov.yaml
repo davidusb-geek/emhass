@@ -31,7 +31,7 @@ jobs:
         run: |
           uv venv
           uv sync --reinstall --extra test
-          uv run coverage run -m --source=emhass unittest
+          uv run coverage run --source=emhass -m pytest tests/
           uv run coverage report
           uv run coverage xml -o coverage.xml
 
