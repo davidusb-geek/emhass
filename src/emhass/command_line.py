@@ -3991,7 +3991,8 @@ async def _publish_deferrable_states(
         col_name = f"P_deferrable{k}"
         if col_name not in opt_res_latest.columns or k >= len(custom_state):
             continue
-        nominal_power = nominal[k] if k < len(nominal) else 0.0
+        # A sequence load gives its power profile as a list: use its peak power.
+        nominal_power = float(np.max(np.atleast_1d(nominal[k]))) if k < len(nominal) else 0.0
         states = opt_res_latest[col_name].apply(
             lambda power, npow=nominal_power: _deferrable_power_to_state(power, npow)
         )
