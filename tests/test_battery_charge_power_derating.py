@@ -335,23 +335,73 @@ def _soc_at_step_start(opt_res, soc_init):
 
 
 def test_charge_power_respects_the_limit_for_the_soc_it_starts_at():
+    """Check every scheduled charge; band coverage is enforced separately."""
     opt_res = _solve(with_derating=True)
     soc_start = _soc_at_step_start(opt_res, 0.1)
     charge = -opt_res["P_batt"].to_numpy()  # charging is negative in P_batt
     tol = 1.0  # W
 
-    checked_high = 0
     for soc, power in zip(soc_start, charge, strict=True):
         if power <= tol:
             continue  # not charging in this step
         if soc >= 0.9:
             assert power <= 0.2 * CHARGE_MAX + tol
-            checked_high += 1
         elif soc >= 0.5:
             assert power <= 0.4 * CHARGE_MAX + tol
         else:
             assert power <= CHARGE_MAX + tol
-    assert checked_high > 0, "scenario never charged above 90% SOC, so it proves nothing"
+
+
+@pytest.mark.parametrize(
+    "soc_init,soc_final,expected_fraction",
+    [
+        (0.10, 0.40, 1.0),  # below first threshold: full charge power
+        (0.60, 0.80, 0.4),  # 50% band: 40% power
+        (0.92, 0.98, 0.2),  # 90% band: 20% power
+        (0.85, 0.97, 0.4),  # first step crosses 90%; next step uses 20%
+    ],
+)
+def test_each_soc_band_ceiling_binds(soc_init, soc_final, expected_fraction):
+    """A uniquely cheapest first step makes the SOC-dependent ceiling bind.
+
+    Flat prices admit equally optimal charging schedules; asserting that the
+    solver happens to charge above 90% in such a schedule is not a regression
+    test. Here the cheapest first interval makes charging up to the relevant
+    ceiling preferable to postponing it. Compare with derating disabled so
+    that a missing or weakened ceiling is detected.
+    """
+    df_input, p_pv, p_load = _scenario()
+    df_input["unit_load_cost"] = [0.01, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+
+    def solve(derating):
+        overrides = {DERATING_PARAM: SOLVER_DERATING} if derating else {}
+        opt = build_optimization(plant_overrides=overrides)
+        result = opt.perform_dayahead_forecast_optim(
+            df_input, p_pv, p_load, soc_init=soc_init, soc_final=soc_final
+        )
+        assert opt.optim_status in VALID_OPTIMAL_STATUSES
+        return result
+
+    tapered = solve(derating=True)
+    flat = solve(derating=False)
+    first_charge = -tapered["P_batt"].iloc[0]
+    flat_first_charge = -flat["P_batt"].iloc[0]
+    ceiling = expected_fraction * CHARGE_MAX
+
+    # Non-vacuous: the first interval actively charges at the expected ceiling.
+    assert first_charge == pytest.approx(ceiling, abs=1.0)
+    if expected_fraction == 1.0:
+        assert flat_first_charge == pytest.approx(CHARGE_MAX, abs=1.0)
+    else:
+        assert flat_first_charge > ceiling + 1.0
+
+    # Charging across a threshold is limited by SOC at STEP START, not end.
+    if soc_init == 0.85:
+        assert tapered["SOC_opt"].iloc[0] > 0.9
+        second_charge = -tapered["P_batt"].iloc[1]
+        assert 1.0 < second_charge <= 0.2 * CHARGE_MAX + 1.0
+
+
 
 
 def test_derating_spreads_the_fill_over_more_timesteps():
