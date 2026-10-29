@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import _pickle as cPickle
+import asyncio
 import bz2
 import copy
 import glob
@@ -650,22 +651,29 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 "precipitation": [0.0] * len(mpc_times),
             },
         }
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Redirect only this instance's data_path so no repo file is touched.
-            with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
-                cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
-                with open(cache_path, "wb") as f:
-                    f.write(orjson.dumps(poisoned))
-                with patch("emhass.forecast.aiohttp.ClientSession") as session_cls:
-                    session_cls.side_effect = aiohttp.ClientError("network down")
-                    with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
-                        result = await self.fcst._fetch_open_meteo_covariates_json(58, 3)
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                # Redirect only this instance's data_path so no repo file is touched.
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
+                    with open(cache_path, "wb") as f:
+                        f.write(orjson.dumps(poisoned))
+                    with patch("emhass.forecast.aiohttp.ClientSession") as session_cls:
+                        session_cls.side_effect = aiohttp.ClientError("network down")
+                        with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                            result = await self.fcst._fetch_open_meteo_covariates_json(58, 3)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
         self.assertIsNone(result, "a non-covering cache must not be served or kept as fallback")
         self.assertTrue(
             any("does not cover the requested span" in line for line in logs.output),
             f"expected the span warning in logs, got: {logs.output}",
         )
-        session_cls.assert_called_once()  # the poisoned cache must trigger a refetch attempt
+        # The poisoned cache is dropped, so this is a cold start and the refetch
+        # is retried. It must still not be served.
+        self.assertEqual(session_cls.call_count, forecast_module.open_meteo_max_attempts)
 
     async def test_covariate_cache_full_span_is_served(self):
         """A fresh cache that does cover the requested span is still served without refetch."""
@@ -1039,6 +1047,135 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         session_cls.assert_not_called()
         self.assertIsNone(result)
         self.assertEqual(written, [])
+
+    async def test_covariate_cold_start_retries_then_succeeds(self):
+        """No usable covariate cache: a transport failure is retried, then the fetch stops."""
+        from unittest.mock import patch
+
+        payload = {"latitude": self.fcst.lat, "longitude": self.fcst.lon, "minutely_15": {}}
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with aioresponses() as mocked:
+                        mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                        mocked.get(url_pattern, payload=payload)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertEqual(result, payload)
+            self.assertEqual(total_calls, 2, "a successful attempt must not be fetched again")
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+
+    async def test_covariate_http_error_is_not_retried(self):
+        """A non-2xx covariate response is terminal. It is not a transport failure."""
+        from unittest.mock import patch
+
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with aioresponses() as mocked:
+                        mocked.get(url_pattern, status=400)
+                        mocked.get(url_pattern, status=400)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertIsNone(result)
+            self.assertEqual(total_calls, 1)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+
+    async def test_covariate_asyncio_timeout_is_retried(self):
+        """Python 3.10 raises asyncio.TimeoutError, which is not the builtin TimeoutError."""
+        from unittest.mock import patch
+
+        payload = {"latitude": self.fcst.lat, "longitude": self.fcst.lon, "minutely_15": {}}
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with aioresponses() as mocked:
+                        # asyncio.TimeoutError, not the builtin: they differ on Python 3.10.
+                        mocked.get(url_pattern, exception=asyncio.TimeoutError())  # noqa: UP041
+                        mocked.get(url_pattern, payload=payload)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertEqual(result, payload)
+            self.assertEqual(total_calls, 2)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+
+    async def test_covariate_stale_cache_falls_back_without_retry(self):
+        """A present cache is the fallback: one failed refresh, then the cached payload."""
+        from unittest.mock import patch
+
+        now = int(pd.Timestamp.now().timestamp())
+        day = 86400
+        payload = {
+            "latitude": self.fcst.lat,
+            "longitude": self.fcst.lon,
+            "minutely_15": {
+                "time": [now - day, now + day],
+                "temperature_2m": [1.0, 2.0],
+            },
+        }
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        original_max_age = self.fcst.optim_conf.get("open_meteo_cache_max_age")
+        self.fcst.optim_conf["open_meteo_cache_max_age"] = 0
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
+                    cache_path.write_bytes(orjson.dumps(payload))
+                    with aioresponses() as mocked:
+                        # A second attempt would exhaust this mock and fail the test.
+                        mocked.get(url_pattern, status=504)
+                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                        total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertEqual(result, payload)
+            self.assertEqual(total_calls, 1)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+            if original_max_age is None:
+                self.fcst.optim_conf.pop("open_meteo_cache_max_age", None)
+            else:
+                self.fcst.optim_conf["open_meteo_cache_max_age"] = original_max_age
+
+    async def test_covariate_request_timeout_is_set(self):
+        """The covariate fetch uses the same finite ClientTimeout as the PV forecast."""
+        from unittest.mock import patch
+
+        captured = {}
+        real_session = aiohttp.ClientSession
+
+        def _capture_session(*args, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return real_session(*args, **kwargs)
+
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
+                    with patch.object(aiohttp, "ClientSession", _capture_session):
+                        with aioresponses() as mocked:
+                            for _ in range(forecast_module.open_meteo_max_attempts):
+                                mocked.get(url_pattern, exception=TimeoutError())
+                            result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+            self.assertIsNone(result)
+            self.assertIsInstance(captured.get("timeout"), aiohttp.ClientTimeout)
+            self.assertEqual(captured["timeout"].total, forecast_module.open_meteo_request_timeout)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
 
     async def test_build_weather_future_returns_none_without_weather_features(self):
         """_build_weather_future returns None when the model has no weather_features."""
@@ -1980,6 +2117,67 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertAlmostEqual(p_pv.loc[ts], 100.0 * (h - 4) + 100.0 * frac, places=6)
         self.assertTrue((p_pv.between_time("00:00", "04:45") == 0.0).all())
         self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
+
+    def _solar_forecast_plants(self, n_plants):
+        """Configure n identical forecast.solar arrays and skip the on-disk cache."""
+        self.plant_conf["pv_module_model"] = ["module"] * n_plants
+        self.plant_conf["surface_tilt"] = [30] * n_plants
+        self.plant_conf["surface_azimuth"] = [180] * n_plants
+        self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+        self.fcst.params.setdefault("passed_data", {})
+        self.fcst.params["passed_data"]["weather_forecast_cache"] = False
+        return os.path.join(tempfile.gettempdir(), f"emhass-no-solar-cache-{n_plants}.pkl")
+
+    def _solar_forecast_watts(self, watts):
+        ts = self.fcst.forecast_dates[len(self.fcst.forecast_dates) // 2]
+        key = ts.strftime("%Y-%m-%d %H:%M:%S")
+        return ts, {"result": {"watts": {key: watts}}}
+
+    async def test_solar_forecast_transport_error_retries_without_double_count(self):
+        """A transport failure is retried per array, and a later success is not added twice."""
+        cache_path = self._solar_forecast_plants(2)
+        ts, first = self._solar_forecast_watts(100.0)
+        _, second = self._solar_forecast_watts(40.0)
+        url_pattern = re.compile(r"https://api\.forecast\.solar/estimate/.*")
+        original_backoff = forecast_module.forecast_solar_backoff_seconds
+        forecast_module.forecast_solar_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                mocked.get(url_pattern, payload=first)
+                mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                mocked.get(url_pattern, payload=second)
+                df_weather = await self.fcst._get_weather_solar_forecast(cache_path)
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertIsInstance(df_weather, pd.DataFrame)
+            # 100 from the first array plus 40 from the second, each counted once.
+            self.assertAlmostEqual(df_weather.loc[ts, "yhat"], 140.0)
+            self.assertEqual(total_calls, 3)
+        finally:
+            forecast_module.forecast_solar_backoff_seconds = original_backoff
+
+    async def test_solar_forecast_transport_error_all_attempts_returns_false(self):
+        """A forecast.solar outage returns False after retries and does not write the cache."""
+        self._solar_forecast_plants(1)
+        self.fcst.params["passed_data"]["weather_forecast_cache"] = True
+        url_pattern = re.compile(r"https://api\.forecast\.solar/estimate/.*")
+        original_backoff = forecast_module.forecast_solar_backoff_seconds
+        forecast_module.forecast_solar_backoff_seconds = (0, 0, 0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                cache_path = os.path.join(tmp_dir, "weather_forecast_data.pkl")
+                with aioresponses() as mocked:
+                    for _ in range(forecast_module.forecast_solar_max_attempts):
+                        mocked.get(url_pattern, exception=TimeoutError())
+                    res = await self.fcst._get_weather_solar_forecast(cache_path)
+                    total_calls = sum(len(v) for v in mocked.requests.values())
+                self.assertFalse(res)
+                self.assertEqual(total_calls, forecast_module.forecast_solar_max_attempts)
+                self.assertFalse(
+                    os.path.exists(cache_path),
+                    "a failed forecast.solar fetch must not be cached",
+                )
+        finally:
+            forecast_module.forecast_solar_backoff_seconds = original_backoff
 
     #  Test output weather forecast using passed runtime lists
     @fixture_clock()
@@ -3180,17 +3378,128 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             os.remove(w_forecast_cache_path)
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "TEST_KEY"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "TEST_ID"
+        # The quota counter is a file in the system temp dir and survives test
+        # runs. Once it is at the daily cap the fetch returns before any HTTP
+        # call, which is a different path from a 429. Give this test a fresh
+        # counter so the status-code assertions see a real request.
+        self._isolate_solcast_counter_dir()
         # Test 429 (Too Many Requests)
         with aioresponses() as mocked:
             # We mock ANY URL starting with solcast
             mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=429)
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
+            self.assertEqual(
+                sum(len(v) for v in mocked.requests.values()),
+                1,
+                "a Solcast quota response must not be retried",
+            )
         # Test 500 (Server Error)
         with aioresponses() as mocked:
             mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=500)
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
+            self.assertEqual(
+                sum(len(v) for v in mocked.requests.values()),
+                1,
+                "an HTTP error from Solcast must not be retried",
+            )
+
+    def _solcast_retry_setup(self):
+        """Point a Solcast fetch at one roof, with the on-disk cache moved aside."""
+        self._isolate_solcast_counter_dir()
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111"
+        cache = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        parked = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
+        if os.path.isfile(cache):
+            os.rename(cache, parked)
+
+            def _restore():
+                if os.path.isfile(cache):
+                    os.remove(cache)
+                if os.path.isfile(parked):
+                    os.rename(parked, cache)
+
+            self.addCleanup(_restore)
+
+    async def test_solcast_transport_error_retries_then_succeeds(self):
+        """A connection error is retried, and each retry reserves one more provider call."""
+        self._solcast_retry_setup()
+        # Use a period_end within the fixture's forecast grid (pinned at 2025-03-22 12:00 UTC)
+        # so the successful response contributes a nonzero forecast value.
+        mid = self.fcst.forecast_dates[len(self.fcst.forecast_dates) // 2]
+        period_end = (mid + self.fcst.freq).astimezone("UTC").isoformat()
+        payload = {
+            "forecasts": [
+                {
+                    "period_end": period_end,
+                    "period": f"PT{int(self.fcst.freq.total_seconds() / 60)}M",
+                    "pv_estimate": 0.5,
+                }
+            ]
+        }
+        url_pattern = re.compile(r"https://api\.solcast\.com\.au/.*")
+        original_backoff = forecast_module.solcast_backoff_seconds
+        forecast_module.solcast_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                mocked.get(url_pattern, payload=payload)
+                res = await self.fcst.get_weather_forecast(method="solcast")
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertIsInstance(res, pd.DataFrame)
+            self.assertIn("yhat", res.columns)
+            self.assertGreater(
+                res.loc[mid, "yhat"], 0, "successful response must contribute nonzero yhat"
+            )
+            self.assertEqual(total_calls, forecast_module.solcast_max_attempts)
+            # One reservation up front, plus one per retry before the success.
+            self.assertEqual(self._read_solcast_counter(), forecast_module.solcast_max_attempts)
+        finally:
+            forecast_module.solcast_backoff_seconds = original_backoff
+
+    async def test_solcast_transport_error_stops_at_quota_cap(self):
+        """A retry that would pass the daily cap is not sent, and no partial frame is returned."""
+        self._solcast_retry_setup()
+        # The live fetch reserves the 8th call. The retry does not fit.
+        self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=7))
+        url_pattern = re.compile(r"https://api\.solcast\.com\.au/.*")
+        original_backoff = forecast_module.solcast_backoff_seconds
+        forecast_module.solcast_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                mocked.get(url_pattern, payload={"forecasts": []})
+                res = await self.fcst.get_weather_forecast(method="solcast")
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertFalse(res)
+            self.assertEqual(total_calls, 1)
+            self.assertEqual(self._read_solcast_counter(), 8)
+        finally:
+            forecast_module.solcast_backoff_seconds = original_backoff
+
+    async def test_solcast_transport_error_all_attempts_returns_false(self):
+        """Every transport attempt failing returns False so callers follow the failure path."""
+        self._solcast_retry_setup()
+        url_pattern = re.compile(r"https://api\.solcast\.com\.au/.*")
+        original_backoff = forecast_module.solcast_backoff_seconds
+        forecast_module.solcast_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                for _ in range(forecast_module.solcast_max_attempts):
+                    mocked.get(url_pattern, exception=TimeoutError())
+                res = await self.fcst.get_weather_forecast(method="solcast")
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertFalse(res)
+            self.assertEqual(total_calls, forecast_module.solcast_max_attempts)
+            self.assertEqual(self._read_solcast_counter(), forecast_module.solcast_max_attempts)
+        finally:
+            forecast_module.solcast_backoff_seconds = original_backoff
 
     # --- Multi-rooftop Solcast quota accounting + UTC quota day ---
     #
