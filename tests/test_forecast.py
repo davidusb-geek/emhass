@@ -1495,6 +1495,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     @fixture_clock()
     async def test_get_weather_forecast_solcast_method_mock(self):
         self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
+        self._isolate_weather_cache_dir()  # nor the shared weather cache
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -1503,11 +1504,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
-        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-            )
 
         test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
 
@@ -1540,16 +1536,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     / (self.fcst.freq.seconds / 3600)
                 ),
             )
-            if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
-                os.rename(
-                    emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-                    emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                )
 
     # Test output weather forecast using Solcast-multiroofs with mock get request data
     @fixture_clock()
     async def test_get_weather_forecast_solcast_multiroofs_method_mock(self):
         self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
+        self._isolate_weather_cache_dir()  # nor the shared weather cache
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -1559,11 +1551,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111,222222,333333"
         roof_ids = re.split(r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip())
-        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-            )
         test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
@@ -1591,11 +1578,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     / (self.fcst.freq.seconds / 3600)
                 ),
             )
-            if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
-                os.rename(
-                    emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-                    emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                )
 
     # Test Solcast resampling: recorded 30-min Solcast payload → 15-min grid
     async def test_get_weather_forecast_solcast_15min_resampling_mock(self):
@@ -1609,6 +1591,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         a fully zero-filled result.
         """
         self._isolate_solcast_counter_dir()  # never touch the real daily quota counter
+        self._isolate_weather_cache_dir()  # nor the shared weather cache
         original_freq = self.fcst.freq
         original_forecast_dates = self.fcst.forecast_dates
         self.fcst.freq = pd.Timedelta("15min")
@@ -1626,11 +1609,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
-        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-            )
 
         test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
         async with aiofiles.open(test_data_path, "rb") as f:
@@ -1676,11 +1654,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Restore original freq/forecast_dates
         self.fcst.freq = original_freq
         self.fcst.forecast_dates = original_forecast_dates
-        if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-            )
 
     # --- Solcast period-average → optimisation-grid overlap resampling ---
     #
@@ -1701,6 +1674,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Point forecast_dates at a fixed local-tz window [start, end) at the
         given freq (kept as an exact tiling: end is excluded)."""
         self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True  # bypass unrelated quota cap
+        self._isolate_weather_cache_dir()  # never serve a cache from the data directory
         orig = (self.fcst.freq, self.fcst.forecast_dates)
         self.fcst.freq = pd.Timedelta(freq_str)
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(freq_str)
@@ -1891,13 +1865,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
           (b) day-2 PV values (rows 48–95) are non-zero — proving the code
               returns real Solcast data for the second day rather than zeros.
         """
-        # --- 1. Save and rename any pre-existing weather cache ---
-        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-            )
-
         # --- 2. Build a fresh Forecast with delta_forecast_daily=2 ---
         params = await TestForecast.get_test_params()
         params["passed_data"] = {
@@ -1917,6 +1884,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
+        # Never serve a cache from the data directory to this fresh Forecast
+        self._isolate_weather_cache_dir(fcst)
 
         # --- 3. PIN THE CLOCK ---
         # forecast.py builds forecast_dates from pd.Timestamp.now(tz=time_zone).
@@ -2006,13 +1975,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             msg=f"Dec-28 08:30Z PV expected >0 W; got {pv_dec28_0830} W",
         )
 
-        # --- 11. Restore weather cache if it existed ---
-        if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
-            os.rename(
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-            )
-
     # Test #932: a weather cache lacking 'yhat' (e.g. left over after switching
     # weather_forecast_method, since the cache file is shared across methods)
     # must not crash get_power_from_weather. The rate-limited fetchers should
@@ -2020,10 +1982,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_get_weather_forecast_solcast_incompatible_cache_recovers(self):
         from unittest.mock import patch
 
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
+        cache_path = self._isolate_weather_cache_dir() / "weather_forecast_data.pkl"
 
         # Schema-incompatible cache: open-meteo columns, NO 'yhat', over a stale
         # window that does not cover forecast_dates (forces the stale-cache path).
@@ -2059,29 +2018,26 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             compressed = await f.read()
         payload = orjson.loads(cPickle.loads(bz2.decompress(compressed)).content)
 
-        try:
-            with (
-                patch.object(self.fcst, "_solcast_rate_limit_ok", return_value=True),
-                aioresponses() as mocked,
-            ):
-                mocked.get(
-                    re.compile(r"https://api\.solcast\.com\.au/.*"),
-                    payload=payload,
-                )
-                df_weather = await self.fcst.get_weather_forecast(method="solcast")
+        with (
+            patch.object(self.fcst, "_solcast_rate_limit_ok", return_value=True),
+            aioresponses() as mocked,
+        ):
+            mocked.get(
+                re.compile(r"https://api\.solcast\.com\.au/.*"),
+                payload=payload,
+            )
+            df_weather = await self.fcst.get_weather_forecast(method="solcast")
+            # The incompatible cache was discarded and the forecast was fetched
+            self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 1)
+        self.assertFalse(cache_path.exists())
 
-            # The incompatible cache must NOT be served verbatim: the refetched
-            # frame has 'yhat' and get_power_from_weather must not raise.
-            self.assertIsInstance(df_weather, pd.DataFrame)
-            self.assertIn("yhat", df_weather.columns)
-            p_pv = self.fcst.get_power_from_weather(df_weather)
-            self.assertEqual(len(p_pv), len(self.fcst.forecast_dates))
-            self.assertFalse(p_pv.isna().any())
-        finally:
-            if os.path.isfile(cache_path):
-                os.remove(cache_path)
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
+        # The incompatible cache must NOT be served verbatim: the refetched
+        # frame has 'yhat' and get_power_from_weather must not raise.
+        self.assertIsInstance(df_weather, pd.DataFrame)
+        self.assertIn("yhat", df_weather.columns)
+        p_pv = self.fcst.get_power_from_weather(df_weather)
+        self.assertEqual(len(p_pv), len(self.fcst.forecast_dates))
+        self.assertFalse(p_pv.isna().any())
 
     # Test output weather forecast using Forecast.Solar with mock get request data
     @fixture_clock()
@@ -3409,7 +3365,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     async def test_solcast_caching_and_errors(self):
         """Test Solcast caching logic and API error handling."""
-        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        w_forecast_cache_path = self._isolate_weather_cache_dir() / "weather_forecast_data.pkl"
         # Test Cache Hit
         data = pd.DataFrame(index=self.fcst.forecast_dates)
         data["yhat"] = 1000.0
@@ -3454,25 +3410,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             )
 
     def _solcast_retry_setup(self):
-        """Point a Solcast fetch at one roof, with the on-disk cache moved aside."""
+        """Point a Solcast fetch at one roof, with an empty per-test data directory."""
         self._isolate_solcast_counter_dir()
+        self._isolate_weather_cache_dir()
         self.fcst.params = {
             "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111"
-        cache = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        parked = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-        if os.path.isfile(cache):
-            os.rename(cache, parked)
-
-            def _restore():
-                if os.path.isfile(cache):
-                    os.remove(cache)
-                if os.path.isfile(parked):
-                    os.rename(parked, cache)
-
-            self.addCleanup(_restore)
 
     async def test_solcast_transport_error_retries_then_succeeds(self):
         """A connection error is retried, and each retry reserves one more provider call."""
@@ -3557,6 +3502,20 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # multi-rooftop aggregate. Keyed by UTC calendar date, since Solcast's
     # quota resets on the UTC day, not the site's local day.
 
+    def _isolate_weather_cache_dir(self, fcst=None):
+        """Point the forecast at an empty per-test data directory, so a weather cache in
+        the repository's data directory is neither served to the test nor removed by it.
+        The fixtures are still read from the repository's data directory. Returns the
+        temporary directory."""
+        fcst = fcst or self.fcst
+        tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(
+            unittest.mock.patch.object(
+                fcst, "emhass_conf", {**fcst.emhass_conf, "data_path": tmp_data_path}
+            )
+        )
+        return tmp_data_path
+
     def _isolate_solcast_counter_dir(self):
         """Route the quota counter file into a private per-test temp dir so
         these tests never touch a real developer/runtime quota counter."""
@@ -3582,13 +3541,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         zero requests even though a mock exists that would have succeeded.
         Caller must isolate the counter dir first (needed before any
         pre-loading reservation call, so it isn't done here)."""
+        self._isolate_weather_cache_dir()  # never serve or remove a cache in the data directory
         self.fcst.params = {
             "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = roof_ids_csv
-        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-            os.remove(emhass_conf["data_path"] / "weather_forecast_data.pkl")
         payload = {
             "forecasts": [
                 {
@@ -3730,8 +3688,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 }
                 self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
                 self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = bad
-                if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
-                    os.remove(emhass_conf["data_path"] / "weather_forecast_data.pkl")
+                self._isolate_weather_cache_dir()  # never serve or remove a cache in the data dir
                 with aioresponses() as mocked:
                     res = await self.fcst.get_weather_forecast(method="solcast")
                 self.assertFalse(res)
@@ -4223,11 +4180,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Wire up the mocked-Solcast environment shared by the bias tests.
 
         Sets passed_data/credentials, bypasses the daily-quota cap (these tests
-        exercise the blend logic, not the rate limiter), and moves any pre-existing
-        weather cache aside. Restores the cache and clears the bias key via addCleanup
-        so nothing leaks into other tests even if an assertion fails. Returns the
-        mocked Solcast GET URL.
+        exercise the blend logic, not the rate limiter), and gives the forecast an
+        empty per-test data directory. Clears the bias key via addCleanup so nothing
+        leaks into other tests even if an assertion fails. Returns the mocked Solcast
+        GET URL.
         """
+        self._isolate_weather_cache_dir()
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -4238,17 +4196,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
         self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True
 
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_bias_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
-
-        def _restore():
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
-            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
-
-        self.addCleanup(_restore)
+        self.addCleanup(self.fcst.optim_conf.pop, "weather_forecast_pv_quantile_bias", None)
 
         days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
         return f"https://api.solcast.com.au/rooftop_sites/test_roof/forecasts?hours={days_solcast}"
