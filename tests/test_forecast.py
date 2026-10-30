@@ -5,6 +5,7 @@ import asyncio
 import bz2
 import copy
 import glob
+import hashlib
 import os
 import pathlib
 import pickle
@@ -12,6 +13,7 @@ import re
 import tempfile
 import unittest
 import unittest.mock
+from urllib.parse import quote
 
 import aiofiles
 import aiohttp
@@ -19,6 +21,7 @@ import numpy as np
 import orjson
 import pandas as pd
 from aioresponses import aioresponses
+from aioresponses.core import normalize_url
 
 from emhass import forecast as forecast_module
 from emhass import utils
@@ -357,8 +360,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = bz2.decompress(compressed)
         data = cPickle.loads(data)
         data = orjson.loads(data.content)
+        data = self._openmeteo_unixtime_payload(data)
         lat = self.retrieve_hass_conf["Latitude"]
         lon = self.retrieve_hass_conf["Longitude"]
+        # The default 3-day horizon is requested; the query mirrors the production request.
         get_url = (
             "https://api.open-meteo.com/v1/forecast?"
             + "latitude="
@@ -374,13 +379,41 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             + "shortwave_radiation_instant,"
             + "diffuse_radiation_instant,"
             + "direct_normal_irradiance_instant"
+            + "&forecast_days=3"
+            + "&timezone="
+            + quote(str(self.fcst.time_zone), safe="")
+            + "&timeformat=unixtime"
         )
+
+        # Run against an empty per-test cache directory so a cached response in the
+        # repository's data directory can neither satisfy nor be overwritten by this test.
+        # The fixtures above were read from the repository's data directory beforehand.
+        repo_data_path = emhass_conf["data_path"]
+        # The files this test could read or write there: the caches, the debug CSV and the fixture.
+        guarded = (
+            "cached-open-meteo-forecast-b.json",
+            "weather_forecast_data.pkl",
+            "debug-weather-forecast-open-meteo.csv",
+            "test_response_openmeteo_get_method.pbz2",
+        )
+        repo_digests_before = self._sha256_files(repo_data_path, guarded)
+        tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(
+            unittest.mock.patch.object(
+                self.fcst, "emhass_conf", {**self.fcst.emhass_conf, "data_path": tmp_data_path}
+            )
+        )
+        self.assertEqual(list(tmp_data_path.iterdir()), [])
 
         with aioresponses() as mocked:
             mocked.get(get_url, payload=data)
 
             # Test dataframe output from get weather forecast
             df_weather_openmeteo = await self.fcst.get_weather_forecast(method="open-meteo")
+            # The forecast came from the mocked request, not from a cached response
+            self.assertEqual(len(mocked.requests[("GET", normalize_url(get_url))]), 1)
+            self.assertTrue((tmp_data_path / "cached-open-meteo-forecast-b.json").is_file())
+            self.assertFalse(df_weather_openmeteo.isna().any().any())
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
             self.assertIsInstance(
                 df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -439,6 +472,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(p_pv_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(p_pv_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(p_pv_forecast))
+            # The second forecast is served from the temporary cache: still one request
+            self.assertEqual(len(mocked.requests[("GET", normalize_url(get_url))]), 1)
+
+        # None of those files was created, removed or modified
+        self.assertEqual(self._sha256_files(repo_data_path, guarded), repo_digests_before)
 
     def _two_plant_conf(self):
         """Two PV plants with every sibling list at the matching length."""
@@ -3816,15 +3854,62 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = bz2.decompress(compressed)
         data = cPickle.loads(data)
         data = orjson.loads(data.content)
+        data = self._openmeteo_unixtime_payload(data)
+        tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(
+            unittest.mock.patch.object(
+                self.fcst, "emhass_conf", {**self.fcst.emhass_conf, "data_path": tmp_data_path}
+            )
+        )
+        irradiance = self.enterContext(
+            unittest.mock.patch.object(
+                self.fcst, "cloud_cover_to_irradiance", wraps=self.fcst.cloud_cover_to_irradiance
+            )
+        )
         with aioresponses() as mocked:
             mocked.get(re.compile(r"https://api\.open-meteo\.com/.*"), payload=data)
             # Call with legacy=True
             df = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=True)
+            # The forecast came from the mocked request, not from a cached response
+            self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 1)
+            # The legacy branch estimated the irradiance from the cloud cover
+            irradiance.assert_called_once()
             self.assertIsInstance(df, pd.DataFrame)
             # Verify columns exist (calculated by cloud_cover_to_irradiance)
             self.assertIn("ghi", df.columns)
             self.assertIn("dni", df.columns)
             self.assertIn("dhi", df.columns)
+            self.assertEqual(len(df), len(self.fcst.forecast_dates))
+            # The irradiance columns are filled with 0, so check the payload covered the horizon
+            self.assertFalse(df[["temp_air", "cloud_cover"]].isna().any().any())
+
+    @staticmethod
+    def _sha256_files(root, names):
+        """SHA-256 of the named files in `root`; None for a file that does not exist."""
+        return {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            if (root / name).is_file()
+            else None
+            for name in names
+        }
+
+    def _openmeteo_unixtime_payload(self, data):
+        """The recorded Open-Meteo payload as returned for `timeformat=unixtime`.
+
+        The shipped fixture holds local ISO times from 2025-02-24. They are converted to
+        epoch seconds, shifted by whole days (24 h each, so the local time of day is kept
+        while the UTC offset is unchanged) so that they cover the forecast horizon of the
+        fixed test clock; the coverage is asserted. A copy is returned.
+        """
+        data = copy.deepcopy(data)
+        times = pd.to_datetime(data["minutely_15"]["time"]).tz_localize(data["timezone"])
+        shift_days = (self.fcst.forecast_dates[0].date() - times[0].date()).days
+        times = times + pd.Timedelta(days=shift_days)
+        epochs = ((times - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).tolist()
+        self.assertLessEqual(epochs[0], int(self.fcst.forecast_dates[0].timestamp()))
+        self.assertGreaterEqual(epochs[-1], int(self.fcst.forecast_dates[-1].timestamp()))
+        data["minutely_15"]["time"] = epochs
+        return data
 
     async def _load_openmeteo_mock_payload(self):
         """Load the recorded Open-Meteo response used as a mock payload."""
