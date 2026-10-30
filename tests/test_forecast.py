@@ -3410,25 +3410,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             )
 
     def _solcast_retry_setup(self):
-        """Point a Solcast fetch at one roof, with the on-disk cache moved aside."""
+        """Point a Solcast fetch at one roof, with an empty per-test data directory."""
         self._isolate_solcast_counter_dir()
+        self._isolate_weather_cache_dir()
         self.fcst.params = {
             "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111"
-        cache = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        parked = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-        if os.path.isfile(cache):
-            os.rename(cache, parked)
-
-            def _restore():
-                if os.path.isfile(cache):
-                    os.remove(cache)
-                if os.path.isfile(parked):
-                    os.rename(parked, cache)
-
-            self.addCleanup(_restore)
 
     async def test_solcast_transport_error_retries_then_succeeds(self):
         """A connection error is retried, and each retry reserves one more provider call."""
@@ -4191,11 +4180,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Wire up the mocked-Solcast environment shared by the bias tests.
 
         Sets passed_data/credentials, bypasses the daily-quota cap (these tests
-        exercise the blend logic, not the rate limiter), and moves any pre-existing
-        weather cache aside. Restores the cache and clears the bias key via addCleanup
-        so nothing leaks into other tests even if an assertion fails. Returns the
-        mocked Solcast GET URL.
+        exercise the blend logic, not the rate limiter), and gives the forecast an
+        empty per-test data directory. Clears the bias key via addCleanup so nothing
+        leaks into other tests even if an assertion fails. Returns the mocked Solcast
+        GET URL.
         """
+        self._isolate_weather_cache_dir()
         self.fcst.params = {
             "passed_data": {
                 "weather_forecast_cache": False,
@@ -4206,17 +4196,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
         self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True
 
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_bias_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
-
-        def _restore():
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
-            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
-
-        self.addCleanup(_restore)
+        self.addCleanup(self.fcst.optim_conf.pop, "weather_forecast_pv_quantile_bias", None)
 
         days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
         return f"https://api.solcast.com.au/rooftop_sites/test_roof/forecasts?hours={days_solcast}"
