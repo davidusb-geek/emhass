@@ -2042,6 +2042,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # Test output weather forecast using Forecast.Solar with mock get request data
     @fixture_clock()
     async def test_get_weather_forecast_solarforecast_method_mock(self):
+        self._isolate_weather_cache_dir()  # never serve or remove the shared weather cache
         test_data_path = str(
             emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
         )
@@ -2093,6 +2094,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """Hourly Forecast.Solar points on a 15-minute grid: the interior slots of each source
         hour are interpolated, not zero-filled (issue #1137). Slots outside the source horizon
         stay at zero."""
+        self._isolate_weather_cache_dir()  # never serve or remove the shared weather cache
         self.fcst.freq = pd.Timedelta("15min")
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("15min")
         self.fcst.forecast_dates = pd.date_range(
@@ -2458,10 +2460,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         """#997: under the open-meteo weather augmentation (method='list'), a cache
         that does not cover the window is treated like open-meteo (deleted for a
         fresh refetch) rather than served best-effort stale with zero-filled GHI."""
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
+        cache_path = self._isolate_weather_cache_dir() / "weather_forecast_data.pkl"
         stale_index = pd.date_range(
             start=self.fcst.forecast_dates[0] - pd.Timedelta(days=5),
             periods=8,
@@ -2471,14 +2470,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with open(cache_path, "wb") as f:
             pickle.dump(stale, f)
         self.fcst.weather_forecast_method = "list"
-        try:
-            result = await self.fcst.get_cached_forecast_data(str(cache_path))
-            removed = not os.path.isfile(cache_path)
-        finally:
-            if os.path.isfile(cache_path):
-                os.remove(cache_path)
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
+        result = await self.fcst.get_cached_forecast_data(str(cache_path))
+        removed = not os.path.isfile(cache_path)
         self.assertIsNone(result)
         self.assertTrue(removed)
 
