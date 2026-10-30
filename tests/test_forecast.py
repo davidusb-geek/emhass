@@ -391,7 +391,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         repo_files_before = sorted(p.name for p in repo_data_path.iterdir())
         tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(
-            unittest.mock.patch.dict(self.fcst.emhass_conf, {"data_path": tmp_data_path})
+            unittest.mock.patch.object(
+                self.fcst, "emhass_conf", {**self.fcst.emhass_conf, "data_path": tmp_data_path}
+            )
         )
         self.assertEqual(list(tmp_data_path.iterdir()), [])
 
@@ -3846,7 +3848,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = self._openmeteo_unixtime_payload(data)
         tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(
-            unittest.mock.patch.dict(self.fcst.emhass_conf, {"data_path": tmp_data_path})
+            unittest.mock.patch.object(
+                self.fcst, "emhass_conf", {**self.fcst.emhass_conf, "data_path": tmp_data_path}
+            )
         )
         with aioresponses() as mocked:
             mocked.get(re.compile(r"https://api\.open-meteo\.com/.*"), payload=data)
@@ -3859,6 +3863,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertIn("ghi", df.columns)
             self.assertIn("dni", df.columns)
             self.assertIn("dhi", df.columns)
+            self.assertEqual(len(df), len(self.fcst.forecast_dates))
             # The irradiance columns are filled with 0, so check the payload covered the horizon
             self.assertFalse(df[["temp_air", "cloud_cover"]].isna().any().any())
 
