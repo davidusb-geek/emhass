@@ -222,6 +222,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test PV forecast adjustment
     async def test_pv_forecast_adjust(self):
+        self._isolate_weather_cache_dir()  # the fitted model and debug CSVs go to a temp dir
         model_type = "long_train_data"
         data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
         async with aiofiles.open(data_path, "rb") as inp:
@@ -279,6 +280,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # regression output, which can be negative (e.g. LassoRegression extrapolating
     # on a cloudy day after sunny training history). Result must be clamped to >= 0.
     async def test_pv_forecast_adjust_clamps_negative(self):
+        self._isolate_weather_cache_dir()  # the debug CSVs go to a temp dir
         idx = pd.date_range("2026-04-19 10:00:00", periods=4, freq="15min", tz=self.fcst.time_zone)
         forecasted_pv = pd.DataFrame({"forecast": [500.0, 600.0, 700.0, 800.0]}, index=idx)
 
@@ -305,6 +307,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # from its input. With the raw integer hour feature a constant input curve
     # produced steps of the full hour-coefficient at every hour boundary.
     async def test_pv_forecast_adjust_no_hour_boundary_jump(self):
+        self._isolate_weather_cache_dir()  # the debug CSVs go to a temp dir
         idx = pd.date_range("2026-04-19 10:00:00", periods=17, freq="15min", tz=self.fcst.time_zone)
         forecasted_pv = pd.DataFrame({"forecast": np.full(len(idx), 1000.0)}, index=idx)
 
@@ -328,6 +331,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # from the PV adjustment training set; without a curtailment series the
     # training set is unchanged.
     async def test_pv_forecast_adjust_drops_curtailed_timesteps(self):
+        self._isolate_weather_cache_dir()  # the debug CSVs go to a temp dir
         idx = pd.date_range("2026-04-19 10:00:00", periods=16, freq="30min", tz=self.fcst.time_zone)
         data = pd.DataFrame(
             {
@@ -3711,7 +3715,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         behaviour is to delete the stale pickle so the next call fetches fresh
         data from the API.
         """
-        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_stale_test.pkl"
+        w_forecast_cache_path = (
+            self._isolate_weather_cache_dir() / "weather_forecast_data_stale_test.pkl"
+        )
         # Build a cache that covers yesterday only (stale relative to forecast_dates)
         yesterday = self.fcst.forecast_dates[0] - pd.Timedelta(days=1)
         stale_index = pd.date_range(
@@ -3742,7 +3748,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         Also exercises the os.remove-after-close path on Windows (the file handle
         must be released before unlink, else PermissionError [WinError 32]).
         """
-        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_corrupt_test.pkl"
+        w_forecast_cache_path = (
+            self._isolate_weather_cache_dir() / "weather_forecast_data_corrupt_test.pkl"
+        )
         # Write a non-DataFrame payload directly (bypasses set_cached_forecast_data)
         with open(w_forecast_cache_path, "wb") as f:
             pickle.dump({"not": "a dataframe"}, f)
@@ -3760,7 +3768,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         (reindex + zero-fill) must still be used to preserve daily API quota.
         """
         w_forecast_cache_path = (
-            emhass_conf["data_path"] / "weather_forecast_data_stale_solcast_test.pkl"
+            self._isolate_weather_cache_dir() / "weather_forecast_data_stale_solcast_test.pkl"
         )
         yesterday = self.fcst.forecast_dates[0] - pd.Timedelta(days=1)
         stale_index = pd.date_range(
@@ -3778,8 +3786,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             result = await self.fcst.get_cached_forecast_data(w_forecast_cache_path)
         finally:
             self.fcst.weather_forecast_method = original_method
-            if w_forecast_cache_path.exists():
-                os.remove(w_forecast_cache_path)
 
         # Must return a DataFrame (stale data served, file NOT deleted)
         self.assertIsInstance(result, pd.DataFrame)
@@ -3890,10 +3896,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         cache file).
         """
         payload = await self._load_openmeteo_mock_payload()
-        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
-        # Ensure a true cold start: no cache file on disk.
-        if os.path.exists(json_path):
-            os.remove(json_path)
+        # The per-test directory is empty, so this is a true cold start.
+        json_path = self._isolate_weather_cache_dir() / "cached-open-meteo-forecast-b.json"
         url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
         # Patch the backoff to zero so the test does not actually sleep.
         original_backoff = forecast_module.open_meteo_backoff_seconds
@@ -3923,14 +3927,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertIn("minutely_15", persisted)
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
-            if os.path.exists(json_path):
-                os.remove(json_path)
 
     async def test_open_meteo_cold_start_all_attempts_fail_returns_none(self):
         """Cold start with every attempt failing returns None and writes no cache."""
-        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
-        if os.path.exists(json_path):
-            os.remove(json_path)
+        json_path = self._isolate_weather_cache_dir() / "cached-open-meteo-forecast-b.json"
         url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
         original_backoff = forecast_module.open_meteo_backoff_seconds
         forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
@@ -3949,8 +3949,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             )
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
-            if os.path.exists(json_path):
-                os.remove(json_path)
 
     async def test_open_meteo_cache_present_falls_back_immediately_no_retry(self):
         """Cache present: a fetch failure falls back to the cache with NO retry.
@@ -3961,7 +3959,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         cache file must be preserved (never overwritten on failure).
         """
         payload = await self._load_openmeteo_mock_payload()
-        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
+        json_path = self._isolate_weather_cache_dir() / "cached-open-meteo-forecast-b.json"
         # Seed a valid cache file on disk (this is the fallback content).
         cache_content = orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode()
         async with aiofiles.open(json_path, "w") as json_file:
@@ -3988,8 +3986,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await json_file.read(), cache_content)
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
-            if os.path.exists(json_path):
-                os.remove(json_path)
 
     async def test_open_meteo_request_timeout_is_set(self):
         """A bounded per-request ClientTimeout is applied to the Open-Meteo fetch.
@@ -3999,9 +3995,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         cold start is handled like any other transient error (retried, then
         None when it persists).
         """
-        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
-        if os.path.exists(json_path):
-            os.remove(json_path)
+        self._isolate_weather_cache_dir()  # an empty directory: a cold start
         # Assert the timeout constant is finite and sensible.
         self.assertIsNotNone(forecast_module.open_meteo_request_timeout)
         self.assertGreater(forecast_module.open_meteo_request_timeout, 0)
@@ -4031,8 +4025,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(captured["timeout"].total, forecast_module.open_meteo_request_timeout)
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
-            if os.path.exists(json_path):
-                os.remove(json_path)
 
     def test_cloud_cover_to_irradiance(self):
         """Test the manual irradiance calculation from cloud cover."""
@@ -5907,6 +5899,7 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = TestForecastDatesTieAlignment.asyncSetUp
 
     _build_forecast = TestForecastDatesTieAlignment._build_forecast
+    _isolate_weather_cache_dir = TestForecast._isolate_weather_cache_dir
 
     @staticmethod
     def _marker(ts: pd.Timestamp) -> float:
@@ -5970,6 +5963,7 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
                     }
                 }
                 fcst.get_cached_open_meteo_forecast_json = AsyncMock(return_value=raw)
+                self._isolate_weather_cache_dir(fcst)  # the debug CSV goes to a temp dir
                 data = await fcst._get_weather_open_meteo("no-such-cache.json", False)
                 self.assertEqual(list(data.index), list(fcst.forecast_dates))
                 self.assertTrue(data.index.is_unique)
@@ -5988,18 +5982,15 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
             step=pd.Timedelta(minutes=30),
         )
         csv_rows = pd.date_range("2026-10-14 10:00", periods=4, freq="30min", tz=tz)
-        csv_path = emhass_conf["data_path"] / "tmp_short_forecast.csv"
-        try:
-            pd.DataFrame(
-                {"ts": [t.isoformat() for t in csv_rows], "v": [1.0, 2.0, 3.0, 4.0]}
-            ).to_csv(csv_path, header=False, index=False)
-            grid = pd.date_range("2026-10-14 10:00", periods=8, freq="30min", tz=tz)
-            with self.assertLogs(logger, level="WARNING") as captured:
-                out = fcst.get_forecast_out_from_csv_or_list(
-                    pd.DataFrame(index=grid), grid, str(csv_path)
-                )
-        finally:
-            csv_path.unlink(missing_ok=True)
+        csv_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory())) / "forecast.csv"
+        pd.DataFrame({"ts": [t.isoformat() for t in csv_rows], "v": [1.0, 2.0, 3.0, 4.0]}).to_csv(
+            csv_path, header=False, index=False
+        )
+        grid = pd.date_range("2026-10-14 10:00", periods=8, freq="30min", tz=tz)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            out = fcst.get_forecast_out_from_csv_or_list(
+                pd.DataFrame(index=grid), grid, str(csv_path)
+            )
         self.assertEqual(out.iloc[:, 0].tolist(), [1.0, 2.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0])
         self.assertTrue(any("does not cover 3 of 8" in m for m in captured.output))
 
@@ -6015,28 +6006,25 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
             step=pd.Timedelta(minutes=30),
         )
         grid = pd.date_range("2026-10-14 10:00", periods=48, freq="30min", tz=tz)
-        csv_path = emhass_conf["data_path"] / "tmp_quiet_forecast.csv"
-        try:
-            for label, rows in (
-                (
-                    "hourly source on a 30-minute grid",
-                    pd.date_range("2026-10-14 09:00", periods=30, freq="60min", tz=tz),
-                ),
-                (
-                    "source 3 minutes off the grid",
-                    pd.date_range("2026-10-14 09:57", periods=60, freq="30min", tz=tz),
-                ),
-            ):
-                with self.subTest(source=label):
-                    pd.DataFrame(
-                        {"ts": [t.isoformat() for t in rows], "v": range(len(rows))}
-                    ).to_csv(csv_path, header=False, index=False)
-                    with self.assertNoLogs(logger, level="WARNING"):
-                        fcst.get_forecast_out_from_csv_or_list(
-                            pd.DataFrame(index=grid), grid, str(csv_path)
-                        )
-        finally:
-            csv_path.unlink(missing_ok=True)
+        csv_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory())) / "forecast.csv"
+        for label, rows in (
+            (
+                "hourly source on a 30-minute grid",
+                pd.date_range("2026-10-14 09:00", periods=30, freq="60min", tz=tz),
+            ),
+            (
+                "source 3 minutes off the grid",
+                pd.date_range("2026-10-14 09:57", periods=60, freq="30min", tz=tz),
+            ),
+        ):
+            with self.subTest(source=label):
+                pd.DataFrame({"ts": [t.isoformat() for t in rows], "v": range(len(rows))}).to_csv(
+                    csv_path, header=False, index=False
+                )
+                with self.assertNoLogs(logger, level="WARNING"):
+                    fcst.get_forecast_out_from_csv_or_list(
+                        pd.DataFrame(index=grid), grid, str(csv_path)
+                    )
 
     def test_perfect_forecast_profile_starting_mid_day_is_matched_by_wall_time(self):
         """A profile whose first item is 10:00 puts item 0 on every 10:00, not on midnight."""
@@ -6103,14 +6091,11 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
             step=pd.Timedelta(minutes=60),
         )
         index = pd.date_range("2026-10-25 00:00", "2026-10-25 05:00", freq="60min", tz=tz)
-        csv_path = emhass_conf["data_path"] / "tmp_dst_local_iso_forecast.csv"
-        try:
-            pd.DataFrame(
-                {"ts": [t.isoformat() for t in index], "v": [self._marker(t) for t in index]}
-            ).to_csv(csv_path, header=False, index=False)
-            self.assertGreater(len({t.utcoffset() for t in index}), 1)
-            df = fcst._load_forecast_data(str(csv_path), None, index)
-        finally:
-            csv_path.unlink(missing_ok=True)
+        csv_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory())) / "forecast.csv"
+        pd.DataFrame(
+            {"ts": [t.isoformat() for t in index], "v": [self._marker(t) for t in index]}
+        ).to_csv(csv_path, header=False, index=False)
+        self.assertGreater(len({t.utcoffset() for t in index}), 1)
+        df = fcst._load_forecast_data(str(csv_path), None, index)
         self.assertEqual(list(df.index.tz_convert("UTC")), list(index.tz_convert("UTC")))
         self.assertEqual(df["yhat"].tolist(), [self._marker(t) for t in index])
