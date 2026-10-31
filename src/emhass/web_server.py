@@ -660,8 +660,10 @@ async def _handle_action_dispatch(
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
         try:
-            await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+            success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
         except SocFractionError:
+            return await grab_log(action_str), 400
+        if not success:
             return await grab_log(action_str), 400
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 

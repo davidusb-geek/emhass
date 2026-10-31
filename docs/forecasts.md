@@ -183,6 +183,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
+The action answers with HTTP 400 and the action log when it reports a failure, for example a rejected forecast.
 
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
 ```bash

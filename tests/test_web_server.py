@@ -267,6 +267,26 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_weather_cache_failure_is_400(self, mock_load, mock_cache, mock_grab):
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_cache.return_value = False
+        # a non-ERROR log line, so only the returned False can make this a 400
+        mock_grab.return_value = ["WARNING the forecast was rejected"]
+        response = await self.client.post("/action/weather-forecast-cache", json={})
+        self.assertEqual(response.status_code, 400)
+        mock_grab.assert_awaited_once_with(" >> Performing weather forecast, try to caching result")
+
+    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_weather_cache_success_is_200(self, mock_load, mock_cache):
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_cache.return_value = True
+        response = await self.client.post("/action/weather-forecast-cache", json={})
+        self.assertEqual(response.status_code, 200)
+
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
     @patch("emhass.web_server.export_influxdb_to_csv", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
     async def test_action_export_csv_soc_fraction_is_400(self, mock_load, mock_export, mock_grab):
