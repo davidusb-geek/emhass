@@ -108,6 +108,13 @@ for (const [kind, reply] of Object.entries({
     assert.notEqual(s.registry.alert.style.display, 'block'); s.done();
   });
 }
+test('a successful view load keeps the error of an unrelated action visible', async () => {
+  const s = setup({ replies: healthy }); await s.load();
+  s.registry['alert-text'].textContent = 'optimisation failed'; s.registry.alert.style.display = 'block';
+  await s.toggle();
+  assert.equal(s.container.firstElementChild.id, 'advance');
+  assert.equal(s.registry.alert.style.display, 'block'); assert.match(alertText(s), /optimisation failed/); s.done();
+});
 test('an incomplete Advanced template keeps the working Basic view', async () => {
   const incomplete = ADVANCED.replace(/id=["']?dayahead-optim["']?(?=[\s>])/, 'id=renamed');
   const s = setup({ replies: { ...healthy, 'advanced.html': ok(incomplete) } });

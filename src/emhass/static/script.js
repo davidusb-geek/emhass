@@ -73,6 +73,8 @@ async function loadButtons(page) {
   }
 }
 
+const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
+
 //fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
 async function loadView(page) {
   const file = page + ".html";
@@ -85,7 +87,9 @@ async function loadView(page) {
   }
   document.getElementById("TabSelection").innerHTML = htmlData; //container element to house basic or advanced data
   await loadButtons(page); //load buttons based on basic or advanced
-  document.getElementById("alert").style.display = "none"; //a failed earlier load is now recovered
+  if (document.getElementById("alert-text").textContent.includes(VIEW_ERROR_PREFIX)) {
+    document.getElementById("alert").style.display = "none"; //only a failed earlier view load is recovered, not another action's error
+  }
 }
 
 //on check present basic or advanced html inside form element
@@ -147,7 +151,7 @@ async function SwitchBasicOrAdvanced() {
 //report a failed view load in the alert box (the view's own status icons may not exist)
 function showViewError(error) {
   document.getElementById("alert-text").textContent =
-    "\r\n\u2022 Unable to load the page view: " + error.message;
+    "\r\n\u2022 " + VIEW_ERROR_PREFIX + error.message;
   document.getElementById("alert").style.display = "block";
   document.getElementById("alert").style.textAlign = "left";
 }
