@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import pathlib
 import re
 import tempfile
@@ -1584,6 +1585,11 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_build_secrets(self):
+        # build_secrets prefers EMHASS_URL, SUPERVISOR_TOKEN and TIME_ZONE from the environment over
+        # the files under test; a developer's own values must not change the expected defaults.
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+            environ.pop(name, None)
         # Test the build_secrets defaults from get_test_params()
         params = await TestUtils.get_test_params()
         expected_keys = [

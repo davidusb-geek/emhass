@@ -40,6 +40,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # build_secrets reads EMHASS_URL and SUPERVISOR_TOKEN from the environment; a developer's
+        # own values must not reach these tests. The environment is restored after each test.
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN"):
+            environ.pop(name, None)
         emhass_conf["data_path"] = root / "data/"
 
         self.get_data_from_file = True
@@ -193,10 +198,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
         test_url = "http://mock.invalid/history"
-        with aioresponses() as mocked:
+        with aioresponses() as mocked, self.assertLogs(logger, level="ERROR") as logs:
             mocked.get(test_url, status=401, repeat=True)
             response = await self.rh.get_data(days_list, var_list, test_url=test_url)
         self.assertFalse(response)
+        # Only the HTTP 401 branch logs this; a connection error logs "Network error" instead
+        self.assertTrue(any("TOKEN/KEY is invalid or missing" in line for line in logs.output))
         self.assertIn(("GET", test_url), [(m, str(u)) for m, u in mocked.requests])
 
     # Test with html mock response
@@ -2136,7 +2143,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     @patch("aiofiles.open")
     async def test_post_data_extended(self, mock_aio_open):
         self.rh.get_data_from_file = False
-        # Every POST goes to a controlled response: four successes, then one 500 below
+        # Every POST goes to a controlled response: four successes, then one 503 below
         mocked = self.enterContext(aioresponses())
         states_url = re.compile(r".*/states/.*")
         for _ in range(4):
@@ -2229,15 +2236,16 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_f.write.called)
         self.assertGreaterEqual(mock_f.write.call_count, 2)
 
-        # Test Error Handling (response_ok = False): the next POST gets a 500
-        mocked.post(states_url, status=500)
+        # Test Error Handling (response_ok = False): the next POST gets a 503. post_data reports
+        # 500 for any transport exception, so a 503 can only come from the mocked response.
+        mocked.post(states_url, status=503)
         # Use dont_post=False to force the POST (get_data_from_file is False, set at start)
         response, _ = await self.rh.post_data(
             data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
         )
 
         self.assertFalse(response.ok)
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 503)
         # The four successful posts and the failing one all reached the mocked endpoint
         posts = sum(
             len(calls) for (method, _), calls in mocked.requests.items() if method == "POST"
