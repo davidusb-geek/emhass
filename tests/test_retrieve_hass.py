@@ -7,6 +7,7 @@ import inspect
 import os
 import pathlib
 import pickle
+import re
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2135,6 +2136,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     @patch("aiofiles.open")
     async def test_post_data_extended(self, mock_aio_open):
         self.rh.get_data_from_file = False
+        # Every POST goes to a controlled response: four successes, then one 500 below
+        mocked = self.enterContext(aioresponses())
+        states_url = re.compile(r".*/states/.*")
+        for _ in range(4):
+            mocked.post(states_url, status=200)
 
         # Setup mock file context for save_entities=True
         mock_f = AsyncMock()
@@ -2153,6 +2159,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             data_df, idx, entity_id, "monetary", "EUR", "Cost Function", "cost_fun"
         )
         self.assertEqual(data["state"], f"{data_df.sum():.2f}")
+        self.assertTrue(response.ok)
 
         # Test "optim_status" type
         status_df = pd.Series(["Optimal"], index=[0])
@@ -2160,12 +2167,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             status_df, 0, "sensor.optim_status", "none", "", "Status", "optim_status"
         )
         self.assertEqual(data["state"], "Optimal")
+        self.assertTrue(response.ok)
 
         # Test "deferrable" type (complex attributes)
         response, data = await self.rh.post_data(
             data_df, idx, entity_id, "power", "W", "Deferrable", "deferrable"
         )
         self.assertIn("deferrables_schedule", data["attributes"])
+        self.assertTrue(response.ok)
 
         # Test "unit_load_cost" (4 decimals)
         response, data = await self.rh.post_data(
@@ -2173,6 +2182,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(data["state"], f"{data_df.iloc[0]:.4f}")
         self.assertIn("unit_load_cost_forecasts", data["attributes"])
+        self.assertTrue(response.ok)
 
         # Test save_entities=True
         # Save old path to restore later
@@ -2219,23 +2229,20 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_f.write.called)
         self.assertGreaterEqual(mock_f.write.call_count, 2)
 
-        # Test Error Handling (response_ok = False)
-        # We need to un-patch the aioresponses or create a new specific patch for client session
-        with patch("aiohttp.ClientSession.post") as mock_post:
-            mock_resp = AsyncMock()
-            mock_resp.ok = False
-            mock_resp.status = 500
-            mock_resp.__aenter__.return_value = mock_resp
-            mock_post.return_value = mock_resp
+        # Test Error Handling (response_ok = False): the next POST gets a 500
+        mocked.post(states_url, status=500)
+        # Use dont_post=False to force the POST (get_data_from_file is False, set at start)
+        response, _ = await self.rh.post_data(
+            data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
+        )
 
-            # Use dont_post=False to force network attempt
-            # Ensure get_data_from_file is False (set at start of test)
-            response, _ = await self.rh.post_data(
-                data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
-            )
-
-            self.assertFalse(response.ok)
-            self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.ok)
+        self.assertEqual(response.status_code, 500)
+        # The four successful posts and the failing one all reached the mocked endpoint
+        posts = sum(
+            len(calls) for (method, _), calls in mocked.requests.items() if method == "POST"
+        )
+        self.assertEqual(posts, 5)
 
     async def test_concurrent_save_entities_metadata_integrity(self):
         """Concurrent publishes that share entities/metadata.json must not

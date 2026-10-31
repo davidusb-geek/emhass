@@ -285,6 +285,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Without the bypass, the first call stores the object in the cache and
         the second call returns the same cached (stale) object.
         """
+        # Offline weather: the list-forecast Open-Meteo augmentation (#997) is fail-soft
+        open_meteo = self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
         OptimizationCache.clear(logger)
         params_json, runtimeparams_json = await self._params_with_shared_tank(48.0)
         idd1 = await set_input_data_dict(
@@ -320,6 +328,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             idd2["opt"].optim_conf["shared_thermal_tanks"][0]["start_temperature"], 40.0
         )
+        open_meteo.assert_awaited()
 
     async def test_set_input_data_dict_caches_without_shared_thermal_tanks(self):
         """Regression guard: the warm-start cache must still work for ordinary
@@ -2385,6 +2394,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Test that thermal config parameters (def_load_config and heater overrides)
         are correctly processed for non-MPC actions (e.g. dayahead-optim).
         """
+        # Offline weather: the list-forecast Open-Meteo augmentation (#997) is fail-soft
+        open_meteo = self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
         costfun = "profit"
         action = "dayahead-optim"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -2431,6 +2448,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(thermal_config["start_temperature"], 25.5)
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
+        open_meteo.assert_awaited()
 
     @patch("emhass.command_line.publish_json", new_callable=AsyncMock)
     @patch("emhass.command_line.aiofiles.open")
