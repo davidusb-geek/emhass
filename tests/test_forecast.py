@@ -2858,8 +2858,19 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         # Obtain only 48 rows of data and remove last column for input
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
-        # Get weather forecast with list
-        p_pv_forecast = await fcst.get_weather_forecast()
+        # Get weather forecast with list. The default Open-Meteo request is answered from the
+        # recorded payload, into an empty per-test cache, so it needs neither network nor cache.
+        self._isolate_weather_cache_dir(fcst)
+        async with aiofiles.open(
+            emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2", "rb"
+        ) as f:
+            recorded = cPickle.loads(bz2.decompress(await f.read()))
+        payload = self._openmeteo_unixtime_payload(orjson.loads(recorded.content))
+        open_meteo_url = re.compile(r"^https://api\.open-meteo\.com/v1/forecast\?")
+        with aioresponses() as mocked:
+            mocked.get(open_meteo_url, payload=payload)
+            p_pv_forecast = await fcst.get_weather_forecast()
+        self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 1)
         df_input_data.index = p_pv_forecast.index
         df_input_data.index.freq = rh.df_final.index.freq
         # Get load cost forecast with list, check values from output
