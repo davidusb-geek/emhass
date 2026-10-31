@@ -84,6 +84,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         return params
 
     async def asyncSetUp(self):
+        data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        shutil.copytree(root / "data", data_path, dirs_exist_ok=True)
+        self.enterContext(patch.dict(emhass_conf, {"data_path": data_path}))
         params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
         # Add runtime parameters for forecast lists
         runtimeparams = {
@@ -1075,6 +1078,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                     "perfect-optim",
                     "--config",
                     str(emhass_conf["config_path"]),
+                    "--data",
+                    str(emhass_conf["data_path"]),
                     "--debug",
                     "True",
                     "--params",
@@ -1114,6 +1119,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                     "dayahead-optim",
                     "--config",
                     str(emhass_conf["config_path"]),
+                    "--data",
+                    str(emhass_conf["data_path"]),
                     "--params",
                     self.params_json,
                     "--runtimeparams",
@@ -1142,6 +1149,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 "naive-mpc-optim",
                 "--config",
                 str(emhass_conf["config_path"]),
+                "--data",
+                str(emhass_conf["data_path"]),
                 "--params",
                 self.params_json,
                 "--runtimeparams",
@@ -3907,6 +3916,9 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test fixtures and clear the cache."""
+        data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        shutil.copytree(root / "data", data_path, dirs_exist_ok=True)
+        self.enterContext(patch.dict(emhass_conf, {"data_path": data_path}))
         OptimizationCache.clear()
         self.params = await TestOptimizationCacheIntegration.get_test_params()
 
