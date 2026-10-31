@@ -70,6 +70,11 @@ window.onload = async function () {
   let param_definitions = await getParamDefinitions();
   //obtain configuration from emhass (pull)
   let config = await obtainConfig();
+  //fail closed: a failed load is not an empty configuration. Render no form, allow no save
+  if (config === null) {
+    document.getElementById("save").disabled = true;
+    return;
+  }
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
   let list_html = await getListHTML();
   //load list parameter page (default)
@@ -113,22 +118,44 @@ async function getParamDefinitions() {
 }
 
 //obtain emhass config (from saved params extracted/simplified into the config format)
+//returns null when the configuration could not be obtained (never an empty config)
 async function obtainConfig() {
   config = {};
-  const response = await fetch(`get-config`, {
-    method: "GET",
-  });
-  let  response_status = response.status; //return status
-  //if request failed
-  if (response_status !== 200 && response_status !== 201) {
-    showChangeStatus(response_status, await response.json());
-    return {};
+  try {
+    const response = await fetch(`get-config`, {
+      method: "GET",
+    });
+    let  response_status = response.status; //return status
+    //if request failed
+    if (response_status !== 200 && response_status !== 201) {
+      showChangeStatus(response_status, await readErrorLog(response));
+      return null;
+    }
+    //else extract json rom data
+    let blob = await response.blob(); //get data blob
+    config = await new Response(blob).json(); //obtain json from blob
+    if (config === null || typeof config !== "object" || Array.isArray(config)) {
+      throw new Error("the response is not a configuration object");
+    }
+    showChangeStatus(response_status, {});
+    return config;
+  } catch (error) {
+    showChangeStatus(0, [`Unable to obtain the configuration: ${error.message}`]);
+    return null;
   }
-  //else extract json rom data
-  let blob = await response.blob(); //get data blob
-  config = await new Response(blob).json(); //obtain json from blob
-  showChangeStatus(response_status, {});
-  return config;
+}
+
+//error messages of a failed response: the JSON list sent by emhass, else the HTTP status
+async function readErrorLog(response) {
+  try {
+    const log = await response.json();
+    if (Array.isArray(log) && log.length) {
+      return log;
+    }
+  } catch (error) {
+    //not JSON (e.g. a proxy error page)
+  }
+  return [`HTTP ${response.status}`];
 }
 
 //obtain emhass default config (to present the default parameters in view)
@@ -140,8 +167,8 @@ async function ObtainDefaultConfig() {
   //if request failed
   let response_status = response.status; //return status
   if (response_status !== 200 && response_status !== 201) {
-    showChangeStatus(response_status, await response.json());
-    return {};
+    showChangeStatus(response_status, await readErrorLog(response));
+    return null;
   }
   //else extract json rom data
   let blob = await response.blob(); //get data blob
@@ -1064,14 +1091,19 @@ async function saveConfiguration(param_definitions) {
   }
 
   //finally, send built config to emhass
-  const response = await fetch(`set-config`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(config),
-  });
-  showChangeStatus(response.status, await response.json());
+  try {
+    const response = await fetch(`set-config`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+    const saved = response.status === 200 || response.status === 201;
+    showChangeStatus(response.status, saved ? [] : await readErrorLog(response));
+  } catch (error) {
+    showChangeStatus(0, [`Unable to save the configuration: ${error.message}. Reload the page to check the stored settings.`]);
+  }
 }
 
 //Toggle between box (json) and list view
@@ -1103,6 +1135,10 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   } else {
     //obtain latest config
     config = await obtainConfig();
+  }
+  //keep the current view if the configuration could not be obtained
+  if (config === null) {
+    return;
   }
 
   //if array is empty assume json box is selected
