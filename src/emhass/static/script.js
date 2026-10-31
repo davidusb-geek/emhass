@@ -7,7 +7,11 @@
 
 //on page reload get saved data
 window.onload = async function () {
-  await loadBasicOrAdvanced();
+  try {
+    await loadBasicOrAdvanced();
+  } catch (error) {
+    showViewError(error);
+  }
   initStickyTables();
 
   //add listener for basic and advanced html switch
@@ -16,23 +20,32 @@ window.onload = async function () {
     .addEventListener("click", () => SwitchBasicOrAdvanced());
 };
 
+//action buttons of the advanced view
+const ADVANCED_ACTION_IDS = [
+  "dayahead-optim",
+  "forecast-model-fit",
+  "forecast-model-predict",
+  "forecast-model-tune",
+  "forecast-calibration",
+  "regressor-model-fit",
+  "regressor-model-predict",
+  "export-influxdb-to-csv",
+  "perfect-optim",
+  "publish-data",
+  "naive-mpc-optim",
+];
+
+//controls loadButtons attaches listeners to, per view
+const VIEW_CONTROL_IDS = {
+  basic: ["dayahead-optim-basic"],
+  advanced: [...ADVANCED_ACTION_IDS, "input-plus", "input-minus", "input-select", "input-clear"],
+};
+
 //add listeners to buttons (based on page)
 async function loadButtons(page) {
   switch (page) {
     case "advanced":
-      [
-        "dayahead-optim",
-        "forecast-model-fit",
-        "forecast-model-predict",
-        "forecast-model-tune",
-        "forecast-calibration",
-        "regressor-model-fit",
-        "regressor-model-predict",
-        "export-influxdb-to-csv",
-        "perfect-optim",
-        "publish-data",
-        "naive-mpc-optim",
-      ].forEach((id) =>
+      ADVANCED_ACTION_IDS.forEach((id) =>
         document
           .getElementById(id)
           .addEventListener("click", () => formAction(id, "advanced"))
@@ -50,7 +63,7 @@ async function loadButtons(page) {
         .addEventListener("click", () => ClearInputData());
       
       // Check if InfluxDB is enabled and show/hide export section
-      await checkInfluxDBAndShowExport();
+      checkInfluxDBAndShowExport(); //not awaited: it handles its own errors and must not delay the view setup
       break;
     case "basic":
       document
@@ -60,36 +73,41 @@ async function loadButtons(page) {
   }
 }
 
+//fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
+async function loadView(page) {
+  const file = page + ".html";
+  const htmlData = await getHTMLData(file);
+  const probe = document.createElement("template");
+  probe.innerHTML = htmlData;
+  const missing = VIEW_CONTROL_IDS[page].filter((id) => probe.content.querySelector(`#${id}`) === null);
+  if (missing.length) {
+    throw new Error(`${file} is incomplete (missing ${missing.join(", ")})`);
+  }
+  document.getElementById("TabSelection").innerHTML = htmlData; //container element to house basic or advanced data
+  await loadButtons(page); //load buttons based on basic or advanced
+  document.getElementById("alert").style.display = "none"; //a failed earlier load is now recovered
+}
+
 //on check present basic or advanced html inside form element
 async function loadBasicOrAdvanced(RequestedPage) {
-  let basicFile = "basic.html";
-  let advencedFile = "advanced.html";
-  let formContainer = document.getElementById("TabSelection"); //container element to house basic or advanced data
-  let htmlData
   //first check any function  arg
   if (arguments.length == 1) {
     switch (RequestedPage) {
       case "basic":
-        htmlData = await getHTMLData(basicFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("basic"); //load buttons based on basic or advanced
+        await loadView("basic");
         if (testStorage()) {
           localStorage.setItem("TabSelection", "basic");
         } //remember mode (save to localStorage)
         return "basic"; //return basic to get saved data
       case "advanced":
-        htmlData = await getHTMLData(advencedFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("advanced");
+        await loadView("advanced");
         if (testStorage()) {
           localStorage.setItem("TabSelection", "advanced");
         }
         getSavedData();
         return "advanced";
       default:
-        htmlData = await getHTMLData(advencedFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("advanced");
+        await loadView("advanced");
         getSavedData();
         return "advanced";
     }
@@ -101,41 +119,45 @@ async function loadBasicOrAdvanced(RequestedPage) {
       localStorage.getItem("TabSelection") === "advanced"
     ) {
       //if advance
-      let htmlData = await getHTMLData(advencedFile);
-      formContainer.innerHTML = htmlData;
-      loadButtons("advanced");
+      await loadView("advanced");
       getSavedData();
       return "advanced";
     } else {
       //else run basic (first time)
-      htmlData = await getHTMLData(basicFile);
-      formContainer.innerHTML = htmlData;
-      loadButtons("basic");
+      await loadView("basic");
       return "basic";
     }
   } else {
     //if localStorage not supported, set to advanced page
-    htmlData = await getHTMLData(advencedFile);
-    formContainer.innerHTML = htmlData;
-    loadButtons("advanced");
+    await loadView("advanced");
     return "advanced";
   }
 }
 
 //on button press, check current displayed page data and switch
-function SwitchBasicOrAdvanced() {
-  let formContainerChildID =
-    document.getElementById("TabSelection").firstElementChild.id;
-  if (formContainerChildID === "basic") {
-    loadBasicOrAdvanced("advanced");
-  } else {
-    loadBasicOrAdvanced("basic");
+async function SwitchBasicOrAdvanced() {
+  const current = document.getElementById("TabSelection").firstElementChild;
+  try {
+    await loadBasicOrAdvanced(current && current.id === "basic" ? "advanced" : "basic");
+  } catch (error) {
+    showViewError(error); //the current view is left untouched
   }
+}
+
+//report a failed view load in the alert box (the view's own status icons may not exist)
+function showViewError(error) {
+  document.getElementById("alert-text").textContent =
+    "\r\n\u2022 Unable to load the page view: " + error.message;
+  document.getElementById("alert").style.display = "block";
+  document.getElementById("alert").style.textAlign = "left";
 }
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
   const response = await fetch(`static/` + htmlFile);
+  if (!response.ok) {
+    throw new Error(`${htmlFile} request failed with HTTP ${response.status}`);
+  }
   let blob = await response.blob(); //get data blob
   let htmlTemplateData = await new Response(blob).text(); //obtain html from blob
   return htmlTemplateData;
