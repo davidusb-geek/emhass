@@ -183,7 +183,10 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
-The action answers with HTTP 400 and the action log when it reports a failure, for example a rejected forecast.
+The action answers with HTTP 400 and the action log when the forecast could not be produced. Earlier versions answered 200 in these cases, so clients that relied on that status should be updated. The failures are:
+- Solcast returning an HTTP error, or the daily call cap already being used.
+- An invalid `weather_forecast_method`.
+- A runtime `pv_power_forecast` list that is rejected, for example one paired with a `pv_power_forecast_p10` list of a different length.
 With the `csv` weather forecast method there is nothing to cache, because your file is read on every run, so the action does nothing and answers 200.
 
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:

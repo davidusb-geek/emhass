@@ -5301,14 +5301,33 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(result, expected)
 
     async def test_weather_forecast_cache_has_nothing_to_cache_for_csv(self):
-        """A correctly sized csv file must not turn into a failed cache request."""
+        """csv is a successful no-op: the file is never read and no forecast is built."""
         params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
         params["optim_conf"]["weather_forecast_method"] = "csv"
-        with fixture_clock():
+        with (
+            fixture_clock(),
+            patch.object(Forecast, "get_weather_forecast", AsyncMock()) as get_forecast,
+            patch.object(Forecast, "__init__", side_effect=AssertionError("no Forecast")),
+        ):
             result = await weather_forecast_cache(
                 emhass_conf, orjson.dumps(params).decode("utf-8"), "{}", logger
             )
         self.assertIs(result, True)
+        get_forecast.assert_not_awaited()
+
+    async def test_weather_forecast_cache_still_runs_for_a_runtime_pv_list(self):
+        """A runtime PV list is not short-circuited: a valid one succeeds, a rejected one fails."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        params_json = orjson.dumps(params).decode("utf-8")
+        for p10_rows, expected in ((None, True), (3, False)):
+            with self.subTest(p10_rows=p10_rows), fixture_clock():
+                runtime = {"pv_power_forecast": [1.0] * 96}
+                if p10_rows:
+                    runtime["pv_power_forecast_p10"] = [0.5] * p10_rows
+                runtime = orjson.dumps(runtime).decode("utf-8")
+                result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
+                self.assertIs(result, expected)
 
     async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
         """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""
