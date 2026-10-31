@@ -4,6 +4,7 @@ import unittest
 import numpy as np
 import orjson
 import pandas as pd
+from sklearn.neighbors import KNeighborsRegressor
 
 from emhass import utils
 from emhass.machine_learning_forecaster import MLForecaster
@@ -182,8 +183,8 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
 
-    async def test_error_handling_and_fallbacks(self):
-        """Test error handling for invalid models or data."""
+    async def test_unknown_sklearn_model_falls_back_to_kneighbors(self):
+        """An unknown model name is logged and replaced by KNeighborsRegressor, not an error."""
         self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "InvalidModel"
         mlf = MLForecaster(
             self.data,
@@ -194,16 +195,21 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        try:
+        with self.assertLogs(logger, level="ERROR") as logs:
             await mlf.fit(
                 split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
                 perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
             )
-        except Exception as e:
-            self.assertIsInstance(e, (ValueError, AttributeError))
+        self.assertTrue(
+            any(
+                "InvalidModel is not valid. Defaulting to KNeighborsRegressor" in m
+                for m in logs.output
+            )
+        )
+        self.assertIsInstance(mlf.forecaster.estimator, KNeighborsRegressor)
 
-    async def test_tune_edge_case_short_data(self):
-        """Test tuning with very short data (edge case)."""
+    async def test_fit_rejects_too_few_training_rows(self):
+        """A training slice no longer than the lag window is refused with a ValueError."""
         short_data = self.data.iloc[:50]  # minimal data
         mlf = MLForecaster(
             short_data,
@@ -214,14 +220,8 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        try:
+        with self.assertRaisesRegex(ValueError, "window size"):
             await mlf.fit(split_date_delta="1h", perform_backtest=False)
-            await mlf.tune(
-                debug=True,
-                split_date_delta="1h",
-            )
-        except Exception as e:
-            self.assertIsInstance(e, (ValueError, IndexError, RuntimeError))
 
     async def test_treat_runtimeparams_ml_lags_real_associations(self):
         """
