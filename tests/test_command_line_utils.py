@@ -17,6 +17,7 @@ import numpy as np
 import orjson
 import pandas as pd
 import pytz
+import time_machine
 
 from emhass import utils
 from emhass.command_line import (
@@ -47,9 +48,10 @@ from emhass.command_line import (
     regressor_model_predict,
     retrieve_home_assistant_data,
     set_input_data_dict,
+    weather_forecast_cache,
 )
 from emhass.forecast import Forecast
-from tests.fixture_clock import fixture_clock
+from tests.fixture_clock import FIXTURE_NOW, fixture_clock
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -5230,6 +5232,81 @@ class TestContinualPublishSleep(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sleep, 1200.0)
         sleep = await self._first_sleep(pd.Timedelta(minutes=30), midnight + 1799.5)
         self.assertAlmostEqual(sleep, 0.5)
+
+
+class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
+    """A weather CSV shorter than the forecast grid stops the cycle cleanly (#1249)."""
+
+    CSV_ROWS_SHIPPED = 48  # data/data_weather_forecast.csv
+
+    async def _inputs(self, action, rows, now):
+        """set_input_data_dict on a temporary copy of data/ whose weather CSV has ``rows`` rows."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        runtimeparams = {"prediction_horizon": 48} if action == "naive-mpc-optim" else None
+        if runtimeparams:
+            params["passed_data"] = runtimeparams
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            shutil.copytree(emhass_conf["data_path"], data)
+            csv = data / "data_weather_forecast.csv"
+            lines = csv.read_text().splitlines()
+            lines = (lines * (rows // len(lines) + 1))[:rows]
+            csv.write_text("".join(line + "\n" for line in lines))
+            with time_machine.travel(now, tick=False):
+                return await set_input_data_dict(
+                    {**emhass_conf, "data_path": data},
+                    "profit",
+                    orjson.dumps(params).decode("utf-8"),
+                    orjson.dumps(runtimeparams).decode("utf-8") if runtimeparams else None,
+                    action,
+                    logger,
+                    get_data_from_file=True,
+                )
+
+    async def test_short_weather_csv_stops_the_cycle_before_the_solver(self):
+        for action in ("dayahead-optim", "naive-mpc-optim"):
+            with self.subTest(action=action):
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    result = await self._inputs(action, 24, FIXTURE_NOW)
+                self.assertFalse(result)
+                self.assertTrue(any("24 rows for 48 forecast steps" in m for m in logs.output))
+
+    async def test_weather_csv_that_covers_the_grid_builds_the_inputs(self):
+        for action in ("dayahead-optim", "naive-mpc-optim"):
+            for rows in (48, 60):  # exactly the grid, and a longer file
+                with self.subTest(action=action, rows=rows):
+                    result = await self._inputs(action, rows, FIXTURE_NOW)
+                    self.assertTrue(result)
+                    self.assertEqual(len(result["df_input_data_dayahead"]), 48)
+
+    async def test_weather_forecast_cache_treats_none_and_false_as_failure(self):
+        """The same predicate as the two optimisation actions: None and False are rejections."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "open-meteo"
+        params_json = orjson.dumps(params).decode("utf-8")
+        for forecast, expected in (
+            (None, False),
+            (False, False),
+            (pd.DataFrame({"yhat": [1.0]}), True),
+        ):
+            with self.subTest(forecast=type(forecast).__name__):
+                with (
+                    fixture_clock(),
+                    patch.object(
+                        Forecast, "get_weather_forecast", AsyncMock(return_value=forecast)
+                    ),
+                ):
+                    result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
+                self.assertIs(result, expected)
+
+    async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
+        """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""
+        fall_back = datetime(2025, 10, 25, 22, 10, tzinfo=UTC)
+        with self.assertLogs(logger, level="ERROR") as logs:
+            result = await self._inputs("dayahead-optim", self.CSV_ROWS_SHIPPED, fall_back)
+        self.assertFalse(result)
+        self.assertTrue(any("48 rows for 50 forecast steps" in m for m in logs.output))
 
 
 if __name__ == "__main__":

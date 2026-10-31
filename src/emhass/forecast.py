@@ -1020,11 +1020,16 @@ class Forecast:
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
-    def _get_weather_csv(self, csv_path: str) -> pd.DataFrame:
-        """Helper to retrieve weather data from CSV."""
+    def _get_weather_csv(self, csv_path: str) -> pd.DataFrame | None:
+        """Helper to retrieve weather data from CSV, or None if it is shorter than the grid."""
         data = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
         if len(data) < len(self.forecast_dates):
-            self.logger.error("Passed data from CSV is not long enough")
+            self.logger.error(
+                "Passed data from CSV is not long enough: %d rows for %d forecast steps",
+                len(data),
+                len(self.forecast_dates),
+            )
+            return None
         else:
             data = data.loc[data.index[0 : len(self.forecast_dates)], :]
             data.index = self.forecast_dates
