@@ -191,11 +191,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def test_get_data_failed(self):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-        response = await self.rh.get_data(days_list, var_list)
-        if self.get_data_from_file:
-            self.assertFalse(response)
-        else:
-            self.assertTrue(response)
+        test_url = "http://mock.invalid/history"
+        with aioresponses() as mocked:
+            mocked.get(test_url, status=401, repeat=True)
+            response = await self.rh.get_data(days_list, var_list, test_url=test_url)
+        self.assertFalse(response)
+        self.assertIn(("GET", test_url), [(m, str(u)) for m, u in mocked.requests])
 
     # Test with html mock response
     async def test_get_data_mock(self):
