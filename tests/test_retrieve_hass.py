@@ -40,10 +40,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        # build_secrets reads EMHASS_URL and SUPERVISOR_TOKEN from the environment; a developer's
-        # own values must not reach these tests. The environment is restored after each test.
+        # build_secrets reads EMHASS_URL, SUPERVISOR_TOKEN and TIME_ZONE from the environment; a
+        # developer's own values must not reach these tests. The environment is restored after
+        # each test.
         environ = self.enterContext(patch.dict(os.environ))
-        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN"):
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
             environ.pop(name, None)
         emhass_conf["data_path"] = root / "data/"
 
@@ -177,6 +178,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hass_url", self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
             self.assertEqual(self.retrieve_hass_conf["hass_url"], "https://myhass.duckdns.org/")
+            self.assertEqual(str(self.retrieve_hass_conf["time_zone"]), "Europe/Paris")
 
     # Check yaml parse worked
     async def test_yaml_parse_web_server(self):
