@@ -17,17 +17,17 @@
     <div id="top-links">
       <!-- index page  -->
       <a href="index" title="Home" style="margin-right: 12px; cursor: pointer; z-index: 1">
-        <svg class="feather">
+        <svg class="feather" aria-hidden="true">
           <use class="feather" href="static/img/feather-sprite.svg#home" />
         </svg>
       </a>
-      <a href="https://emhass.readthedocs.io/en/latest/">
-        <svg class="feather" title="EMHASS Docs" style="margin-right: 12px;" ;>
+      <a href="https://emhass.readthedocs.io/en/latest/" title="EMHASS Docs">
+        <svg class="feather" aria-hidden="true" style="margin-right: 12px;" ;>
           <use class="feather" href="static/img/feather-sprite.svg#book" />
         </svg>
       </a>
-      <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
-        <svg class="feather" title="EMHASS Git repo" style="margin-right: 0px;">
+      <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer" title="EMHASS Git repo">
+        <svg class="feather" aria-hidden="true" style="margin-right: 0px;">
           <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
         </svg>
       </a>
@@ -39,11 +39,11 @@
   </div>
   <div class="header-footer">
     <h4>Configuration:</h4>
-    <a id="json-toggle" title="List and Box view toggle">
-      <svg id="json" class="feather" class="header-footer-button">
+    <button type="button" id="json-toggle" class="icon-button" title="List and Box view toggle">
+      <svg id="json" class="feather" class="header-footer-button" aria-hidden="true">
         <use class="feather" href="static/img/feather-sprite.svg#code" />
       </svg>
-    </a>
+    </button>
   </div>
 
   <!-- parameter list/box elements section -->

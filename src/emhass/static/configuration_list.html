@@ -22,8 +22,7 @@
   <div class="section-card-header">
     <h4>Deferrable Loads</h4>
     <!-- #1116: 0 is a valid deferrable-load count (EMHASS accepts num_def_loads=0) -->
-    <input id="number_of_deferrable_loads" min="0" type="number">
-    </label>
+    <input id="number_of_deferrable_loads" min="0" type="number" aria-label="Number of deferrable loads">
   </div>
   <div class="section-body"> </div> <!--  parameters will get generated here -->
 </div>
@@ -46,7 +45,7 @@
     </label>
     <!-- #610: mirrors number_of_deferrable_loads above - auto-syncs the 15 -->
     <!-- per-battery array param lengths, see configuration_script.js -->
-    <input id="number_of_batteries" min="1" type="number">
+    <input id="number_of_batteries" min="1" type="number" aria-label="Number of batteries">
   </div>
   <div class="section-body"> </div> <!--  parameters will get generated here -->
 </div>
