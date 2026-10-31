@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import pickle
+import shutil
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -839,6 +840,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
     # Test outputs of fit, predict and tune
     async def test_forecast_model_fit_predict_tune(self):
+        # Private data_path so the synthetic load_forecast.pkl never touches repository data
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        tmp_data_path = pathlib.Path(tmp_dir.name)
+        for fixture in ("long_train_data.pkl", "test_df_final.pkl"):
+            shutil.copy(emhass_conf["data_path"] / fixture, tmp_data_path / fixture)
+        tmp_conf = {**emhass_conf, "data_path": tmp_data_path}
         costfun = "profit"
         action = "forecast-model-fit"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -859,7 +867,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = orjson.dumps(params).decode("utf-8")
         input_data_dict = await set_input_data_dict(
-            emhass_conf,
+            tmp_conf,
             costfun,
             params_json,
             runtimeparams_json,
@@ -872,7 +880,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
-        default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
+        default_file_path = tmp_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if default_file_path.exists():
             default_file_path.unlink()
@@ -884,7 +892,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         created_dummy = True
         try:
             input_data_dict = await set_input_data_dict(
-                emhass_conf,
+                tmp_conf,
                 costfun,
                 self.params_json,
                 self.runtimeparams_json,
