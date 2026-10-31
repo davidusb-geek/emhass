@@ -161,20 +161,28 @@ async function readErrorLog(response) {
 //obtain emhass default config (to present the default parameters in view)
 async function ObtainDefaultConfig() {
   config = {};
-  const response = await fetch(`get-config/defaults`, {
-    method: "GET",
-  });
-  //if request failed
-  let response_status = response.status; //return status
-  if (response_status !== 200 && response_status !== 201) {
-    showChangeStatus(response_status, await readErrorLog(response));
+  try {
+    const response = await fetch(`get-config/defaults`, {
+      method: "GET",
+    });
+    //if request failed
+    let response_status = response.status; //return status
+    if (response_status !== 200 && response_status !== 201) {
+      showChangeStatus(response_status, await readErrorLog(response));
+      return null;
+    }
+    //else extract json rom data
+    let blob = await response.blob(); //get data blob
+    config = await new Response(blob).json(); //obtain json from blob
+    if (config === null || typeof config !== "object" || Array.isArray(config)) {
+      throw new Error("the response is not a configuration object");
+    }
+    showChangeStatus(response_status, {});
+    return config;
+  } catch (error) {
+    showChangeStatus(0, [`Unable to obtain the default configuration: ${error.message}`]);
     return null;
   }
-  //else extract json rom data
-  let blob = await response.blob(); //get data blob
-  config = await new Response(blob).json(); //obtain json from blob
-  showChangeStatus(response_status, {});
-  return config;
 }
 
 //get html data from configuration_list.html (list template)

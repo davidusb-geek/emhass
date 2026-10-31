@@ -98,6 +98,26 @@ test('Defaults keeps the current form when GET /get-config/defaults fails with a
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['alert-text'].textContent, /HTTP 502/);
 });
+test('Defaults keeps the current form when the GET /get-config/defaults request is rejected', async () => {
+  const s = setup(() => { throw new TypeError('Failed to fetch'); });
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
+  assert.deepEqual(setConfigCalls(s), []);
+});
+for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null']]) {
+  test(`Defaults keeps the current form when GET /get-config/defaults returns 200 with ${name}`, async () => {
+    const s = setup(() => new Response(body, { status: 200 }));
+    s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+    await s.ctx.ToggleView({}, '<div></div>', true);
+    assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+    assert.equal(s.state.rendered, undefined);
+    assert.equal(s.nodes.alert.style.display, 'block');
+    assert.deepEqual(setConfigCalls(s), []);
+  });
+}
 test('List/Box toggle still switches views when GET /get-config succeeds', async () => {
   const s = setup(() => json(200, saved));
   await s.ctx.ToggleView({}, '<div></div>', false);
