@@ -146,7 +146,6 @@ p {
 
 a {
   background-color: transparent;
-  -webkit-text-decoration-skip: objects;
   color: darkblue;
   text-decoration: none;
 }
@@ -891,7 +890,6 @@ select,
 
 /* Alert box styling */
 .alert {
-  display: box;
   overflow-x: auto;
   align-items: center;
   align-self: center;
