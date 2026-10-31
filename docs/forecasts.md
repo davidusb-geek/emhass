@@ -184,6 +184,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
 The action answers with HTTP 400 and the action log when it reports a failure, for example a rejected forecast.
+With the `csv` weather forecast method there is nothing to cache, because your file is read on every run, so the action does nothing and answers 200.
 
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
 ```bash

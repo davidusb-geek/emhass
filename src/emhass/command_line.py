@@ -2676,6 +2676,11 @@ async def weather_forecast_cache(
         logger,
         emhass_conf,
     )
+    # csv reads the caller's file on every run, so there is nothing to cache. The cache action
+    # doubles the horizon, which a correctly sized file would not cover.
+    if optim_conf["weather_forecast_method"] == "csv":
+        logger.info("weather_forecast_method 'csv' is not cached: nothing to do")
+        return True
     # Make sure weather_forecast_cache is true
     if (params is not None) and (params != "null"):
         params = orjson.loads(params)

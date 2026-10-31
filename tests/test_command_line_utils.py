@@ -5300,6 +5300,16 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
                     result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
                 self.assertIs(result, expected)
 
+    async def test_weather_forecast_cache_has_nothing_to_cache_for_csv(self):
+        """A correctly sized csv file must not turn into a failed cache request."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        with fixture_clock():
+            result = await weather_forecast_cache(
+                emhass_conf, orjson.dumps(params).decode("utf-8"), "{}", logger
+            )
+        self.assertIs(result, True)
+
     async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
         """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""
         fall_back = datetime(2025, 10, 25, 22, 10, tzinfo=UTC)
