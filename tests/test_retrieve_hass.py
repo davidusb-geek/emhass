@@ -40,6 +40,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # build_secrets reads EMHASS_URL and SUPERVISOR_TOKEN from the environment; a developer's
+        # own values must not reach these tests. The environment is restored after each test.
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN"):
+            environ.pop(name, None)
         emhass_conf["data_path"] = root / "data/"
 
         self.get_data_from_file = True
