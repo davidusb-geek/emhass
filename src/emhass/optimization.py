@@ -3,6 +3,7 @@ import copy
 import logging
 import os
 import pickle
+import threading
 import time
 from math import ceil, isfinite
 
@@ -228,6 +229,7 @@ class Optimization:
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
+        self._solve_lock = threading.Lock()
         self.optim_status = None
 
         # Prioritize config value over default arg
@@ -4008,7 +4010,7 @@ class Optimization:
             breach,
             "minimum" if is_cool else "maximum",
         )
-        return THERMAL_FREE_GAIN_RELIEF
+        return max(THERMAL_FREE_GAIN_RELIEF, float(breach) * 1.5 + 10.0)
 
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
@@ -7171,32 +7173,67 @@ class Optimization:
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
-        Includes automatic fallback to relaxed LP if MILP fails or times out.
-
-        If ``stage_times`` is provided, the wall-clock duration of three
-        internal phases is recorded under the keys ``optim_solve.build``,
-        ``optim_solve.solve`` and ``optim_solve.extract``. These nest under
-        the existing ``optim_solve`` parent timer in ``command_line.py`` and
-        sum to it within a few milliseconds.
-
-        ``soc_init``/``soc_final`` accept either a bare float (broadcast to
-        every battery - the single-battery calling convention, unchanged at
-        ``number_of_batteries == 1``) or a list of exactly
-        ``number_of_batteries`` entries (#610); passing per-battery values
-        through from command_line.py at runtime is command_line.py's job -
-        this signature already accepts the list shape today.
-
-        ``battery_availability`` (see _normalize_battery_availability) scales
-        each battery's charge/discharge power limit per timestep, so a battery
-        that is only connected part of the horizon (an EV) can be modelled
-        without changing ``number_of_batteries``. ``battery_discharge_energy_max``
-        caps the energy each battery may deliver over the horizon (Wh, battery
-        side; ``None`` = no cap). ``soc_target``/``soc_target_timestep`` accept a
-        per-battery list too; a battery with a target but no timestep gets it at
-        its last connected timestep (the departure); pass that battery's
-        ``soc_final`` equal to the target, since its SOC is frozen afterwards.
+        Serializes execution per Optimization instance to prevent concurrent requests
+        from mixing parameter updates and solve state.
         """
+        with self._solve_lock:
+            return self._perform_optimization_locked(
+                data_opt=data_opt,
+                p_pv=p_pv,
+                p_load=p_load,
+                unit_load_cost=unit_load_cost,
+                unit_prod_price=unit_prod_price,
+                soc_init=soc_init,
+                soc_final=soc_final,
+                soc_target=soc_target,
+                soc_target_timestep=soc_target_timestep,
+                current_period_peak=current_period_peak,
+                capacity_charge_window=capacity_charge_window,
+                capacity_charge_consideration=capacity_charge_consideration,
+                capacity_charge_current_interval_history=capacity_charge_current_interval_history,
+                def_total_hours=def_total_hours,
+                def_total_timestep=def_total_timestep,
+                def_start_timestep=def_start_timestep,
+                def_end_timestep=def_end_timestep,
+                def_init_temp=def_init_temp,
+                min_power_of_deferrable_loads=min_power_of_deferrable_loads,
+                debug=debug,
+                stage_times=stage_times,
+                battery_availability=battery_availability,
+                battery_discharge_energy_max=battery_discharge_energy_max,
+            )
+
+    def _perform_optimization_locked(
+        self,
+        data_opt: pd.DataFrame,
+        p_pv: np.array,
+        p_load: np.array,
+        unit_load_cost: np.array,
+        unit_prod_price: np.array,
+        soc_init: float | list | None = None,
+        soc_final: float | list | None = None,
+        soc_target: float | list | None = None,
+        soc_target_timestep: int | list | None = None,
+        current_period_peak: float | None = None,
+        capacity_charge_window: list | None = None,
+        capacity_charge_consideration: list | None = None,
+        capacity_charge_current_interval_history: list | None = None,
+        def_total_hours: list | None = None,
+        def_total_timestep: list | None = None,
+        def_start_timestep: list | None = None,
+        def_end_timestep: list | None = None,
+        def_init_temp: list | None = None,
+        min_power_of_deferrable_loads: list | None = None,
+        debug: bool | None = False,
+        stage_times: dict[str, float] | None = None,
+        battery_availability: float | list | None = None,
+        battery_discharge_energy_max: float | list | None = None,
+    ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
+        # Rebuild problem to ensure fresh forecasts are applied across MPC iterations.
+        if self.optim_conf.get("shared_thermal_tanks"):
+            self.prob = None
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)

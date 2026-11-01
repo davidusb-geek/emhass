@@ -5545,6 +5545,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df = self.prepare_forecast_data()
         df["outdoor_temperature_forecast"] = 20.0
         df["ghi"] = 800.0
+        df["ghi"] = 0.0
+        df.loc[df.index[0:4], "ghi"] = 800.0
         opt = self.create_optimization()
         res = opt.perform_optimization(
             df,
@@ -5558,6 +5560,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(temp.max(), 23.0)
         demand = res["heating_demand_heater0"].to_numpy(dtype=float)
         self.assertTrue(np.all(demand >= -1e-8))
+
+        # Without excess gains, verify that the configured maximum remains enforced
+        df_no_excess = df.copy()
+        df_no_excess["ghi"] = 0.0
+        res_no_excess = opt.perform_optimization(
+            df_no_excess,
+            self.p_pv_forecast.values.ravel(),
+            np.zeros(48),
+            df_no_excess[opt.var_load_cost].values,
+            df_no_excess[opt.var_prod_price].values,
+        )
+        self.assertEqual(res_no_excess["optim_status"].iloc[0], "Optimal")
+        temp_no_excess = res_no_excess["predicted_temp_heater0"].to_numpy(dtype=float)
+        self.assertLessEqual(temp_no_excess.max(), 23.0 + 1e-6)
 
     def test_thermal_battery_surface_gain_cached_refresh_and_non_negative_demand(self):
         """Surface gain applies to thermal balance, reported demand clips >= 0, and cache hit updates."""
@@ -5620,6 +5636,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         balance2 = opt.param_thermal[0]["thermal_balance"].value
         self.assertTrue(np.all(demand2 > 0.0))
         np.testing.assert_allclose(demand2, balance2)
+        # Assert first run's predicted temperature reflects surface solar gain compared to no-sun run
+        self.assertGreater(
+            res["predicted_temp_heater0"].iloc[1], res2["predicted_temp_heater0"].iloc[1]
+        )
 
     def test_shared_tank_excess_gains_passive_warming_and_clipped_demand(self):
         """Shared tank temperature rises with building-physics excess gains while demand stays >= 0."""
@@ -5672,6 +5692,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["optim_status"].iloc[0], "Optimal")
         temps = res["predicted_temp_heater0"].values
         demand = res["heating_demand_heater0"].values
+        # Ensure the heater was not dispatched at timestep 0, proving pure passive warming
+        np.testing.assert_allclose(res["P_deferrable0"].iloc[0], 0.0, atol=1e-6)
         self.assertGreater(temps[1], temps[0])
         self.assertTrue(np.all(demand >= -1e-8))
         self.assertAlmostEqual(demand[0], 0.0, places=6)
@@ -11442,6 +11464,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         FAILS on the assertion that all ON runs are >= N. That is the desired RED
         behaviour on base code.
         """
+        # Price pr
+... [truncated for diff preview]
         # Price profile chosen to produce on-off-on short cycling under base code:
         # cheap at t=1, expensive at t=2-3, cheap again at t=4-5.
         # With 3 required operating hours (=6 timesteps at 30min), the base solver
