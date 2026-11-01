@@ -5320,11 +5320,17 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
         params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
         params["optim_conf"]["weather_forecast_method"] = "csv"
         params_json = orjson.dumps(params).decode("utf-8")
-        for p10_rows, expected in ((None, True), (3, False)):
-            with self.subTest(p10_rows=p10_rows), fixture_clock():
-                runtime = {"pv_power_forecast": [1.0] * 96}
-                if p10_rows:
-                    runtime["pv_power_forecast_p10"] = [0.5] * p10_rows
+        nan_list = [1.0] * 95 + [float("nan")]
+        for label, runtime, expected in (
+            ("valid", {"pv_power_forecast": [1.0] * 96}, True),
+            (
+                "p10 length mismatch",
+                {"pv_power_forecast": [1.0] * 96, "pv_power_forecast_p10": [0.5] * 3},
+                False,
+            ),
+            ("non-finite value", {"pv_power_forecast": nan_list}, False),
+        ):
+            with self.subTest(runtime=label), fixture_clock():
                 runtime = orjson.dumps(runtime).decode("utf-8")
                 with patch.object(
                     Forecast,
@@ -5337,6 +5343,23 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
                 # the runtime list overrides the configured csv, so the csv no-op is not taken
                 spy.assert_awaited_once()
                 self.assertEqual(spy.await_args.args[1], "list")
+
+    async def test_undersized_runtime_pv_list_is_ignored_so_csv_stays_a_no_op(self):
+        """Per the forecast-input contract a short or mistyped list is ignored, not rejected.
+
+        The configured method then applies, as for the optimisation actions. For csv that is the
+        approved successful no-op, so the cache action reports success and builds no forecast.
+        """
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        params_json = orjson.dumps(params).decode("utf-8")
+        for label, value in (("too short", [1.0, 2.0]), ("wrong type", "not a list")):
+            with self.subTest(pv_power_forecast=label), fixture_clock():
+                runtime = orjson.dumps({"pv_power_forecast": value}).decode("utf-8")
+                with patch.object(Forecast, "get_weather_forecast", AsyncMock()) as get_forecast:
+                    result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
+                self.assertIs(result, True)
+                get_forecast.assert_not_awaited()
 
     async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
         """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""
