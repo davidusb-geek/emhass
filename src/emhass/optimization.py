@@ -1725,7 +1725,6 @@ class Optimization:
                         np.full(n, base_loss)
                     )
                     draw_off_arr = self._tile_profile(draw_off_profile, n)
-                    params["heating_demand"].value = draw_off_arr
                     params["thermal_balance"].value = draw_off_arr
                 else:
                     # Building heating mode: outdoor-temp-dependent losses.
@@ -1783,24 +1782,30 @@ class Optimization:
                             sense=hc.get("sense") or "heat",
                         )
                         params["thermal_balance"].value = np.array(thermal_balance[:n])
-                        sense = utils.normalize_heat_cool_mode(
-                            hc.get("sense") or "heat", field_name="sense", context="thermal demand"
-                        )
-                        params["heating_demand"].value = (
-                            thermal_balance[:n]
-                            if sense == "cool"
-                            else np.maximum(thermal_balance[:n], 0.0)
-                        )
                     else:
-                        params["heating_demand"].value = np.zeros(n)
                         params["thermal_balance"].value = np.zeros(n)
+
+                # Surface solar gain (pool, outdoor tank, solar-thermal). Subtracts
+                # absorbed irradiance from the signed balance. No-op when
+                # solar_absorption_area is unset.
+                params["thermal_balance"].value = self._apply_surface_solar_gain(
+                    hc, data_opt, params["thermal_balance"].value, n
+                )
+                sense = utils.normalize_heat_cool_mode(
+                    hc.get("sense") or "heat", field_name="sense", context="thermal demand"
+                )
+                params["heating_demand"].value = (
+                    params["thermal_balance"].value
+                    if sense == "cool"
+                    else np.maximum(params["thermal_balance"].value, 0.0)
+                )
 
                 self._persist_q_input(k, params, hc)
                 relief = self._thermal_battery_bound_relief(
                     k,
                     hc,
                     new_start_temp,
-                    params["heating_demand"].value,
+                    params["thermal_balance"].value,
                     params["thermal_losses"].value,
                     params["min_temps"].value,
                     params["max_temps"].value,
@@ -3963,7 +3968,7 @@ class Optimization:
         return heating_demand - solar_gain
 
     def _thermal_battery_bound_relief(
-        self, k, hc, start_temperature, heating_demand, thermal_losses, min_temps, max_temps, n
+        self, k, hc, start_temperature, thermal_balance, thermal_losses, min_temps, max_temps, n
     ):
         """Room (deg C) the bound of a thermal_battery gets this run: 0.0 when a
         plan can keep it, THERMAL_FREE_GAIN_RELIEF when free gains or losses alone
@@ -3984,7 +3989,7 @@ class Optimization:
         breach = self._free_gain_breach(
             start_temperature=start_temperature,
             conversion=conversion,
-            net_out=np.asarray(heating_demand, dtype=float)
+            net_out=np.asarray(thermal_balance, dtype=float)
             + np.asarray(thermal_losses, dtype=float),
             zone_loss=None,
             outdoor=None,
@@ -4141,11 +4146,6 @@ class Optimization:
                         sense=sense,
                     )
                     params["thermal_balance"].value = np.array(balance[:required_len])
-                    params["heating_demand"].value = (
-                        balance[:required_len]
-                        if sense == "cool"
-                        else np.maximum(balance[:required_len], 0.0)
-                    )
 
                     gains_info = []
                     if solar_irradiance is not None:
@@ -4185,17 +4185,18 @@ class Optimization:
                         annual_reference_hdd=annual_reference_hdd,
                         optimization_time_step=int(self.freq.total_seconds() / 60),
                     )
-                    params["heating_demand"].value = np.array(demand[:required_len])
                     params["thermal_balance"].value = np.array(demand[:required_len])
 
             # Surface solar gain (pool, outdoor tank, solar-thermal). Subtracts
-            # absorbed irradiance from the residual heating demand. No-op when
+            # absorbed irradiance from the signed balance. No-op when
             # solar_absorption_area is unset.
-            params["heating_demand"].value = self._apply_surface_solar_gain(
-                hc, data_opt, params["heating_demand"].value, required_len
-            )
             params["thermal_balance"].value = self._apply_surface_solar_gain(
                 hc, data_opt, params["thermal_balance"].value, required_len
+            )
+            params["heating_demand"].value = (
+                params["thermal_balance"].value
+                if sense == "cool"
+                else np.maximum(params["thermal_balance"].value, 0.0)
             )
 
             # Set min/max temperature parameters
@@ -4212,7 +4213,7 @@ class Optimization:
                     k,
                     hc,
                     start_temp_float,
-                    params["heating_demand"].value,
+                    params["thermal_balance"].value,
                     params["thermal_losses"].value,
                     params["min_temps"].value,
                     params["max_temps"].value,
@@ -4238,8 +4239,8 @@ class Optimization:
             # draw_off_demand units: kWh per timestep (see parameterized path comment)
             hot_water = self._resolve_draw_off_demand(hc, base_loss, required_len)
             if hot_water is not None:
-                heating_demand, thermal_losses = hot_water
-                thermal_balance = heating_demand
+                raw_demand, thermal_losses = hot_water
+                thermal_balance = raw_demand
             else:
                 # Signed kW magnitude -> kWh/timestep (see _loss_kw_to_timestep_energy).
                 thermal_losses = self._loss_kw_to_timestep_energy(
@@ -4268,7 +4269,7 @@ class Optimization:
                         optimization_time_step=int(self.freq.total_seconds() / 60),
                         sense=sense,
                     )
-                    demand = balance if sense == "cool" else np.maximum(balance, 0.0)
+                    thermal_balance = balance
                 else:
                     if sense == "cool":
                         self.logger.warning(
@@ -4287,15 +4288,14 @@ class Optimization:
                         annual_reference_hdd=hc.get("annual_reference_hdd", 3000.0),
                         optimization_time_step=int(self.freq.total_seconds() / 60),
                     )
-                    balance = demand
-                heating_demand = np.array(demand[:required_len])
-                thermal_balance = np.array(balance[:required_len])
+                    thermal_balance = demand
+                thermal_balance = np.array(thermal_balance[:required_len])
             # Surface solar gain (fallback path - mirrors parameterized path).
-            heating_demand = self._apply_surface_solar_gain(
-                hc, data_opt, heating_demand, required_len
-            )
             thermal_balance = self._apply_surface_solar_gain(
                 hc, data_opt, thermal_balance, required_len
+            )
+            heating_demand = (
+                thermal_balance if sense == "cool" else np.maximum(thermal_balance, 0.0)
             )
             min_temps_param = None
             max_temps_param = None
@@ -4303,7 +4303,7 @@ class Optimization:
                 k,
                 hc,
                 start_temp_float,
-                heating_demand,
+                thermal_balance,
                 thermal_losses,
                 min_temperatures_list,
                 max_temperatures_list,
@@ -4832,11 +4832,11 @@ class Optimization:
         # indoor/outdoor loss otherwise - single-model configs keep their
         # previous behaviour. The two building models (explicit physics vs
         # HDD) stay mutually exclusive: a building is modelled one way.
-        heating_demand = np.zeros(required_len)
+        thermal_balance = np.zeros(required_len)
         hot_water = self._resolve_draw_off_demand(tank, base_loss, required_len)
         if hot_water is not None:
             draw_off_demand, thermal_losses = hot_water
-            heating_demand = heating_demand + np.asarray(draw_off_demand)[:required_len]
+            thermal_balance = thermal_balance + np.asarray(draw_off_demand)[:required_len]
         else:
             # Signed kW magnitude -> kWh/timestep (see _loss_kw_to_timestep_energy).
             thermal_losses = self._loss_kw_to_timestep_energy(
@@ -4877,7 +4877,7 @@ class Optimization:
                     vals = np.concatenate((vals, np.zeros(required_len - len(vals))))
                 solar_irradiance = vals[:required_len]
             internal_gains_forecast = p_load if internal_gains_factor > 0 else None
-            demand = utils.calculate_heating_demand_physics(
+            demand = utils.calculate_thermal_balance_physics(
                 u_value=tank["u_value"],
                 envelope_area=tank["envelope_area"],
                 ventilation_rate=tank["ventilation_rate"],
@@ -4892,7 +4892,7 @@ class Optimization:
                 internal_gains_factor=internal_gains_factor,
                 sense=tank.get("sense") or "heat",
             )
-            heating_demand = heating_demand + np.array(demand[:required_len])
+            thermal_balance = thermal_balance + np.array(demand[:required_len])
         elif "specific_heating_demand" in tank and "area" in tank:
             if str(tank.get("sense") or "heat").strip().lower() == "cool":
                 self.logger.warning(
@@ -4911,7 +4911,7 @@ class Optimization:
                 annual_reference_hdd=tank.get("annual_reference_hdd", 3000.0),
                 optimization_time_step=int(self.freq.total_seconds() / 60),
             )
-            heating_demand = heating_demand + np.array(demand[:required_len])
+            thermal_balance = thermal_balance + np.array(demand[:required_len])
 
         # Apply surface solar gain if configured at the tank level
         solar_gain = utils.calculate_surface_solar_gain(
@@ -4921,7 +4921,7 @@ class Optimization:
             length=required_len,
         )
         if solar_gain is not None:
-            heating_demand = heating_demand - solar_gain
+            thermal_balance = thermal_balance - solar_gain
 
         # Window solar gain for a building zone (kWh/step): sunlight transmitted
         # through glazing (window_area m2 * SHGC) offsets the heat the zone needs,
@@ -4938,7 +4938,16 @@ class Optimization:
             shgc = float(tank.get("shgc", 0.6))
             dt_h = self.freq.total_seconds() / 3600.0
             window_gain = ghi * float(tank["window_area"]) * shgc / 1000.0 * dt_h
-            heating_demand = heating_demand - window_gain
+            thermal_balance = thermal_balance - window_gain
+
+        tank_sense_norm = utils.normalize_heat_cool_mode(
+            tank.get("sense") or "heat",
+            field_name="sense",
+            context=f"shared tank {tank_id}",
+        )
+        heating_demand = (
+            thermal_balance if tank_sense_norm == "cool" else np.maximum(thermal_balance, 0.0)
+        )
 
         # Per-source COP arrays (HP uses Carnot, gas / oil / district use flat
         # efficiency). Resolve each source's conversion factor from its config.
@@ -5096,7 +5105,7 @@ class Optimization:
                 predicted_temp[1:]
                 == predicted_temp[:-1]
                 + conversion
-                * (sense_coeff * _raw_heat(-1) + xfer_net - heating_demand[:-1] - loss_vec[:-1])
+                * (sense_coeff * _raw_heat(-1) + xfer_net - thermal_balance[:-1] - loss_vec[:-1])
             )
         else:
             # Dead zone: the first L steps receive no heat from THIS horizon's own
@@ -5108,7 +5117,7 @@ class Optimization:
                 predicted_temp[1 : 1 + L]
                 == predicted_temp[:L]
                 + conversion
-                * (sense_coeff * prior_heat + xfer_net[:L] - heating_demand[:L] - loss_vec[:L])
+                * (sense_coeff * prior_heat + xfer_net[:L] - thermal_balance[:L] - loss_vec[:L])
             )
             # At the top of the clamp (L == required_len - 1) the dead zone above
             # already covers the whole remaining horizon, so this block spans zero
@@ -5122,7 +5131,7 @@ class Optimization:
                     * (
                         sense_coeff * _raw_heat(-1 - L)
                         + xfer_net[L:]
-                        - heating_demand[L:-1]
+                        - thermal_balance[L:-1]
                         - loss_vec[L:-1]
                     )
                 )
@@ -5203,7 +5212,7 @@ class Optimization:
             breach = self._free_gain_breach(
                 start_temperature=start_temperature,
                 conversion=float(conversion),
-                net_out=np.asarray(heating_demand, dtype=float)
+                net_out=np.asarray(thermal_balance, dtype=float)
                 + (0.0 if loss_coefficient is not None else np.asarray(thermal_losses)),
                 zone_loss=zone_step,
                 outdoor=outdoor_temp_arr,
@@ -5260,7 +5269,7 @@ class Optimization:
             sense=tank_sense,
             lag=L,
             transfer_heat=xfer_last_span,
-            demand=np.asarray(heating_demand, dtype=float),
+            demand=np.asarray(thermal_balance, dtype=float),
             flat_loss=None if loss_coefficient is not None else np.asarray(thermal_losses),
             zone_loss=None
             if loss_coefficient is None
@@ -5384,10 +5393,10 @@ class Optimization:
             loss_last = thermal_losses[-1]
             loss_span = abs(float(thermal_losses[-1]))
         temp_end = predicted_temp[-1] + conversion * (
-            sense_coeff * heat_last + xfer_last - heating_demand[-1] - loss_last
+            sense_coeff * heat_last + xfer_last - thermal_balance[-1] - loss_last
         )
         end_step_span = conversion * (
-            end_step_span + xfer_last_span + abs(float(heating_demand[-1])) + loss_span
+            end_step_span + xfer_last_span + abs(float(thermal_balance[-1])) + loss_span
         )
 
         self._shared_tank_end[tank_id] = (temp_end, end_step_span)
@@ -5680,7 +5689,7 @@ class Optimization:
                         "tank_id": tank_id,
                         "predicted_temp": predicted_temp,
                         "conversion": float(conversion),
-                        "heating_demand": np.asarray(heating_demand, dtype=float),
+                        "heating_demand": np.asarray(thermal_balance, dtype=float),
                         "xfer_net": xfer_net,  # cvxpy expr or zeros, length required_len-1
                         "loss_coefficient": loss_coefficient,
                         "thermal_losses": (
