@@ -7,11 +7,13 @@ Synthetic and self-contained, built on the multi-battery test helper.
 """
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
 from emhass import utils
+from emhass.optimization import Optimization
 from tests.test_multi_battery_optimization import (
     VALID_OPTIMAL_STATUSES,
     build_optimization,
@@ -146,6 +148,105 @@ class TestDefAvailability(unittest.TestCase):
         self.assertEqual(opt.optim_status, "Optimal")
         self.assertEqual(res["P_deferrable0"].to_numpy()[0], 0.0)
         self.assertEqual(opt.param_def_current_power_active[0].value, 0.0)
+
+    def test_current_power_release_with_a_running_state(self):
+        """def_current_power also marks the load as running at t=0 (no phantom
+        start, minimum on/off time); a blocked t=0 releases that run too."""
+        variants = {
+            "semi-continuous, startup penalty": {
+                "treat_deferrable_load_as_semi_cont": [True, False],
+                "set_deferrable_startup_penalty": [1.0, 0.0],
+            },
+            "min power, startup penalty": {
+                "minimum_power_of_deferrable_loads": [500.0, 0.0],
+                "set_deferrable_startup_penalty": [1.0, 0.0],
+            },
+            "semi-continuous, min on/off time": {
+                "treat_deferrable_load_as_semi_cont": [True, False],
+                "def_minimum_on_time": [4, 0],
+                "def_minimum_off_time": [3, 0],
+            },
+            "min power, min on-time remainder": {
+                "minimum_power_of_deferrable_loads": [500.0, 0.0],
+                "def_minimum_on_time": [4, 0],
+                "def_current_on_timesteps": [1, 0],
+            },
+        }
+        for name, conf in variants.items():
+            for blocked in (1, 3):
+                with self.subTest(name, blocked=blocked):
+                    opt = loads(def_current_power=[1500.0, 0.0], **conf)
+                    avail = [0] * blocked + [1] * (N - blocked)
+                    res = run(opt, def_availability=[avail, None])
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    p0 = res["P_deferrable0"].to_numpy()
+                    np.testing.assert_allclose(p0[:blocked], 0.0, atol=1e-6)
+
+    def test_ceiling_below_the_min_power_of_the_call_releases_a_forced_run(self):
+        """perform_optimization can be given its own minimum powers; whether a
+        fraction leaves room for the load is judged against those, the values
+        the constraints are built with, not against the configuration."""
+        opt = loads(
+            def_current_state=[True, False],
+            def_minimum_on_time=[6, 0],
+            def_current_on_timesteps=[1, 0],
+        )
+        perform = opt.perform_optimization
+
+        def with_call_min_power(*args, **kwargs):
+            return perform(*args, min_power_of_deferrable_loads=[1500.0, 0.0], **kwargs)
+
+        opt.perform_optimization = with_call_min_power
+        # 0.5 * 2000 W = 1000 W < 1500 W: the load cannot run in step 2
+        res = run(opt, def_availability=[[1, 1, 0.5] + [1] * (N - 3), None])
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertEqual(res["P_deferrable0"].to_numpy()[2], 0.0)
+        np.testing.assert_allclose(opt.param_running_lb[0].value[2:], 0.0)
+
+    def test_semi_continuous_block_holds_in_the_relaxed_retry(self):
+        """The relaxed retry treats every load as continuous; a step a
+        semi-continuous load cannot run in must stay blocked there, not turn
+        into a partial-power step."""
+        opt = loads(treat_deferrable_load_as_semi_cont=[True, False])
+        with mock.patch.object(Optimization, "_needs_relaxed_retry", return_value=True):
+            res = run(opt, def_availability=[[0.5] * 4 + [1] * (N - 4), None])
+        self.assertIn("Relaxed", opt.optim_status)
+        p0 = res["P_deferrable0"].to_numpy()
+        np.testing.assert_allclose(p0[:4], 0.0, atol=1e-6)
+        self.assertAlmostEqual(p0.sum() * 0.5, 2000.0 * 2, delta=1.0)
+
+    def test_sequence_load_is_off_below_full_availability(self):
+        """A sequence load runs a fixed profile, so a fraction below 1 blocks
+        the step, also where the profile is below the sequence's peak."""
+        opt = loads(nominal_power_of_deferrable_loads=[[1000.0, 400.0, 400.0, 400.0], 1000.0])
+        res = run(opt, def_availability=[[1, 0.5, 0.5, 0.5] + [1] * (N - 4), None])
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        p0 = res["P_deferrable0"].to_numpy()
+        np.testing.assert_allclose(p0[1:4], 0.0, atol=1e-6)
+        self.assertAlmostEqual(p0.sum(), 2200.0, delta=1.0)
+
+    def test_sequence_without_a_complete_placement_raises(self):
+        """A sequence must be placed in one piece; a mask that leaves no
+        complete placement is an input error, not an infeasible model."""
+        gaps = [1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0]  # no four steps in a row
+        opt = loads(nominal_power_of_deferrable_loads=[[1000.0] * 4, 1000.0])
+        with self.assertRaisesRegex(ValueError, r"def_availability\[0\]"):
+            run(opt, def_availability=[gaps, None])
+        # already running: its single placement starts at t=0 and cannot be cut
+        opt = loads(
+            nominal_power_of_deferrable_loads=[[1000.0] * 4, 1000.0],
+            def_current_state=[True, False],
+        )
+        with self.assertRaisesRegex(ValueError, "already running"):
+            run(opt, def_availability=[[1, 0] + [1] * (N - 2), None])
+        # with a max cost a load that is not running may stay unscheduled
+        opt = loads(
+            nominal_power_of_deferrable_loads=[[1000.0] * 4, 1000.0],
+            deferrable_load_max_cost=[100.0, 0.0],
+        )
+        res = run(opt, def_availability=[gaps, None])
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        np.testing.assert_allclose(res["P_deferrable0"].to_numpy(), 0.0, atol=1e-6)
 
     def test_mask_change_on_the_same_problem_is_honoured(self):
         """The mask is a Parameter: a new value on a reused (cached) problem

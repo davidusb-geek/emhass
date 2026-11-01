@@ -594,6 +594,30 @@ class Optimization:
             raise ValueError(f"{name} must have {count} entries ({count_name}), got {len(value)}")
         return [_series(value[k], k) for k in range(count)]
 
+    def _sequence_placements(self, k: int, n: int) -> np.ndarray:
+        """Power profile of every placement the sequence load k can take.
+
+        Row ``s`` is the (remaining) power sequence started at step ``s``. A load
+        that is already running keeps its single placement at t=0, and a
+        sequence longer than the horizon is truncated to one placement. Shared
+        by the constraint builder and the ``def_availability`` check, so both
+        see the same placements.
+        """
+        power_sequence = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+        elapsed_steps = int(self.param_current_operating_timesteps[k].value)
+        if elapsed_steps > 0:
+            power_sequence = power_sequence[elapsed_steps:]
+        sequence_length = len(power_sequence)
+        if self.param_def_current_state[k].value:
+            y_len = 1
+        else:
+            y_len = max(n - sequence_length + 1, 1)
+        rows = np.zeros((y_len, n))
+        for start_t in range(y_len):
+            end_t = min(start_t + sequence_length, n)
+            rows[start_t, start_t:end_t] = power_sequence[: (end_t - start_t)]
+        return rows
+
     def _apply_def_availability(self, avail_list: list) -> None:
         """Apply the ``def_availability`` runtime input to the deferrable loads.
 
@@ -605,9 +629,18 @@ class Optimization:
         constraint or variable, so a cached problem picks up a new mask
         without a rebuild.
 
+        A semi-continuous load runs at its ON level or not at all, and a
+        sequence load runs its fixed power profile, so for both any value below
+        1 blocks the step: their mask is set to 0 there instead of scaled. That
+        keeps the step blocked when the ON level is lowered below nominal (a
+        thermal cap) and in the relaxed retry, which treats every load as
+        continuous. A sequence must still have one complete placement in the
+        available steps, else a ValueError names the load (the alternative is
+        an infeasible model).
+
         A load cannot run where the ceiling leaves no room for its ON state:
-        ``0``, for a semi-continuous load any value below 1 (it runs at its ON
-        level or not at all), else a ceiling below ``minimum_power``. A forced
+        ``0``, a blocked step as above, else a ceiling below the minimum power
+        of this call (``_min_power_of_deferrable_loads``). A forced
         run of the load (single-constant pin, min-on remainder, current-power
         force-on) ends at the first such step, and a single-constant load loses
         its "already running" credit there, so the rest of its run counts as a
@@ -616,21 +649,51 @@ class Optimization:
         model infeasible.
         """
         nominal_powers = self.optim_conf["nominal_power_of_deferrable_loads"]
-        min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
+        # The minimum powers this call builds its constraints with (a direct
+        # perform_optimization caller can override the configured ones).
+        min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
+        if min_powers is None:
+            min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
         semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"]
+        max_cost = self.optim_conf.get("deferrable_load_max_cost") or []
         for k in range(min(len(avail_list), len(self.param_window_masks))):
             avail = avail_list[k]
             if np.all(avail >= 1.0):
                 continue
             nominal = nominal_powers[k]
-            nominal = float(max(nominal)) if isinstance(nominal, list) else float(nominal)
-            self.param_window_masks[k].value = self.param_window_masks[k].value * avail
+            is_sequence = isinstance(nominal, list)
+            nominal = float(max(nominal)) if is_sequence else float(nominal)
+            window = np.asarray(self.param_window_masks[k].value, dtype=float).copy()
 
-            if k < len(semi_cont) and semi_cont[k]:
+            if is_sequence or (k < len(semi_cont) and semi_cont[k]):
                 cannot_run = avail < 1.0
+                self.param_window_masks[k].value = np.where(cannot_run, 0.0, window)
             else:
                 min_power = float(min_powers[k]) if k < len(min_powers) else 0.0
                 cannot_run = (avail <= 0.0) | (avail * nominal < min_power - 1e-9)
+                self.param_window_masks[k].value = window * avail
+
+            if is_sequence:
+                # Every placement is a fixed profile; the model has to pick one
+                # (unless a max cost lets it skip a load that is not running).
+                may_skip = (
+                    k < len(max_cost)
+                    and max_cost[k] > 0
+                    and not self.param_def_current_state[k].value
+                )
+                if not may_skip:
+                    rows = self._sequence_placements(k, len(avail))
+
+                    def _fits(mask, rows=rows, m=nominal):
+                        return bool(np.any(np.all(rows <= m * mask + 1e-6, axis=1)))
+
+                    if _fits(window) and not _fits(self.param_window_masks[k].value):
+                        raise ValueError(
+                            f"def_availability[{k}] leaves no complete placement for the "
+                            f"power sequence of deferrable load {k}: a value below 1 blocks "
+                            "a step of a sequence load, and a sequence that is already "
+                            "running cannot be interrupted."
+                        )
             if k < len(self.param_running_lb):
                 lb = np.asarray(self.param_running_lb[k].value, dtype=float).copy()
                 blocked_forced = np.flatnonzero(cannot_run & (lb > 0))
@@ -6244,17 +6307,9 @@ class Optimization:
                     # Constraint: Choose exactly one start time
                     constraints.append(cp.sum(y) == 1)
 
-                # Detailed power shape constraint (Convolution-like)
-                # We build the matrix explicitly here
-                mat_rows = []
-                for start_t in range(y_len):
-                    row = np.zeros(n)
-                    end_t = min(start_t + sequence_length, n)
-                    seq_slice = power_sequence[: (end_t - start_t)]
-                    row[start_t:end_t] = seq_slice
-                    mat_rows.append(row)
-
-                mat_np = np.array(mat_rows)  # Shape (y_len, n)
+                # Detailed power shape constraint (Convolution-like): one row
+                # per placement, shared with the def_availability check.
+                mat_np = self._sequence_placements(k, n)  # Shape (y_len, n)
 
                 constraints.append(p_deferrable[k] == cp.matmul(y, mat_np))
 
