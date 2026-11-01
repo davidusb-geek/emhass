@@ -23,13 +23,14 @@ function setup({ stored, replies, savedInputs, realSavedData }) {
   for (const id of ['alert', 'alert-text', 'basicOrAdvanced']) registry[id] = element(id);
   registry.TabSelection = container;
   const calls = [];
-  const ctx = { window: {}, console, Response, setTimeout: () => 0,
+  // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
+  const ctx = { window: {}, console, Response, setTimeout: () => 0, AbortSignal: { timeout: () => AbortSignal.timeout(40) },
     localStorage: { getItem: k => storage[k] ?? null, setItem: (k, v) => { storage[k] = String(v); }, removeItem: k => { delete storage[k]; } },
     document: { getElementById: id => registry[id] || null, querySelectorAll: () => [],
       createElement: () => ({ content: { querySelector: sel => (idsOf(ctx.probeHtml || '').includes(sel.slice(1)) ? {} : null),
           get firstElementChild() { const id = idsOf(ctx.probeHtml || '')[0]; return id === undefined ? null : { id }; } },
         set innerHTML(html) { ctx.probeHtml = html; } }) },
-    fetch: async (url) => { calls.push(url); return replies[url.replace('static/', '')](); } };
+    fetch: async (url, options) => { calls.push({ url, signal: options && options.signal }); return settle(replies[url.replace('static/', '').split('?')[0]](), options); } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
   if (!realSavedData) ctx.getSavedData = () => {};
   ctx.dictInputs = () => {}; ctx.initStickyTables = () => {};
@@ -40,6 +41,11 @@ function setup({ stored, replies, savedInputs, realSavedData }) {
     toggle: () => registry.basicOrAdvanced.listeners.click(),
     done: () => process.off('unhandledRejection', onRejection) };
 }
+// a reply that never completes; it ends only when the request's own timeout aborts it
+const STALL = Symbol('stall');
+const settle = (r, options) => (r === STALL
+  ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)))
+  : r);
 const ok = html => () => new Response(html, { status: 200 });
 const healthy = { 'basic.html': ok(BASIC), 'advanced.html': ok(ADVANCED), '/get-config': ok('{}') };
 const failures = {
@@ -178,4 +184,53 @@ test('a normal Advanced load requests /get-config for the export section and res
 test('the alert names the HTTP status of a failed template request', async () => {
   const s = setup({ stored: 'advanced', replies: { ...healthy, 'basic.html': failures['an HTTP 502 error page'] } });
   await s.load(); await s.toggle(); assert.match(alertText(s), /HTTP 502/); s.done();
+});
+
+// bounded requests: a stalled request ends in a visible, recoverable error
+test('a stalled first template request is reported and the toggle recovers', async () => {
+  const replies = { ...healthy, 'basic.html': () => STALL };
+  const s = setup({ replies });
+  await s.load();
+  assert.equal(s.registry.alert.style.display, 'block'); assert.match(alertText(s), /abort|time/i);
+  assert.equal(s.container.innerHTML, ''); assert.equal(s.rejections.length, 0);
+  replies['basic.html'] = ok(BASIC);
+  await s.toggle();
+  assert.equal(s.container.firstElementChild.id, 'basic');
+  assert.equal(s.registry.alert.style.display, 'none'); s.done();
+});
+test('a stalled switch keeps the working view and selection, and a retry succeeds', async () => {
+  const replies = { ...healthy, 'advanced.html': () => STALL };
+  const s = setup({ replies }); await s.load();
+  const before = s.container.innerHTML, button = s.registry['dayahead-optim-basic'];
+  await s.toggle();
+  assert.equal(s.container.innerHTML, before); assert.equal(s.registry['dayahead-optim-basic'], button);
+  assert.equal(s.storage.TabSelection, undefined); assert.match(alertText(s), /abort|time/i);
+  replies['advanced.html'] = ok(ADVANCED);
+  await s.toggle();
+  assert.equal(s.container.firstElementChild.id, 'advance'); assert.equal(s.storage.TabSelection, 'advanced');
+  assert.equal(s.registry.alert.style.display, 'none'); s.done();
+});
+test('a second click while a switch is loading is ignored', async () => {
+  let release; const requests = [];
+  const replies = { ...healthy, 'advanced.html': () => { requests.push(1); return new Promise(res => { release = () => res(new Response(ADVANCED, { status: 200 })); }); } };
+  const s = setup({ replies }); await s.load();
+  const first = s.toggle(), second = s.toggle();
+  await new Promise(r => setImmediate(r));
+  assert.equal(requests.length, 1, 'only one template request while the first is loading');
+  release(); await first; await second;
+  assert.equal(s.container.firstElementChild.id, 'advance'); assert.equal(s.storage.TabSelection, 'advanced');
+  await s.toggle(); // the guard is released afterwards
+  assert.equal(s.container.firstElementChild.id, 'basic'); s.done();
+});
+test('the guard is released after a failed switch', async () => {
+  const replies = { ...healthy, 'advanced.html': () => { throw new TypeError('Failed to fetch'); } };
+  const s = setup({ replies }); await s.load();
+  await s.toggle(); replies['advanced.html'] = ok(ADVANCED); await s.toggle();
+  assert.equal(s.container.firstElementChild.id, 'advance'); s.done();
+});
+test('template and export-check requests carry a timeout signal', async () => {
+  const s = setup({ stored: 'advanced', replies: healthy }); await s.load();
+  const calls = s.calls.filter(c => /basic\.html|advanced\.html|get-config/.test(c.url));
+  assert.ok(calls.length >= 2);
+  for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`); s.done();
 });

@@ -77,6 +77,15 @@ async function loadButtons(page) {
 
 const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
 
+//a template or export-check request still pending after this long fails instead of leaving the page waiting
+const REQUEST_TIMEOUT_MS = 30000;
+function requestSignal() {
+  //browsers without AbortSignal.timeout keep waiting, as before
+  return typeof AbortSignal !== "undefined" && AbortSignal.timeout
+    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    : undefined;
+}
+
 //fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
 async function loadView(page) {
   const file = page + ".html";
@@ -145,12 +154,19 @@ async function loadBasicOrAdvanced(RequestedPage) {
 }
 
 //on button press, check current displayed page data and switch
+let switching = false; //a click while a switch is still loading is ignored, so loads cannot overlap
 async function SwitchBasicOrAdvanced() {
-  const current = document.getElementById("TabSelection").firstElementChild;
+  if (switching) {
+    return;
+  }
+  switching = true;
   try {
+    const current = document.getElementById("TabSelection").firstElementChild;
     await loadBasicOrAdvanced(current && current.id === "basic" ? "advanced" : "basic");
   } catch (error) {
     showViewError(error); //the current view is left untouched
+  } finally {
+    switching = false;
   }
 }
 
@@ -164,7 +180,7 @@ function showViewError(error) {
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-  const response = await fetch(`static/` + htmlFile);
+  const response = await fetch(`static/` + htmlFile, { signal: requestSignal() });
   if (!response.ok) {
     throw new Error(`${htmlFile} request failed with HTTP ${response.status}`);
   }
@@ -594,7 +610,7 @@ let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
   const thisCheck = ++influxChecks;
   try {
-    const response = await fetch("/get-config");
+    const response = await fetch("/get-config", { signal: requestSignal() });
     if (response.ok) {
       const config = await response.json();
       if (thisCheck !== influxChecks) {
