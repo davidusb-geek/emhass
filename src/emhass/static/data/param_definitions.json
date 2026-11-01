@@ -129,7 +129,7 @@
     },
     "use_victoriametrics": {
       "friendly_name": "Use VictoriaMetrics for data retrieval",
-      "Description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label).",
+      "Description": "Enable VictoriaMetrics as data source instead of the Home Assistant API. Like InfluxDB this allows for longer historical data retention for machine learning models. Data is expected in the format written by the Home Assistant InfluxDB integration (metric '<unit>_value' with an 'entity_id' label), or scraped from the Home Assistant Prometheus integration (see the entity label parameter).",
       "input": "boolean",
       "default_value": false,
       "unit": "none"
@@ -160,6 +160,13 @@
       "Description": "Regular expression matched against the metric name to find a sensor. Defaults to '.+_value', which matches the '<unit>_value' metrics written by the Home Assistant InfluxDB integration whatever the unit of the sensor.",
       "input": "string",
       "default_value": ".+_value",
+      "unit": "none"
+    },
+    "victoriametrics_entity_label": {
+      "friendly_name": "VictoriaMetrics entity label",
+      "Description": "Name of a label holding the full entity id (e.g. 'sensor.power_load'), for data scraped from the Home Assistant Prometheus integration: set it to 'entity' and set the metric name regex to 'homeassistant_sensor_.+'. Leave empty for data written by the Home Assistant InfluxDB integration, which is matched on its 'entity_id' and 'domain' labels.",
+      "input": "string",
+      "default_value": "",
       "unit": "none"
     },
     "victoriametrics_use_ssl": {
@@ -230,7 +237,7 @@
     },
     "method_ts_round": {
       "friendly_name": "Timestamp rounding method",
-      "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
+      "Description": "Rounding of the first optimization step, applied once per request: first = round down, last = round up, nearest = closest step (on the UTC clock).",
       "input": "select",
       "select_options": ["nearest", "first", "last"],
       "default_value": "nearest",
@@ -352,14 +359,14 @@
     },
     "inverter_efficiency_dc_ac": {
       "friendly_name": "Hybrid inverter efficency DC to AC",
-      "Description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100)",
+      "Description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100)",
       "input": "float",
       "default_value": 1.0,
       "unit": "fraction"
     },
     "inverter_efficiency_ac_dc": {
       "friendly_name": "Hybrid inverter efficency AC to DC",
-      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
+      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100)",
       "input": "float",
       "default_value": 1.0,
       "unit": "fraction"
@@ -404,6 +411,32 @@
       "input": "boolean",
       "default_value": false,
       "unit": "none"
+    },
+    "cop_solver": {
+      "friendly_name": "Heat-pump COP solver",
+      "Description": "How the temperature-dependent heat-pump COP is resolved for shared thermal tanks. 'static' (default) keeps the constant heating-curve COP - the pre-existing behavior. 'auto' runs an exact dynamic-programming refinement when the static solve's COP is inconsistent with the achieved tank temperature; 'dp' always runs it. Opt in with 'auto' for tanks whose heat pump banks heat well above its curve supply.",
+      "input": "select",
+      "select_options": [
+        "auto",
+        "dp",
+        "static"
+      ],
+      "default_value": "static",
+      "unit": "none"
+    },
+    "cop_solver_tolerance": {
+      "friendly_name": "COP solver trigger tolerance",
+      "Description": "The DP COP refinement engages when the COP used differs from COP(achieved tank temperature) by more than this many COP units. Defaults to 0.5.",
+      "input": "float",
+      "default_value": 0.5,
+      "unit": "COP"
+    },
+    "cop_hx_approach": {
+      "friendly_name": "COP heat-exchanger approach",
+      "Description": "Temperature difference (degC) between a thermal store and the heat pump's working fluid used when evaluating the temperature-dependent COP: the condenser runs at store temperature plus this approach (heating), the evaporator at store temperature minus it (cooling). Used by the COP consistency check and the DP refinement. Defaults to 5.",
+      "input": "float",
+      "default_value": 5.0,
+      "unit": "degC"
     }
   },
   "Tariff": {
@@ -749,7 +782,7 @@
     },
     "battery_dynamic_max": {
       "friendly_name": "Maximum percentage of battery discharge per hour",
-      "Description": "The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
+      "Description": "Accepts values between 0 and 1. The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": 0.9,
       "unit": "fraction",
@@ -810,37 +843,40 @@
     },
     "battery_charge_efficiency": {
       "friendly_name": "Battery charge efficiency",
-      "Description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, Accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.95,
       "unit": "fraction"
     },
     "battery_nominal_energy_capacity": {
       "friendly_name": "Battery total capacity",
-      "Description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.int",
       "default_value": 5000,
       "unit": "Wh"
     },
     "battery_minimum_state_of_charge": {
       "friendly_name": "Minimum Battery charge percentage",
-      "Description": "The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "Accepts values between 0 and 1. The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.3,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_maximum_state_of_charge": {
       "friendly_name": "Maximum Battery charge percentage",
-      "Description": "The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
+      "Description": "Accepts values between 0 and 1. The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.9,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_target_state_of_charge": {
       "friendly_name": "Battery desired percentage after optimization",
-      "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
+      "Description": "Accepts values between 0 and 1. The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain.",
       "input": "array.float",
       "default_value": 0.6,
+      "maximum": 1,
       "unit": "fraction"
     },
     "battery_stress_cost": {
@@ -862,6 +898,7 @@
     "Description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
     "input": "array.float",
     "default_value": 0.4,
+    "maximum": 1,
     "requires": {
       "set_use_battery": true
     }
@@ -880,6 +917,7 @@
       "Description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries.",
       "input": "array.float",
       "default_value": 0.9,
+      "maximum": 1,
       "requires": {
         "set_use_battery": true
     }

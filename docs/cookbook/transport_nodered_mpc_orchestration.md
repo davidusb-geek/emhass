@@ -38,6 +38,7 @@ Reference table of the runtime params accepted by `treat_runtimeparams` that thi
 | `load_cost_forecast` | `list[float]` | per-timestep tariff for load |
 | `prod_price_forecast` | `list[float]` | per-timestep sell price for production |
 | `soc_init` | `float` (0..1) | current battery state of charge as fraction |
+| `prediction_horizon` | `int` | number of optimization steps to plan. **Always send it:** without it `naive-mpc-optim` plans only 10 steps |
 
 Expected: EMHASS restarts cleanly with the static keys; `GET /api/get-config` returns them.
 
@@ -46,7 +47,7 @@ Expected: EMHASS restarts cleanly with the static keys; `GET /api/get-config` re
 Drag an `inject` node into your Node-RED tab. Configure:
 
 - Payload: `{}` (empty object, type `JSON`)
-- Repeat: `interval`, every 5 min (or whatever cadence you want; 5-15 min is typical in production)
+- Repeat: `interval`, every 5 min (or whatever cadence you want; 5-15 min is typical in production). Plain price lists are positional from the first optimization step, which `method_ts_round` derives from the request time (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)). Set `method_ts_round` to `first` so that the first step is the step containing the tick, and build the lists from that step. This does not synchronise the two clocks: this flow builds the payload before EMHASS reads the request time, so a tick close to a step boundary can give EMHASS a first step one step later than the one the lists assume. Prefer sending the prices as a timestamped mapping when your source has timestamps, and check the first timestamp of the returned plan against the assumed first step before acting on it.
 - Inject once after deploy: optional, useful for testing
 
 This is the heartbeat that will drive every MPC call. Wire its output to the next node (Step 3).
@@ -62,21 +63,26 @@ Add a `function` node downstream of the inject. The body computes runtime params
 // The example values below are placeholders — wire them to your actual sources.
 
 const charger_kw = 11.0;
-const timestep_min = 30;          // must match EMHASS optimization_time_step_minutes
-const horizon_steps = 48;         // 48 × 30min = 24h
+const timestep_min = 30;          // must match the EMHASS optimization_time_step
+const horizon_steps = 48;         // 48 × 30min = 24 elapsed hours (a fixed step count, also on a 23- or 25-hour DST day)
 
 // Example: deferrable #2 is an EV, recompute its window each call
 const ev_remaining_kwh = flow.get("ev_remaining_kwh") || 0;
 const ev_hours = Math.ceil(ev_remaining_kwh / charger_kw);
 const minutes_until_deadline = flow.get("minutes_until_deadline") || 480;
-const end_step = Math.floor(minutes_until_deadline / timestep_min);
+// Step indices count from the first optimization step, which with method_ts_round "first" started
+// minutes_into_step minutes ago (epoch based: assumes a UTC offset that is a whole number of steps).
+// An end of 0 means "no limit", so a deadline inside the first step needs handling by your flow.
+const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
+const end_step = Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min);
 
 // Battery SOC from your battery monitor, normalized to fraction 0..1
 const soc_percent = flow.get("battery_soc_percent") || 50;
 const soc_init = soc_percent / 100;
 
 // Per-timestep price arrays from your tariff source, sent as plain lists: one
-// value per optimization timestep, starting with the current step. EMHASS
+// value per optimization timestep, starting with the first step of the grid (the step
+// containing now when method_ts_round is "first"). EMHASS
 // rejects a list shorter than horizon_steps (never pads it) and ignores extra
 // values. Prices may be negative.
 const load_cost = flow.get("load_cost_per_step");
@@ -91,6 +97,7 @@ if (!isValid(load_cost) || !isValid(prod_price)) {
 }
 
 msg.payload = {
+    prediction_horizon: horizon_steps,
     operating_hours_of_each_deferrable_load: [4, ev_hours],
     start_timesteps_of_each_deferrable_load: [0, 0],
     end_timesteps_of_each_deferrable_load: [horizon_steps, end_step],
@@ -140,7 +147,7 @@ The following are observed-in-production patterns from running this flow shape f
 - **Hysteresis dead-band.** Add ~50 W (or your inverter's noise floor) of dead-band around charge/discharge mode-transition boundaries so the orchestrator doesn't flap between modes as PV and load wiggle around equilibrium.
 - **Forecast resilience.** Single PV-forecast source is a single point of failure. Production-grade orchestrators run primary (commercial: Solcast, Forecast.Solar, etc.) + physics-fallback (Open-Meteo `global_tilted_irradiance` × DC_kWp × eta, clipped to inverter AC max) + a daily auto-calibration step (EMA-update of a correction factor from real-vs-modeled PV).
 - **State between ticks.** Use `flow.set(...)` / `flow.get(...)` (not `context.set/get`) so the values survive Node-RED redeploys of unrelated tabs.
-- **Price arrays.** As plain lists, `load_cost_forecast` and `prod_price_forecast` must have at least `horizon_steps` entries of finite numbers. EMHASS rejects a shorter list with an error instead of padding it, and fails the cycle on `NaN`, `null`, booleans or strings. Step 3 above checks both and skips the tick rather than sending a fabricated fallback. If your tariff source publishes timestamped prices, you can send them as a timestamped mapping instead and let EMHASS align them. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
+- **Price arrays.** As plain lists, `load_cost_forecast` and `prod_price_forecast` are positional from the first optimization step and must have at least `horizon_steps` entries of finite numbers (a list that starts one step early or late places every price on the wrong interval and still gives a valid-looking plan). EMHASS rejects a shorter list with an error instead of padding it, and fails the cycle on `NaN`, `null`, booleans or strings. Step 3 above checks both and skips the tick rather than sending a fabricated fallback. If your tariff source publishes timestamped prices, you can send them as a timestamped mapping instead and let EMHASS align them. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
 - **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. See [Battery-aware runtime params](battery_aware_runtime_params.md) for the full story.
 
 ## Credits

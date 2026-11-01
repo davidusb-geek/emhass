@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.18.7 - 2026-10-23
+
+### Improvement
+- test: deterministic DP-refinement fixture and DST-safe fixed-clock fixtures (#1247, #1248) (@MMicieli)
+- test: use an explicit tight MIP gap in the zone-overshoot last-step test (#1246) (@MMicieli)
+- chore: align Python 3.11–3.13 support and CI (#1220 stage 1) (@MMicieli)
+- feat: keep a time-limited solve's feasible plan; keep mutual exclusion in the relaxed fallback (#539) (@snauwaertc)
+- feat: dry run: POST /api/v1/dry-run/<action> solves and returns the plan, writing nothing (@ameetdesh)
+- test: add a drift guard for config_defaults and param_definitions (@HFZR2005)
+
+### Documentation
+- docs: thermal planning guide and a hybrid heating walkthrough (#539) (@snauwaertc)
+- docs(cookbook): add Node-RED/MQTT/evcc EV charging recipe (no Home Assistant) (@OptimalNothing90)
+
+### Fix
+- fix: seed the thermal-lag dead zone with heat already in flight (prior_heat) (#539) (@snauwaertc)
+- fix: handle NaN values in power columns when formatting injection dict (@Blizzeq)
+
+## 0.18.6 - 2026-10-16
+
+Rolling out anew version of EMHASS loaded with a bunch of fixes and improvements.
+Update to this version to prepare for the upcoming DST change challenge.
+Thanks to all contributors.
+
+### Improvement
+- test: DST regression suite for the time grid and forecast transport (#1189) (@MMicieli)
+- feat: cap a heat pump's delivered heat with max_thermal_power (#539) (@snauwaertc)
+- feat: opt-in DP COP refinement for shared-tank heat pumps (part 2 of #1187) (@snauwaertc)
+- feat: dynamic-programming solver for a heat-pump-charged store (part 1 of #1187) (@snauwaertc)
+
+### Documentation
+- docs: clarify the DST-safe time-grid contract and Nordpool forecasts (#1189) (@MMicieli)
+- docs: fix the Nordpool examples (timestamp mapping, no prepended value, hourly 24-entry days only) (#1189) (@MMicieli)
+- docs: the DP COP refinement and the thermal math model (part 3 of #1187) (@snauwaertc)
+- docs: cookbook recipes for DHW and heat pump (@snauwaertc)
+
+### Fix
+- fix: rebuild the cached problem when a sequence load's running state changes (@Blizzeq)
+- fix: keep a positive deferrable load start when the end timestep is 0 or negative (@Blizzeq)
+- fix: reject a state of charge above 1 before it reaches the solver (@HFZR2005)
+- fix: keep the captured forecast start across Forecasts built from one params dict; explicit tz origin (#1189 follow-up) (@MMicieli)
+- fix: keep forecast values on their UTC instants across a DST change (#1189) (@MMicieli)
+- fix: use one UTC-safe time grid per request (#1189) (@MMicieli)
+- fix: use the configured load sensor as var_model when var_model is unset or the stock default (@Blizzeq)
+- fix: scale the soc_final penalty by the self-consumption big-M (@Blizzeq)
+- fix: warn when heat_topology replaces configured loads; keep shared_thermal_tanks from config.json (@snauwaertc)
+- fix: forward current_period_peak through the dayahead capacity-tariff path (@snauwaertc)
+- fix: price a temperature bound that free gains alone break, instead of an infeasible run (@snauwaertc)
+- fix: read def_load_config from config.json into optim_conf (@Blizzeq)
+- fix: sleep to the next continual_publish period boundary (@Blizzeq)
+- fix: interpolate interior Forecast.Solar gaps at sub-hourly steps (@Blizzeq)
+- fix: replace fillna(method=...) removed in pandas 3 in the weather safety fill (@Blizzeq)
+- Fix: validate Open-Meteo covariate cache span (@Unplanted6505)
+- fix(command_line): fallback to nearest index when ffill/bfill returns -1 (@Blizzeq)
+
 ## 0.18.5 - 2026-10-09
 
 This release brings massive upgrades to the thermal modeling engine, advanced hybrid-inverter configurations, and robust fixes for DST transitions and forecasting.

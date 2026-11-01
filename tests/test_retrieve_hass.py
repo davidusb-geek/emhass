@@ -7,6 +7,7 @@ import inspect
 import os
 import pathlib
 import pickle
+import re
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,6 +40,12 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # build_secrets reads EMHASS_URL, SUPERVISOR_TOKEN and TIME_ZONE from the environment; a
+        # developer's own values must not reach these tests. The environment is restored after
+        # each test.
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+            environ.pop(name, None)
         emhass_conf["data_path"] = root / "data/"
 
         self.get_data_from_file = True
@@ -171,6 +178,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hass_url", self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
             self.assertEqual(self.retrieve_hass_conf["hass_url"], "https://myhass.duckdns.org/")
+            self.assertEqual(str(self.retrieve_hass_conf["time_zone"]), "Europe/Paris")
 
     # Check yaml parse worked
     async def test_yaml_parse_web_server(self):
@@ -191,11 +199,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def test_get_data_failed(self):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-        response = await self.rh.get_data(days_list, var_list)
-        if self.get_data_from_file:
-            self.assertFalse(response)
-        else:
-            self.assertTrue(response)
+        test_url = "http://mock.invalid/history"
+        with aioresponses() as mocked, self.assertLogs(logger, level="ERROR") as logs:
+            mocked.get(test_url, status=401, repeat=True)
+            response = await self.rh.get_data(days_list, var_list, test_url=test_url)
+        self.assertFalse(response)
+        # Only the HTTP 401 branch logs this; a connection error logs "Network error" instead
+        self.assertTrue(any("TOKEN/KEY is invalid or missing" in line for line in logs.output))
+        self.assertIn(("GET", test_url), [(m, str(u)) for m, u in mocked.requests])
 
     # Test with html mock response
     async def test_get_data_mock(self):
@@ -1079,10 +1090,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
-    def _vm_query_side_effect(entity_data, calls=None, keep_metric_name=True):
+    def _vm_query_side_effect(
+        entity_data, calls=None, keep_metric_name=True, entity_label="entity_id"
+    ):
         """Build a ``_vm_query_range`` side_effect emulating VictoriaMetrics.
 
-        :param entity_data: mapping of entity_id label -> list of series, each a tuple
+        :param entity_data: mapping of entity label value -> list of series, each a tuple
             ``(metric_name, [(bucket_start_iso, value), ...])``. Timestamps are given as
             the START of the bucket (the label EMHASS must produce); the fake server
             returns them the way VictoriaMetrics does, at the END of the
@@ -1091,12 +1104,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         :param calls: optional list collecting ``(query, start, end, step)`` per call.
         :param keep_metric_name: emulate MetricsQL (``__name__`` kept through
             ``avg_over_time``, the default) or a plain PromQL backend that drops it.
+        :param entity_label: label the selector locates the entity with (``entity_id``
+            for InfluxDB-integration data, ``entity`` for Prometheus-integration data).
         """
 
         async def query_side_effect(session, query, start_s, end_s, step_s):
             if calls is not None:
                 calls.append((query, start_s, end_s, step_s))
-            entity_id = query.split('entity_id="')[1].split('"')[0]
+            entity_id = query.split(f'{{{entity_label}="')[1].split('"')[0]
             result = []
             for metric_name, points in entity_data.get(entity_id, []):
                 values = []
@@ -1105,7 +1120,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                     if start_s <= ts <= end_s:
                         values.append([ts, str(value)])
                 if values:
-                    metric = {"entity_id": entity_id, "domain": "sensor"}
+                    metric = {entity_label: entity_id, "domain": "sensor"}
                     if keep_metric_name:
                         metric["__name__"] = metric_name
                     result.append({"metric": metric, "values": values})
@@ -1125,6 +1140,28 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rh._vm_selector("power_a"), '{entity_id="power_a",__name__=~"W_value"}')
         # Quotes and backslashes in a value cannot break out of the matcher
         self.assertIn('entity_id="a\\"b\\\\c"', rh._vm_selector('sensor.a"b\\c'))
+
+    def test_vm_selector_entity_label(self):
+        """With an entity label the full entity id is matched on that label alone."""
+        rh = self._make_vm_rh(
+            victoriametrics_database="",
+            victoriametrics_metric_regex="homeassistant_sensor_.+",
+            victoriametrics_entity_label=" entity ",
+        )
+        self.assertEqual(
+            rh._vm_selector("sensor.power_a"),
+            '{entity="sensor.power_a",__name__=~"homeassistant_sensor_.+"}',
+        )
+        self.assertIn('entity="sensor.a\\"b\\\\c"', rh._vm_selector('sensor.a"b\\c'))
+        # The database filter still applies when configured
+        rh = self._make_vm_rh(victoriametrics_entity_label="entity")
+        self.assertTrue(rh._vm_selector("sensor.power_a").endswith(',db="homeassistant"}'))
+        # A label name cannot be quoted, so an invalid one is refused with an error and
+        # the entity_id/domain matching is used instead
+        with self.assertLogs(logger, level="ERROR") as logs:
+            rh = self._make_vm_rh(victoriametrics_entity_label='entity="x"} or vector(1) #')
+        self.assertIn("Invalid victoriametrics_entity_label", logs.output[0])
+        self.assertTrue(rh._vm_selector("sensor.power_a").startswith('{entity_id="power_a",'))
 
     def test_vm_connection_settings(self):
         """Host/port/ssl/auth settings map onto the HTTP client arguments."""
@@ -1188,6 +1225,47 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(end_s, int(pd.Timestamp("2023-04-02T00:00:00Z").timestamp()))
         self.assertTrue(query.startswith("avg_over_time({entity_id="))
         self.assertTrue(query.endswith("}[1800s])"))
+
+    async def test_get_data_victoriametrics_entity_label(self):
+        """Prometheus-integration series are read through the entity label, and series
+        split by a label change (same metric name) are joined into one history."""
+        rh = self._make_vm_rh(
+            victoriametrics_database="",
+            victoriametrics_metric_regex="homeassistant_sensor_.+",
+            victoriametrics_entity_label="entity",
+        )
+        calls = []
+        side_effect = self._vm_query_side_effect(
+            {
+                "sensor.power_photovoltaics": [
+                    (
+                        "homeassistant_sensor_power_w",
+                        [("2023-04-01T10:00:00Z", 1500.0), ("2023-04-01T10:30:00Z", 1800.0)],
+                    )
+                ],
+                "sensor.power_load_no_var_loads": [
+                    ("homeassistant_sensor_power_w", [("2023-04-01T10:00:00Z", 500.0)]),
+                    ("homeassistant_sensor_power_w", [("2023-04-01T10:30:00Z", 450.0)]),
+                ],
+            },
+            calls,
+            entity_label="entity",
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.power_photovoltaics", "sensor.power_load_no_var_loads"]
+        with patch.object(rh, "_vm_query_range", side_effect=side_effect):
+            self.assertTrue(await rh.get_data(days_list, var_list))
+        df = rh.df_final
+        self.assertEqual(list(df.columns), var_list)
+        self.assertEqual(len(df), 28)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[0]], 1500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][var_list[1]], 500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][var_list[1]], 450.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 23:30:00+00:00"][var_list[1]], 450.0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(
+            calls[0][0].startswith('avg_over_time({entity="sensor.power_photovoltaics",')
+        )
 
     async def test_get_data_victoriametrics_fill_previous(self):
         """Empty buckets are forward-filled like InfluxDB FILL(previous)."""
@@ -2067,6 +2145,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     @patch("aiofiles.open")
     async def test_post_data_extended(self, mock_aio_open):
         self.rh.get_data_from_file = False
+        # Every POST goes to a controlled response: four successes, then one 503 below
+        mocked = self.enterContext(aioresponses())
+        states_url = re.compile(r".*/states/.*")
+        for _ in range(4):
+            mocked.post(states_url, status=200)
 
         # Setup mock file context for save_entities=True
         mock_f = AsyncMock()
@@ -2085,6 +2168,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             data_df, idx, entity_id, "monetary", "EUR", "Cost Function", "cost_fun"
         )
         self.assertEqual(data["state"], f"{data_df.sum():.2f}")
+        self.assertTrue(response.ok)
 
         # Test "optim_status" type
         status_df = pd.Series(["Optimal"], index=[0])
@@ -2092,12 +2176,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             status_df, 0, "sensor.optim_status", "none", "", "Status", "optim_status"
         )
         self.assertEqual(data["state"], "Optimal")
+        self.assertTrue(response.ok)
 
         # Test "deferrable" type (complex attributes)
         response, data = await self.rh.post_data(
             data_df, idx, entity_id, "power", "W", "Deferrable", "deferrable"
         )
         self.assertIn("deferrables_schedule", data["attributes"])
+        self.assertTrue(response.ok)
 
         # Test "unit_load_cost" (4 decimals)
         response, data = await self.rh.post_data(
@@ -2105,6 +2191,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(data["state"], f"{data_df.iloc[0]:.4f}")
         self.assertIn("unit_load_cost_forecasts", data["attributes"])
+        self.assertTrue(response.ok)
 
         # Test save_entities=True
         # Save old path to restore later
@@ -2151,23 +2238,21 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_f.write.called)
         self.assertGreaterEqual(mock_f.write.call_count, 2)
 
-        # Test Error Handling (response_ok = False)
-        # We need to un-patch the aioresponses or create a new specific patch for client session
-        with patch("aiohttp.ClientSession.post") as mock_post:
-            mock_resp = AsyncMock()
-            mock_resp.ok = False
-            mock_resp.status = 500
-            mock_resp.__aenter__.return_value = mock_resp
-            mock_post.return_value = mock_resp
+        # Test Error Handling (response_ok = False): the next POST gets a 503. post_data reports
+        # 500 for any transport exception, so a 503 can only come from the mocked response.
+        mocked.post(states_url, status=503)
+        # Use dont_post=False to force the POST (get_data_from_file is False, set at start)
+        response, _ = await self.rh.post_data(
+            data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
+        )
 
-            # Use dont_post=False to force network attempt
-            # Ensure get_data_from_file is False (set at start of test)
-            response, _ = await self.rh.post_data(
-                data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
-            )
-
-            self.assertFalse(response.ok)
-            self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.ok)
+        self.assertEqual(response.status_code, 503)
+        # The four successful posts and the failing one all reached the mocked endpoint
+        posts = sum(
+            len(calls) for (method, _), calls in mocked.requests.items() if method == "POST"
+        )
+        self.assertEqual(posts, 5)
 
     async def test_concurrent_save_entities_metadata_integrity(self):
         """Concurrent publishes that share entities/metadata.json must not

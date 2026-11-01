@@ -18,6 +18,8 @@ The sensor containing the load data should be specified in the parameter `sensor
 
 If you are implementing an MPC controller, then you should also need to provide some data at the optimization runtime using the key `runtimeparams`.
 
+To try a request without replacing the live plan, send the same body to `/api/v1/dry-run/<action>`: see [Dry run](dry_run.md).
+
 The valid values to pass for both forecast data and MPC-related data are explained below.
 
 ### Forecast data at runtime
@@ -52,6 +54,8 @@ The possible dictionary keys to pass data are:
 - `shared_thermal_tanks` a list of shared thermal storage objects (several sources feeding one storage), the manual flat alternative to `heat_topology`. Each tank carries `id`, `load_ids` (the deferrable-load indices of its sources), `volume` (m3), `start_temperature`, per-step `min_temperatures` / `max_temperatures`, and optionally `thermal_loss` (kW), `draw_off_demand` (kWh per step), `desired_temperatures`, `overshoot_temperature` and `sense` (`heat` or `cool`). Each load in `load_ids` needs a `def_load_config[k]` entry of the form `{"thermal_source": {...}}` with its conversion: `efficiency` (a fixed factor), or `supply_temperature` or `heating_curve` plus `carnot_efficiency` (a heat pump). This is the schema the `heat_topology` compiler produces; writing a `heat_topology` is usually simpler. When `heat_topology` is also set, the compiled topology replaces this list (with `extend_deferrable_loads: true` the runtime tanks are kept and the topology's tanks appended).
 
 - `shared_tank_start_temperatures` a per-storage start-temperature override keyed by storage id, e.g. `{"dhw": 48.5}`. It is applied after the `heat_topology` compile, so it patches manual and compiled tanks alike: the per-run equivalent of `soc_init` or `heater_start_temperatures` for an MPC loop that reads a live tank temperature sensor. Unknown ids and non-numeric values are ignored with a warning.
+
+- `shared_tank_prior_heat` per-storage heat already produced but not yet arrived because of `thermal_inertia`, keyed by storage id: thermal kWh for each of the last L steps, oldest first, e.g. `{"house": [0.8, 1.4]}`. The initial condition for the lag under rolling MPC (see [heat_topology.md](heat_topology.md)). Absent keeps the cold-start behaviour; a malformed entry is ignored with a warning.
 
 - `pv_power_forecast` for the central (P50) PV power production forecast.
 
@@ -130,7 +134,7 @@ For compatibility with existing runtime callers, a forecast value that is a stri
 
 #### Plain lists
 
-A plain list is already expressed in optimization timesteps. The first value is the current timestep and each following value is one `optimization_time_step` later. EMHASS does not resample a list.
+A plain list is positional: the first value is the first step of the optimization grid (set by `method_ts_round`, from the clock read once at the start of the request) and each following value is one `optimization_time_step` later. The grid is regular in elapsed time, so a daylight saving day needs 23 or 25 hourly values. EMHASS does not resample a list.
 
 - A list must contain at least as many values as the forecast horizon. A shorter list is rejected with an error and ignored, so the action uses the configured forecast method instead. It is never padded.
 - A longer list is accepted, and EMHASS uses its first horizon-length values.
@@ -141,9 +145,9 @@ A mapping of ISO 8601 timestamps to values is aligned onto the optimization grid
 
 1. The supplied values are checked against the numerical contract before any aggregation, so an error reports the source timestamp.
 2. Timestamps are normalized by instant. Always include a UTC offset: a timestamp without an offset is read as UTC, not as local time.
-3. Points are converted to the configured `time_zone` and aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value.
+3. Points are aggregated to `optimization_time_step` buckets using the mean, for example four 15-minute values become one 60-minute value. The buckets are anchored on the first step of the optimization grid (set by `method_ts_round`), so each bucket coincides with one grid step in every time zone.
 4. The aggregated points are matched to the forecast grid by UTC instant, so DST transitions do not shift values.
-5. Each value holds until the next supplied point (step, hold-last semantics). A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
+5. Each value holds until the next supplied point (step, hold-last semantics). Holding applies to the aggregated bucket values: a bucket that contains two points holds their mean, not the later point, over the steps that follow it until the next bucket with a point. A point before the start of the horizon anchors the first steps. Horizon steps before the first supplied point take the first supplied value (backfill).
 
 Coarser source data is therefore held constant, finer data is averaged, and there is no interpolation between points.
 
@@ -157,6 +161,26 @@ Coarser source data is therefore held constant, finer data is averaged, and ther
 #### Choosing a fallback
 
 When a forecast source is unavailable, don't substitute `0` by default. A zero household load or a zero import price is a valid number that produces a mathematically valid but wrong plan. Use a fallback only when it is trustworthy for that quantity, for example 0 W of PV at night or a known fixed tariff. Otherwise skip that optimization cycle, either by not calling the action or by letting EMHASS reject the invalid payload, and run again when fresh data is available.
+
+### Step indices and other positional inputs
+
+Everything that is indexed by optimization step shares the grid of the plain lists: the plain forecast lists above and the step indices `start_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load`. Index `i` is the instant `first_step + i x optimization_time_step`, measured in **elapsed time**. On a daylight saving day the local clock labels of those instants skip or repeat an hour.
+
+- **The first step is not always "now".** `method_ts_round` decides it, once per request: `first` is the step that contains the request time, `last` the next step boundary (the current one if the request is exactly on it), and `nearest` (default) the closest boundary on the UTC clock, so a request in the second half of a step starts one step later (see [`method_ts_round`](config.md)). Index 0 of a plain list or step index is that first step.
+- **One grid per EMHASS request, not per caller.** EMHASS reads the clock once when it receives a request and uses that first step for everything in the request. A caller that builds its payload first (a script, a template, a flow) uses its own earlier reading of the clock; if the two readings fall on different sides of a step boundary, the first step the caller assumed and the first step EMHASS used differ by one step. Setting `method_ts_round` to `first` does not synchronise the two clocks.
+- **Prefer timestamped mappings for forecasts and prices.** They are matched by instant, so the source timestamps are kept whatever the first step is (see above). Positional lists and step indices must still correspond to the grid EMHASS actually used: when you must send them, set `method_ts_round` to `first`, floor the clock to the step instead of reproducing the `nearest` rule, and, before acting on the first step of a time-sensitive plan, check that the first timestamp of the returned plan equals the first step you assumed.
+- **Step indices count from the first step.** `end_timesteps_of_each_deferrable_load = N` forbids operation at step `N` and later; `0` means *no end limit*, not "stop immediately". Do not combine a positive start step with an end of `0` or a negative end: EMHASS then ignores the start step too (verified with the optimiser), so give the end explicitly (for example the horizon length). A value derived from a clock time must be counted in elapsed time from the first step.
+- **Compute elapsed time from instants, not from wall-clock arithmetic.** Subtracting or adding to datetimes that share one time zone is a wall-clock operation, so across a daylight saving change the result is an hour off (23 or 25 elapsed hours between the same two local times). In Home Assistant templates use `as_timestamp()` (seconds since the epoch), for example `(as_timestamp(target) - as_timestamp(now())) / 60` for the minutes to a target time, and `as_timestamp(first_step) + step_seconds * i` for the instant of step `i`.
+- **Fixed-length horizons.** `prediction_horizon` is a number of steps and `delta_forecast_daily` is a number of local calendar days. A 48-step, 30-minute `prediction_horizon` is always 24 elapsed hours. A `delta_forecast_daily` window has a different number of steps only when it contains a daylight saving change, by the size of the change and the step: with 30-minute steps 46 or 50 for a one-hour change (Australia/Sydney), 47 or 49 for a 30-minute change (Australia/Lord_Howe), and 48 once the change is behind the first step. Without `prediction_horizon`, `naive-mpc-optim` plans only 10 steps.
+
+A Home Assistant template for the first step with `method_ts_round` set to `first` and an `optimization_time_step` of 30 minutes:
+
+```jinja
+{%- set step_s = 1800 -%}
+{%- set first_step = (as_timestamp(now()) // step_s) * step_s -%}
+```
+
+The floor on epoch seconds is the local step boundary only when the UTC offset is a whole number of steps, which holds for whole-hour and half-hour offsets with a 30-minute step. For a zone such as Asia/Kathmandu (+05:45) or Pacific/Chatham the floor lands on :15 and :45, so add the offset first: `{%- set off = now().utcoffset().total_seconds() -%}` and `first_step = ((as_timestamp(now()) + off) // step_s) * step_s - off` (checked in Home Assistant for Kathmandu, Kolkata, Sydney, Chatham and St. John's).
 
 ### Passing other data at runtime
 
@@ -204,7 +228,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
 
-- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Only used by `naive-mpc-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
+- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Used by `naive-mpc-optim` and `dayahead-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
@@ -249,13 +273,43 @@ rest_command:
 The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
 ```
 
-### Capping the demand charge at the peak already incurred (naive-mpc-optim)
+### Batteries that are not always connected: EV / V2G availability windows (naive-mpc-optim)
+
+With `number_of_batteries > 1` one of the batteries can be an electric vehicle on a bidirectional (V2G / V2H) charger. Such a battery is only part of the system while the car is plugged in, it must reach a charge level by the time the driver leaves, and the car itself usually limits how much and how deep it may be discharged. Three optional runtime keys (only used by `naive-mpc-optim`) model this without changing `number_of_batteries` between runs, so the problem structure, the optimization cache and the published per-battery sensors stay the same whether the car is there or not:
+
+- `battery_availability`: one entry per battery. Each entry is `null` (always available, the default), a number, or a list with one value per timestep. A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected) that scales that battery's `battery_charge_power_max` and `battery_discharge_power_max` for that timestep: `1` = connected at full power, `0` = not connected. While a battery is unavailable it neither charges nor discharges, so its SOC stays frozen. A list shorter than the horizon is padded with its last value. With a single battery a flat list is read as its time series.
+- `battery_discharge_energy_max`: one entry per battery, the maximum energy (Wh, battery side) the battery may deliver over the horizon, or `null` for no cap. Use it for a V2G warranty or cycle budget (for example a car whose manufacturer allows a fixed number of discharged kWh over its lifetime). The cap applies to one optimization run only: EMHASS does not remember what was discharged in earlier runs, so send the budget that is still left on every MPC call. A bare number applies to every battery.
+- `soc_target` / `soc_target_timestep` (see the previous section) also accept one entry per battery. A battery with a target but no timestep (`null`) gets the target at its **last available timestep**, i.e. the departure. Because the SOC is frozen after departure, also pass `soc_final` for that battery equal to the target, so the end-of-horizon SOC agrees with it (EMHASS logs a warning when it is lower).
+
+A minimum SOC below which the car refuses to discharge is the per-battery `battery_minimum_state_of_charge`; a lower discharge power accepted by the car is the per-battery `battery_discharge_power_max`. If a battery starts below its minimum SOC and cannot recover into its band inside its availability window (for instance a car that is not plugged in at all), the minimum is not enforced for it in that run instead of making the problem infeasible. The same holds for a battery above its maximum SOC that cannot come down inside its window or its discharge budget. With `set_battery_dynamic` the ramp limits also apply around a disconnection, so the optimizer ramps a battery down over the steps before its availability drops to zero.
+
+Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged in for the next 72 quarter-hours, must leave at 84 %, may discharge at most 11 kW and at most 10 kWh, and never below 20 %:
+
+```json
+{
+  "number_of_batteries": 2,
+  "battery_nominal_energy_capacity": [36160, 75000],
+  "battery_charge_power_max": [17600, 25000],
+  "battery_discharge_power_max": [19200, 11000],
+  "battery_minimum_state_of_charge": [0.1, 0.2],
+  "battery_maximum_state_of_charge": [1.0, 0.9],
+  "soc_init": [0.78, 0.71],
+  "soc_final": [0.5, 0.84],
+  "battery_availability": [null, [1, 1, 1, "... 72 ones, then zeros ..."]],
+  "soc_target": [null, 0.84],
+  "battery_discharge_energy_max": [null, 10000]
+}
+```
+
+When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
+
+### Capping the demand charge at the peak already incurred (naive-mpc-optim and dayahead-optim)
 
 EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)). With `capacity_charge_interval_timesteps = 1` (default), it prices the highest eligible positive-import timestep; with `N > 1`, it prices the highest eligible completed tariff-interval average described below.
 
 In a real tariff the demand charge is assessed over a **billing period**, not just the optimization horizon. The billing period may use any caller-defined start/end dates; it does not need to be a calendar month. Once you have already incurred, say, a 7 kW billed peak earlier in the current period, there is no point spending battery energy now to keep this horizon's eligible peak below 7 kW: that peak is already "locked in" and will be billed regardless. The optional runtime key `current_period_peak` tells EMHASS what that already-incurred billed peak is, so it only shaves the part of a new peak that is actually above it.
 
-- `current_period_peak`: the billed peak already incurred in this billing period, in **Watts** (not kW). With `capacity_charge_interval_timesteps = 1`, use the highest eligible positive-import timestep. With `capacity_charge_interval_timesteps > 1`, use the highest eligible **completed clocked tariff-interval average**; keep the currently open interval in `capacity_charge_current_interval_history` until it completes. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
+- `current_period_peak`: the billed peak already incurred in this billing period, in **Watts** (not kW). With `capacity_charge_interval_timesteps = 1`, use the highest eligible positive-import timestep. With `capacity_charge_interval_timesteps > 1`, use the highest eligible **completed clocked tariff-interval average**; keep the currently open interval in `capacity_charge_current_interval_history` (MPC only: `dayahead-optim` cannot represent a partly elapsed interval, so start a day-ahead horizon on an interval boundary) until it completes. Only effective when `capacity_cost_per_kw > 0`; ignored otherwise.
 
 It defaults to *unset* (`None`, equivalent to 0), in which case the full horizon peak is priced, identical to behaviour without this key. It is a one-sided floor (`peak_import >= current_period_peak`), so it never forces additional import and never makes the problem infeasible.
 
@@ -286,7 +340,7 @@ rest_command:
 ```
 
 ```{warning}
-`current_period_peak` is in **Watts**, not kilowatts: pass `7000`, not `7`, for a 7 kW peak (if your sensor is in kW, multiply by 1000 as shown above). It only has an effect when `capacity_cost_per_kw` is set above 0; on its own it does nothing. It is a floor, not a target: it never raises import or forces a new peak, it only stops the optimizer chasing a peak it cannot reduce. A negative, non-finite (NaN or infinity) or non-numeric value is ignored (treated as 0). Reset it at the start of each billing period (e.g. via a utility-meter cycle) so a stale high value does not suppress legitimate peak shaving in the new period.
+`current_period_peak` is in **Watts**, not kilowatts: pass `7000`, not `7`, for a 7 kW peak (if your sensor is in kW, multiply by 1000 as shown above). It only has an effect when `capacity_cost_per_kw` is set above 0; on its own it does nothing. It is a floor, not a target: it never raises import or forces a new peak, it only stops the optimizer chasing a peak it cannot reduce. A negative, non-finite (NaN or infinity) or non-numeric value is ignored (treated as 0). Reset it at the start of each billing period (e.g. via a utility-meter cycle) so a stale high value does not suppress legitimate peak shaving in the new period. With `dayahead-optim`, which has no `capacity_charge_window`, do not send the old period's peak when the horizon crosses into a new billing period (for example a plan made on the last day of the month): the floor would make import up to that peak free on the first day of the new period too, and the plan could set a new billed peak there. Omit `current_period_peak` for such a run, or run `naive-mpc-optim` with a window.
 ```
 
 ### Restricting the demand charge to a tariff demand window (naive-mpc-optim)
@@ -406,7 +460,7 @@ A bare `capacity_cost_per_kw` models **one** capacity/demand-charge component. S
 ```
 
 - **Canonical form.** `capacity_cost_per_kw` is normalised before anything structural is decided: `3.0` and `[3.0]` (what the config form serialises for a single value) and `[]` all collapse to the legacy scalar K=1 form — same model, same cache key, no per-component objects. Only a list of **two or more** rates selects K>1 (`K = len(list)`). `capacity_charge_interval_timesteps` is normalised the same way: `6` and `[6]` both mean a shared 6-timestep basis; `[6, 3]` means genuine per-component bases.
-- **Structural vs runtime.** `capacity_cost_per_kw` (the list, and its length K) and `capacity_charge_interval_timesteps` are structural `optim_conf` — a change rebuilds the problem and its cache key. `current_period_peak`, `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are `naive-mpc-optim` runtime inputs — changing them between ticks is a warm-start cache hit.
+- **Structural vs runtime.** `capacity_cost_per_kw` (the list, and its length K) and `capacity_charge_interval_timesteps` are structural `optim_conf` — a change rebuilds the problem and its cache key. `current_period_peak` is a runtime input of `naive-mpc-optim` and `dayahead-optim`; `capacity_charge_window`, `capacity_charge_consideration` and `capacity_charge_current_interval_history` are `naive-mpc-optim` runtime inputs. All four are runtime inputs — changing them between ticks is a warm-start cache hit.
 - Every runtime input becomes a **list of exactly K entries**, one per component in `capacity_cost_per_kw` order. `capacity_charge_interval_timesteps` may be a bare value (shared measurement basis, broadcast to every component) or a list of exactly K for independent per-component intervals — **any other list length is a configuration error** (a wrong-length interval list would silently redefine the tariff measurement basis, e.g. a 30-minute average-demand charge becoming a native per-timestep peak charge, so it is rejected rather than reinterpreted).
 - **Independent component semantics.** Each component has its own rate, measurement interval, eligibility window, MPC consideration, realised open-interval history and already-incurred incumbent peak. A peak visible only in component A's window never raises component B's peak; A's consideration mask never affects B; each incumbent floor binds only its own component; `capacity_charge_window` vs `capacity_charge_consideration` keep their existing distinct meanings per component (eligibility vs this-solve prospective participation), and consideration never scales or erases any component's incumbent peak.
 - **One optimiser.** Still one solve, one physical dispatch, one objective. The capacity term generalises from `capacity_cost_per_kw * peak_import / 1000` to `sum over k of capacity_cost_per_kw[k] * peak_import[k] / 1000`.
@@ -567,6 +621,32 @@ Each sensor is retrieved with `avg_over_time(<selector>[<optimization_time_step>
 ```{note}
 As with InfluxDB, if `use_victoriametrics` is set in `config.json` the parameters given at runtime in the POST payload (for example `historic_days_to_retrieve`) still take precedence, so make sure the fit/predict automations pass consistent values. When both `use_influxdb` and `use_victoriametrics` are enabled InfluxDB is used and a warning is logged.
 ```
+
+### Series scraped from the Prometheus integration
+
+If VictoriaMetrics already scrapes the Home Assistant [Prometheus integration](https://www.home-assistant.io/integrations/prometheus/), EMHASS can read that history directly, without also feeding the `influxdb` integration. Those series name the metric after the domain, device class and unit, and keep the full entity id in an `entity` label:
+
+```text
+homeassistant_sensor_power_w{entity="sensor.power_load", domain="sensor", friendly_name="Power load"}
+```
+
+Set `victoriametrics_entity_label` to `entity` so that the whole entity id is matched against that label (instead of the `entity_id` and `domain` labels described above), and point `victoriametrics_metric_regex` at the sensor metrics:
+
+```json
+{
+  "use_victoriametrics": true,
+  "victoriametrics_host": "192.168.1.10",
+  "victoriametrics_port": 8428,
+  "victoriametrics_database": "",
+  "victoriametrics_metric_regex": "homeassistant_sensor_.+",
+  "victoriametrics_entity_label": "entity"
+}
+```
+
+- Keep the `homeassistant_sensor_` prefix in the regex. The integration also exports `homeassistant_entity_available`, `homeassistant_last_updated_time_seconds` and `homeassistant_state_change_*` for every entity, with the same `entity` label.
+- Leave `victoriametrics_database` empty: scraped series carry no `db` label.
+- Units are not converted. A power sensor exported in kW (`homeassistant_sensor_power_kw`) is read in kW, so rescale it with an arithmetic expression such as `{{'sensor.grid_power' * 1000}}`.
+- A label that changes value over time, such as a renamed `friendly_name`, starts a new series under the same metric name. EMHASS joins series that share a metric name, so the history stays continuous. If both series have samples in the bucket where the change happened, the first value is kept and a duplicate timestamps warning is logged.
 
 
 ## Passing in secret parameters

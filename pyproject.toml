@@ -3,7 +3,7 @@ name = "emhass"
 dynamic = ["version"]
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
-requires-python = ">=3.10, <3.13"
+requires-python = ">=3.11"
 authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
@@ -13,9 +13,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -27,7 +27,7 @@ dependencies = [
     "pytz>=2024.2",
     "h5py>=3.12.1",
     "highspy>=1.10.0",
-    "cvxpy>=1.6.0, <1.8.0",
+    "cvxpy>=1.6.0, <1.10.0",
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
     "skforecast>=0.19.1,<0.23.0",
@@ -61,6 +61,8 @@ test = [
     # tests fail under aiohttp 3.13+. Cap aiohttp here (test extra only) until
     # aioresponses ships 3.13 support; production installs stay unpinned.
     "aiohttp<3.13",
+    # freezes the clock for the DST regression suite in tests/dst_1189
+    "time-machine",
 ]
 dev = ["ruff"]
 

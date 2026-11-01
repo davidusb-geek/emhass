@@ -66,18 +66,20 @@ watts of source input:
 | Field | Description |
 | --- | --- |
 | `id` | Unique source ID. |
-| `type` | `heatpump`, `heat_pump`, `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
+| `type` | `heatpump` (`heat_pump` is accepted as the same type), `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
 | `nominal_power` | Maximum source input power in W. |
 | `min_power` | Optional minimum input power in W; default `0`. Must not exceed `nominal_power`. |
-| `treat_as_semi_cont` | Optional on/off-at-nominal behavior; default `true`. |
+| `treat_as_semi_cont` | Optional on/off behavior at `nominal_power` (lower where `max_thermal_power` binds, see below); default `true`. |
 | `supply_temperature` | Fixed heat-pump supply temperature in degrees Celsius. |
 | `heating_curve` | Alternative heat-pump supply-temperature curve. |
+| `cooling_curve` | For a `cool` storage: the same shape as `heating_curve` (defaults `min_supply` 5, `max_supply` 18), giving a weather-compensated chilled supply temperature. The cooling Carnot lift (outdoor minus supply) is applied automatically. |
 | `carnot_efficiency` | Heat-pump Carnot efficiency; default `0.4`. |
 | `efficiency` | Required constant conversion efficiency for gas, oil, district, electric, and constant-efficiency sources. |
 | `cost_track` | Optional key in `cost_tracks`. Without it, the shared electricity tariff is used. |
 | `electric` | Optional override for electric-balance membership. |
 | `max_supply_temperature` | Optional hard ceiling (degrees Celsius) on the storage temperature this source can heat into. A number, or a per-timestep list (a short list is extended with its last value). |
 | `overshoot_temperature` | Optional threshold (degrees Celsius): with the storage's desired temperature set, this source stops beyond it (see below). Overrides the storage-level `overshoot_temperature`. |
+| `max_thermal_power` | Optional hard ceiling (W) on a heat pump's delivered heat, `COP * electrical power`. A number. |
 | `startup_penalty` | Optional penalty per off-to-on switch, to discourage short cycling; default `0`. Each start costs `startup_penalty × nominal_power (kW) × electricity price × step length (h)`, priced at the electricity tariff even for a fuel source on its own `cost_track`. |
 | `max_startups` | Optional hard limit on the number of starts over the horizon; default `0` (no limit). |
 
@@ -90,17 +92,72 @@ per flow, and each load counts its own starts. A source that switches from one
 storage to the other therefore starts the second flow, and its `max_startups`
 limits each flow separately, not the unit as a whole.
 
-A heat pump requires either `supply_temperature` or a `heating_curve`. A
+A heat pump requires `supply_temperature`, a `heating_curve`, or a
+`cooling_curve`. A
 constant-efficiency source requires `efficiency`.
 
 Source type controls electric-balance membership by default:
 
-- `heatpump`, `heat_pump`, and `electric` are electric loads;
+- `heatpump` and `electric` are electric loads;
 - `gas`, `oil`, and `district` are non-electric loads; and
 - `constant_efficiency` defaults to electric because its fuel is ambiguous.
 
 An explicit `electric: true` or `electric: false` overrides the default. This
 keeps a gas boiler's fuel input out of the household electric power balance.
+
+#### Temperature-dependent COP refinement (`cop_solver`)
+
+A heat pump's COP falls as it heats the storage hotter, but the optimizer
+plans against a COP evaluated at an assumed temperature. When banking heat is
+profitable, for example super-heating a buffer into surplus PV, the plan can
+rely on a COP the unit cannot reach at that temperature. With
+`cop_solver: auto`, EMHASS checks each curve-driven heat pump (`heating_curve`
+or `cooling_curve`) after the solve and, only when the COP it used disagrees
+with the temperature it planned, refines the storage's trajectory with an exact
+dynamic program and solves once more. A constant `supply_temperature` source
+has a fixed COP and is not refined.
+
+The default is `static`: no refinement, exactly the previous behaviour. Turn it
+on for a buffer or tank that a heat pump regularly charges well above its curve
+supply temperature, and compare it with `static` on your own system: with
+several coupled stores the refined plan is not always cheaper. A run where it
+engages takes longer, because of the second solve. See
+[the mathematical model](advanced_math_model.md) for the details.
+
+#### Per-source thermal-output ceiling
+
+A heat pump delivers `COP * electrical power`, and with a weather-compensated
+`heating_curve` the COP climbs steeply on mild days. A small unit can then be
+modelled as delivering far more heat than it can: a 5.7 kW (electrical) heat
+pump at COP 8 would "deliver" about 46 kW, well above its rated 15 kW. Set
+`max_thermal_power` to the unit's rated thermal output to cap the delivered heat
+directly. The optimizer then also draws less electrical power when the unit is
+thermally limited. Unlike `nominal_power`, which bounds electrical input, this
+bounds thermal output, which is what the compressor actually limits. A source
+that feeds several storages compiles into one load per flow; the cap applies to
+those flows together, so their combined delivered heat stays within it.
+
+```json
+"sources": [
+  {"id": "hp", "type": "heatpump", "nominal_power": 5700,
+   "heating_curve": {"slope": 0.7, "offset": 38},
+   "carnot_efficiency": 0.46, "max_thermal_power": 15000,
+   "treat_as_semi_cont": false}
+]
+```
+
+A semi-continuous source runs on/off at one power level. For a capped source
+that level becomes `min(nominal_power, max_thermal_power / COP)` per step, as a
+real unit at its thermal ceiling runs flat-out against whichever limit binds.
+The COP refinement (`cop_solver`) respects the cap as well.
+
+A capped source (semi-continuous or continuous) with a nonzero `min_power`
+cannot run at steps where `COP * min_power` exceeds `max_thermal_power`
+(typically mild days, when the COP is high). The solve still succeeds: those
+steps are off, other sources cover the demand where they can, and a warning
+names the deferrable load (numbered in the order of `flows`, see
+[Publishing results](#publishing-results)) and the number of affected steps. Lower `min_power` only if the unit really modulates
+that low.
 
 #### Per-source temperature ceiling
 
@@ -124,7 +181,7 @@ already on its way cannot push the storage past it.
 ```
 
 A source may not push the storage past its ceiling within a step. A
-semi-continuous source (the default) runs at its full nominal power, so if one
+semi-continuous source (the default) runs at its full ON level, so if one
 full-power step heats the storage by more than the gap between its temperature
 and the ceiling, that source never runs and the other source does all the work,
 with no warning. Make a capped source continuous (`"treat_as_semi_cont": false`),
@@ -202,6 +259,22 @@ infeasible. Only the minimums of the first 6 timesteps trigger this; a minimum
 that rises later in the horizon (for example a scheduled legionella cycle) stays
 hard, because the plan can heat ahead for it.
 
+The same happens to a maximum that free heat alone breaks. Sun through the
+windows (or a warm day) can carry a heated storage past its maximum with every
+source off, and no plan can prevent that. Before each run EMHASS follows the
+storage with its sources off (heat already in flight from `prior_heat`
+included), held up only by its minimums; if that path lies
+above a maximum, the maximums of that storage are priced for that run instead
+of making it infeasible, and the log says so. The penalty is the one used for a
+storage that starts below its minimum, so no source heats into the excess. On a
+run where a plan can keep the maximum, it is a hard limit as before. A cooling
+storage mirrors this for its minimum on a cold night. Two cases are left
+unchanged, because the check cannot be sure there: a storage that a transfer
+could still take heat from (or give heat to, when cooling), and a zone whose
+`loss_coefficient` times the timestep exceeds its `thermal_mass`. The
+predicted temperature then shows the excess; `max_temp_heater{k}` keeps showing
+the configured maximum.
+
 #### Building-zone storage
 
 A storage can also model a building zone (a house or a room) as a thermal mass
@@ -214,7 +287,8 @@ are optional; without them a storage is a water tank as before.
 | --- | --- | --- |
 | `thermal_mass` | kWh/K | Heat capacity, instead of `volume`. |
 | `loss_coefficient` | kW/K | Heat-loss coefficient UA. The loss becomes `UA * (T - outdoor)`, so a warmer zone loses more and the optimizer can pre-heat on cheap power and coast through a price peak. Cannot be combined with a `building_demand` consumer, which also models the loss to outdoor. |
-| `thermal_inertia` | hours | Delay between the storage's own source heat and the temperature response, as in the thermal model. Applied in whole timesteps (rounded down) and capped at the horizon. Transfers are not lagged, so on a storage fed only by transfers it is ignored (with a warning). Over the first lagged steps no source heat arrives, so the minimum temperature there is priced rather than hard. |
+| `thermal_inertia` | hours | Delay between the storage's own source heat and the temperature response, as in the thermal model. Applied in whole timesteps (rounded down) and capped at the horizon. Transfers are not lagged, so on a storage fed only by transfers it is ignored (with a warning). Over the first lagged steps only heat already in flight (`prior_heat`) arrives, so the minimum temperature there is priced rather than hard. |
+| `prior_heat` | kWh per step | Heat the storage's sources already produced that is still in flight because of `thermal_inertia`, oldest first. Usually sent per run with `shared_tank_prior_heat` instead; see [Rolling MPC](#rolling-mpc). |
 | `window_area`, `shgc` | m2, fraction | Solar gain through glazing from the GHI forecast (`window_area * shgc * GHI`), which offsets the zone's heating need. `shgc` defaults to `0.6`. Applied only to a zone with `loss_coefficient`, and only when the weather data has GHI (open-meteo); otherwise it is zero. |
 
 For example, a house held between 19.5 and 21.5 degrees Celsius, with a
@@ -380,8 +454,12 @@ Each flow pair must exactly match an entry in `flows`.
 `max_combined_power` adds a per-timestep cap on the sum of the member flows. It
 does not replace their individual `min_power` and `nominal_power` limits.
 `mutual_exclusion: true` additionally allows at most one member to be active.
-For semi-continuous sources, an active flow runs at its nominal power, so the
-group cap must be at least as large as every member that may run. For
+This also holds in the relaxed fallback EMHASS uses when the full problem cannot
+be solved: if one active member per timestep cannot meet the demand, the run is
+reported infeasible rather than planning two members at once.
+For semi-continuous sources, an active flow runs at its ON level (its nominal
+power, or less where `max_thermal_power` binds), so the group cap must be at
+least as large as every member that may run. For
 continuous sources, the optimizer may modulate each active flow between its
 individual minimum and nominal limits while respecting the group cap. A group
 cap below a required member's feasible power can make the thermal problem
@@ -434,8 +512,10 @@ A storage fed only by a transfer has no load of its own; its temperature is in
 its position in the tank list (its position in `storage`, after any manual
 `shared_thermal_tanks` in extend mode). Each transfer adds a `P_transfer_{from}_{to}` column
 to the result (delivered heat, W): the schedule to drive the circulation pump
-with. These columns are in the result CSV and the `/api/v1/plan` output; they
-are not published as Home Assistant sensors.
+with. Both the transfer-only storage's temperature and the `P_transfer_*`
+columns are in the result CSV and the `/api/v1/plan` output, but they are not
+published as Home Assistant sensors, because neither belongs to a deferrable
+load.
 
 ### Rolling MPC
 
@@ -447,11 +527,54 @@ send at runtime, or send only `shared_tank_start_temperatures` (for example
 `{"dhw": 48.5}`) to override the start temperature per storage id without
 resending the topology. The solve takes a few seconds longer than a warm start.
 
+With `thermal_inertia`, heat produced at step `t` only reaches the storage at
+step `t + 1 + L`, where `L` is `thermal_inertia` divided by the time step,
+rounded down. In a one-shot day-ahead plan the first `L` steps therefore get no
+source heat, which is correct: nothing precedes the horizon. A rolling MPC run
+starts mid-flight, though: heat committed by the previous runs is still on its
+way. Without an initial condition, the temperature over those first steps does
+not depend on anything the optimizer can choose, so it keeps re-injecting heat
+and returns an Optimal plan that over-provisions heating.
+
+Pass that heat per run with `shared_tank_prior_heat`, keyed by storage id:
+
+```json
+{"shared_tank_prior_heat": {"house": [0.8, 1.4]}}
+```
+
+The values are the thermal kWh that all of the storage's sources together
+delivered in each of the last `L` steps, oldest first. Leave out heat that
+arrived through a `transfers` entry: transfers are not lagged. A shorter list
+is right-aligned (the most recent steps are the ones still in flight), a longer
+one keeps its last `L` values, and either is logged. Without a lag the value is
+ignored, which is logged too. Omitting it keeps the cold-start behaviour.
+
+A malformed runtime entry (not a list, not numeric, negative or not finite) is
+ignored with a warning, and that storage starts cold for the run. A `prior_heat`
+written into the storage configuration is checked strictly instead: the same
+values fail the run.
+
+To keep it up to date, each time an optimization time step completes, drop the
+oldest value and append the thermal kWh actually delivered during that step. If
+MPC runs more often than once per time step (for example every 5 minutes on a
+30-minute grid), resend the same list on the runs in between. Do not refill it
+from the new plan's own first `L` steps: that feeds the model its intentions
+rather than what the hardware did, which is exactly what this initial condition
+corrects. The best source is a differenced heat or energy counter on the unit
+(thermal kWh per step, or electrical kWh times that step's COP); the executed
+step of the previous plan is a usable fallback when there is no counter and the
+unit follows its setpoints closely. When differencing a counter, clamp a
+negative difference (a counter reset) to 0, and send 0 for a step whose reading
+is unavailable rather than a non-numeric value, which would drop the whole list
+for that run.
+
 ## Combining with other deferrable loads
 
 By default the compiler replaces the whole deferrable-load set with the
 topology's flows, because it cannot tell configured loads apart from the
-shipped defaults. If you also have ordinary deferrable loads (washing machine,
+shipped defaults. When more loads are configured than the topology compiles to,
+and they are not the two shipped example loads, the log warns which load
+indices are dropped. If you also have ordinary deferrable loads (washing machine,
 EV charger, ...) in the per-load arrays, set `extend_deferrable_loads` at the
 top level of the topology:
 

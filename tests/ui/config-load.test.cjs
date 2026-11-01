@@ -1,0 +1,263 @@
+// Run from repository root: node --test tests/ui/config-load.test.cjs
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('src/emhass/static/configuration_script.js', 'utf8');
+const saved = { battery_nominal_energy_capacity: 23456, costfun: 'self-consumption' };
+
+// a reply that never completes; it ends only when the request's own timeout aborts it
+const STALL = Symbol('stall');
+// the same, but rejecting with an AbortError, as Chrome 103-123 does for AbortSignal.timeout
+const STALL_ABORT_ERROR = Symbol('stall-abort-error');
+// AbortSignal.timeout's own timer does not keep the event loop alive on every Node, so a test waiting only on it
+// is cancelled ('Promise resolution is still pending but the event loop has already resolved'). A ref'd timer
+// aborts a real AbortSignal with the same TimeoutError and keeps the loop alive until it fires.
+function timeoutSignal(ms) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms);
+  return controller.signal;
+}
+function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
+  const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
+    classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
+  const nodes = {};
+  for (const id of ['configuration-container', 'save', 'yaml', 'defaults', 'json-toggle', 'alert', 'alert-text', 'loader']) nodes[id] = el();
+  const calls = [];
+  const state = { rendered: undefined, view: 'list' };
+  const boxEl = { value: box, innerHTML: '' };
+  nodes['configuration-container'].getElementsByClassName = () => (state.view === 'list' ? [{}] : []);
+  // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
+  const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => timeoutSignal(40) },
+    document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
+      getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
+    fetch: async (url, options) => {
+      calls.push({ url, method: options && options.method, signal: options && options.signal, cache: options && options.cache });
+      const settle = r => ((r === STALL || r === STALL_ABORT_ERROR)
+        ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(r === STALL ? options.signal.reason : new DOMException('The user aborted a request.', 'AbortError'))))
+        : r);
+      const override = staticReply(url);
+      if (override !== undefined) return settle(override);
+      if (url.includes('param_definitions')) return new Response('{}', { status: 200 });
+      if (url.includes('configuration_list')) return new Response('<div class="section-card"></div>', { status: 200 });
+      return settle(getConfigReply(url));
+    } };
+  vm.createContext(ctx); vm.runInContext(source, ctx);
+  // the list renderer is not under test here; record what it was asked to render
+  ctx.loadConfigurationListView = (defs, config) => { state.rendered = config; nodes['configuration-container'].innerHTML = 'LIST'; };
+  return { ctx, nodes, calls, state, boxEl, load: () => ctx.window.onload() };
+}
+const json = (status, body) => new Response(JSON.stringify(body), { status });
+const setConfigCalls = s => s.calls.filter(c => c.url === 'set-config');
+const failClosed = (s) => {
+  assert.equal(s.state.rendered, undefined, 'no form rendered from a failed load');
+  assert.equal(s.nodes.save.listeners.click, undefined, 'Save not attached');
+  assert.equal(s.nodes.save.disabled, true, 'Save disabled');
+  assert.equal(s.nodes['configuration-container'].innerHTML, '');
+  assert.equal(s.nodes.alert.style.display, 'block', 'failure reported in the alert box');
+  assert.match(s.nodes['alert-text'].textContent, /Reload the page to try again/, 'a recovery step is offered');
+  assert.deepEqual(setConfigCalls(s), [], 'nothing is sent to /set-config');
+};
+
+test('GET /get-config 500 with a JSON error array fails closed and shows the server message', async () => {
+  const s = setup(() => json(500, ['failed to retrieve default config file']));
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /failed to retrieve default config file/);
+});
+test('GET /get-config 500 with an empty JSON list reports the HTTP status', async () => {
+  const s = setup(() => json(500, []));
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /HTTP 500/);
+});
+test('GET /get-config 500 with an HTML body fails closed and reports the HTTP status', async () => {
+  const s = setup(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /HTTP 502/);
+});
+test('rejected GET /get-config request fails closed and reports the error', async () => {
+  const s = setup(() => { throw new TypeError('Failed to fetch'); });
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
+});
+for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null'], ['an empty object', '{}']]) {
+  test(`HTTP 200 with ${name} fails closed`, async () => {
+    const s = setup(() => new Response(body, { status: 200 }));
+    await s.load(); failClosed(s);
+  });
+}
+test('HTTP 200 renders the saved configuration and attaches the buttons', async () => {
+  const s = setup(() => json(200, saved));
+  await s.load();
+  assert.deepEqual(s.state.rendered, saved);
+  for (const id of ['save', 'yaml', 'defaults', 'json-toggle']) assert.equal(typeof s.nodes[id].listeners.click, 'function', id);
+  assert.equal(s.nodes.save.disabled, false);
+});
+test('List/Box toggle keeps the current view when GET /get-config fails', async () => {
+  const s = setup(() => json(500, ['failed to retrieve default config file']));
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', false);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['alert-text'].textContent, /failed to retrieve default config file/);
+});
+test('Defaults keeps the current form when GET /get-config/defaults fails with a JSON error', async () => {
+  const s = setup(() => json(500, ['failed to retrieve default config file']));
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['alert-text'].textContent, /failed to retrieve default config file/);
+  assert.deepEqual(setConfigCalls(s), []);
+});
+test('Defaults keeps the current form when GET /get-config/defaults fails with an HTML body', async () => {
+  const s = setup(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['alert-text'].textContent, /HTTP 502/);
+});
+test('Defaults keeps the current form when the GET /get-config/defaults request is rejected', async () => {
+  const s = setup(() => { throw new TypeError('Failed to fetch'); });
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
+  assert.deepEqual(setConfigCalls(s), []);
+});
+for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null'], ['an empty object', '{}']]) {
+  test(`Defaults keeps the current form when GET /get-config/defaults returns 200 with ${name}`, async () => {
+    const s = setup(() => new Response(body, { status: 200 }));
+    s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+    await s.ctx.ToggleView({}, '<div></div>', true);
+    assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+    assert.equal(s.state.rendered, undefined);
+    assert.equal(s.nodes.alert.style.display, 'block');
+    assert.deepEqual(setConfigCalls(s), []);
+  });
+}
+test('List/Box toggle still switches views when GET /get-config succeeds', async () => {
+  const s = setup(() => json(200, saved));
+  await s.ctx.ToggleView({}, '<div></div>', false);
+  assert.equal(s.state.rendered, undefined);
+  assert.match(s.nodes['configuration-container'].innerHTML, /config-box/);
+  assert.deepEqual(JSON.parse(s.boxEl.innerHTML), saved);
+});
+
+async function save(reply) {
+  const s = setup(() => reply()); s.state.view = 'box';
+  const out = {}; s.ctx.showChangeStatus = (st, log) => { out.status = st; out.log = log; };
+  await s.ctx.saveConfiguration({});
+  return { s, out };
+}
+test('/set-config 200 reports success', async () => {
+  const { s, out } = await save(() => json(200, []));
+  assert.equal(out.status, 200); assert.equal(setConfigCalls(s).length, 1);
+});
+test('/set-config JSON error reports the server messages', async () => {
+  const { out } = await save(() => json(400, ['bad value']));
+  assert.equal(out.status, 400); assert.deepEqual(out.log, ['bad value']);
+});
+test('/set-config non-JSON error reports the HTTP status', async () => {
+  const { out } = await save(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
+  assert.equal(out.status, 502); assert.deepEqual([...out.log], ['HTTP 502']);
+});
+test('rejected /set-config request is reported with the error message', async () => {
+  const { out } = await save(() => { throw new TypeError('Failed to fetch'); });
+  assert.notEqual(out.status, 200); assert.match(out.log.join(' '), /Failed to fetch/);
+  assert.doesNotMatch(out.log.join(' '), /may still have saved/, 'a failed request is not reported as an unknown outcome');
+});
+
+// bounded requests: a stalled request ends in a visible error instead of leaving the page waiting
+test('a stalled GET /get-config fails closed with a timeout message', async () => {
+  const s = setup(() => STALL);
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /abort|time/i);
+});
+for (const [name, staticReply] of [
+  ['a stalled definitions request', url => (url.includes('param_definitions') ? STALL : undefined)],
+  ['an HTTP 404 for the definitions', url => (url.includes('param_definitions') ? new Response('nf', { status: 404 }) : undefined)],
+  ['a rejected definitions request', url => { if (url.includes('param_definitions')) throw new TypeError('Failed to fetch'); }],
+  ['a stalled list template request', url => (url.includes('configuration_list') ? STALL : undefined)],
+  ['an HTTP 404 for the list template', url => (url.includes('configuration_list') ? new Response('nf', { status: 404 }) : undefined)],
+]) {
+  test(`${name} fails closed: no form, Save disabled and not attached, nothing written`, async () => {
+    const s = setup(() => json(200, saved), { staticReply });
+    await s.load();
+    assert.equal(s.state.rendered, undefined); assert.equal(s.nodes.save.listeners.click, undefined);
+    assert.equal(s.nodes.save.disabled, true); assert.equal(s.nodes['configuration-container'].innerHTML, '');
+    assert.equal(s.nodes.alert.style.display, 'block'); assert.match(s.nodes['alert-text'].textContent, /Reload the page/);
+    assert.deepEqual(setConfigCalls(s), []);
+  });
+}
+for (const [name, body] of [['an empty body', ''], ['a blank body', ' '+String.fromCharCode(10)+' ']]) {
+  test(`an HTTP 200 list template with ${name} fails closed with a visible, actionable error`, async () => {
+    const s = setup(() => json(200, saved), { staticReply: url => (url.includes('configuration_list') ? new Response(body, { status: 200 }) : undefined) });
+    await s.load(); failClosed(s);
+    assert.match(s.nodes['alert-text'].textContent, /configuration_list\.html.*empty/);
+  });
+}
+test('every configuration request is made with a timeout signal', async () => {
+  const s = setup(() => json(200, saved)); await s.load();
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  const { s: t } = await save(() => json(200, []));
+  const calls = [...s.calls, ...t.calls].filter(c => /get-config|set-config|static/.test(c.url));
+  assert.ok(calls.length >= 5);
+  for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`);
+});
+test('a stalled Defaults request keeps the form and a second Defaults click recovers', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, saved)));
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.match(s.nodes['alert-text'].textContent, /abort|time/i); assert.deepEqual(setConfigCalls(s), []);
+  stall = false;
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.deepEqual(s.state.rendered, saved);
+});
+test('a stalled /set-config is reported and a later save succeeds', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, []))); s.state.view = 'box';
+  const out = []; s.ctx.showChangeStatus = (st, log) => out.push({ st, log });
+  await s.ctx.saveConfiguration({});
+  assert.notEqual(out[0].st, 200); assert.match(out[0].log.join(' '), /Unable to save.*(abort|time).*server may still have saved it/is);
+  stall = false; await s.ctx.saveConfiguration({});
+  assert.equal(out[1].st, 200);
+});
+
+test('a successful request clears the error shown for the failed one before it', async () => {
+  let fail = true;
+  const s = setup(() => (fail ? json(500, ['failed to retrieve default config file']) : json(200, saved)));
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes.alert.style.display, 'block');
+  fail = false;
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.deepEqual(s.state.rendered, saved); assert.equal(s.nodes.alert.style.display, 'none');
+});
+test('a successful save clears the error of a save that timed out', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, []))); s.state.view = 'box';
+  await s.ctx.saveConfiguration({});
+  assert.equal(s.nodes.alert.style.display, 'block'); assert.match(s.nodes['alert-text'].textContent, /may still have saved it/);
+  stall = false; await s.ctx.saveConfiguration({});
+  assert.equal(s.nodes.alert.style.display, 'none');
+});
+test('the definitions and the list template are revalidated, not served from the 12 h static cache', async () => {
+  const s = setup(() => json(200, saved)); await s.load();
+  for (const name of ['param_definitions', 'configuration_list']) {
+    const call = s.calls.find(c => c.url.includes(name));
+    assert.equal(call.cache, 'no-cache', `${name} may be served stale after an upgrade`);
+  }
+});
+test('a timed-out save is reported as an unknown outcome whichever error the browser aborts with', async () => {
+  const s = setup(() => STALL_ABORT_ERROR); s.state.view = 'box';
+  const out = []; s.ctx.showChangeStatus = (st, log) => out.push(log.join(' '));
+  await s.ctx.saveConfiguration({});
+  assert.match(out[0], /may still have saved it/);
+  const plain = setup(() => { throw new DOMException('The user aborted a request.', 'AbortError'); }); plain.state.view = 'box';
+  const out2 = []; plain.ctx.showChangeStatus = (st, log) => out2.push(log.join(' '));
+  await plain.ctx.saveConfiguration({});
+  assert.doesNotMatch(out2[0], /may still have saved/, 'an abort that is not our timeout is not an unknown outcome');
+});

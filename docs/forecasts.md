@@ -183,6 +183,13 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
+The action answers with HTTP 400 when the forecast could not be produced; the reason is in the action log, which the response does not return because it is shared by all requests. Earlier versions answered 200 in these cases, so clients that relied on that status should be updated. The failures are:
+
+- Solcast or solar.forecast returning an HTTP error, solar.forecast staying unreachable after its retries, a missing or unusable Solcast API key or rooftop ID, or the Solcast daily call cap already being used. A network failure that Solcast or Open-Meteo raise is not one of these and still answers 500.
+- An invalid `weather_forecast_method`.
+- A runtime `pv_power_forecast` list that is rejected, for example one with a non-finite value or one paired with a `pv_power_forecast_p10` list of a different length. A list that is too short or of the wrong type is only ignored, as in the other actions, and the configured method applies.
+
+With the `csv` weather forecast method there is nothing to cache, because your file is read on every run, so the action does nothing and answers 200.
 
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
 ```bash
@@ -410,6 +417,8 @@ For the `csv` method you should push a csv file to the `data` folder. The CSV fi
     2021-04-29 01:00:00+00:00,243.38
     ...
 
+Each timestamp is read as an absolute instant: include the UTC offset (a timestamp without one is read as UTC). A file written in local time may therefore change offset in the middle, for example `+01:00` and `+02:00` across a daylight saving change, and both occurrences of a repeated local hour stay distinct. The rows should cover the whole optimization horizon at the `optimization_time_step`. For a step more than one source step (the median row spacing) after the last row or before the first, EMHASS keeps using the closest row and logs a warning (not checked for a file with a single row) with the number of uncovered steps and the first and last of them.
+
 For the list method, you just have to add the data as a list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option.
 
 The possible dictionary keys to pass data are:
@@ -429,7 +438,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
-You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list length should be 24 data points.
+You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list should contain one value per step: 24 hourly values, or 23 or 25 across a daylight saving change.
 
 ### Understanding forecast data formats: List vs Dictionary
 
@@ -446,7 +455,7 @@ The list format passes forecast values as a simple array. This is the most compa
 attention to timing and data length.
 
 **Requirements:**
-- The list must contain values for the **current time period first**, followed by future values
+- The list must start with the value for the **first step of the optimization grid** (set by `method_ts_round`; with `first` it is the step that contains now), followed by future values
 - The list must contain at least one value per horizon step based on `optimization_time_step`. Extra values are
 ignored, and a shorter list is rejected with an error rather than padded
 - Values must be in the correct order (chronological)
@@ -459,7 +468,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 	"optimization_time_step": 60
 }' http://localhost:5000/action/dayahead-optim
 ```
-For a 24-hour forecast with 1-hour intervals, you need exactly 24 values starting from the current hour.
+For a 24-hour forecast with 1-hour intervals, you need one value per grid step, 24 hourly values (23 or 25 across a daylight saving change), starting at the first grid step.
 
 When to use list format:
 - Your forecast data is already aligned with EMHASS intervals
@@ -504,15 +513,7 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
-What happens internally:
-1. Every value is checked against the [numerical contract](passing_data.md#forecast-input-contract), so an invalid value
-is reported with its source timestamp and the action fails
-2. Timestamps are parsed as ISO8601 and converted to your configured timezone
-3. Points that fall inside the same `optimization_time_step` are averaged (e.g., four 15-minute values become one hourly
-value); coarser data is not interpolated
-4. Values are matched to the forecast grid by UTC instant and each value holds until the next point (step semantics)
-5. Horizon steps before the first supplied point take the first supplied value (backfill)
-6. The result is converted to a list for the optimizer
+What happens internally: the values are validated, aggregated to the optimization step and matched to the grid by UTC instant, exactly as described under [Forecast input contract](passing_data.md#forecast-input-contract).
 
 When to use dictionary format:
 - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
@@ -523,36 +524,64 @@ When to use dictionary format:
 Practical Home Assistant Examples
 
 Dictionary format with Nordpool (Simple - Recommended!):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool: >
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }},
-			"prod_price_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool: >
+    {% set prices = (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") or []) + (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") or []) %}
+    {% set mapping = dict(zip(prices | map(attribute="start") | map("string") | list, prices | map(attribute="value") | list)) %}
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{ mapping | tojson }},
+      "prod_price_forecast": {{ mapping | tojson }}
+    }' http://localhost:5000/action/dayahead-optim
 ```
-The Nordpool integration already provides data in dictionary format with timestamps, so you can pass it directly using `| tojson`!
+`raw_today` is a list of `{start, end, value}` objects, not the `{timestamp: value}` mapping EMHASS expects (passing it with `| tojson` as is makes the optimisation fail), so the template pairs each `start` with its `value`. Prices are placed by timestamp, so this is correct for hourly and 15-minute prices and on daylight saving days. `raw_today + raw_tomorrow` covers the whole day-ahead horizon. The `value` must be in currency per kWh, as for every EMHASS price (divide a per-MWh sensor by 1000).
+
+In Home Assistant templates `zip` is a function, `zip(keys, values)`, not a filter (`keys | zip(values)` fails with "No filter named 'zip'"); `dict(...)` and `tojson` are available. The `or []` keeps the template from failing when an attribute is missing, but then it renders an empty mapping (`{}`) or only today's prices, which does not make a valid day-ahead request: guard the automation, as described next. The `start` values are timestamps with their UTC offset (`2026-10-03 00:00:00+10:00`), which EMHASS reads as absolute instants.
+
+The `tojson` filter of Home Assistant writes an apostrophe as `'`, so a value or timestamp containing `'` cannot end the single-quoted `-d` argument (checked with the Home Assistant template engine: the rendered command stays one `-d` argument and the payload valid JSON); EMHASS then rejects a non-numeric price.
+
+Run it only when the prices cover the whole forecast window. A mapping that starts after now (today's prices missing), ends before the window does (tomorrow's not published, or an `unavailable` sensor that kept old attributes) or has a gap is silently completed by EMHASS: steps before the first point take its price and steps after the last point hold the last price, so the plan is valid but wrongly priced. The window of a day-ahead run is one local calendar day from now, so check coverage from the timestamps, not from a count of entries (a day has 23, 24 or 25 hourly entries, and 92, 96 or 100 quarter-hour entries). As an automation condition:
+
+```yaml
+condition:
+  - condition: template
+    value_template: >
+      {%- set s = "sensor.nordpool_kwh_be_eur_3_10_025" -%}
+      {%- set p = (state_attr(s, "raw_today") or []) + (state_attr(s, "raw_tomorrow") or []) -%}
+      {%- set ns = namespace(ok = p | length > 0) -%}
+      {%- for i in range(1, p | length) -%}
+        {%- if as_timestamp(p[i].start) != as_timestamp(p[i - 1].end) -%}{%- set ns.ok = false -%}{%- endif -%}
+      {%- endfor -%}
+      {{ states(s) not in ['unknown', 'unavailable'] and ns.ok
+         and as_timestamp(p[0].start) <= as_timestamp(now())
+         and as_timestamp(p[-1].end) >= as_timestamp(now() + timedelta(days=1)) }}
+```
+
+It requires the first entry to start at or before now, the entries to be contiguous, and the last one to end at or after the same wall-clock time tomorrow (`now() + timedelta(days=1)` is a local calendar day, as in EMHASS). With a `delta_forecast_daily` other than 1, replace `1` by that number of days.
 
 List format with Nordpool (Traditional - More Complex):
-```bash
+```yaml
 shell_command:
-	emhass_dayahead_nordpool_list: >
-		curl -i -H "Content-Type: application/json" -X POST -d '{
-			"load_cost_forecast": {{(
-				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float] +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
-				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
-				[now().hour:][:24]
-			)}}
-		}' http://localhost:5000/action/dayahead-optim
+  emhass_dayahead_nordpool_list: >
+    curl -i -H "Content-Type: application/json" -X POST -d '{
+      "load_cost_forecast": {{(
+        (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
+        state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
+        [now().hour:][:24]
+      )}}
+    }' http://localhost:5000/action/dayahead-optim
 ```
 
 Notice how the list format requires:
-- Adding the current hour value first `[states("sensor.nordpool...")]`. `| float` has no default on purpose: if the
-sensor is unavailable the template fails and the call is skipped, instead of sending a price of 0
 - Extracting values from dictionaries `map(attribute="value")`
-- Slicing from current hour `[now().hour:]`
+- Slicing from current hour `[now().hour:]`. With a 60-minute step this is the first grid step only for `method_ts_round: first`. With the default `nearest` from about :30 on (an exact :30 goes to the even UTC hour), and with `last` (a time that is not exactly on a step), the grid starts one hour later, so every value is applied one hour too late
 - Limiting to the correct length `[:24]`
+
+`raw_today` already starts with the first hour of the local day, so `[now().hour:]` alone selects the current hour;
+do not prepend another value, which would shift every price one hour early. This positional list is right only for
+hourly prices on a day with 24 entries: with 15-minute prices (96 entries) or on a daylight saving day (its `raw_today` has 23 or 25
+entries, so `[now().hour:]` is one hour off after the change) it selects the wrong prices, so use the dictionary format there (or always).
+A missing attribute does not stop this template from rendering (Home Assistant treats it as empty), and a list gives no protection against missing prices: with `raw_today` missing and `raw_tomorrow` present, the slice takes tomorrow's prices as today's, and in the first hour of the day it is still long enough, so EMHASS accepts a list of the wrong day. Use the same coverage condition as for the dictionary format, or better the dictionary format itself.
 
 Dictionary format handles all of this automatically!
 
@@ -570,8 +599,8 @@ Data resolution:
 - Each hourly price is held constant for all 15-minute intervals within that hour (step semantics, no interpolation)
 
 Current values:
-- When using list format, the first value in the list must be the current period
-- Example: If it's 14:30 and your intervals are 30 minutes, the first value should be for 14:30-15:00
+- When using list format, the first value in the list must be for the first grid step: with `method_ts_round: first` the step that contains now, with `last` the first step boundary not before now, with `nearest` (default) the closest boundary
+- Example: at 14:50 with 30-minute intervals, `nearest` starts the grid at 15:00
 - Dictionary format automatically handles this by using timestamps
 
 Mixing formats:
@@ -650,6 +679,10 @@ An MPC call may look like this for 4 deferrable loads:
 ```
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
+
+```{note}
+This example sends plain lists, so every list is positional from the first optimization step (see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs)), and it prepends the current price as that first value. That only matches the grid when the first step is the 30-minute step containing now (`method_ts_round: first`) and the Amber forecast rows continue directly after the current interval. With the default `nearest`, a call in the second half of a step starts one step later and every price lands one step early. Amber forecast rows carry their own `start_time`, so a timestamped mapping avoids the alignment question.
+```
 
 ### Example combining multiple Solcast configurations
 
@@ -740,6 +773,8 @@ The subsequent shell command to concatenate `today` and `tomorrow` values can be
 shell_command:
   trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
+
+This command assumes a 60-minute `optimization_time_step` and `method_ts_round: first`, so that the list starts at the current hour (see [the list format](#understanding-forecast-data-formats-list-vs-dictionary)). With another step or rounding mode, prefer the dictionary format.
 
 ## Now/current values in forecasts
 

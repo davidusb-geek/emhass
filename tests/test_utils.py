@@ -2,8 +2,10 @@
 
 import json
 import logging
+import os
 import pathlib
 import re
+import tempfile
 import unittest
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -141,6 +143,134 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # Test get_yaml_parse with built params in get_test_params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         self.assertEqual(retrieve_hass_conf["Altitude"], 8000.0)
+
+    def test_get_forecast_start_inside_repeated_hour(self):
+        """The start is rounded on the UTC clock, so both passes of a repeated hour work (#1189)."""
+        # (zone, first UTC instant of the repeated local interval, its length in minutes)
+        folds = [
+            ("Europe/Berlin", "2026-10-25T00:00Z", 60),
+            ("Australia/Sydney", "2027-04-03T15:00Z", 60),
+            ("Europe/Dublin", "2026-10-25T00:00Z", 60),
+            ("Africa/Casablanca", "2026-02-15T01:00Z", 60),
+            ("Australia/Lord_Howe", "2027-04-03T14:30Z", 30),
+        ]
+        for zone, fold_start, length in folds:
+            tz = pytz.timezone(zone)
+            for offset_min in range(-30, length * 2 + 31, 7):
+                # includes seconds and sub-second parts: whole seconds are kept in UTC
+                now = pd.Timestamp(fold_start) + pd.Timedelta(minutes=offset_min, seconds=13.7)
+                for freq in (5, 15, 30, 60):
+                    step = pd.Timedelta(minutes=freq)
+                    for method in ("first", "nearest", "last"):
+                        with self.subTest(zone=zone, now=now, freq=freq, method=method):
+                            start = utils.get_forecast_start(now, step, tz, method)
+                            self.assertEqual(str(start.tz), str(tz))
+                            delta = start.tz_convert("UTC") - now.floor("s")  # whole seconds
+                            if method == "first":
+                                self.assertTrue(-step < delta <= pd.Timedelta(0))
+                            elif method == "last":
+                                self.assertTrue(pd.Timedelta(0) <= delta < step)
+                            else:
+                                self.assertLessEqual(abs(delta), step / 2)
+
+    def test_get_forecast_start_nearest_exact_midpoint_goes_to_the_even_step(self):
+        """docs/config.md: an exact midpoint under nearest goes to the even-numbered step counted
+        from the UTC epoch, whatever the zone and the fractional seconds (#1189)."""
+        hour = pd.Timedelta("60min")
+        for zone in ("UTC", "Europe/Berlin", "Australia/Sydney", "Asia/Kathmandu"):
+            tz = pytz.timezone(zone)
+            for now, expected in (
+                ("2026-10-14T08:30:00Z", "2026-10-14T08:00:00Z"),
+                ("2026-10-14T09:30:00Z", "2026-10-14T10:00:00Z"),
+                ("2026-10-14T09:30:00.900Z", "2026-10-14T10:00:00Z"),  # whole seconds
+            ):
+                with self.subTest(zone=zone, now=now):
+                    start = utils.get_forecast_start(pd.Timestamp(now), hour, tz, "nearest")
+                    self.assertEqual(start, pd.Timestamp(expected))
+
+    def test_timestamped_mapping_holds_the_bucket_mean_until_the_next_bucket_with_a_point(self):
+        """Points in one step are averaged and that mean is what is held (docs/passing_data.md)."""
+        tz = pytz.timezone("Australia/Sydney")
+        grid = [t.isoformat() for t in pd.date_range("2026-10-16T00:00Z", periods=6, freq="30min")]
+        mapping = {
+            "2026-10-16T00:00:00Z": 0.0,
+            "2026-10-16T00:10:00Z": 10.0,
+            "2026-10-16T02:00:00Z": 99.0,
+        }
+        got = utils._align_runtime_forecast_mapping(mapping, grid, 30, tz)
+        self.assertEqual(got, [5.0, 5.0, 5.0, 5.0, 99.0, 99.0])
+
+    def test_timestamped_mapping_buckets_are_one_grid_step_wide_in_any_zone(self):
+        """In Asia/Kathmandu (+05:45) a 'nearest' grid sits on UTC hours; buckets must follow it."""
+        tz = pytz.timezone("Asia/Kathmandu")
+        grid = pd.date_range("2026-10-14T05:00Z", periods=6, freq="60min").tz_convert(tz)
+        points = pd.date_range("2026-10-14T04:00Z", periods=48, freq="15min")
+        mapping = {t.isoformat(): float(i) for i, t in enumerate(points)}  # value = point number
+        got = utils._align_runtime_forecast_mapping(mapping, [t.isoformat() for t in grid], 60, tz)
+        # independent expectation: the mean of the points inside [grid step, grid step + 60 min)
+        expected = [
+            np.mean([i for i, p in enumerate(points) if g <= p < g + pd.Timedelta("60min")])
+            for g in grid
+        ]
+        self.assertEqual(got, expected)
+
+    def test_get_forecast_dates_default_is_the_configuration_default(self):
+        """Omitting method_ts_round gives the grid of a default-configured run (nearest)."""
+        tz = pytz.timezone("Europe/Berlin")
+        now = tz.localize(datetime(2026, 10, 12, 10, 20, 0)).astimezone(UTC)
+        with patch("emhass.utils._get_now", return_value=now):
+            self.assertEqual(utils.get_forecast_dates(30, 1, tz)[0], "2026-10-12T10:30:00+02:00")
+
+    async def test_unknown_method_ts_round_does_not_break_actions_without_a_grid(self):
+        """publish-data and friends never needed the rounding; they must not start failing."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        params = orjson.loads(self.params_json)
+        params["retrieve_hass_conf"]["method_ts_round"] = "Nearest"
+        retrieve_hass_conf["method_ts_round"] = "Nearest"
+        with self.assertLogs(logger, level="ERROR"):
+            await utils.treat_runtimeparams(
+                self.runtimeparams_json,
+                orjson.dumps(params).decode(),
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "publish-data",
+                logger,
+                emhass_conf,
+            )
+
+    def test_get_forecast_start_rejects_unknown_method(self):
+        with self.assertRaises(ValueError):
+            utils.get_forecast_start(
+                pd.Timestamp("2026-10-12T08:20Z"), pd.Timedelta("30min"), pytz.UTC, "middle"
+            )
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_follows_method_ts_round(self, mock_ts_now):
+        """Runtime grid and Forecast use one start: 10:20 Berlin, 30 min steps (#1189)."""
+        tz = pytz.timezone("Europe/Berlin")
+        mock_ts_now.return_value = tz.localize(datetime(2026, 10, 12, 10, 20, 0)).astimezone(UTC)
+        starts = {
+            method: utils.get_forecast_dates(30, 1, tz, method_ts_round=method)[0]
+            for method in ("first", "nearest", "last")
+        }
+        self.assertEqual(starts["first"], "2026-10-12T10:00:00+02:00")
+        self.assertEqual(starts["nearest"], "2026-10-12T10:30:00+02:00")
+        self.assertEqual(starts["last"], "2026-10-12T10:30:00+02:00")
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_second_pass_of_repeated_hour(self, mock_ts_now):
+        """02:20 CET (second pass) must start in the second pass, not at the first (#1189)."""
+        tz = pytz.timezone("Europe/Berlin")
+        mock_ts_now.return_value = pd.Timestamp("2026-10-25T01:20:00Z").to_pydatetime()
+        dates = utils.get_forecast_dates(60, 1, tz, method_ts_round="first")
+        self.assertEqual(dates[0], "2026-10-25T02:00:00+01:00")
+        self.assertEqual(len(dates), 24)
+        # First pass (02:20 CEST) starts 02:00 CEST; the local day then lasts 25 hours.
+        mock_ts_now.return_value = pd.Timestamp("2026-10-25T00:20:00Z").to_pydatetime()
+        dates = utils.get_forecast_dates(60, 1, tz, method_ts_round="first")
+        self.assertEqual(dates[0], "2026-10-25T02:00:00+02:00")
+        self.assertEqual(len(dates), 25)
 
     @patch("emhass.utils._get_now")
     def test_get_forecast_dates_standard_day(self, mock_ts_now):
@@ -435,6 +565,52 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # Same correct local start expected
         self.assertEqual(dates_local[0], "2026-06-15T21:15:00+10:00")
 
+    async def test_treat_runtimeparams_captures_the_request_start_once(self):
+        """The first grid step is stored in passed_data so Forecast does not read the clock again."""
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        now = pd.Timestamp("2026-10-25T00:20:13Z").to_pydatetime()  # 02:20 CEST, repeated hour
+        with patch("emhass.utils._get_now", return_value=now):
+            params, retrieve_hass_conf, *_ = await utils.treat_runtimeparams(
+                self.runtimeparams_json,
+                self.params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+            grid = utils.get_forecast_dates(
+                retrieve_hass_conf["optimization_time_step"].total_seconds() / 60,
+                1,
+                retrieve_hass_conf["time_zone"],
+                method_ts_round=retrieve_hass_conf["method_ts_round"],
+            )
+        start = orjson.loads(params)["passed_data"]["forecast_start"]
+        self.assertEqual(pd.Timestamp(start), pd.Timestamp(grid[0]))
+        self.assertEqual(pd.Timestamp(start).tz_convert("UTC").second, 0)
+
+    async def test_dayahead_forwards_current_period_peak(self):
+        """The capacity-tariff peak floor (current_period_peak) must reach
+        passed_data in the DAYAHEAD path, not only MPC. The dayahead branch
+        previously hardcoded it to None, silently dropping the floor so the
+        solver minimised the absolute import peak (flat grid) instead of
+        honouring the already-incurred billing-period peak."""
+        runtimeparams = orjson.loads(self.runtimeparams_json)
+        runtimeparams["current_period_peak"] = 3790
+        rp_json = orjson.dumps(runtimeparams).decode("utf-8")
+        for set_type in ("dayahead-optim", "naive-mpc-optim"):
+            rhc, oc, pc = utils.get_yaml_parse(self.params_json, logger)
+            params, *_ = await utils.treat_runtimeparams(
+                rp_json, self.params_json, rhc, oc, pc, set_type, logger, emhass_conf
+            )
+            params = orjson.loads(params)
+            self.assertEqual(
+                params["passed_data"]["current_period_peak"],
+                3790,
+                f"current_period_peak dropped in {set_type}",
+            )
+
     async def test_treat_runtimeparams(self):
         # Test dayahead runtime params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
@@ -632,6 +808,60 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             "calibration_val_days",
         ):
             self.assertNotIn(key, passed)
+
+    async def test_treat_runtimeparams_var_model_follows_custom_load_sensor(self):
+        """Regression for issue #1208.
+
+        config_defaults.json always supplies var_model, and the GUI save rewrites the stock
+        value, so a custom sensor_power_load_no_var_loads must still be the forecaster input
+        unless the user set a different var_model on purpose.
+        """
+        stock = "sensor.power_load_no_var_loads"
+        load = "sensor.house_load"
+        other = "sensor.other_model_input"
+        cases = {
+            "no var_model in config.json": ({"sensor_power_load_no_var_loads": load}, {}, load),
+            "stock var_model left by GUI save": (
+                {"sensor_power_load_no_var_loads": load, "var_model": stock},
+                {},
+                load,
+            ),
+            "deliberate var_model kept": (
+                {"sensor_power_load_no_var_loads": load, "var_model": other},
+                {},
+                other,
+            ),
+            "runtime var_model wins": (
+                {"sensor_power_load_no_var_loads": load},
+                {"var_model": other},
+                other,
+            ),
+            "stock load sensor unchanged": ({}, {}, stock),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (config_json, runtime, expected) in cases.items():
+                with self.subTest(case=label):
+                    conf = {**emhass_conf, "config_path": pathlib.Path(tmp) / "config.json"}
+                    conf["config_path"].write_text(orjson.dumps(config_json).decode("utf-8"))
+                    config = await utils.build_config(
+                        conf, logger, str(conf["defaults_path"]), str(conf["config_path"])
+                    )
+                    params = await utils.build_params(conf, {}, config, logger)
+                    params_json = orjson.dumps(params).decode("utf-8")
+                    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+                        params_json, logger
+                    )
+                    out, _, _, _ = await utils.treat_runtimeparams(
+                        orjson.dumps(runtime).decode("utf-8"),
+                        params_json,
+                        retrieve_hass_conf,
+                        optim_conf,
+                        plant_conf,
+                        "forecast-model-fit",
+                        logger,
+                        conf,
+                    )
+                    self.assertEqual(orjson.loads(out)["passed_data"]["var_model"], expected)
 
     @patch("emhass.utils._get_now")
     async def test_treat_runtimeparams_dict_forecast_holds_last_value(self, mock_now):
@@ -1355,6 +1585,11 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_build_secrets(self):
+        # build_secrets prefers EMHASS_URL, SUPERVISOR_TOKEN and TIME_ZONE from the environment over
+        # the files under test; a developer's own values must not change the expected defaults.
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+            environ.pop(name, None)
         # Test the build_secrets defaults from get_test_params()
         params = await TestUtils.get_test_params()
         expected_keys = [
@@ -1473,6 +1708,18 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # A two-point sample of the jet scale spans both ends of the ramp
         self.assertIn("rgb(0, 0, 131)", html)
         self.assertIn("rgb(128, 0, 0)", html)
+
+    def test_get_injection_dict_nan_in_power_columns(self):
+        # Issue #1119: results containing missing/NaN values in power columns
+        # must serialize safely without IntCastingNaNError
+        df = self.df.copy()
+        df.loc[df.index[0], "P_PV"] = float("nan")
+        df.loc[df.index[1], "P_Load"] = float("nan")
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_0", injection_dict)
+        self.assertIn("table1", injection_dict)
+        if "optim_status" in self.df.columns:
+            self.assertIn("optim_status", df.columns)
 
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
@@ -1689,6 +1936,131 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(params_out["passed_data"]["soc_init"], 0.95)
         self.assertEqual(params_out["passed_data"]["soc_final"], 0.6)
+
+    async def _treat_soc_runtime(self, runtimeparams, set_type="naive-mpc-optim"):
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        return await treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+
+    async def test_treat_runtimeparams_rejects_soc_above_one(self):
+        """A percentage fails before the solver, and the error names the field (#935)."""
+        cases = (
+            (
+                {"prediction_horizon": 10, "soc_init": 65, "soc_final": 0.6},
+                "soc_init=65",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "soc_init": 0.5, "soc_final": 65},
+                "soc_final=65",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "soc_init": 0.5, "soc_target": 80},
+                "soc_target=80",
+                "naive-mpc-optim",
+            ),
+            ({"soc_init": 65}, "soc_init=65", "dayahead-optim"),
+            (
+                {"prediction_horizon": 10, "battery_minimum_state_of_charge": 10},
+                "battery_minimum_state_of_charge=10",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_maximum_state_of_charge": 90},
+                "battery_maximum_state_of_charge=90",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_target_state_of_charge": 60},
+                "battery_target_state_of_charge=60",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "number_of_batteries": 2, "soc_init": [0.4, 65]},
+                "soc_init[1]=65",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "soc_target": "80"},
+                "soc_target=80",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_soc_deficit_threshold": 40},
+                "battery_soc_deficit_threshold=40",
+                "naive-mpc-optim",
+            ),
+            (
+                {"prediction_horizon": 10, "battery_soc_surplus_threshold": 65},
+                "battery_soc_surplus_threshold=65",
+                "naive-mpc-optim",
+            ),
+        )
+        for runtimeparams, expected, set_type in cases:
+            with self.subTest(expected=expected):
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    with self.assertRaises(utils.SocFractionError) as ctx:
+                        await self._treat_soc_runtime(runtimeparams, set_type)
+                message = str(ctx.exception)
+                self.assertIn(expected, message)
+                self.assertIn("not a percentage", message)
+                self.assertTrue(any(message in line for line in logs.output))
+
+    async def test_treat_runtimeparams_accepts_full_soc_fraction(self):
+        """1 is a full battery and must still be accepted."""
+        params_out, _, _, plant_conf_out = await self._treat_soc_runtime(
+            {
+                "prediction_horizon": 10,
+                "soc_init": 1.0,
+                "soc_final": 1,
+                "battery_maximum_state_of_charge": 1.0,
+            }
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["soc_init"], 1.0)
+        self.assertEqual(params_out["passed_data"]["soc_final"], 1.0)
+        self.assertEqual(plant_conf_out["battery_maximum_state_of_charge"], 1.0)
+
+    async def test_treat_runtimeparams_dayahead_passes_per_battery_soc_target(self):
+        """A runtimeparams blob shared with naive-mpc-optim (per-battery soc_target
+        lists) must not crash dayahead-optim."""
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"soc_target": [None, 0.8], "soc_target_timestep": [None, 5]},
+            "dayahead-optim",
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["soc_target"], [None, 0.8])
+        self.assertEqual(params_out["passed_data"]["soc_target_timestep"], [None, 5])
+
+    async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
+        """A percentage saved in the plant config fails even when the request adds nothing."""
+        params = await TestUtils.get_test_params()
+        params["plant_conf"]["battery_maximum_state_of_charge"] = 90
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        with self.assertRaises(utils.SocFractionError) as ctx:
+            await treat_runtimeparams(
+                None,
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "dayahead-optim",
+                logger,
+                emhass_conf,
+            )
+        self.assertIn("battery_maximum_state_of_charge=90", str(ctx.exception))
 
     async def test_treat_runtimeparams_ignore_pv_feedback_during_curtailment(self):
         """Wiring for ignore_pv_feedback_during_curtailment runtime flag (#818).
@@ -2203,6 +2575,22 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "buffer->room"):
             utils.compile_heat_topology(topo)
 
+    def test_cool_source_with_heating_curve_keeps_working(self):
+        """A sense='cool' source configured with heating_curve (the only curve key
+        before cooling_curve existed) must keep using it."""
+        curve = {"slope": 0.5, "offset": 20, "min_supply": 7, "max_supply": 18}
+        outdoor = np.array([25.0, 30.0, 35.0])
+        cops = utils.resolve_thermal_battery_cop(
+            {"sense": "cool", "heating_curve": curve, "carnot_efficiency": 0.4}, outdoor
+        )
+        expected = utils.calculate_cop_heatpump(
+            supply_temperature=utils.apply_heating_curve(curve, outdoor),
+            carnot_efficiency=0.4,
+            outdoor_temperature_forecast=outdoor,
+            mode="cool",
+        )
+        np.testing.assert_allclose(cops, expected)
+
     def test_compile_heat_topology_rejects_wrong_types(self):
         """Wrong top-level types raise the documented ValueError instead of an
         AttributeError, and a string extend flag is not treated as true."""
@@ -2358,6 +2746,14 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 }
             )
         self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        with self.assertLogs(logger, level="WARNING"):
+            out = await self._run_treat_runtimeparams_dict(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_prior_heat": {"dhw": [huge]},
+                }
+            )
+        self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
 
     async def test_heat_topology_extend_pads_runtime_state_arrays(self):
         """Runtime state given for the user's loads gets the defaults for the
@@ -2513,6 +2909,106 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertFalse(out.get("shared_thermal_tanks"))
                 self.assertTrue(any("load_ids" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_prior_heat_patch(self):
+        """shared_tank_prior_heat feeds the lag model's initial condition (thermal
+        kWh already in flight from previous MPC runs) by tank id."""
+        out = await self._run_treat_runtimeparams(
+            {
+                "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                "shared_tank_prior_heat": {"dhw": [0.4, 1.2]},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["prior_heat"], [0.4, 1.2])
+
+    async def test_treat_runtimeparams_shared_tank_prior_heat_rejects_bad_feeds(self):
+        """A stale or malformed feed must degrade to the previous cold-start
+        behaviour (no prior_heat) with a warning, never a wrong-but-plausible plan."""
+        for payload, needle in (
+            ({"no_such_tank": [1.0]}, "no_such_tank"),
+            ({"dhw": "1.0,2.0"}, "must be a list"),
+            ({"dhw": [1.0, "warm"]}, "not all numeric"),
+            ({"dhw": [-1.0, 2.0]}, ">= 0"),
+            # A boolean is not heat (float(True) would be 1.0).
+            ({"dhw": [True, 1.0]}, "not all numeric"),
+        ):
+            with self.assertLogs(logger, level="WARNING") as log_cm:
+                out = await self._run_treat_runtimeparams(
+                    {
+                        "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                        "shared_tank_prior_heat": payload,
+                    }
+                )
+            self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
+            self.assertTrue(any(needle in m for m in log_cm.output), f"expected {needle!r} warning")
+
+    async def test_treat_runtimeparams_shared_tank_prior_heat_matches_ids_as_text(self):
+        """JSON object keys are always strings, so a tank with a numeric id is
+        matched by its text form, as shared_tank_start_temperatures does."""
+        tank = self._manual_tank(start_temperature=50.0)
+        tank["id"] = 0
+        out = await self._run_treat_runtimeparams(
+            {
+                "shared_thermal_tanks": [tank],
+                "shared_tank_prior_heat": {"0": [0.4, 1.2]},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["prior_heat"], [0.4, 1.2])
+
+    async def test_treat_runtimeparams_bad_prior_heat_starts_the_tank_cold(self):
+        """A malformed runtime value replaces a configured prior_heat with none, so
+        the tank starts cold for the run instead of using stale heat."""
+        tank = self._manual_tank(start_temperature=50.0)
+        tank["prior_heat"] = [2.0, 2.0]
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {"shared_thermal_tanks": [tank], "shared_tank_prior_heat": {"dhw": "warm"}}
+            )
+        self.assertNotIn("prior_heat", out["shared_thermal_tanks"][0])
+        self.assertTrue(any("starts cold" in m for m in log_cm.output), log_cm.output)
+
+    async def test_treat_runtimeparams_prior_heat_ambiguous_ids_are_ignored(self):
+        """Storage ids 0 and "0" pass the topology compiler (it compares raw ids)
+        but read the same as a JSON key: the value is applied to neither."""
+        storage = {"thermal_mass": 8.0, "thermal_inertia": 1.0, "start_temperature": 20.0}
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3000, "supply_temperature": 45}
+            ],
+            "storage": [{"id": 0, **storage}, {"id": "0", **storage}],
+            "flows": [{"from": "hp", "to": 0}, {"from": "hp", "to": "0"}],
+        }
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {"heat_topology": topo, "shared_tank_prior_heat": {"0": [1.0]}}
+            )
+        tanks = out["shared_thermal_tanks"]
+        self.assertEqual(len(tanks), 2)
+        self.assertTrue(all("prior_heat" not in t for t in tanks))
+        self.assertTrue(any("read the same" in m for m in log_cm.output), log_cm.output)
+
+    async def test_compile_heat_topology_passes_prior_heat_through(self):
+        """prior_heat is a per-step list, so the compiler must pass it through
+        unconverted (the sibling zone keys are coerced to scalar floats)."""
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3000, "supply_temperature": 45}
+            ],
+            "storage": [
+                {
+                    "id": "zone",
+                    "thermal_mass": 8.0,
+                    "thermal_inertia": 1.0,
+                    "prior_heat": [0.5, 1.5],
+                    "start_temperature": 20.0,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "zone"}],
+        }
+        compiled = utils.compile_heat_topology(topo)
+        tank = compiled["shared_thermal_tanks"][0]
+        self.assertEqual(tank["prior_heat"], [0.5, 1.5])
+        self.assertEqual(tank["thermal_inertia"], 1.0)
 
     async def test_treat_runtimeparams_shared_tank_start_temperature_patches_compiled(self):
         """The override applies AFTER the heat_topology compile, so a tank that
@@ -2717,6 +3213,33 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertEqual(params["optim_conf"]["def_minimum_on_time"], [3, 0, 0])
         self.assertEqual(params["optim_conf"]["def_minimum_off_time"], [2, 0, 0])
+
+    async def test_cop_hx_approach_wired_through_config(self):
+        """cop_hx_approach must follow the four-step add-parameter workflow like
+        its cop_solver siblings: present in the canonical defaults + schema, and
+        a user-configured value must reach optim_conf (it was previously read
+        only via an inline .get() default, unreachable from any config file)."""
+        import csv as csv_mod
+
+        import orjson as _orjson
+
+        defaults = _orjson.loads(open(emhass_conf["defaults_path"], "rb").read())
+        self.assertIn("cop_hx_approach", defaults)
+        self.assertEqual(defaults["cop_hx_approach"], 5.0)
+        definitions = _orjson.loads(
+            open(
+                emhass_conf["root_path"] / "static" / "data" / "param_definitions.json", "rb"
+            ).read()
+        )
+        self.assertIn("cop_hx_approach", definitions["System"])
+        with open(emhass_conf["associations_path"]) as f:
+            assoc_params = [row[2] for row in csv_mod.reader(f) if len(row) > 2]
+        self.assertIn("cop_hx_approach", assoc_params)
+        # A configured value flows into optim_conf
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config["cop_hx_approach"] = 3.5
+        params = await utils.build_params(emhass_conf, {}, config, logger)
+        self.assertEqual(params["optim_conf"]["cop_hx_approach"], 3.5)
 
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
@@ -4685,6 +5208,59 @@ class TestResolveThermalBatteryCopHeatingCurve(unittest.TestCase):
         self.assertIn("supply_temperature", msg)
         self.assertIn("heating_curve", msg)
 
+    def test_cooling_curve_gives_per_slot_cooling_cop(self):
+        """A cool source with a cooling_curve gets a weather-compensated chilled supply
+        and the cooling Carnot lift (T_outdoor - T_supply), so the COP varies per slot
+        and is higher when it is cooler outside."""
+        hc = {
+            "carnot_efficiency": 0.35,
+            "sense": "cool",
+            "cooling_curve": {"slope": 0.3, "offset": 20, "min_supply": 8, "max_supply": 18},
+        }
+        # outdoor 35 -> supply clip(20 - 0.3*35, 8, 18) = 9.5; outdoor 25 -> 12.5
+        cops = utils.resolve_thermal_battery_cop(hc, np.array([35.0, 25.0]))
+        # cooling COP = carnot * T_supply_K / (T_outdoor - T_supply); higher when cooler out
+        self.assertGreater(cops[1], cops[0])
+
+    def test_cooling_curve_compiles_through_topology(self):
+        """A heatpump source with a cooling_curve compiles into its thermal_source block
+        (mirroring heating_curve), so a chiller can be weather-compensated and DP-refined
+        via heat_topology - not only via def_load_config."""
+        topo = {
+            "sources": [
+                {
+                    "id": "chiller",
+                    "type": "heatpump",
+                    "carnot_efficiency": 0.35,
+                    "nominal_power": 2100,
+                    "cooling_curve": {
+                        "slope": 0.3,
+                        "offset": 20,
+                        "min_supply": 8,
+                        "max_supply": 18,
+                    },
+                }
+            ],
+            "storage": [
+                {
+                    "id": "zone",
+                    "thermal_mass": 5.0,
+                    "loss_coefficient": 0.2,
+                    "comfort_sense": "cool",
+                    "start_temperature": 24,
+                    "min_temperature": [10] * 48,
+                    "max_temperature": [28] * 48,
+                }
+            ],
+            "flows": [{"from": "chiller", "to": "zone"}],
+        }
+        src = utils.compile_heat_topology(topo)["def_load_config"][0]["thermal_source"]
+        self.assertEqual(
+            src["cooling_curve"],
+            {"slope": 0.3, "offset": 20.0, "min_supply": 8.0, "max_supply": 18.0},
+        )
+        self.assertEqual(src["sense"], "cool")
+
 
 class TestCompileHeatTopology(unittest.TestCase):
     """Tests for the graph -> primitives compiler."""
@@ -6013,6 +6589,67 @@ class TestCompileHeatTopology(unittest.TestCase):
             utils.compile_heat_topology(no_storage_id)
         self.assertIn("storage[0]", str(ctx.exception))
         self.assertIn("id", str(ctx.exception))
+
+    def test_max_thermal_power_rejects_non_positive(self):
+        """A non-positive, non-finite or non-numeric max_thermal_power is rejected:
+        a zero/negative ceiling would permanently disable the source, and NaN, inf
+        or a boolean is not a power."""
+        for bad in (0, -100, float("nan"), float("inf"), True, "15000"):
+            topo = {
+                "sources": [
+                    {
+                        "id": "hp",
+                        "type": "heatpump",
+                        "supply_temperature": 55,
+                        "carnot_efficiency": 0.4,
+                        "nominal_power": 3500,
+                        "max_thermal_power": bad,
+                    },
+                ],
+                "storage": [
+                    {
+                        "id": "dhw",
+                        "volume": 0.2,
+                        "start_temperature": 50,
+                        "min_temperature": [45] * 4,
+                        "max_temperature": [65] * 4,
+                    }
+                ],
+                "flows": [{"from": "hp", "to": "dhw"}],
+            }
+            with self.assertRaises(ValueError):
+                utils.compile_heat_topology(topo)
+
+    def test_max_thermal_power_passed_through(self):
+        """A source's max_thermal_power is compiled into its thermal_source block;
+        sources without it omit the key (backward compatible)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_thermal_power": 4000,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["max_thermal_power"], 4000.0)
+        # Booster (load 1) has no cap -> key absent
+        self.assertNotIn("max_thermal_power", out["def_load_config"][1]["thermal_source"])
 
 
 class TestRuntimeBanner(unittest.TestCase):

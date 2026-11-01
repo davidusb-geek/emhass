@@ -10,6 +10,7 @@ import os
 import pathlib
 import shutil
 import time
+import uuid
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -172,12 +173,58 @@ def add_local_calendar_days(
     return pd.Timestamp(resolved)
 
 
+def get_forecast_start(
+    now: pd.Timestamp | datetime,
+    freq: pd.Timedelta,
+    time_zone: datetime.tzinfo | str,
+    method_ts_round: str = "nearest",
+) -> pd.Timestamp:
+    """Round a clock reading to the first optimization step, without wall-clock ambiguity.
+
+    This is the single definition of the forecast start used by both the runtime
+    parameters (``get_forecast_dates``) and ``Forecast``, so that they build the same grid.
+    Whole seconds are kept in UTC and the result is returned in ``time_zone``; local wall
+    times are never localized, so repeated (fall-back) and missing (spring-forward) hours
+    cannot raise or select the wrong occurrence.
+
+    - ``nearest``: round to the closest step on the UTC clock (ties to even).
+    - ``first``: the latest step that is not after ``now``.
+    - ``last``: the earliest step that is not before ``now``.
+
+    ``first`` and ``last`` stay aligned to the local wall clock (e.g. :00/:30 in
+    Asia/Kathmandu) using the UTC offset in force at ``now``.
+
+    :param now: The clock reading; must be timezone-aware.
+    :param freq: The optimization time step.
+    :param time_zone: The configured site time zone the result is expressed in.
+    :param method_ts_round: ``nearest``, ``first`` or ``last``.
+    :raises ValueError: If ``method_ts_round`` is not one of the supported values.
+    """
+    # Whole seconds, rounded down as before: a request a fraction of a second after a step
+    # boundary (a cron job firing at :00) still gets that boundary for "last".
+    now_utc = pd.Timestamp(now).tz_convert("UTC").floor("s")
+    if method_ts_round == "nearest":
+        start_utc = now_utc.round(freq)
+    elif method_ts_round in ("first", "last"):
+        offset = now_utc.tz_convert(time_zone).utcoffset()
+        wall = (now_utc + offset).tz_localize(None)
+        wall = wall.floor(freq) if method_ts_round == "first" else wall.ceil(freq)
+        start_utc = (wall - offset).tz_localize("UTC")
+    else:
+        raise ValueError(
+            f"method_ts_round must be 'nearest', 'first' or 'last', got {method_ts_round!r}"
+        )
+    return start_utc.tz_convert(time_zone)
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
     time_zone: datetime.tzinfo,
     timedelta_days: int | None = 0,
-) -> pd.core.indexes.datetimes.DatetimeIndex:
+    method_ts_round: str = "nearest",
+    now: datetime | None = None,
+) -> list[str]:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
 
@@ -187,18 +234,23 @@ def get_forecast_dates(
     :type delta_forecast: int
     :param timedelta_days: Additional local calendar days needed for the forecast range, defaults to 0
     :type timedelta_days: Optional[int], optional
-    :return: A list of future forecast dates.
-    :rtype: pd.core.indexes.datetimes.DatetimeIndex
+    :param method_ts_round: How the first step is rounded, see :func:`get_forecast_start`.
+        Callers that feed ``Forecast`` must pass the configured ``method_ts_round`` so both
+        build the same grid. Defaults to ``nearest``, the configuration default, so a caller that
+        omits it gets the grid a default-configured run uses.
+    :type method_ts_round: str, optional
+    :param now: The timezone-aware clock reading to build the grid from. Pass the same value to
+        every call of one request so they share a grid; defaults to the current time.
+    :type now: datetime, optional
+    :return: The forecast dates as ISO 8601 strings, one per optimization step.
+    :rtype: list[str]
 
     """
     freq = pd.to_timedelta(freq, "minutes")
-    start_time = _get_now()
-
-    # start_time is the timezone-aware UTC instant from _get_now(); tz_convert expresses it in
-    # the configured timezone regardless of the host clock. It raises on a naive value, so a
-    # refactor that reintroduced a naive "now" here would fail loudly rather than silently shift.
-    start_forecast = (
-        pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
+    # _get_now() is the timezone-aware UTC instant; the start is derived from it in UTC so the
+    # host clock zone is irrelevant. get_forecast_start() raises on a naive value.
+    start_forecast = get_forecast_start(
+        _get_now() if now is None else now, freq, time_zone, method_ts_round
     )
     total_days = int(delta_forecast) + int(timedelta_days or 0)
     final_end_date = add_local_calendar_days(start_forecast, total_days, time_zone) - freq
@@ -461,6 +513,34 @@ def resolve_min_temperatures(
     return [None if np.isnan(v) else float(v) for v in effective]
 
 
+def cop_from_tank_temperature(
+    tank_temperature: Sequence[float] | np.ndarray,
+    carnot_efficiency: float,
+    outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series,
+    approach: float = 5.0,
+    cop_bounds: tuple[float, float] = (1.0, 8.0),
+    mode: str = "heat",
+) -> np.ndarray:
+    """COP for a heat pump charging a tank to its *own* achieved temperature.
+
+    The condenser (heat) runs at the tank temperature PLUS a small heat-exchanger
+    approach; the evaporator (cool) runs at the tank temperature MINUS the approach.
+    Either way the COP tracks the temperature the tank actually reaches rather than a
+    fixed weather curve. Used by the post-solve DP COP refinement to test consistency
+    and to set the COP at the globally-optimal temperature. Returns a per-timestep COP
+    array clipped to ``cop_bounds``.
+    """
+    tank = np.asarray(tank_temperature, dtype=float)
+    supply = tank - float(approach) if mode == "cool" else tank + float(approach)
+    cops = calculate_cop_heatpump(
+        supply_temperature=supply,
+        carnot_efficiency=carnot_efficiency,
+        outdoor_temperature_forecast=outdoor_temperature_forecast,
+        mode=mode,
+    )
+    return np.clip(np.asarray(cops, dtype=float), cop_bounds[0], cop_bounds[1])
+
+
 def resolve_thermal_battery_cop(
     hc: dict,
     outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series | None,
@@ -510,28 +590,34 @@ def resolve_thermal_battery_cop(
         raise ValueError(
             "resolve_thermal_battery_cop in heat-pump mode requires outdoor_temperature_forecast"
         )
-    # Heating-curve mode: per-slot supply T from outdoor T. Falls back to constant
-    # `supply_temperature` when no curve is configured.
-    heating_curve = hc.get("heating_curve")
-    if heating_curve:
-        supply_temperature = apply_heating_curve(heating_curve, outdoor_temperature_forecast)
+    sense = normalize_heat_cool_mode(
+        hc.get("sense") or "heat", field_name="sense", context="thermal_battery"
+    )
+    # Curve mode: per-slot supply T from outdoor T (weather compensation). Heat sources
+    # read `heating_curve`, cool sources read `cooling_curve` (and, as before that key
+    # existed, a `heating_curve` when no `cooling_curve` is set); both fall back to a
+    # constant `supply_temperature` when no curve is configured. A curve makes the supply
+    # (and hence the COP) vary over the horizon, which is what makes the source
+    # DP-refinable.
+    if sense == "cool":
+        curve = hc.get("cooling_curve") or hc.get("heating_curve")
+    else:
+        curve = hc.get("heating_curve")
+    if curve:
+        supply_temperature = apply_heating_curve(curve, outdoor_temperature_forecast)
     else:
         supply_temperature = hc.get("supply_temperature")
         if supply_temperature is None:
             raise ValueError(
                 "thermal_battery requires either 'efficiency' (constant-efficiency mode), "
-                "'supply_temperature' (constant heat-pump mode), or 'heating_curve' "
-                "(weather-compensated heat-pump mode)"
+                "'supply_temperature' (constant heat-pump mode), or a "
+                "'heating_curve'/'cooling_curve' (weather-compensated heat-pump mode)"
             )
     cops = calculate_cop_heatpump(
         supply_temperature=supply_temperature,
         carnot_efficiency=hc.get("carnot_efficiency", 0.4),
         outdoor_temperature_forecast=outdoor_temperature_forecast,
-        mode=normalize_heat_cool_mode(
-            hc.get("sense") or "heat",
-            field_name="sense",
-            context="thermal_battery",
-        ),
+        mode=sense,
     )
     return cops if length is None else cops[:length]
 
@@ -810,7 +896,8 @@ def compile_heat_topology(topology: dict) -> dict:
             "constant_efficiency": True,  # ambiguous - default electric unless overridden
         }
         if src_type in {"heatpump", "heat_pump"}:
-            # Heating curve takes precedence; constant supply_temperature is the fallback.
+            # A weather-compensated curve takes precedence (heating_curve for heat sources,
+            # cooling_curve for chillers); a constant supply_temperature is the fallback.
             if "heating_curve" in src and src["heating_curve"]:
                 hc_block = dict(src["heating_curve"])
                 # Validate required fields up-front so users get clear errors
@@ -826,12 +913,26 @@ def compile_heat_topology(topology: dict) -> dict:
                     "min_supply": float(hc_block.get("min_supply", 25.0)),
                     "max_supply": float(hc_block.get("max_supply", 70.0)),
                 }
+            elif "cooling_curve" in src and src["cooling_curve"]:
+                cc_block = dict(src["cooling_curve"])
+                for required in ("slope", "offset"):
+                    if required not in cc_block:
+                        raise ValueError(
+                            f"heat_topology.sources[{src['id']}].cooling_curve missing "
+                            f"required field '{required}'"
+                        )
+                source_block["cooling_curve"] = {
+                    "slope": float(cc_block["slope"]),
+                    "offset": float(cc_block["offset"]),
+                    "min_supply": float(cc_block.get("min_supply", 5.0)),
+                    "max_supply": float(cc_block.get("max_supply", 18.0)),
+                }
             elif "supply_temperature" in src:
                 source_block["supply_temperature"] = float(src["supply_temperature"])
             else:
                 raise ValueError(
                     f"heat_topology.sources[{src['id']}] (type=heatpump) requires "
-                    "either 'supply_temperature' or 'heating_curve'"
+                    "'supply_temperature', 'heating_curve', or 'cooling_curve'"
                 )
             source_block["carnot_efficiency"] = float(src.get("carnot_efficiency", 0.4))
         elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
@@ -916,6 +1017,31 @@ def compile_heat_topology(topology: dict) -> dict:
                     src["id"],
                     float(source_block["supply_temperature"]),
                 )
+        # Optional per-source thermal-output ceiling (W): caps cop * p_deferrable
+        # so a high COP (e.g. a small mild-weather Carnot lift) cannot make the
+        # model deliver more heat than the physical unit's rated thermal output.
+        # Unlike max_supply_temperature this is a straight power bound, not a
+        # temperature-gated switch, and is scalar-only: a unit's rated thermal
+        # output is a fixed hardware spec, not weather-dependent like condenser
+        # temperature.
+        _thermal_cap = src.get("max_thermal_power")
+        if _thermal_cap is not None:
+            if isinstance(_thermal_cap, bool) or not isinstance(_thermal_cap, int | float):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power must be a "
+                    f"number of W, got {_thermal_cap!r}"
+                )
+            thermal_cap_value = float(_thermal_cap)
+            if not np.isfinite(thermal_cap_value) or thermal_cap_value <= 0:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_thermal_power "
+                    f"must be a finite number > 0 W, got {_thermal_cap!r}; omit the "
+                    "key to leave the source uncapped."
+                )
+            source_block["max_thermal_power"] = thermal_cap_value
+            # A source feeding several storages compiles into one load per flow;
+            # the optimizer caps those loads together by this id.
+            source_block["source_id"] = src["id"]
         # Optional per-source threshold: with the storage's desired_temperatures
         # set, this source stops beyond it (see the optimizer for the gate per
         # source mode). Sources without it (or with null) inherit the
@@ -1179,6 +1305,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"{_range}, got {raw!r}"
                 )
             tank[_zone_key] = value
+        # prior_heat is the lag model's initial condition (thermal kWh per step
+        # already in flight from previous rolling-MPC runs), so unlike the scalars
+        # above it is a per-step list and is passed through unconverted. Usually
+        # supplied per run via runtimeparams rather than written into the topology.
+        if s.get("prior_heat") is not None:
+            tank["prior_heat"] = s["prior_heat"]
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1325,6 +1457,103 @@ def _per_user_load_list(value, offset: int) -> list:
     if value is None:
         return []
     return [value] * offset
+
+
+# The fields a heat_topology in replace mode always overwrites with its compiled
+# values (otherwise the compiled def_load_config would not match
+# number_of_deferrable_loads, etc.). All per-load arrays must match
+# number_of_deferrable_loads, which the compiler sets.
+_TOPOLOGY_REPLACED_KEYS = frozenset(
+    {
+        "number_of_deferrable_loads",
+        "def_load_config",
+        "shared_thermal_tanks",
+        "tank_transfers",
+        "deferrable_load_groups",
+        "nominal_power_of_deferrable_loads",
+        "minimum_power_of_deferrable_loads",
+        "treat_deferrable_load_as_semi_cont",
+        "cost_forecast_per_deferrable_load",
+        "set_deferrable_load_single_constant",
+        "set_deferrable_startup_penalty",
+        "deferrable_load_max_cost",
+        "set_deferrable_max_startups",
+        "operating_hours_of_each_deferrable_load",
+        "start_timesteps_of_each_deferrable_load",
+        "end_timesteps_of_each_deferrable_load",
+        "is_electric_load",
+    }
+)
+
+
+def _prior_heat_values(series):
+    """(values, None) for a usable shared_tank_prior_heat list, else (None, why)."""
+    if isinstance(series, str) or not isinstance(series, list | tuple):
+        return None, f"must be a list of numbers, got {type(series).__name__}"
+    try:
+        # A boolean is not heat (float(True) would be 1.0).
+        if any(isinstance(v, bool) for v in series):
+            raise TypeError("boolean entry")
+        values = [float(v) for v in series]
+    except (TypeError, ValueError, OverflowError):
+        return None, f"={series!r} is not all numeric"
+    if any(v < 0 or not np.isfinite(v) for v in values):
+        return None, "must be finite and >= 0"
+    return values, None
+
+
+def _restore_configured_shared_tanks(params: dict, configured) -> None:
+    """Undo the unchecked association copy of a rejected runtime tank list."""
+    if configured is None:
+        params["optim_conf"].pop("shared_thermal_tanks", None)
+    else:
+        params["optim_conf"]["shared_thermal_tanks"] = configured
+
+
+def _warn_replaced_deferrable_loads(
+    optim_conf: dict, compiled: dict, emhass_conf: dict, logger: logging.Logger
+) -> None:
+    """Warn when a heat_topology in replace mode drops configured deferrable loads.
+
+    Without extend_deferrable_loads the compiled flows replace the whole load
+    set, so loads configured beyond them (a dishwasher, a pool pump) are not
+    optimized. The shipped defaults configure two example loads; a load set whose
+    every overwritten field still equals the shipped value is taken as untouched
+    and replaced without a word.
+    """
+    try:
+        configured = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        return
+    compiled_count = int(compiled.get("number_of_deferrable_loads") or 0)
+    if configured <= compiled_count:
+        return
+    defaults_path = (emhass_conf or {}).get("defaults_path")
+    try:
+        defaults = orjson.loads(pathlib.Path(defaults_path).read_bytes()) if defaults_path else {}
+    except (OSError, orjson.JSONDecodeError):
+        defaults = {}
+
+    def _shipped(key):
+        value = optim_conf.get(key)
+        if key in defaults:
+            return value == defaults[key]
+        # Not in the defaults (def_load_config, the tank lists): only an empty
+        # value, or a list of empty entries, is untouched.
+        return not value or (isinstance(value, list) and not any(value))
+
+    if defaults and all(_shipped(key) for key in _TOPOLOGY_REPLACED_KEYS):
+        return
+    logger.warning(
+        "heat_topology replaces the deferrable loads: %d are configured but its flows "
+        "compile to %d, so loads %d..%d are not optimized. Set extend_deferrable_loads: "
+        "true in heat_topology to keep the configured loads and add the topology's "
+        "after them.",
+        configured,
+        compiled_count,
+        compiled_count,
+        configured - 1,
+    )
 
 
 def _extend_optim_conf_with_compiled_topology(
@@ -1915,17 +2144,20 @@ def _align_runtime_forecast_mapping(
         forecast_data_df["time"], format="ISO8601", utc=True
     ).dt.tz_convert(time_zone)
 
-    # Aggregate any sub-step points to the optimization time step. Resample in
-    # the local time zone so buckets line up with get_forecast_dates(), including
-    # sub-hour UTC offsets.
+    target_dates = pd.to_datetime(forecast_dates, utc=True)
+
+    # Aggregate any sub-step points to the optimization time step. The buckets are
+    # anchored on the first grid instant, so each bucket is exactly one grid step wide
+    # and coincides with a grid point whatever the zone offset (sub-hour offsets,
+    # 30-minute DST changes).
     forecast_data_df = forecast_data_df.resample(
         pd.to_timedelta(optimization_time_step, "minutes"),
         on="time",
+        origin=target_dates[0].tz_convert(time_zone) if len(target_dates) else "start_day",
     ).aggregate({"value": "mean"})
 
     # Align by instant in UTC across DST boundaries.
     forecast_data_df.index = forecast_data_df.index.tz_convert("UTC")
-    target_dates = pd.to_datetime(forecast_dates, utc=True)
 
     # Existing runtime mapping semantics: each supplied point holds until the
     # next point. A point before the horizon anchors the first target step.
@@ -2220,6 +2452,10 @@ async def treat_runtimeparams(
             params["passed_data"][key] = value
     else:
         params["passed_data"] = default_passed_dict
+    # Only set_input_data_dict's dry_run argument, which only the dry-run URL
+    # passes, makes a dry run. A dry_run left in saved or passed params must
+    # not turn a live run into one that writes nothing.
+    params["passed_data"].pop("dry_run", None)
 
     # Capture defaults for power limits before association loop
     power_limit_defaults = {
@@ -2249,6 +2485,10 @@ async def treat_runtimeparams(
                 ):
                     batt_distinct_config_lists[batt_param_name] = list(configured)
 
+        # The configured shared tanks, before the association loop below copies a
+        # runtime list over them unchecked: a runtime list that the shared-tank
+        # validation further down rejects falls back to these.
+        configured_shared_tanks = params["optim_conf"].get("shared_thermal_tanks")
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
@@ -2391,7 +2631,25 @@ async def treat_runtimeparams(
         else:
             time_zone = params["retrieve_hass_conf"]["time_zone"]
 
-        forecast_dates = get_forecast_dates(optimization_time_step, delta_forecast, time_zone)
+        # Same rounding as Forecast.__init__ so runtime forecasts are aligned to the grid
+        # the optimizer will actually use.
+        method_ts_round = params["retrieve_hass_conf"].get("method_ts_round", "nearest")
+        if method_ts_round not in ("nearest", "first", "last"):
+            logger.error("Wrong method_ts_round passed parameter: %r", method_ts_round)
+            method_ts_round = "nearest"  # actions that build a Forecast still fail on it
+        # The request clock is read here, once, and used for every grid of this request.
+        # Forecast reuses the captured start instead of reading the clock again, so the
+        # runtime forecasts and the optimizer share one grid even when the request crosses a
+        # time-step boundary.
+        request_now = _get_now()
+        forecast_dates = get_forecast_dates(
+            optimization_time_step,
+            delta_forecast,
+            time_zone,
+            method_ts_round=method_ts_round,
+            now=request_now,
+        )
+        params["passed_data"]["forecast_start"] = forecast_dates[0]
 
         # Add runtime exclusive (not in config) parameters to params
         # regressor-model-fit
@@ -2472,7 +2730,11 @@ async def treat_runtimeparams(
             while len(extended_forecast_dates) < int(prediction_horizon):
                 required_delta_forecast += 1
                 extended_forecast_dates = get_forecast_dates(
-                    optimization_time_step, required_delta_forecast, time_zone
+                    optimization_time_step,
+                    required_delta_forecast,
+                    time_zone,
+                    method_ts_round=method_ts_round,
+                    now=request_now,
                 )
             if required_delta_forecast > delta_forecast:
                 logger.info(
@@ -2487,6 +2749,7 @@ async def treat_runtimeparams(
                 delta_forecast = required_delta_forecast
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
                 forecast_dates = extended_forecast_dates
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             num_batteries = validate_num_batteries(params["plant_conf"])
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
@@ -2512,6 +2775,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_init = soc_init[0]
+                reject_soc_fraction_above_one("soc_init", soc_init, logger)
                 if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
@@ -2535,6 +2799,7 @@ async def treat_runtimeparams(
                                 f"to every battery) or a list of exactly 1 entry"
                             )
                         soc_final = soc_final[0]
+                reject_soc_fraction_above_one("soc_final", soc_final, logger)
                 if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
                     logger.warning(
                         f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
@@ -2572,6 +2837,7 @@ async def treat_runtimeparams(
                     return [value] * num_batteries
 
                 soc_init_list = _resolve_soc_runtime_list("soc_init", target_list)
+                reject_soc_fraction_above_one("soc_init", soc_init_list, logger)
                 for k in range(num_batteries):
                     if soc_init_list[k] < min_list[k]:
                         logger.warning(
@@ -2588,6 +2854,7 @@ async def treat_runtimeparams(
                 params["passed_data"]["soc_init"] = soc_init_list
 
                 soc_final_list = _resolve_soc_runtime_list("soc_final", target_list)
+                reject_soc_fraction_above_one("soc_final", soc_final_list, logger)
                 for k in range(num_batteries):
                     if soc_final_list[k] < min_list[k]:
                         logger.warning(
@@ -2606,8 +2873,18 @@ async def treat_runtimeparams(
             # and default to None (no intermediate target); clamping/validation of
             # the value and the timestep is handled in Optimization.perform_optimization.
             params["passed_data"]["soc_target"] = runtimeparams.get("soc_target", None)
+            reject_soc_fraction_above_one("soc_target", params["passed_data"]["soc_target"], logger)
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
+            )
+            # Per-battery availability window (EV / V2G) and discharge energy
+            # budget. Runtime-only, default None (always available, no budget);
+            # shape validation happens in Optimization.perform_optimization.
+            params["passed_data"]["battery_availability"] = runtimeparams.get(
+                "battery_availability", None
+            )
+            params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
+                "battery_discharge_energy_max", None
             )
             # Peak grid import already incurred this billing period (issue #623,
             # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
@@ -2665,6 +2942,7 @@ async def treat_runtimeparams(
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
+            reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
             params["passed_data"]["prediction_horizon"] = None
 
             def _passthrough_soc_runtime(key: str):
@@ -2683,17 +2961,25 @@ async def treat_runtimeparams(
 
             params["passed_data"]["soc_init"] = _passthrough_soc_runtime("soc_init")
             params["passed_data"]["soc_final"] = _passthrough_soc_runtime("soc_final")
-            params["passed_data"]["soc_target"] = (
-                float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
-            )
+            params["passed_data"]["soc_target"] = _passthrough_soc_runtime("soc_target")
+            for soc_name in ("soc_init", "soc_final", "soc_target"):
+                reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
+            # A per-battery list (naive-mpc-optim) passes through unchanged so a
+            # runtimeparams blob shared with naive-mpc-optim does not crash here.
+            soc_target_timestep = runtimeparams.get("soc_target_timestep")
             params["passed_data"]["soc_target_timestep"] = (
-                int(runtimeparams["soc_target_timestep"])
-                if "soc_target_timestep" in runtimeparams
-                else None
+                soc_target_timestep
+                if soc_target_timestep is None or isinstance(soc_target_timestep, list)
+                else int(soc_target_timestep)
             )
-            params["passed_data"]["current_period_peak"] = None
-            # Like current_period_peak, the demand-window mask is naive-mpc-only:
-            # dayahead/perfect optimizations price the full horizon peak.
+            # Capacity-tariff peak floor: read it here too so dayahead-optim honours
+            # the already-incurred billing-period peak instead of minimising the
+            # absolute peak. (perfect-optim covers past data and does not use it.)
+            params["passed_data"]["current_period_peak"] = runtimeparams.get(
+                "current_period_peak", None
+            )
+            # The demand-window mask stays naive-mpc-only: dayahead/perfect
+            # optimizations price the full horizon peak.
             params["passed_data"]["capacity_charge_window"] = None
             # Like the above, MPC capacity consideration is naive-mpc-only
             # (issue #540 follow-up).
@@ -2737,6 +3023,7 @@ async def treat_runtimeparams(
             )
             if problem is not None:
                 logger.warning("shared_thermal_tanks: %s. Ignoring the runtime tanks.", problem)
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
             elif isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
                 params["optim_conf"]["shared_thermal_tanks"] = tanks
                 topology = params["optim_conf"].get("heat_topology")
@@ -2754,6 +3041,7 @@ async def treat_runtimeparams(
                     "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
                     type(tanks).__name__,
                 )
+                _restore_configured_shared_tanks(params, configured_shared_tanks)
 
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
@@ -2956,6 +3244,15 @@ async def treat_runtimeparams(
                 default=default,
                 cast=caster,
             )
+        # config_defaults.json always supplies var_model, and a GUI save writes that stock
+        # value back to config.json. An unset or stock var_model follows the configured
+        # load sensor, so a custom sensor_power_load_no_var_loads is the forecaster input (#1208).
+        if (
+            "var_model" not in runtimeparams
+            and default_var_model
+            and params["passed_data"]["var_model"] in (None, "sensor.power_load_no_var_loads")
+        ):
+            params["passed_data"]["var_model"] = default_var_model
 
         # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
@@ -3246,6 +3543,29 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # After the runtime merge when a request was supplied, and on the saved
+    # config when it was not. A percentage in either place must fail here.
+    reject_configured_soc_fractions(plant_conf, optim_conf, logger)
+
+    # Shared tanks from the configuration file get the same check as runtime
+    # ones (above), so a bad entry is reported and ignored instead of failing
+    # inside the optimizer. A runtime list that passed is checked again, which
+    # is harmless.
+    configured_tanks = optim_conf.get("shared_thermal_tanks")
+    if configured_tanks:
+        if not isinstance(configured_tanks, list) or not all(
+            isinstance(t, dict) for t in configured_tanks
+        ):
+            problem = "must be a list of tank objects"
+        else:
+            try:
+                n_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
+            except (TypeError, ValueError):
+                n_loads = 0
+            problem = _runtime_shared_tanks_problem(configured_tanks, n_loads)
+        if problem is not None:
+            logger.warning("shared_thermal_tanks in the configuration: %s. Ignoring them.", problem)
+            optim_conf.pop("shared_thermal_tanks", None)
 
     # If heat_topology is present (static config or runtime override), compile
     # it down to flat optim_conf primitives. Runtime override wins over static
@@ -3279,6 +3599,7 @@ async def treat_runtimeparams(
             # Default replace mode: merge compiled fields into optim_conf,
             # allowing user-set fields to win for things the compiler always
             # populates (e.g. operating_hours).
+            _warn_replaced_deferrable_loads(optim_conf, compiled, emhass_conf, logger)
             for key, val in compiled.items():
                 if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
@@ -3286,27 +3607,7 @@ async def treat_runtimeparams(
                     # For the structural fields we ALWAYS want compiled values
                     # (otherwise the compiled def_load_config doesn't match
                     # number_of_deferrable_loads, etc.)
-                    if key in {
-                        "number_of_deferrable_loads",
-                        "def_load_config",
-                        "shared_thermal_tanks",
-                        "tank_transfers",
-                        "deferrable_load_groups",
-                        "nominal_power_of_deferrable_loads",
-                        "minimum_power_of_deferrable_loads",
-                        "treat_deferrable_load_as_semi_cont",
-                        "cost_forecast_per_deferrable_load",
-                        # All per-load arrays must match number_of_deferrable_loads,
-                        # which the compiler sets - so override any defaults.
-                        "set_deferrable_load_single_constant",
-                        "set_deferrable_startup_penalty",
-                        "deferrable_load_max_cost",
-                        "set_deferrable_max_startups",
-                        "operating_hours_of_each_deferrable_load",
-                        "start_timesteps_of_each_deferrable_load",
-                        "end_timesteps_of_each_deferrable_load",
-                        "is_electric_load",
-                    }:
+                    if key in _TOPOLOGY_REPLACED_KEYS:
                         optim_conf[key] = val
         params["optim_conf"] = optim_conf
         logger.info(
@@ -3474,6 +3775,55 @@ async def treat_runtimeparams(
                         for k in range(len(ids), final_num_def_loads)
                     ]
 
+    # Per-tank in-flight heat for a lagged tank (thermal_inertia), keyed by tank id:
+    # the thermal kWh already delivered per step by previous rolling-MPC runs but not
+    # yet arrived. Sibling of shared_tank_start_temperatures - both are per-run state,
+    # not configuration - and likewise tolerant: bad entries warn and are skipped so a
+    # flaky feed degrades to the previous cold-start behaviour instead of failing.
+    if runtimeparams and "shared_tank_prior_heat" in runtimeparams:
+        overrides = runtimeparams["shared_tank_prior_heat"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_prior_heat must be an object mapping tank id to a list "
+                "of per-step thermal kWh, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, series in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                matching = [t for t in tanks if isinstance(t, dict) and str(t.get("id")) == tank_id]
+                if len(matching) > 1:
+                    # Two tanks whose ids read the same as text (0 and "0"): the
+                    # key cannot say which one is meant.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] matches %d tanks whose ids read the "
+                        "same; ignoring.",
+                        tank_id,
+                        len(matching),
+                    )
+                    continue
+                values, problem = _prior_heat_values(series)
+                if problem is not None:
+                    # A bad runtime value starts that tank cold for the run, as
+                    # documented: a configured prior_heat would be stale here.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] %s; ignoring, the tank starts cold.",
+                        tank_id,
+                        problem,
+                    )
+                    matching[0].pop("prior_heat", None)
+                    continue
+                matching[0]["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,
@@ -3537,16 +3887,17 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     :rtype: dict
 
     """
+    df = df.copy()
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
     if "optim_status" in df.columns:
         optim_status = df["optim_status"].iloc[0]
+        df.drop("optim_status", axis=1, inplace=True)
     else:
         optim_status = "Status not available"
-    df.drop("optim_status", axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
-    df[cols_p] = df[cols_p].astype(int)
+    df[cols_p] = df[cols_p].round().astype("Int64")
     df[cols_else] = df[cols_else].round(3)
     # Create plots
     # Figure 0: Systems Powers
@@ -4577,6 +4928,8 @@ async def build_params(
         "soc_final": None,
         "soc_target": None,
         "soc_target_timestep": None,
+        "battery_availability": None,
+        "battery_discharge_energy_max": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
         "capacity_charge_consideration": None,
@@ -4859,6 +5212,20 @@ BATT_ARRAY_PARAMS_PLANT_CONF: dict[str, bool | int | float] = {
     "battery_target_state_of_charge": 0.6,
     "battery_stress_cost": 0.0,
 }
+# Plant SOC bounds are fractions in [0, 1]. Checked on their own because the
+# other entries in BATT_ARRAY_PARAMS_PLANT_CONF are watts, efficiencies, or
+# costs, which are valid above 1 (#935).
+SOC_FRACTION_PLANT_PARAMS: tuple[str, ...] = (
+    "battery_minimum_state_of_charge",
+    "battery_maximum_state_of_charge",
+    "battery_target_state_of_charge",
+)
+# Penalty thresholds are fractions of capacity too. Their costs are currency
+# and stay out of this list (#935).
+SOC_FRACTION_OPTIM_PARAMS: tuple[str, ...] = (
+    "battery_soc_deficit_threshold",
+    "battery_soc_surplus_threshold",
+)
 BATT_ARRAY_PARAMS_OPTIM_CONF: dict[str, bool | int | float] = {
     "battery_soc_deficit_threshold": 0.4,
     "battery_soc_deficit_cost": 0.0,
@@ -4971,6 +5338,185 @@ def check_batt_params(
         return coerced
     parameter[parameter_name] = [coerced] * num_batteries
     return parameter[parameter_name]
+
+
+async def replace_file(path, content: str | bytes) -> None:
+    """Write ``content`` to ``path`` through a temporary file and os.replace, so a
+    reader running at the same time sees the old file or the new one, never a
+    partly written one."""
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
+            await f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+# A lock that one process holds and every other one - another Gunicorn worker
+# included - fails to take at once, rather than waits for.
+try:
+    import fcntl as _fcntl
+
+    def try_lock_file(f) -> bool:
+        """Lock the open file ``f`` if no other open file holds it. True if locked."""
+        try:
+            _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def unlock_file(f) -> None:
+        _fcntl.flock(f, _fcntl.LOCK_UN)
+
+except ImportError:
+    try:
+        import msvcrt as _msvcrt
+
+        def try_lock_file(f) -> bool:
+            """Lock the open file ``f`` if no other open file holds it. True if locked."""
+            f.seek(0)
+            try:
+                _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return False
+            return True
+
+        def unlock_file(f) -> None:
+            f.seek(0)
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+
+    except ImportError:  # no locking primitive: nothing to hold
+
+        def try_lock_file(f) -> bool:
+            return True
+
+        def unlock_file(f) -> None:
+            pass
+
+
+# A dry run solves as a live run does, returns the plan, and writes nothing.
+# It is a URL of its own, not a runtime parameter: an EMHASS that predates it
+# answers 404 there, where it would ignore an unknown parameter and run live.
+DRY_RUN_URL = "/api/v1/dry-run/<action>"
+DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
+# Runtime parameters that ask for a write. A dry run refuses them rather than
+# ignore them, so a caller never believes something was saved.
+DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+# The on/off parameters a dry run reads strictly, then passes on as booleans:
+# the forecast reads them by truthiness, and the string "false" is truthy.
+DRY_RUN_FLAGS = (*DRY_RUN_REFUSED_KEYS, "weather_forecast_cache_only")
+
+_FLAG_TRUE = ("true", "1", "yes", "on")
+_FLAG_FALSE = ("false", "0", "no", "off", "")
+
+
+def read_flag(value: object, name: str) -> bool:
+    """Read a runtime on/off parameter strictly.
+
+    ``bool("false")`` is True, and a templated request often sends the string.
+    Booleans, 0 and 1, None, and the strings true/false, 1/0, yes/no, on/off
+    (any case) are read; anything else raises.
+
+    :param value: The value sent for the parameter.
+    :param name: The parameter's name, for the error message.
+    :return: The parameter's value.
+    :raises ValueError: For any other value.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _FLAG_TRUE:
+            return True
+        if text in _FLAG_FALSE:
+            return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
+    """Why a request must be refused before anything runs, or None.
+
+    On an action URL a ``dry_run`` parameter that is not false is refused:
+    that URL never honours it, and running live would replace the plan the
+    caller meant to keep. On the dry-run URL, ``dry_run`` may be left out or
+    true, and the parameters that ask for a write are refused.
+
+    :param runtimeparams: The request's runtime parameters.
+    :param dry_run: True for the dry-run URL, False for an action URL.
+    :return: The reason to refuse the request, or None.
+    """
+    try:
+        asked = read_flag(runtimeparams.get("dry_run"), "dry_run")
+        if asked and not dry_run:
+            return (
+                f"dry_run is not a runtime parameter of this URL; send the same "
+                f"body to {DRY_RUN_URL} for a dry run. Nothing was run"
+            )
+        if dry_run and "dry_run" in runtimeparams and not asked:
+            return "dry_run is false in the body of a dry run. Nothing was run"
+        if dry_run:
+            for key in DRY_RUN_FLAGS:
+                if read_flag(runtimeparams.get(key), key) and key in DRY_RUN_REFUSED_KEYS:
+                    return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
+    except ValueError as exc:
+        return f"{exc}. Nothing was run"
+    return None
+
+
+class SocFractionError(ValueError):
+    """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
+
+
+def reject_configured_soc_fractions(
+    plant_conf: dict, optim_conf: dict, logger: logging.Logger
+) -> None:
+    """Reject a saved or overridden SOC fraction above 1 (#935).
+
+    Plant bounds and the SOC penalty thresholds are fractions of battery
+    capacity. Their costs are currency and are not checked here.
+    """
+    for soc_name in SOC_FRACTION_PLANT_PARAMS:
+        reject_soc_fraction_above_one(soc_name, plant_conf.get(soc_name), logger)
+    for soc_name in SOC_FRACTION_OPTIM_PARAMS:
+        reject_soc_fraction_above_one(soc_name, optim_conf.get(soc_name), logger)
+
+
+def reject_soc_fraction_above_one(name: str, value, logger: logging.Logger) -> None:
+    """Raise SocFractionError when a SOC value is above 1 (#935).
+
+    ``1`` is a full battery. ``None`` means the value was omitted. A numeric
+    string is read as a number, so ``"80"`` is rejected the same way as ``80``.
+    Anything else that is not a number is left untouched. An out-of-band
+    fraction such as ``0.05`` stays valid for the existing recovery and clamp
+    logic.
+    """
+    if value is None:
+        return
+    items = value if isinstance(value, list) else [value]
+    for index, item in enumerate(items):
+        number = item
+        if isinstance(item, str):
+            try:
+                number = float(item)
+            except ValueError:
+                continue
+        elif isinstance(item, bool) or not isinstance(item, int | float):
+            continue
+        if number <= 1:
+            continue
+        label = f"{name}[{index}]" if isinstance(value, list) else name
+        message = (
+            f"{label}={number} is above 1. State of charge is a fraction in "
+            f"[0, 1] (0.65 means 65%), not a percentage."
+        )
+        logger.error("%s", message)
+        raise SocFractionError(message)
 
 
 def _warn_if_runtime_scalar_masks_batt_list(
