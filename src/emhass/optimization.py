@@ -1784,6 +1784,16 @@ class Optimization:
                             sense=hc.get("sense") or "heat",
                         )
                         params["thermal_balance"].value = np.array(thermal_balance[:n])
+                    elif "specific_heating_demand" in hc and "area" in hc:
+                        demand = utils.calculate_heating_demand(
+                            specific_heating_demand=hc["specific_heating_demand"],
+                            floor_area=hc["area"],
+                            outdoor_temperature_forecast=outdoor_temp.tolist(),
+                            base_temperature=hc.get("base_temperature", 18.0),
+                            annual_reference_hdd=hc.get("annual_reference_hdd", 3000.0),
+                            optimization_time_step=int(self.freq.total_seconds() / 60),
+                        )
+                        params["thermal_balance"].value = np.array(demand[:n])
                     else:
                         params["thermal_balance"].value = np.zeros(n)
 
@@ -7230,10 +7240,6 @@ class Optimization:
         battery_discharge_energy_max: float | list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
-        # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
-        # Rebuild problem to ensure fresh forecasts are applied across MPC iterations.
-        if self.optim_conf.get("shared_thermal_tanks"):
-            self.prob = None
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
