@@ -67,7 +67,7 @@ function setup({ getConfig = () => ({}) } = {}) {
     if (cache.html !== html) cache = { html, params: parseParams(html) };
     return cache.params;
   };
-  const ctx = { window: {}, console: { ...console, debug() {}, log() {} }, setTimeout: () => 0, Response,
+  const ctx = { window: {}, console: { ...console, debug() {}, log() {} }, setTimeout: () => 0, Response, AbortSignal,
     document: {
       getElementById: id => {
         if (id === 'configuration-container') return container;

@@ -64,20 +64,37 @@ const DEFERRABLE_ARRAY_PARAMS = [
   "end_timesteps_of_each_deferrable_load",
 ];
 
+//a request that is still pending after this long fails with an error instead of leaving the page waiting
+const REQUEST_TIMEOUT_MS = 30000;
+function requestSignal() {
+  //browsers without AbortSignal.timeout keep waiting, as before
+  return typeof AbortSignal !== "undefined" && AbortSignal.timeout
+    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    : undefined;
+}
+
+//fail closed: a failed load is not an empty configuration. Render no form, allow no save, say how to recover
+function failClosedLoad() {
+  document.getElementById("save").disabled = true;
+  document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
+}
+
 //on page reload
 window.onload = async function () {
   ///fetch configuration parameters from definitions json file
   let param_definitions = await getParamDefinitions();
   //obtain configuration from emhass (pull)
-  let config = await obtainConfig();
-  //fail closed: a failed load is not an empty configuration. Render no form, allow no save
+  let config = param_definitions === null ? null : await obtainConfig();
   if (config === null) {
-    document.getElementById("save").disabled = true;
-    document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
+    failClosedLoad();
     return;
   }
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
   let list_html = await getListHTML();
+  if (list_html === null) {
+    failClosedLoad();
+    return;
+  }
   //load list parameter page (default)
   loadConfigurationListView(param_definitions, config, list_html);
 
@@ -107,15 +124,21 @@ window.onload = async function () {
 };
 
 //obtain file containing information about parameters (definitions)
+//returns null when the definitions could not be obtained
 async function getParamDefinitions() {
-  const response = await fetch(`static/data/param_definitions.json`);
-  if (response.status !== 200 && response.status !== 201) {
+  try {
+    const response = await fetch(`static/data/param_definitions.json`, {
+      signal: requestSignal(),
+    });
+    if (response.status !== 200 && response.status !== 201) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
     //alert error in alert box
-    errorAlert("Unable to obtain definitions file");
-    return {};
+    errorAlert(`Unable to obtain definitions file: ${error.message}`);
+    return null;
   }
-  const param_definitions = await response.json();
-  return await param_definitions;
 }
 
 //obtain emhass config (from saved params extracted/simplified into the config format)
@@ -125,6 +148,7 @@ async function obtainConfig() {
   try {
     const response = await fetch(`get-config`, {
       method: "GET",
+      signal: requestSignal(),
     });
     let  response_status = response.status; //return status
     //if request failed
@@ -165,6 +189,7 @@ async function ObtainDefaultConfig() {
   try {
     const response = await fetch(`get-config/defaults`, {
       method: "GET",
+      signal: requestSignal(),
     });
     //if request failed
     let response_status = response.status; //return status
@@ -187,15 +212,21 @@ async function ObtainDefaultConfig() {
 }
 
 //get html data from configuration_list.html (list template)
+//returns null when the template could not be obtained
 async function getListHTML() {
-  const response = await fetch(`static/configuration_list.html`);
-  if (response.status !== 200 && response.status !== 201) {
-    errorAlert("Unable to obtain configuration_list.html file");
-    return {};
+  try {
+    const response = await fetch(`static/configuration_list.html`, {
+      signal: requestSignal(),
+    });
+    if (response.status !== 200 && response.status !== 201) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    let blob = await response.blob(); //get data blob
+    return await new Response(blob).text(); //obtain html from blob
+  } catch (error) {
+    errorAlert(`Unable to obtain configuration_list.html file: ${error.message}`);
+    return null;
   }
-  let blob = await response.blob(); //get data blob
-  let htmlTemplateData = await new Response(blob).text(); //obtain html from blob
-  return htmlTemplateData;
 }
 
 //load list configuration view
@@ -1107,6 +1138,7 @@ async function saveConfiguration(param_definitions) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(config),
+      signal: requestSignal(),
     });
     const saved = response.status === 200 || response.status === 201;
     showChangeStatus(response.status, saved ? [] : await readErrorLog(response));

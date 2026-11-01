@@ -567,6 +567,7 @@ def test_save_configuration_object_type_null_representations(js_src):
         "  return { status: 200, json: async function() { return {}; } };\n"
         "};\n"
         "function showChangeStatus() {}\n"
+        "function requestSignal() { return undefined; }\n"
         "function errorAlert(msg) { throw new Error('errorAlert: ' + msg); }\n\n"
         + save_fn_src
         + "\n\n"

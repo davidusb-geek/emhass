@@ -6,7 +6,9 @@ const vm = require('node:vm');
 const source = fs.readFileSync('src/emhass/static/configuration_script.js', 'utf8');
 const saved = { battery_nominal_energy_capacity: 23456, costfun: 'self-consumption' };
 
-function setup(getConfigReply, { box = '{}' } = {}) {
+// a reply that never completes; it ends only when the request's own timeout aborts it
+const STALL = Symbol('stall');
+function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
   const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
   const nodes = {};
@@ -15,14 +17,20 @@ function setup(getConfigReply, { box = '{}' } = {}) {
   const state = { rendered: undefined, view: 'list' };
   const boxEl = { value: box, innerHTML: '' };
   nodes['configuration-container'].getElementsByClassName = () => (state.view === 'list' ? [{}] : []);
-  const ctx = { window: {}, console, setTimeout: () => 0, Response,
+  // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
+  const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => AbortSignal.timeout(40) },
     document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
-      calls.push({ url, method: options && options.method });
+      calls.push({ url, method: options && options.method, signal: options && options.signal });
+      const settle = r => (r === STALL
+        ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)))
+        : r);
+      const override = staticReply(url);
+      if (override !== undefined) return settle(override);
       if (url.includes('param_definitions')) return new Response('{}', { status: 200 });
       if (url.includes('configuration_list')) return new Response('<div class="section-card"></div>', { status: 200 });
-      return getConfigReply(url);
+      return settle(getConfigReply(url));
     } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
   // the list renderer is not under test here; record what it was asked to render
@@ -148,4 +156,55 @@ test('/set-config non-JSON error reports the HTTP status', async () => {
 test('rejected /set-config request is reported with the error message', async () => {
   const { out } = await save(() => { throw new TypeError('Failed to fetch'); });
   assert.notEqual(out.status, 200); assert.match(out.log.join(' '), /Failed to fetch/);
+});
+
+// bounded requests: a stalled request ends in a visible error instead of leaving the page waiting
+test('a stalled GET /get-config fails closed with a timeout message', async () => {
+  const s = setup(() => STALL);
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /abort|time/i);
+});
+for (const [name, staticReply] of [
+  ['a stalled definitions request', url => (url.includes('param_definitions') ? STALL : undefined)],
+  ['an HTTP 404 for the definitions', url => (url.includes('param_definitions') ? new Response('nf', { status: 404 }) : undefined)],
+  ['a rejected definitions request', url => { if (url.includes('param_definitions')) throw new TypeError('Failed to fetch'); }],
+  ['a stalled list template request', url => (url.includes('configuration_list') ? STALL : undefined)],
+  ['an HTTP 404 for the list template', url => (url.includes('configuration_list') ? new Response('nf', { status: 404 }) : undefined)],
+]) {
+  test(`${name} fails closed: no form, Save disabled and not attached, nothing written`, async () => {
+    const s = setup(() => json(200, saved), { staticReply });
+    await s.load();
+    assert.equal(s.state.rendered, undefined); assert.equal(s.nodes.save.listeners.click, undefined);
+    assert.equal(s.nodes.save.disabled, true); assert.equal(s.nodes['configuration-container'].innerHTML, '');
+    assert.equal(s.nodes.alert.style.display, 'block'); assert.match(s.nodes['alert-text'].textContent, /Reload the page/);
+    assert.deepEqual(setConfigCalls(s), []);
+  });
+}
+test('every configuration request is made with a timeout signal', async () => {
+  const s = setup(() => json(200, saved)); await s.load();
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  const { s: t } = await save(() => json(200, []));
+  const calls = [...s.calls, ...t.calls].filter(c => /get-config|set-config|static/.test(c.url));
+  assert.ok(calls.length >= 5);
+  for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`);
+});
+test('a stalled Defaults request keeps the form and a second Defaults click recovers', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, saved)));
+  s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
+  assert.match(s.nodes['alert-text'].textContent, /abort|time/i); assert.deepEqual(setConfigCalls(s), []);
+  stall = false;
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.deepEqual(s.state.rendered, saved);
+});
+test('a stalled /set-config is reported and a later save succeeds', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, []))); s.state.view = 'box';
+  const out = []; s.ctx.showChangeStatus = (st, log) => out.push({ st, log });
+  await s.ctx.saveConfiguration({});
+  assert.notEqual(out[0].st, 200); assert.match(out[0].log.join(' '), /Unable to save.*(abort|time)/is);
+  stall = false; await s.ctx.saveConfiguration({});
+  assert.equal(out[1].st, 200);
 });
