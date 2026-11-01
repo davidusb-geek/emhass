@@ -25,7 +25,8 @@ function setup({ stored, replies }) {
   const ctx = { window: {}, console, Response, setTimeout: () => 0,
     localStorage: { getItem: k => storage[k] ?? null, setItem: (k, v) => { storage[k] = String(v); }, removeItem: k => { delete storage[k]; } },
     document: { getElementById: id => registry[id] || null, querySelectorAll: () => [],
-      createElement: () => ({ content: { querySelector: sel => (idsOf(ctx.probeHtml || '').includes(sel.slice(1)) ? {} : null) },
+      createElement: () => ({ content: { querySelector: sel => (idsOf(ctx.probeHtml || '').includes(sel.slice(1)) ? {} : null),
+          get firstElementChild() { const id = idsOf(ctx.probeHtml || '')[0]; return id === undefined ? null : { id }; } },
         set innerHTML(html) { ctx.probeHtml = html; } }) },
     fetch: async (url) => { calls.push(url); return replies[url.replace('static/', '')](); } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
@@ -115,6 +116,25 @@ test('a successful view load keeps the error of an unrelated action visible', as
   assert.equal(s.container.firstElementChild.id, 'advance');
   assert.equal(s.registry.alert.style.display, 'block'); assert.match(alertText(s), /optimisation failed/); s.done();
 });
+for (const [view, html, hidden, pattern] of [
+  ['Advanced', () => ADVANCED, 'input-container', /missing input-container\)/],
+  ['Advanced', () => ADVANCED, 'loader', /missing loader\)/],
+  ['Basic', () => BASIC, 'loader', /missing loader\)/],
+  ['Advanced', () => ADVANCED, 'advance', /missing advance[,)]/],
+  ['Basic', () => BASIC, 'basic', /missing basic[,)]/],
+]) {
+  test(`${view} template without #${hidden} is rejected before it replaces the working view`, async () => {
+    const broken = html().replace(new RegExp(`id=["']?${hidden}["']?(?=[\s>])`), 'id=renamed');
+    const other = view === 'Advanced' ? 'basic' : 'advanced';
+    const s = setup({ stored: other, replies: { ...healthy, [`${view.toLowerCase()}.html`]: ok(broken) } });
+    await s.load();
+    const before = s.container.innerHTML, working = s.container.firstElementChild.id;
+    await s.registry.basicOrAdvanced.listeners.click();
+    assert.equal(s.container.innerHTML, before); assert.equal(s.container.firstElementChild.id, working);
+    assert.equal(s.storage.TabSelection, other);
+    assert.match(alertText(s), pattern); assert.equal(s.registry.alert.style.display, 'block'); s.done();
+  });
+}
 test('an incomplete Advanced template keeps the working Basic view', async () => {
   const incomplete = ADVANCED.replace(/id=["']?dayahead-optim["']?(?=[\s>])/, 'id=renamed');
   const s = setup({ replies: { ...healthy, 'advanced.html': ok(incomplete) } });

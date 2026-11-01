@@ -35,11 +35,13 @@ const ADVANCED_ACTION_IDS = [
   "naive-mpc-optim",
 ];
 
-//controls loadButtons attaches listeners to, per view
+//elements the view needs once loaded (loadButtons, the loader status, the saved inputs), per view
 const VIEW_CONTROL_IDS = {
-  basic: ["dayahead-optim-basic"],
-  advanced: [...ADVANCED_ACTION_IDS, "input-plus", "input-minus", "input-select", "input-clear"],
+  basic: ["dayahead-optim-basic", "loader"],
+  advanced: [...ADVANCED_ACTION_IDS, "input-plus", "input-minus", "input-select", "input-clear", "loader", "input-container"],
 };
+//id of the first element of each template, which identifies the displayed view
+const VIEW_ROOT_ID = { basic: "basic", advanced: "advance" };
 
 //add listeners to buttons (based on page)
 async function loadButtons(page) {
@@ -82,6 +84,10 @@ async function loadView(page) {
   const probe = document.createElement("template");
   probe.innerHTML = htmlData;
   const missing = VIEW_CONTROL_IDS[page].filter((id) => probe.content.querySelector(`#${id}`) === null);
+  const root = probe.content.firstElementChild;
+  if (root === null || root.id !== VIEW_ROOT_ID[page]) {
+    missing.unshift(VIEW_ROOT_ID[page]);
+  }
   if (missing.length) {
     throw new Error(`${file} is incomplete (missing ${missing.join(", ")})`);
   }
