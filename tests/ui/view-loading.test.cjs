@@ -10,6 +10,14 @@ const idsOf = html => [...html.matchAll(/\bid=["']?([\w-]+)/g)].map(m => m[1]);
 
 // Minimal DOM: setting innerHTML registers the elements it declares, so the real
 // script wires the real templates' controls. Not a browser rendering test.
+// AbortSignal.timeout's own timer does not keep the event loop alive on every Node, so a test waiting only on it
+// is cancelled ('Promise resolution is still pending but the event loop has already resolved'). A ref'd timer
+// aborts a real AbortSignal with the same TimeoutError and keeps the loop alive until it fires.
+function timeoutSignal(ms) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms);
+  return controller.signal;
+}
 function setup({ stored, replies, savedInputs, realSavedData }) {
   const registry = {}, storage = stored ? { TabSelection: stored } : {};
   if (savedInputs !== undefined) storage.input_container_content = savedInputs;
@@ -24,7 +32,7 @@ function setup({ stored, replies, savedInputs, realSavedData }) {
   registry.TabSelection = container;
   const calls = [];
   // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
-  const ctx = { window: {}, console, Response, setTimeout: () => 0, AbortSignal: { timeout: () => AbortSignal.timeout(40) },
+  const ctx = { window: {}, console, Response, setTimeout: () => 0, AbortSignal: { timeout: () => timeoutSignal(40) },
     localStorage: { getItem: k => storage[k] ?? null, setItem: (k, v) => { storage[k] = String(v); }, removeItem: k => { delete storage[k]; } },
     document: { getElementById: id => registry[id] || null, querySelectorAll: () => [],
       createElement: () => ({ content: { querySelector: sel => (idsOf(ctx.probeHtml || '').includes(sel.slice(1)) ? {} : null),
