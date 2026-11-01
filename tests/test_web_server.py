@@ -254,43 +254,41 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # App returns 400 for failures in this specific action
         self.assertEqual(response.status_code, 400)
 
-    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
     @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
-    async def test_action_weather_cache_soc_fraction_is_400(self, mock_load, mock_cache, mock_grab):
+    async def test_action_weather_cache_400_never_returns_other_requests_log(
+        self, mock_load, mock_cache
+    ):
+        """Both 400 paths answer with a request-specific message, not the shared log's tail.
+
+        The action log is shared and holds every request's runtime parameters, which can include
+        API keys. The log below has another request's (fake) credentials after this request's
+        marker, as happens when two requests overlap.
+        """
         from emhass.utils import SocFractionError
 
         mock_load.return_value = ({}, "profit", "{}")
-        mock_cache.side_effect = SocFractionError("soc_init=65 is above 1")
-        mock_grab.return_value = ["ERROR soc_init=65 is above 1"]
-        response = await self.client.post("/action/weather-forecast-cache", json={})
-        self.assertEqual(response.status_code, 400)
-
-    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
-    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
-    async def test_action_weather_cache_failure_is_400_without_the_shared_log(
-        self, mock_load, mock_cache
-    ):
-        """A failed cache action answers 400 but must not echo other requests' log lines.
-
-        The action log is shared and holds every request's runtime parameters (which can include
-        API keys), so the failure response may not return its tail.
-        """
-        mock_load.return_value = ({}, "profit", "{}")
-        mock_cache.return_value = False  # no ERROR line: only the returned False makes this a 400
-        with tempfile.TemporaryDirectory() as tmp:
-            self.mock_conf["data_path"] = pathlib.Path(tmp)
-            (pathlib.Path(tmp) / web_server.action_log_str).write_text(
-                "INFO - emhass.web_server -  >> Performing weather forecast, try to caching result\n"
-                "INFO - emhass.web_server - Passed runtime parameters: "
-                "{'solcast_api_key': 'SECRET-KEY-123'}\n"
-                "INFO - emhass.web_server - last line\n"
-            )
-            response = await self.client.post("/action/weather-forecast-cache", json={})
-        body = await response.get_data(as_text=True)
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Weather forecast failed", body)
-        self.assertNotIn("SECRET-KEY-123", body)
+        interleaved_log = (
+            "INFO - emhass.web_server -  >> Performing weather forecast, try to caching result\n"
+            "INFO - emhass.web_server - Passed runtime parameters: "
+            "{'solcast_api_key': 'FAKE-KEY-123', 'long_lived_token': 'FAKE-TOKEN-456'}\n"
+            "ERROR - emhass.web_server - another request failed\n"
+        )
+        for label, effect, expected in (
+            ("returned False", False, "Weather forecast failed"),
+            ("SOC fraction", SocFractionError("soc_init=65 is above 1"), "soc_init=65 is above 1"),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                mock_cache.side_effect = effect if isinstance(effect, Exception) else None
+                mock_cache.return_value = effect
+                self.mock_conf["data_path"] = pathlib.Path(tmp)
+                (pathlib.Path(tmp) / web_server.action_log_str).write_text(interleaved_log)
+                response = await self.client.post("/action/weather-forecast-cache", json={})
+                body = await response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(expected, body)
+                for secret in ("FAKE-KEY-123", "FAKE-TOKEN-456", "another request failed"):
+                    self.assertNotIn(secret, body)
 
     @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
