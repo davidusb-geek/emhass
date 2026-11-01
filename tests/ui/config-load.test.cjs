@@ -22,7 +22,7 @@ function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {
     document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
-      calls.push({ url, method: options && options.method, signal: options && options.signal });
+      calls.push({ url, method: options && options.method, signal: options && options.signal, cache: options && options.cache });
       const settle = r => (r === STALL
         ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)))
         : r);
@@ -226,4 +226,11 @@ test('a successful save clears the error of a save that timed out', async () => 
   assert.equal(s.nodes.alert.style.display, 'block'); assert.match(s.nodes['alert-text'].textContent, /may still have saved it/);
   stall = false; await s.ctx.saveConfiguration({});
   assert.equal(s.nodes.alert.style.display, 'none');
+});
+test('the definitions and the list template are revalidated, not served from the 12 h static cache', async () => {
+  const s = setup(() => json(200, saved)); await s.load();
+  for (const name of ['param_definitions', 'configuration_list']) {
+    const call = s.calls.find(c => c.url.includes(name));
+    assert.equal(call.cache, 'no-cache', `${name} may be served stale after an upgrade`);
+  }
 });

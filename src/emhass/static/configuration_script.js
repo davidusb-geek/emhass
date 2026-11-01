@@ -64,35 +64,22 @@ const DEFERRABLE_ARRAY_PARAMS = [
   "end_timesteps_of_each_deferrable_load",
 ];
 
-//a request that is still pending after this long fails with an error instead of leaving the page waiting
+//a request still pending after this long fails with an error instead of leaving the page waiting
+//(browsers without AbortSignal.timeout keep waiting, as before)
 const REQUEST_TIMEOUT_MS = 30000;
-function requestSignal() {
-  //browsers without AbortSignal.timeout keep waiting, as before
-  return typeof AbortSignal !== "undefined" && AbortSignal.timeout
-    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    : undefined;
-}
-
-//fail closed: a failed load is not an empty configuration. Render no form, allow no save, say how to recover
-function failClosedLoad() {
-  document.getElementById("save").disabled = true;
-  document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
-}
 
 //on page reload
 window.onload = async function () {
   ///fetch configuration parameters from definitions json file
   let param_definitions = await getParamDefinitions();
   //obtain configuration from emhass (pull)
-  let config = param_definitions === null ? null : await obtainConfig();
-  if (config === null) {
-    failClosedLoad();
-    return;
-  }
+  let config = param_definitions && (await obtainConfig());
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
-  let list_html = await getListHTML();
-  if (list_html === null) {
-    failClosedLoad();
+  let list_html = config && (await getListHTML());
+  //fail closed: a failed load is not an empty configuration. Render no form, allow no save, say how to recover
+  if (!list_html) {
+    document.getElementById("save").disabled = true;
+    document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
     return;
   }
   //load list parameter page (default)
@@ -128,7 +115,8 @@ window.onload = async function () {
 async function getParamDefinitions() {
   try {
     const response = await fetch(`static/data/param_definitions.json`, {
-      signal: requestSignal(),
+      cache: "no-cache", //revalidate: the definitions change with the release
+      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
     });
     if (response.status !== 200 && response.status !== 201) {
       throw new Error(`HTTP ${response.status}`);
@@ -141,21 +129,16 @@ async function getParamDefinitions() {
   }
 }
 
-//an empty object would render the parameter defaults as if they were the saved settings
-function isUsableConfig(config) {
-  return config !== null && typeof config === "object" && !Array.isArray(config) && Object.keys(config).length > 0;
-}
-
-//obtain emhass config (from saved params extracted/simplified into the config format)
-//returns null when the configuration could not be obtained (never an empty config)
-async function obtainConfig() {
+//request a configuration from emhass: the saved one or the defaults
+//returns null when it could not be obtained (never an empty config)
+async function fetchConfig(url, what) {
   config = {};
   try {
-    const response = await fetch(`get-config`, {
+    const response = await fetch(url, {
       method: "GET",
-      signal: requestSignal(),
+      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
     });
-    let  response_status = response.status; //return status
+    let response_status = response.status; //return status
     //if request failed
     if (response_status !== 200 && response_status !== 201) {
       showChangeStatus(response_status, await readErrorLog(response));
@@ -164,15 +147,26 @@ async function obtainConfig() {
     //else extract json rom data
     let blob = await response.blob(); //get data blob
     config = await new Response(blob).json(); //obtain json from blob
-    if (!isUsableConfig(config)) {
+    //an empty object would render the parameter defaults as if they were the saved settings
+    if (config === null || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length === 0) {
       throw new Error("the response is not a non-empty configuration object");
     }
     showChangeStatus(response_status, {});
     return config;
   } catch (error) {
-    showChangeStatus(0, [`Unable to obtain the configuration: ${error.message}`]);
+    showChangeStatus(0, [`Unable to obtain ${what}: ${error.message}`]);
     return null;
   }
+}
+
+//obtain emhass config (from saved params extracted/simplified into the config format)
+async function obtainConfig() {
+  return fetchConfig(`get-config`, "the configuration");
+}
+
+//obtain emhass default config (to present the default parameters in view)
+async function ObtainDefaultConfig() {
+  return fetchConfig(`get-config/defaults`, "the default configuration");
 }
 
 //error messages of a failed response: the JSON list sent by emhass, else the HTTP status
@@ -188,40 +182,13 @@ async function readErrorLog(response) {
   return [`HTTP ${response.status}`];
 }
 
-//obtain emhass default config (to present the default parameters in view)
-async function ObtainDefaultConfig() {
-  config = {};
-  try {
-    const response = await fetch(`get-config/defaults`, {
-      method: "GET",
-      signal: requestSignal(),
-    });
-    //if request failed
-    let response_status = response.status; //return status
-    if (response_status !== 200 && response_status !== 201) {
-      showChangeStatus(response_status, await readErrorLog(response));
-      return null;
-    }
-    //else extract json rom data
-    let blob = await response.blob(); //get data blob
-    config = await new Response(blob).json(); //obtain json from blob
-    if (!isUsableConfig(config)) {
-      throw new Error("the response is not a non-empty configuration object");
-    }
-    showChangeStatus(response_status, {});
-    return config;
-  } catch (error) {
-    showChangeStatus(0, [`Unable to obtain the default configuration: ${error.message}`]);
-    return null;
-  }
-}
-
 //get html data from configuration_list.html (list template)
 //returns null when the template could not be obtained
 async function getListHTML() {
   try {
     const response = await fetch(`static/configuration_list.html`, {
-      signal: requestSignal(),
+      cache: "no-cache", //revalidate: the template changes with the release
+      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
     });
     if (response.status !== 200 && response.status !== 201) {
       throw new Error(`HTTP ${response.status}`);
@@ -1143,7 +1110,7 @@ async function saveConfiguration(param_definitions) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(config),
-      signal: requestSignal(),
+      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
     });
     const saved = response.status === 200 || response.status === 201;
     showChangeStatus(response.status, saved ? [] : await readErrorLog(response));
