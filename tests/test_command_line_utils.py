@@ -5326,8 +5326,17 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
                 if p10_rows:
                     runtime["pv_power_forecast_p10"] = [0.5] * p10_rows
                 runtime = orjson.dumps(runtime).decode("utf-8")
-                result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
+                with patch.object(
+                    Forecast,
+                    "get_weather_forecast",
+                    autospec=True,
+                    side_effect=Forecast.get_weather_forecast,
+                ) as spy:
+                    result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
                 self.assertIs(result, expected)
+                # the runtime list overrides the configured csv, so the csv no-op is not taken
+                spy.assert_awaited_once()
+                self.assertEqual(spy.await_args.args[1], "list")
 
     async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
         """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""

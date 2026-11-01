@@ -277,6 +277,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/action/weather-forecast-cache", json={})
         self.assertEqual(response.status_code, 400)
         mock_grab.assert_awaited_once_with(" >> Performing weather forecast, try to caching result")
+        self.assertIn("WARNING the forecast was rejected", await response.get_data(as_text=True))
 
     @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
