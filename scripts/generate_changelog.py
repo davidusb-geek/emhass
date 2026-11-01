@@ -107,8 +107,17 @@ if __name__ == "__main__":
     changelog_chunk = generate_markdown()
     print(changelog_chunk)
 
-    # Optional: Uncomment below to prepended automatically to your file
-    # with open("CHANGELOG.md", "r+") as f:
-    #     content = f.read()
-    #     f.seek(0, 0)
-    #     f.write(changelog_chunk + "\n" + content)
+    if changelog_chunk.strip():
+        changelog_path = os.path.join(os.path.dirname(__file__), "..", "CHANGELOG.md")
+        with open(changelog_path, encoding="utf-8") as f:
+            content = f.read()
+
+        title = "# Changelog"
+        if title in content:
+            header, rest = content.split(title, 1)
+            new_content = f"{header}{title}\n\n{changelog_chunk.strip()}\n\n{rest.lstrip()}"
+        else:
+            new_content = f"# Changelog\n\n{changelog_chunk.strip()}\n\n{content.lstrip()}"
+
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            f.write(new_content)

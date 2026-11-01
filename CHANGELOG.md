@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.8 - 2026-11-01
+
+### Improvement
+- test: complete Stage 1 correctness and isolation fixes (#1269) (@MMicieli)
+- test: isolate command-line and Home Assistant test side effects (#1269) (@MMicieli)
+- style: remove two invalid CSS declarations (@MMicieli)
+- test: isolate the Forecast.Solar and list-cache tests from the data-directory cache (@MMicieli)
+- test: isolate the Solcast forecast tests from the data-directory cache (@MMicieli)
+- test: isolate the Open-Meteo forecast tests from the data-directory cache (@MMicieli)
+- test: make forecast index start assertions effective (#1269) (@MMicieli)
+- test: make battery charge derating tests independent of solver tie-breaking (@MMicieli)
+- chore: align Codecov coverage collection with pytest (#1269) (@MMicieli)
+- feat: per-battery availability windows (EV / V2G battery that is not always connected) (@scruysberghs)
+- chore(deps): update cvxpy requirement from <1.8.0,>=1.6.0 to >=1.6.0,<1.10.0 (@dependabot[bot])
+- test: forward feasible_incumbent in the DP-refinement acceptance recorder (@MMicieli)
+- feat: use VictoriaMetrics series entity labels produced by the HA Prometheus integration (@Crosenhain)
+- feat: retry a timed-out weather fetch instead of stalling the cycle (@HFZR2005)
+
+### Documentation
+- docs: update param_definitions.json (@sajonasra)
+
+### Fix
+- fix: reject weather CSV data shorter than the forecast grid (@MMicieli)
+- fix: improve web UI accessibility (@MMicieli)
+- fix: preserve the current view when Basic/Advanced loading fails (@MMicieli)
+- fix: fail closed when the configuration cannot be loaded (@MMicieli)
+- fix: perfect-optim solves every historical window across a DST change (@MMicieli)
+- fix: forward zero MIP gap to HiGHS (@bferanmi806-sketch)
+- Fix MLForecaster DST horizons and load-history timestamp alignment (@MMicieli)
+- fix: fetch weather covariates older than the forecast API reach from the Historical Forecast API (#1125) (@odiechoo)
+- fix: use the peak power of sequence loads when publishing deferrable states (@Blizzeq)
+- fix: preserve excess building gains in thermal temperature predictions (@renaatdb)
+
 ## 0.18.7 - 2026-10-23
 
 ### Improvement
