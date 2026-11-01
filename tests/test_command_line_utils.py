@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import pickle
+import re
 import shutil
 import tempfile
 import unittest
@@ -13,11 +14,13 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import aiofiles
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
 import pytz
 import time_machine
+from aioresponses import aioresponses
 
 from emhass import utils
 from emhass.command_line import (
@@ -5299,6 +5302,32 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
                 ):
                     result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
                 self.assertIs(result, expected)
+
+    async def test_weather_forecast_cache_fails_when_solar_forecast_answers_with_an_error(self):
+        """forecast.solar returns False for an HTTP error (it does not raise), and that is a failure."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "solar.forecast"
+        params_json = orjson.dumps(params).decode("utf-8")
+        with fixture_clock(), aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api\.forecast\.solar/estimate/.*"), status=429)
+            result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
+        self.assertIs(result, False)
+
+    async def test_weather_forecast_cache_does_not_hide_a_raised_provider_failure(self):
+        """A failure the provider raises is not turned into the False result."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "open-meteo"
+        params_json = orjson.dumps(params).decode("utf-8")
+        with (
+            fixture_clock(),
+            patch.object(
+                Forecast,
+                "get_weather_forecast",
+                AsyncMock(side_effect=aiohttp.ClientConnectionError("down")),
+            ),
+            self.assertRaises(aiohttp.ClientConnectionError),
+        ):
+            await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
 
     async def test_weather_forecast_cache_has_nothing_to_cache_for_csv(self):
         """csv is a successful no-op: the file is never read and no forecast is built."""
