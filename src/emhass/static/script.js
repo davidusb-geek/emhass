@@ -78,7 +78,8 @@ async function loadButtons(page) {
 const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
 
 //a template or export-check request still pending after this long fails instead of leaving the page waiting
-//(browsers without AbortSignal.timeout keep waiting, as before)
+//(browsers without AbortSignal.timeout keep waiting, as before). Written without `?.`: this page's script has no
+//ES2020 syntax (optional chaining), and a parse error would break the whole page, not just the timeout.
 const REQUEST_TIMEOUT_MS = 30000;
 
 //fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
@@ -178,7 +179,7 @@ async function getHTMLData(htmlFile) {
   //revalidate: the template changes with the release, and loadView checks it against this script
   const response = await fetch(`static/` + htmlFile, {
     cache: "no-cache",
-    signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout && AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`${htmlFile} request failed with HTTP ${response.status}`);
@@ -609,7 +610,9 @@ let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
   const thisCheck = ++influxChecks;
   try {
-    const response = await fetch("/get-config", { signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS) });
+    const response = await fetch("/get-config", {
+      signal: AbortSignal.timeout && AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (response.ok) {
       const config = await response.json();
       if (thisCheck !== influxChecks) {
