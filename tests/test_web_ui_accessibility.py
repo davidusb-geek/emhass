@@ -94,17 +94,17 @@ def test_click_only_toggles_are_buttons(path, control_id):
 
 @pytest.mark.parametrize("path", FRAGMENTS, ids=lambda p: p.name)
 def test_form_controls_have_a_label(path):
+    """Every control has a non-empty accessible name; an empty <label> wrapper is not one."""
     page = _parse(path)
-    for tag, attrs, ancestors in page.elements:
-        if tag in ("select", "textarea") or (
-            tag == "input" and attrs.get("type", "text") in ("number", "text")
-        ):
-            labelled = (
-                attrs.get("id") in page.label_targets
-                or attrs.get("aria-label")
-                or "label" in ancestors
-            )
-            assert labelled, attrs
+    controls = [
+        attrs
+        for tag, attrs, _ in page.elements
+        if tag in ("select", "textarea")
+        or (tag == "input" and attrs.get("type", "text") in ("number", "text", "checkbox"))
+    ]
+    assert controls
+    for attrs in controls:
+        assert (attrs.get("aria-label") or "").strip(), attrs
 
 
 def test_mark_text_is_readable_on_its_background():
