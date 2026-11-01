@@ -37,6 +37,7 @@ const failClosed = (s) => {
   assert.equal(s.nodes.save.disabled, true, 'Save disabled');
   assert.equal(s.nodes['configuration-container'].innerHTML, '');
   assert.equal(s.nodes.alert.style.display, 'block', 'failure reported in the alert box');
+  assert.match(s.nodes['alert-text'].textContent, /Reload the page to try again/, 'a recovery step is offered');
   assert.deepEqual(setConfigCalls(s), [], 'nothing is sent to /set-config');
 };
 

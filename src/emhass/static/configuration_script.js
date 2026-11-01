@@ -73,6 +73,7 @@ window.onload = async function () {
   //fail closed: a failed load is not an empty configuration. Render no form, allow no save
   if (config === null) {
     document.getElementById("save").disabled = true;
+    document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
     return;
   }
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
