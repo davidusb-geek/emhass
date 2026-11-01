@@ -19,7 +19,7 @@ To enable PV in EMHASS, set `set_use_pv: true` (default is `false`) and configur
 
 ## Perfect optimization (7-day historical backtest)
 
-The `perfect-optim` mode uses real measured PV production and load data from the last 7 days, so the optimizer has perfect knowledge of inputs. The result is the theoretical best-case cost, useful as a benchmark for what `dayahead-optim` is approaching.
+The `perfect-optim` mode uses real measured PV production and load data from the last 7 days, so the optimizer has perfect knowledge of inputs. Each day is a window of 24 elapsed hours (`delta_forecast_daily` x 24) starting at a UTC midnight, also across a daylight saving change (see [`delta_forecast_daily`](../config.md)). The result is the theoretical best-case cost, useful as a benchmark for what `dayahead-optim` is approaching.
 
 Run it:
 

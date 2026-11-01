@@ -265,6 +265,7 @@ def _save_zero_input_array_probe(section: str) -> subprocess.CompletedProcess:
         "  return { status: 200, json: async function() { return {}; } };\n"
         "};\n"
         "function showChangeStatus() {}\n"
+        "var REQUEST_TIMEOUT_MS = 30000;\n"
         "function errorAlert(msg) { throw new Error('errorAlert: ' + msg); }\n\n"
         + allow_list_src
         + "\n\n"

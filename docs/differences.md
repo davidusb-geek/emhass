@@ -40,6 +40,7 @@ See below for a list of associations between the parameters from `config_emhass.
 | retrieve_hass_conf | | victoriametrics_password | |
 | retrieve_hass_conf | | victoriametrics_database | |
 | retrieve_hass_conf | | victoriametrics_metric_regex | |
+| retrieve_hass_conf | | victoriametrics_entity_label | |
 | params_secrets |  solcast_api_key |  optional_solcast_api_key | |
 | params_secrets |  solcast_rooftop_id |  optional_solcast_rooftop_id | |
 | params_secrets |  solar_forecast_kwp |  optional_solar_forecast_kwp | |

@@ -6,16 +6,21 @@ import json
 import os
 import pathlib
 import pickle
+import re
+import shutil
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import aiofiles
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
 import pytz
+import time_machine
+from aioresponses import aioresponses
 
 from emhass import utils
 from emhass.command_line import (
@@ -46,8 +51,10 @@ from emhass.command_line import (
     regressor_model_predict,
     retrieve_home_assistant_data,
     set_input_data_dict,
+    weather_forecast_cache,
 )
 from emhass.forecast import Forecast
+from tests.fixture_clock import FIXTURE_NOW, fixture_clock
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -82,6 +89,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         return params
 
     async def asyncSetUp(self):
+        data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        shutil.copytree(root / "data", data_path, dirs_exist_ok=True)
+        self.enterContext(patch.dict(emhass_conf, {"data_path": data_path}))
         params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
         # Add runtime parameters for forecast lists
         runtimeparams = {
@@ -95,6 +105,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.params_json = orjson.dumps(params).decode("utf-8")
 
     # Test input data for actions (using data from file)
+    @fixture_clock()
     async def test_set_input_data_dict(self):
         costfun = "profit"
         # Test dayahead
@@ -279,6 +290,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Without the bypass, the first call stores the object in the cache and
         the second call returns the same cached (stale) object.
         """
+        # Offline weather: the list-forecast Open-Meteo augmentation (#997) is fail-soft
+        open_meteo = self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
         OptimizationCache.clear(logger)
         params_json, runtimeparams_json = await self._params_with_shared_tank(48.0)
         idd1 = await set_input_data_dict(
@@ -314,6 +333,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             idd2["opt"].optim_conf["shared_thermal_tanks"][0]["start_temperature"], 40.0
         )
+        open_meteo.assert_awaited()
 
     async def test_set_input_data_dict_caches_without_shared_thermal_tanks(self):
         """Regression guard: the warm-start cache must still work for ordinary
@@ -380,6 +400,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(injection_dict["table2"], str)
 
     # Test data formatting of dayahead optimization with load cost and prod price as lists
+    @fixture_clock()
     async def test_dayahead_forecast_optim(self):
         # Test dataframe output of profit dayahead optimization
         costfun = "profit"
@@ -836,6 +857,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
     # Test outputs of fit, predict and tune
     async def test_forecast_model_fit_predict_tune(self):
+        # Private data_path so the synthetic load_forecast.pkl never touches repository data
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        tmp_data_path = pathlib.Path(tmp_dir.name)
+        for fixture in ("long_train_data.pkl", "test_df_final.pkl"):
+            shutil.copy(emhass_conf["data_path"] / fixture, tmp_data_path / fixture)
+        tmp_conf = {**emhass_conf, "data_path": tmp_data_path}
         costfun = "profit"
         action = "forecast-model-fit"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -856,7 +884,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = orjson.dumps(params).decode("utf-8")
         input_data_dict = await set_input_data_dict(
-            emhass_conf,
+            tmp_conf,
             costfun,
             params_json,
             runtimeparams_json,
@@ -869,7 +897,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
-        default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
+        default_file_path = tmp_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if default_file_path.exists():
             default_file_path.unlink()
@@ -881,7 +909,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         created_dummy = True
         try:
             input_data_dict = await set_input_data_dict(
-                emhass_conf,
+                tmp_conf,
                 costfun,
                 self.params_json,
                 self.runtimeparams_json,
@@ -1064,6 +1092,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                     "perfect-optim",
                     "--config",
                     str(emhass_conf["config_path"]),
+                    "--data",
+                    str(emhass_conf["data_path"]),
                     "--debug",
                     "True",
                     "--params",
@@ -1103,6 +1133,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                     "dayahead-optim",
                     "--config",
                     str(emhass_conf["config_path"]),
+                    "--data",
+                    str(emhass_conf["data_path"]),
                     "--params",
                     self.params_json,
                     "--runtimeparams",
@@ -1131,6 +1163,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 "naive-mpc-optim",
                 "--config",
                 str(emhass_conf["config_path"]),
+                "--data",
+                str(emhass_conf["data_path"]),
                 "--params",
                 self.params_json,
                 "--runtimeparams",
@@ -2365,6 +2399,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Test that thermal config parameters (def_load_config and heater overrides)
         are correctly processed for non-MPC actions (e.g. dayahead-optim).
         """
+        # Offline weather: the list-forecast Open-Meteo augmentation (#997) is fail-soft
+        open_meteo = self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
         costfun = "profit"
         action = "dayahead-optim"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -2411,6 +2453,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(thermal_config["start_temperature"], 25.5)
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
+        open_meteo.assert_awaited()
 
     @patch("emhass.command_line.publish_json", new_callable=AsyncMock)
     @patch("emhass.command_line.aiofiles.open")
@@ -3896,6 +3939,9 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test fixtures and clear the cache."""
+        data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        shutil.copytree(root / "data", data_path, dirs_exist_ok=True)
+        self.enterContext(patch.dict(emhass_conf, {"data_path": data_path}))
         OptimizationCache.clear()
         self.params = await TestOptimizationCacheIntegration.get_test_params()
 
@@ -5189,6 +5235,177 @@ class TestContinualPublishSleep(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(sleep, 1200.0)
         sleep = await self._first_sleep(pd.Timedelta(minutes=30), midnight + 1799.5)
         self.assertAlmostEqual(sleep, 0.5)
+
+
+class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
+    """A weather CSV shorter than the forecast grid stops the cycle cleanly (#1249)."""
+
+    CSV_ROWS_SHIPPED = 48  # data/data_weather_forecast.csv
+
+    async def _inputs(self, action, rows, now):
+        """set_input_data_dict on a temporary copy of data/ whose weather CSV has ``rows`` rows."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        runtimeparams = {"prediction_horizon": 48} if action == "naive-mpc-optim" else None
+        if runtimeparams:
+            params["passed_data"] = runtimeparams
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            shutil.copytree(emhass_conf["data_path"], data)
+            csv = data / "data_weather_forecast.csv"
+            lines = csv.read_text().splitlines()
+            lines = (lines * (rows // len(lines) + 1))[:rows]
+            csv.write_text("".join(line + "\n" for line in lines))
+            with time_machine.travel(now, tick=False):
+                return await set_input_data_dict(
+                    {**emhass_conf, "data_path": data},
+                    "profit",
+                    orjson.dumps(params).decode("utf-8"),
+                    orjson.dumps(runtimeparams).decode("utf-8") if runtimeparams else None,
+                    action,
+                    logger,
+                    get_data_from_file=True,
+                )
+
+    async def test_short_weather_csv_stops_the_cycle_before_the_solver(self):
+        for action in ("dayahead-optim", "naive-mpc-optim"):
+            with self.subTest(action=action):
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    result = await self._inputs(action, 24, FIXTURE_NOW)
+                self.assertFalse(result)
+                self.assertTrue(any("24 rows for 48 forecast steps" in m for m in logs.output))
+
+    async def test_weather_csv_that_covers_the_grid_builds_the_inputs(self):
+        for action in ("dayahead-optim", "naive-mpc-optim"):
+            for rows in (48, 60):  # exactly the grid, and a longer file
+                with self.subTest(action=action, rows=rows):
+                    result = await self._inputs(action, rows, FIXTURE_NOW)
+                    self.assertTrue(result)
+                    self.assertEqual(len(result["df_input_data_dayahead"]), 48)
+
+    async def test_weather_forecast_cache_treats_none_and_false_as_failure(self):
+        """The same predicate as the two optimisation actions: None and False are rejections."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "open-meteo"
+        params_json = orjson.dumps(params).decode("utf-8")
+        for forecast, expected in (
+            (None, False),
+            (False, False),
+            (pd.DataFrame({"yhat": [1.0]}), True),
+        ):
+            with self.subTest(forecast=type(forecast).__name__):
+                with (
+                    fixture_clock(),
+                    patch.object(
+                        Forecast, "get_weather_forecast", AsyncMock(return_value=forecast)
+                    ),
+                ):
+                    result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
+                self.assertIs(result, expected)
+
+    async def test_weather_forecast_cache_fails_when_solar_forecast_answers_with_an_error(self):
+        """forecast.solar returns False for an HTTP error (it does not raise), and that is a failure."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "solar.forecast"
+        params_json = orjson.dumps(params).decode("utf-8")
+        # a private data folder: a weather cache left in the repository's would be served instead
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            shutil.copytree(emhass_conf["data_path"], data, ignore=shutil.ignore_patterns("*.pkl"))
+            with fixture_clock(), aioresponses() as mocked:
+                mocked.get(re.compile(r"https://api\.forecast\.solar/estimate/.*"), status=429)
+                result = await weather_forecast_cache(
+                    {**emhass_conf, "data_path": data}, params_json, "{}", logger
+                )
+                requests = sum(len(v) for v in mocked.requests.values())
+        self.assertIs(result, False)
+        # an HTTP error is not retried, unlike a transport failure
+        self.assertEqual(requests, 1)
+
+    async def test_weather_forecast_cache_does_not_hide_a_raised_provider_failure(self):
+        """A failure the provider raises is not turned into the False result."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "open-meteo"
+        params_json = orjson.dumps(params).decode("utf-8")
+        with (
+            fixture_clock(),
+            patch.object(
+                Forecast,
+                "get_weather_forecast",
+                AsyncMock(side_effect=aiohttp.ClientConnectionError("down")),
+            ),
+            self.assertRaises(aiohttp.ClientConnectionError),
+        ):
+            await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
+
+    async def test_weather_forecast_cache_has_nothing_to_cache_for_csv(self):
+        """csv is a successful no-op: the file is never read and no forecast is built."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        with (
+            fixture_clock(),
+            patch.object(Forecast, "get_weather_forecast", AsyncMock()) as get_forecast,
+            patch.object(Forecast, "__init__", side_effect=AssertionError("no Forecast")),
+        ):
+            result = await weather_forecast_cache(
+                emhass_conf, orjson.dumps(params).decode("utf-8"), "{}", logger
+            )
+        self.assertIs(result, True)
+        get_forecast.assert_not_awaited()
+
+    async def test_weather_forecast_cache_still_runs_for_a_runtime_pv_list(self):
+        """A runtime PV list is not short-circuited: a valid one succeeds, a rejected one fails."""
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        params_json = orjson.dumps(params).decode("utf-8")
+        nan_list = [1.0] * 95 + [float("nan")]
+        for label, runtime, expected in (
+            ("valid", {"pv_power_forecast": [1.0] * 96}, True),
+            (
+                "p10 length mismatch",
+                {"pv_power_forecast": [1.0] * 96, "pv_power_forecast_p10": [0.5] * 3},
+                False,
+            ),
+            ("non-finite value", {"pv_power_forecast": nan_list}, False),
+        ):
+            with self.subTest(runtime=label), fixture_clock():
+                runtime = orjson.dumps(runtime).decode("utf-8")
+                with patch.object(
+                    Forecast,
+                    "get_weather_forecast",
+                    autospec=True,
+                    side_effect=Forecast.get_weather_forecast,
+                ) as spy:
+                    result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
+                self.assertIs(result, expected)
+                # the runtime list overrides the configured csv, so the csv no-op is not taken
+                spy.assert_awaited_once()
+                self.assertEqual(spy.await_args.args[1], "list")
+
+    async def test_undersized_runtime_pv_list_is_ignored_so_csv_stays_a_no_op(self):
+        """Per the forecast-input contract a short or mistyped list is ignored, not rejected.
+
+        The configured method then applies, as for the optimisation actions. For csv that is the
+        approved successful no-op, so the cache action reports success and builds no forecast.
+        """
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+        params["optim_conf"]["weather_forecast_method"] = "csv"
+        params_json = orjson.dumps(params).decode("utf-8")
+        for label, value in (("too short", [1.0, 2.0]), ("wrong type", "not a list")):
+            with self.subTest(pv_power_forecast=label), fixture_clock():
+                runtime = orjson.dumps({"pv_power_forecast": value}).decode("utf-8")
+                with patch.object(Forecast, "get_weather_forecast", AsyncMock()) as get_forecast:
+                    result = await weather_forecast_cache(emhass_conf, params_json, runtime, logger)
+                self.assertIs(result, True)
+                get_forecast.assert_not_awaited()
+
+    async def test_shipped_weather_csv_is_too_short_on_a_fall_back_day(self):
+        """The shipped 48-row file does not cover the 50 steps of a fall-back day (Paris)."""
+        fall_back = datetime(2025, 10, 25, 22, 10, tzinfo=UTC)
+        with self.assertLogs(logger, level="ERROR") as logs:
+            result = await self._inputs("dayahead-optim", self.CSV_ROWS_SHIPPED, fall_back)
+        self.assertFalse(result)
+        self.assertTrue(any("48 rows for 50 forecast steps" in m for m in logs.output))
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ import aiofiles
 import orjson
 import pandas as pd
 import pytest
+import time_machine
 
 from emhass import command_line, last_run, plan_store, utils, web_server
 from emhass.command_line import (
@@ -155,6 +156,16 @@ def _run(
     return asyncio.run(run())
 
 
+@contextmanager
+def _one_clock():
+    """Stop the clock mid-step, so that runs compared with each other plan the
+    same horizon: run seconds apart, they could otherwise fall either side of a
+    forecast-step boundary."""
+    now = pd.Timestamp.now(tz="UTC").floor("30min") + pd.Timedelta(minutes=10)
+    with time_machine.travel(now.to_pydatetime(), tick=False):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _cold_cache():
     """Each test starts and ends with an empty OptimizationCache, and leaves
@@ -221,6 +232,7 @@ def test_a_flag_that_cannot_be_read_raises(value):
         ({"entity_save": True}, True, True),
         ({"entity_save": "true"}, True, True),
         ({"weather_forecast_cache": True}, True, True),
+        ({"weather_forecast_cache_only": "maybe"}, True, True),
     ],
 )
 def test_which_requests_are_refused(runtime, dry, refused):
@@ -337,7 +349,7 @@ def test_a_dry_run_leaves_the_live_optimisation_untouched():
 def test_a_dry_run_plans_exactly_as_a_live_run(action):
     """The same inputs, each from a cold cache, give the same plan live and
     dry: a dry run changes what is written, never what is solved."""
-    with _data_copy() as data_path:
+    with _data_copy() as data_path, _one_clock():
         _, live = _run(data_path, action, dry=False)
         OptimizationCache.clear()
         _, dry = _run(data_path, action, dry=True)
@@ -346,19 +358,29 @@ def test_a_dry_run_plans_exactly_as_a_live_run(action):
 
 def test_a_dry_run_shows_what_a_per_step_import_cap_does():
     """The shadow evaluation in the docs: the live request with
-    maximum_power_from_grid as a per-step list. The dry plan holds the cap at
-    every step; the live plan, written and kept, is the uncapped one."""
+    maximum_power_from_grid as a per-step list. The dry run solves it (Optimal)
+    and gives exactly the plan a live run with that cap gives, which holds the
+    cap where it binds; the live plan it leaves in place is the uncapped one."""
     cap = [9000.0] * 48
     cap[16:24] = [500.0] * 8
-    with _data_copy() as data_path:
-        _, live = _run(data_path, "naive-mpc-optim", dry=False)
-        before = _files(data_path)
-        _, capped = _run(
-            data_path, "naive-mpc-optim", dry=True, runtime={"maximum_power_from_grid": cap}
-        )
-        assert _changed(before, _files(data_path)) == []
-    assert (capped["P_grid"].to_numpy() <= pd.Series(cap).to_numpy() + 1e-6).all()
-    assert live["P_grid"].iloc[16:24].max() > 500.0, "the cap should bind for the test to mean much"
+    with _one_clock():
+        with _data_copy() as data_path:
+            _, live = _run(data_path, "naive-mpc-optim", dry=False)
+            before = _files(data_path)
+            _, dry = _run(
+                data_path, "naive-mpc-optim", dry=True, runtime={"maximum_power_from_grid": cap}
+            )
+            assert _changed(before, _files(data_path)) == []
+        OptimizationCache.clear()
+        with _data_copy() as data_path:
+            _, live_capped = _run(
+                data_path, "naive-mpc-optim", dry=False, runtime={"maximum_power_from_grid": cap}
+            )
+    assert live["P_grid"].iloc[16:24].max() > 500.0, "the cap must bind for the test to mean much"
+    assert (dry["optim_status"] == "Optimal").all()
+    pd.testing.assert_frame_equal(dry, live_capped)
+    assert dry["P_grid"].iloc[16:24].max() <= 500.0 + 1e-6
+    assert not dry["P_grid"].equals(live["P_grid"])
 
 
 def _battery_identification(params: dict) -> None:
@@ -396,9 +418,10 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
         os.utime(model, (old, old))
         before = _files(data_path)
         fit = Forecast.adjust_pv_forecast_fit
-        with patch.object(
-            Forecast, "adjust_pv_forecast_fit", autospec=True, side_effect=fit
-        ) as spy:
+        with (
+            patch.object(Forecast, "adjust_pv_forecast_fit", autospec=True, side_effect=fit) as spy,
+            _writes_spied() as opened,
+        ):
             idd, res = _run(data_path, "dayahead-optim", dry=dry, configure=_adjusted_pv)
         changed = _changed(before, _files(data_path))
     assert isinstance(res, pd.DataFrame)
@@ -407,6 +430,7 @@ def test_a_stale_adjusted_pv_model_is_refitted_but_saved_only_live(dry):
         assert changed == []
     else:
         assert "adjust_pv_regressor.pkl" in changed
+        assert str(model) not in opened, "the model must be replaced whole, not rewritten in place"
 
 
 # --------------------------------------------------------------------------
@@ -698,6 +722,86 @@ def test_the_covariates_are_fetched_only_live(dry, saved):
         assert changed == []
     else:
         assert len(calls) == 1 and changed == ["cached-open-meteo-covariates.json"]
+
+
+@pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
+def test_a_weather_cache_removed_before_it_is_read_is_no_cache(dry):
+    """A live run can drop a stale cache between another run seeing it and
+    reading it. The reader then has no cache (and goes on as without one),
+    rather than failing."""
+    with _data_copy() as data_path:
+        missing = data_path / "weather_forecast_data.pkl"
+        missing.unlink(missing_ok=True)
+
+        async def read():
+            fcst = await _forecast(data_path, dry, logger)
+            fcst.weather_forecast_method = "open-meteo"
+            return await fcst.get_cached_forecast_data(str(missing))
+
+        assert asyncio.run(read()) is None
+
+
+class _Model:
+    """A stand-in for MLForecaster that fits at once, and pickles."""
+
+    def __init__(self, *args, **kwargs):
+        self.fitted = True
+
+    async def fit(self, **kwargs):
+        return pd.DataFrame(), None
+
+
+def test_the_ml_forecaster_model_is_replaced_whole():
+    """forecast-model-fit writes its model to a temporary file and moves it into
+    place: a dry run with load_forecast_method mlforecaster loading the model
+    at that moment reads the old one or the new one, never half of one."""
+    with _data_copy() as data_path, _writes_spied() as opened:
+        target = data_path / "a_test_mlf.pkl"
+        target.write_bytes(pickle.dumps("old model"))
+        idd = {
+            "df_input_data": pd.DataFrame({"load": [1.0, 2.0]}),
+            "params": {
+                "passed_data": {
+                    "model_type": "a_test",
+                    "var_model": "load",
+                    "sklearn_model": "KNeighborsRegressor",
+                    "num_lags": 1,
+                    "split_date_delta": "1h",
+                    "perform_backtest": False,
+                }
+            },
+            "emhass_conf": _conf(data_path),
+        }
+        with patch.object(command_line, "MLForecaster", _Model):
+            asyncio.run(command_line.forecast_model_fit(idd, logger, debug=False))
+        saved = pickle.loads(target.read_bytes())
+        leftovers = list(data_path.glob("*.tmp"))
+    assert isinstance(saved, _Model) and saved.fitted
+    assert opened and str(target) not in opened
+    assert leftovers == []
+
+
+def test_replace_file_leaves_the_old_file_until_the_new_one_is_whole(tmp_path):
+    """Until os.replace, readers see the old content; a write that fails leaves
+    the old file as it was, and no temporary file behind."""
+    target = tmp_path / "cache.json"
+    target.write_text("old")
+    seen = []
+    real_replace = os.replace
+
+    def replace(src, dst):
+        seen.append(pathlib.Path(dst).read_text())  # what a reader sees just before
+        real_replace(src, dst)
+
+    with patch("emhass.utils.os.replace", replace):
+        asyncio.run(utils.replace_file(target, "new"))
+    assert seen == ["old"] and target.read_text() == "new"
+
+    with patch("emhass.utils.os.replace", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            asyncio.run(utils.replace_file(target, "newer"))
+    assert target.read_text() == "new"
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_a_dry_run_does_not_save_the_weather_cache():
@@ -1028,16 +1132,22 @@ def test_a_dry_run_flag_left_in_saved_params_does_not_make_a_dry_run():
     assert "last_run.json" in changed and "opt_res_latest.csv" in changed, changed
 
 
-@pytest.mark.parametrize("failure", ["home-assistant", "inputs"])
+@pytest.mark.parametrize("failure", ["home-assistant", "inputs", "raises"])
 def test_a_failed_setup_closes_the_home_assistant_session(failure):
     """When the inputs cannot be built - Home Assistant's configuration is
-    unreadable, or a forecast is missing - set_input_data_dict closes the
-    session it opened before answering False."""
+    unreadable, a forecast is missing, or preparing them raises -
+    set_input_data_dict closes the session it opened, then answers False or
+    lets the error through."""
+    prepared = (
+        AsyncMock(side_effect=RuntimeError("preparing failed"))
+        if failure == "raises"
+        else AsyncMock(return_value=None)
+    )
     with (
         _data_copy() as data_path,
         patch.object(command_line.RetrieveHass, "close", AsyncMock()) as close,
         patch.object(command_line.RetrieveHass, "get_ha_config", AsyncMock(return_value=False)),
-        patch.object(command_line, "_prepare_dayahead_optim", AsyncMock(return_value=None)),
+        patch.object(command_line, "_prepare_dayahead_optim", prepared),
     ):
 
         async def build():
@@ -1049,12 +1159,135 @@ def test_a_failed_setup_closes_the_home_assistant_session(failure):
                 orjson.dumps(FORECASTS).decode(),
                 "dayahead-optim",
                 logger,
-                get_data_from_file=failure == "inputs",
+                get_data_from_file=failure != "home-assistant",
                 dry_run=True,
             )
 
-        assert asyncio.run(build()) is False
+        if failure == "raises":
+            with pytest.raises(RuntimeError, match="preparing failed"):
+                asyncio.run(build())
+        else:
+            assert asyncio.run(build()) is False
     close.assert_awaited_once()
+
+
+def test_an_oversized_body_is_refused_with_413():
+    """Quart caps a request body at MAX_CONTENT_LENGTH (16 MB), for this URL
+    as for /action/<action>. Over it, the dry run answers 413 - not 500 - and
+    nothing is built."""
+    big = b'{"x": "' + b"a" * (web_server.app.config["MAX_CONTENT_LENGTH"] + 1) + b'"}'
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "set_input_data_dict", AsyncMock()) as build,
+    ):
+
+        async def post():
+            response = await client.post(
+                "/api/v1/dry-run/naive-mpc-optim",
+                data=big,
+                headers={"Content-Type": "application/json"},
+            )
+            return response.status_code, await response.get_json()
+
+        status, answer = asyncio.run(post())
+    assert status == 413
+    _conforms(answer)
+    assert answer["errors"] and answer["errors"][-1].endswith("Nothing was run")
+    build.assert_not_called()
+
+
+def test_one_dry_run_runs_at_a_time():
+    """A dry run that arrives while another runs is refused with 429 and a
+    Retry-After, so a burst of dry runs never queues ahead of a live run. The
+    first one is unaffected."""
+    started, release = asyncio.Event(), asyncio.Event()
+    built = AsyncMock(return_value={"params": {"passed_data": {"dry_run": True}}})
+
+    async def wrapper(idd, log):
+        idd["run_record"] = last_run.snapshot("naive-mpc-optim", {}, "Optimal", False, 0.0, "1.0")
+        if not started.is_set():  # only the first one holds on, so a missing guard fails fast
+            started.set()
+            await release.wait()
+        return _plan()
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+        patch.object(web_server, "naive_mpc_optim", wrapper),
+    ):
+
+        async def both():
+            first = asyncio.create_task(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+            try:
+                await started.wait()
+                second = await client.post("/api/v1/dry-run/naive-mpc-optim", json={})
+            finally:
+                release.set()  # whatever happened, let the first one finish
+            first = await first
+            return (
+                (first.status_code, await first.get_json()),
+                (second.status_code, second.headers.get("Retry-After"), await second.get_json()),
+            )
+
+        (first_status, first_body), (second_status, retry, second_body) = asyncio.run(
+            asyncio.wait_for(both(), timeout=30)  # a queued second run would deadlock: fail instead
+        )
+    assert first_status == 200 and first_body["errors"] == []
+    assert second_status == 429 and retry == "2"
+    _conforms(second_body)
+    assert "one runs at a time" in second_body["errors"][-1]
+    assert built.await_count == 1
+
+
+def test_a_dry_run_on_another_worker_holds_the_slot():
+    """Gunicorn workers are processes, each with its own memory, so the
+    one-at-a-time rule is a lock on a file every worker opens. While another
+    worker holds it, a dry run here gets 429; once it is let go, it runs."""
+    built = AsyncMock(return_value={"params": {"passed_data": {"dry_run": True}}})
+
+    async def wrapper(idd, log):
+        idd["run_record"] = last_run.snapshot("naive-mpc-optim", {}, "Optimal", False, 0.0, "1.0")
+        return _plan()
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+        patch.object(web_server, "naive_mpc_optim", wrapper),
+    ):
+        slot = web_server._dry_run_slot()
+        assert not slot.is_relative_to(pathlib.Path(tmp)), "the slot is outside the data folder"
+        with open(slot, "a+") as other_worker:
+            assert utils.try_lock_file(other_worker)
+            try:
+                busy = asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+            finally:
+                utils.unlock_file(other_worker)
+        free = asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
+    assert busy.status_code == 429 and free.status_code == 200
+
+
+def test_accepted_flags_reach_the_run_as_booleans():
+    """weather_forecast_cache "false" and weather_forecast_cache_only "true" are
+    read strictly and passed on as False and True: the forecast reads them by
+    truthiness, and the string "false" would otherwise force a refresh past
+    the saved forecast."""
+    built = AsyncMock(return_value=False)
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        _web(pathlib.Path(tmp)) as client,
+        patch.object(web_server, "_load_params", AsyncMock(return_value=("{}", "profit"))),
+        patch.object(web_server, "set_input_data_dict", built),
+    ):
+        body = {"weather_forecast_cache": "false", "weather_forecast_cache_only": "true"}
+        asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json=body))
+    runtime = orjson.loads(built.call_args.args[3])
+    assert runtime["weather_forecast_cache"] is False
+    assert runtime["weather_forecast_cache_only"] is True
 
 
 # --------------------------------------------------------------------------
@@ -1168,10 +1401,18 @@ def test_a_dry_run_that_raises_answers_500_with_its_error():
 # --------------------------------------------------------------------------
 
 
-def test_the_command_line_refuses_a_dry_run():
-    """The command line has no dry run: asked for one, it refuses rather than
-    run live."""
-    argv = ["main", "--action", "dayahead-optim", "--runtimeparams", '{"dry_run": true}']
+@pytest.mark.parametrize(
+    "asked",
+    [
+        ["--runtimeparams", '{"dry_run": true}'],
+        ["--params", '{"passed_data": {"dry_run": true}}'],
+    ],
+    ids=["runtimeparams", "params"],
+)
+def test_the_command_line_refuses_a_dry_run(asked):
+    """The command line has no dry run: asked for one, in the runtime
+    parameters or in --params' passed_data, it refuses rather than run live."""
+    argv = ["main", "--action", "dayahead-optim", *asked]
     with (
         patch("sys.argv", argv),
         patch.object(command_line, "set_input_data_dict", AsyncMock()) as build,

@@ -39,6 +39,8 @@ _confirm terminal is in the root `emhass` directory before starting_
 
 **Create a developer environment:**
 
+Use a Python interpreter satisfying `requires-python` in `pyproject.toml`; see `.github/workflows/python-test.yml` for the interpreter/OS combinations currently tested in CI.
+
 Using the [`uv` package manager](https://docs.astral.sh/uv/):
 ```bash
 # With the 'test' packages to run unit tests locally.

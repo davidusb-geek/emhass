@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import time
+import uuid
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -1570,6 +1571,12 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"{_range}, got {raw!r}"
                 )
             tank[_zone_key] = value
+        # prior_heat is the lag model's initial condition (thermal kWh per step
+        # already in flight from previous rolling-MPC runs), so unlike the scalars
+        # above it is a per-step list and is passed through unconverted. Usually
+        # supplied per run via runtimeparams rather than written into the topology.
+        if s.get("prior_heat") is not None:
+            tank["prior_heat"] = s["prior_heat"]
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -1743,6 +1750,22 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
         "is_electric_load",
     }
 )
+
+
+def _prior_heat_values(series):
+    """(values, None) for a usable shared_tank_prior_heat list, else (None, why)."""
+    if isinstance(series, str) or not isinstance(series, list | tuple):
+        return None, f"must be a list of numbers, got {type(series).__name__}"
+    try:
+        # A boolean is not heat (float(True) would be 1.0).
+        if any(isinstance(v, bool) for v in series):
+            raise TypeError("boolean entry")
+        values = [float(v) for v in series]
+    except (TypeError, ValueError, OverflowError):
+        return None, f"={series!r} is not all numeric"
+    if any(v < 0 or not np.isfinite(v) for v in values):
+        return None, "must be finite and >= 0"
+    return values, None
 
 
 def _restore_configured_shared_tanks(params: dict, configured) -> None:
@@ -3093,6 +3116,15 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
             )
+            # Per-battery availability window (EV / V2G) and discharge energy
+            # budget. Runtime-only, default None (always available, no budget);
+            # shape validation happens in Optimization.perform_optimization.
+            params["passed_data"]["battery_availability"] = runtimeparams.get(
+                "battery_availability", None
+            )
+            params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
+                "battery_discharge_energy_max", None
+            )
             # Peak grid import already incurred this billing period (issue #623,
             # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
             # Coercion/validation happens in Optimization.perform_optimization.
@@ -3168,15 +3200,16 @@ async def treat_runtimeparams(
 
             params["passed_data"]["soc_init"] = _passthrough_soc_runtime("soc_init")
             params["passed_data"]["soc_final"] = _passthrough_soc_runtime("soc_final")
-            params["passed_data"]["soc_target"] = (
-                float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
-            )
+            params["passed_data"]["soc_target"] = _passthrough_soc_runtime("soc_target")
             for soc_name in ("soc_init", "soc_final", "soc_target"):
                 reject_soc_fraction_above_one(soc_name, params["passed_data"][soc_name], logger)
+            # A per-battery list (naive-mpc-optim) passes through unchanged so a
+            # runtimeparams blob shared with naive-mpc-optim does not crash here.
+            soc_target_timestep = runtimeparams.get("soc_target_timestep")
             params["passed_data"]["soc_target_timestep"] = (
-                int(runtimeparams["soc_target_timestep"])
-                if "soc_target_timestep" in runtimeparams
-                else None
+                soc_target_timestep
+                if soc_target_timestep is None or isinstance(soc_target_timestep, list)
+                else int(soc_target_timestep)
             )
             # Capacity-tariff peak floor: read it here too so dayahead-optim honours
             # the already-incurred billing-period peak instead of minimising the
@@ -3992,6 +4025,55 @@ async def treat_runtimeparams(
                         for k in range(len(ids), final_num_def_loads)
                     ]
 
+    # Per-tank in-flight heat for a lagged tank (thermal_inertia), keyed by tank id:
+    # the thermal kWh already delivered per step by previous rolling-MPC runs but not
+    # yet arrived. Sibling of shared_tank_start_temperatures - both are per-run state,
+    # not configuration - and likewise tolerant: bad entries warn and are skipped so a
+    # flaky feed degrades to the previous cold-start behaviour instead of failing.
+    if runtimeparams and "shared_tank_prior_heat" in runtimeparams:
+        overrides = runtimeparams["shared_tank_prior_heat"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_prior_heat must be an object mapping tank id to a list "
+                "of per-step thermal kWh, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            # JSON object keys are always strings: match tank ids as text.
+            tank_ids = {str(t.get("id")) for t in tanks if isinstance(t, dict)}
+            for tank_id, series in overrides.items():
+                tank_id = str(tank_id)
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_prior_heat: unknown tank id '%s' (known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                matching = [t for t in tanks if isinstance(t, dict) and str(t.get("id")) == tank_id]
+                if len(matching) > 1:
+                    # Two tanks whose ids read the same as text (0 and "0"): the
+                    # key cannot say which one is meant.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] matches %d tanks whose ids read the "
+                        "same; ignoring.",
+                        tank_id,
+                        len(matching),
+                    )
+                    continue
+                values, problem = _prior_heat_values(series)
+                if problem is not None:
+                    # A bad runtime value starts that tank cold for the run, as
+                    # documented: a configured prior_heat would be stale here.
+                    logger.warning(
+                        "shared_tank_prior_heat['%s'] %s; ignoring, the tank starts cold.",
+                        tank_id,
+                        problem,
+                    )
+                    matching[0].pop("prior_heat", None)
+                    continue
+                matching[0]["prior_heat"] = values
     # Canonicalise the structural multi-component capacity-charge params (#540
     # Part B): a config-UI singleton list, an empty list or a stringified list
     # is normalised, and a wrong-length interval list is rejected here - once,
@@ -5119,6 +5201,8 @@ async def build_params(
         "soc_final": None,
         "soc_target": None,
         "soc_target_timestep": None,
+        "battery_availability": None,
+        "battery_discharge_energy_max": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
         "capacity_charge_consideration": None,
@@ -5529,6 +5613,62 @@ def check_batt_params(
     return parameter[parameter_name]
 
 
+async def replace_file(path, content: str | bytes) -> None:
+    """Write ``content`` to ``path`` through a temporary file and os.replace, so a
+    reader running at the same time sees the old file or the new one, never a
+    partly written one."""
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
+            await f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+# A lock that one process holds and every other one - another Gunicorn worker
+# included - fails to take at once, rather than waits for.
+try:
+    import fcntl as _fcntl
+
+    def try_lock_file(f) -> bool:
+        """Lock the open file ``f`` if no other open file holds it. True if locked."""
+        try:
+            _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def unlock_file(f) -> None:
+        _fcntl.flock(f, _fcntl.LOCK_UN)
+
+except ImportError:
+    try:
+        import msvcrt as _msvcrt
+
+        def try_lock_file(f) -> bool:
+            """Lock the open file ``f`` if no other open file holds it. True if locked."""
+            f.seek(0)
+            try:
+                _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return False
+            return True
+
+        def unlock_file(f) -> None:
+            f.seek(0)
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+
+    except ImportError:  # no locking primitive: nothing to hold
+
+        def try_lock_file(f) -> bool:
+            return True
+
+        def unlock_file(f) -> None:
+            pass
+
+
 # A dry run solves as a live run does, returns the plan, and writes nothing.
 # It is a URL of its own, not a runtime parameter: an EMHASS that predates it
 # answers 404 there, where it would ignore an unknown parameter and run live.
@@ -5537,6 +5677,9 @@ DRY_RUN_ACTIONS = ("perfect-optim", "dayahead-optim", "naive-mpc-optim")
 # Runtime parameters that ask for a write. A dry run refuses them rather than
 # ignore them, so a caller never believes something was saved.
 DRY_RUN_REFUSED_KEYS = ("entity_save", "weather_forecast_cache")
+# The on/off parameters a dry run reads strictly, then passes on as booleans:
+# the forecast reads them by truthiness, and the string "false" is truthy.
+DRY_RUN_FLAGS = (*DRY_RUN_REFUSED_KEYS, "weather_forecast_cache_only")
 
 _FLAG_TRUE = ("true", "1", "yes", "on")
 _FLAG_FALSE = ("false", "0", "no", "off", "")
@@ -5591,8 +5734,8 @@ def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
         if dry_run and "dry_run" in runtimeparams and not asked:
             return "dry_run is false in the body of a dry run. Nothing was run"
         if dry_run:
-            for key in DRY_RUN_REFUSED_KEYS:
-                if read_flag(runtimeparams.get(key), key):
+            for key in DRY_RUN_FLAGS:
+                if read_flag(runtimeparams.get(key), key) and key in DRY_RUN_REFUSED_KEYS:
                     return f"{key} asks for a write, and a dry run writes nothing. Nothing was run"
     except ValueError as exc:
         return f"{exc}. Nothing was run"

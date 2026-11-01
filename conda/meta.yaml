@@ -17,13 +17,13 @@ build:
 
 requirements:
   host:
-    - python >=3.10,<3.13
+    - python >=3.11
     - pip
     - hatchling
     - setuptools
     - wheel
   run:
-    - python >=3.10,<3.13
+    - python >=3.11
     - numpy >=2.0.0,<2.3.0
     - scipy >=1.15.0
     - pandas >=2.2.0

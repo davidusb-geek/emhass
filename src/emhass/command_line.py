@@ -332,6 +332,12 @@ class OptimizationCache:
             "indoor_target_temperature",  # thermal_battery runtime param
             "q_input_initial",  # thermal inertia warm-start override
             "draw_off_demand",  # hot water tank daily profile (updates heating_demand param)
+            # NOT listed here on purpose: prior_heat. Although it is per-run state
+            # (like start_temperature), it is baked into the dead-zone constraint as
+            # a raw array at build time rather than parameterized, so it is
+            # STRUCTURAL - excluding it would let a cached problem silently reuse a
+            # stale initial condition. Move it here only together with making it a
+            # cp.Parameter refreshed before each solve.
         }
         # Plant parameters that are updated dynamically (no rebuild needed)
         plant_runtime_keys = {
@@ -2320,6 +2326,43 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
+    # Close the Home Assistant session when setting up fails, by an exception
+    # or by answering False: the caller closes it only after a success.
+    opened: list[RetrieveHass] = []
+    try:
+        input_data_dict = await _set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params,
+            runtimeparams,
+            set_type,
+            logger,
+            get_data_from_file,
+            dry_run,
+            opened,
+        )
+    except BaseException:
+        for rh in opened:
+            await rh.close()
+        raise
+    if not input_data_dict:
+        for rh in opened:
+            await rh.close()
+    return input_data_dict
+
+
+async def _set_input_data_dict(
+    emhass_conf: dict,
+    costfun: str,
+    params: str,
+    runtimeparams: str,
+    set_type: str,
+    logger: logging.Logger,
+    get_data_from_file: bool | None,
+    dry_run: bool,
+    opened: list,
+) -> dict:
+    """set_input_data_dict's work. Each RetrieveHass it creates goes in ``opened``."""
     stage_times = {}
     logger.info("Setting up needed data")
     # Parse Parameters
@@ -2364,13 +2407,13 @@ async def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file,
     )
+    opened.append(rh)
     # Retrieve HA config
     if get_data_from_file:
         async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             content = await inp.read()
             _, _, _, rh.ha_config = pickle.loads(content)
     elif not await rh.get_ha_config():
-        await rh.close()
         return False
     if isinstance(params, dict):
         params_str = orjson.dumps(params).decode("utf-8")
@@ -2565,7 +2608,6 @@ async def set_input_data_dict(
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
         result = {}
     if result is None:
-        await rh.close()
         return False
     # Opt-in battery self-identification (observe/suggest). Runs alongside the
     # optimization prep for the two live optim actions; never affects the
@@ -2642,6 +2684,11 @@ async def weather_forecast_cache(
         logger,
         emhass_conf,
     )
+    # csv reads the caller's file on every run, so there is nothing to cache. The cache action
+    # doubles the horizon, which a correctly sized file would not cover.
+    if optim_conf["weather_forecast_method"] == "csv":
+        logger.info("weather_forecast_method 'csv' is not cached: nothing to do")
+        return True
     # Make sure weather_forecast_cache is true
     if (params is not None) and (params != "null"):
         params = orjson.loads(params)
@@ -2652,7 +2699,7 @@ async def weather_forecast_cache(
     # Create Forecast object
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger)
     result = await fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
-    if isinstance(result, bool) and not result:
+    if result is None or (isinstance(result, bool) and not result):
         return False
 
     return True
@@ -3010,6 +3057,12 @@ async def naive_mpc_optim(
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
     soc_target = input_data_dict["params"]["passed_data"].get("soc_target", None)
     soc_target_timestep = input_data_dict["params"]["passed_data"].get("soc_target_timestep", None)
+    battery_availability = input_data_dict["params"]["passed_data"].get(
+        "battery_availability", None
+    )
+    battery_discharge_energy_max = input_data_dict["params"]["passed_data"].get(
+        "battery_discharge_energy_max", None
+    )
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
     capacity_charge_window = input_data_dict["params"]["passed_data"].get(
         "capacity_charge_window", None
@@ -3042,6 +3095,8 @@ async def naive_mpc_optim(
             soc_final,
             soc_target=soc_target,
             soc_target_timestep=soc_target_timestep,
+            battery_availability=battery_availability,
+            battery_discharge_energy_max=battery_discharge_energy_max,
             current_period_peak=current_period_peak,
             capacity_charge_window=capacity_charge_window,
             capacity_charge_consideration=capacity_charge_consideration,
@@ -3145,9 +3200,9 @@ async def forecast_model_fit(
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        async with aiofiles.open(filename_path, "wb") as outp:
-            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
-            logger.debug("saved model to " + str(filename_path))
+        # Whole, so a run loading the model at the same moment never reads half of it.
+        await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
+        logger.debug("saved model to " + str(filename_path))
     return df_pred, df_pred_backtest, mlf
 
 
@@ -3422,9 +3477,9 @@ async def forecast_model_tune(
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        async with aiofiles.open(filename_path, "wb") as outp:
-            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
-            logger.debug("Saved model to " + str(filename_path))
+        # Whole, so a run loading the model at the same moment never reads half of it.
+        await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
+        logger.debug("Saved model to " + str(filename_path))
     return df_pred_optim, mlf
 
 
@@ -3957,7 +4012,8 @@ async def _publish_deferrable_states(
         col_name = f"P_deferrable{k}"
         if col_name not in opt_res_latest.columns or k >= len(custom_state):
             continue
-        nominal_power = nominal[k] if k < len(nominal) else 0.0
+        # A sequence load gives its power profile as a list: use its peak power.
+        nominal_power = float(np.max(np.atleast_1d(nominal[k]))) if k < len(nominal) else 0.0
         states = opt_res_latest[col_name].apply(
             lambda power, npow=nominal_power: _deferrable_power_to_state(power, npow)
         )
@@ -4654,14 +4710,17 @@ async def main():
     # Add any passed params from args to params
     if args.params:
         params.update(orjson.loads(args.params))
-    # A dry run is the web server's dry-run URL. Asked for here, it is refused
-    # rather than run live, which would replace the plan the caller meant to keep.
+    # A dry run is the web server's dry-run URL. Asked for here, in the runtime
+    # parameters or in --params' passed_data, it is refused rather than run
+    # live, which would replace the plan the caller meant to keep.
     try:
         runtime = orjson.loads(args.runtimeparams) if args.runtimeparams else {}
     except orjson.JSONDecodeError:
         runtime = {}  # reported where the parameters are read
-    if isinstance(runtime, dict):
-        problem = utils.dry_run_request_problem(runtime, dry_run=False)
+    for asked in (runtime, params.get("passed_data")):
+        problem = (
+            utils.dry_run_request_problem(asked, dry_run=False) if isinstance(asked, dict) else None
+        )
         if problem:
             logger.error(problem)
             raise Exception(problem)

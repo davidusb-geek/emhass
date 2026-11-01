@@ -8,7 +8,7 @@ const name = 'battery_charge_power_derating';
 const definition = { input: 'array.array.float', default_value: [], friendly_name: 'Charge power derating', Description: 'Test' };
 function setup(raw) {
   const input = { type: 'text', value: raw };
-  const ctx = { window: {}, console, document: {
+  const ctx = { window: {}, console, AbortSignal, document: {
     getElementsByClassName: () => [{}],
     getElementById: id => id === name ? { tagName: 'DIV', getElementsByClassName: () => [input] } : null,
   }, fetch: async (url, options) => { ctx.sent = JSON.parse(options.body); return { status: 200, json: async () => [] }; } };

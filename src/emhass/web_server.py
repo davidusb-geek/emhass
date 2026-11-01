@@ -3,11 +3,13 @@
 import argparse
 import asyncio
 import contextvars
+import hashlib
 import logging
 import os
 import pickle
 import platform
 import re
+import tempfile
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -21,6 +23,7 @@ import yaml
 from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
+from werkzeug.exceptions import HTTPException
 
 from emhass import last_run, plan_store
 from emhass.command_line import (
@@ -44,6 +47,7 @@ from emhass.command_line import (
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     DRY_RUN_ACTIONS,
+    DRY_RUN_FLAGS,
     HEAT_TOPOLOGY_KEYS,
     SocFractionError,
     build_config,
@@ -59,6 +63,9 @@ from emhass.utils import (
     get_keys_to_mask,
     inverter_power_curve_faults,
     param_to_config,
+    read_flag,
+    try_lock_file,
+    unlock_file,
 )
 
 app = Quart(__name__)
@@ -110,6 +117,15 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
 
 
 app.logger.addHandler(_DryRunLog())
+
+
+def _dry_run_slot() -> Path:
+    """The lock file that lets one dry run at a time run on this EMHASS, across
+    all its Gunicorn workers. It is outside the data folder, where a dry run
+    writes nothing, and named after that folder, so two EMHASS on one host
+    each have their own."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
 
 
 # Add custom filter for trusted HTML content
@@ -644,9 +660,14 @@ async def _handle_action_dispatch(
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
         try:
-            await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except SocFractionError:
-            return await grab_log(action_str), 400
+            success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        except SocFractionError as exc:
+            # The message names only this request's own value, unlike the shared log's tail.
+            return f"EMHASS >> ERROR: {exc}\n", 400
+        if not success:
+            # Not the shared action-log tail: it can hold the lines of concurrent requests, which
+            # include their runtime parameters. The reason is in the action log.
+            return "EMHASS >> Weather forecast failed, see the action log for the reason... \n", 400
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 
     if action_name == "export-influxdb-to-csv":
@@ -906,14 +927,35 @@ async def api_v1_dry_run(action_name: str):
 
     HTTP 200: the solver ran; ``status`` says how (ok, infeasible, error).
     HTTP 400: refused, or stopped before the solver; ``status`` is "not-run".
+    HTTP 413: the body is over MAX_CONTENT_LENGTH (16 MB); ``status`` is "not-run".
+    HTTP 429: another dry run is running (one runs at a time); ``status`` is "not-run".
     HTTP 500: the run failed; ``status`` is "not-run".
 
     Schema: docs/api/v1/dry-run.schema.json (JSON Schema draft 2020-12).
     """
     records: list[tuple[int, str]] = []
     token = _dry_run_log.set(records)
+    headers = {}
     try:
-        body, code = await _dry_run(action_name)
+        # One dry run at a time: a burst of them, which cold-solve, must never
+        # queue ahead of the live MPC run. One that arrives while another runs,
+        # on this worker or another, gets 429.
+        with open(_dry_run_slot(), "a+") as slot:
+            if not try_lock_file(slot):
+                app.logger.error(
+                    "Another dry run is running, and one runs at a time. Retry shortly. "
+                    "Nothing was run"
+                )
+                body, code = {"status": "not-run", "plan": None}, 429
+                headers["Retry-After"] = "2"
+            else:
+                try:
+                    body, code = await _dry_run(action_name)
+                finally:
+                    unlock_file(slot)
+    except HTTPException as exc:  # e.g. 413: the body is over MAX_CONTENT_LENGTH
+        app.logger.error(f"{exc.description} Nothing was run")
+        body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
         app.logger.exception(f"Dry run of {action_name} failed: {exc}")
         body, code = {"status": "not-run", "plan": None}, 500
@@ -929,6 +971,7 @@ async def api_v1_dry_run(action_name: str):
     response = await make_response(orjson.dumps(response_body), code)
     response.headers["Content-Type"] = "application/json"
     response.headers["Cache-Control"] = "no-store"
+    response.headers.update(headers)
     return response
 
 
@@ -968,6 +1011,9 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         app.logger.error(problem)
         return not_run, 400
     runtime.pop("dry_run", None)
+    for key in DRY_RUN_FLAGS:
+        if key in runtime:
+            runtime[key] = read_flag(runtime[key], key)
 
     if runtime:
         app.logger.info(f"Passed runtime parameters: {runtime}")

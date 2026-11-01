@@ -74,7 +74,7 @@ _FORECAST_LISTS = {
 # ───────────────────────── soc_init/soc_final pass-through ─────────────────────
 
 
-def test_naive_mpc_soc_lists_reach_perform_naive_mpc_optim_n2():
+def test_naive_mpc_soc_lists_reach_perform_naive_mpc_optim_n2(tmp_path):
     """#610: runtime soc_init/soc_final lists of length N=2 must reach
     perform_naive_mpc_optim unchanged (positional args 5/6 per command_line.py)."""
     runtimeparams = dict(_FORECAST_LISTS)
@@ -86,36 +86,42 @@ def test_naive_mpc_soc_lists_reach_perform_naive_mpc_optim_n2():
         runtimeparams,
         "naive-mpc-optim",
     )
+    # The wrapper records last_run.json and plan_latest.json under data_path; keep them out of data/
+    idd["emhass_conf"] = {**idd["emhass_conf"], "data_path": tmp_path}
     idx = idd["df_input_data_dayahead"].index[:10]
     mock_res = pd.DataFrame(
         {"P_PV": 0.0, "P_Load": 0.0, "P_grid": 0.0, "optim_status": "Optimal"}, index=idx
     )
     idd["opt"].perform_naive_mpc_optim = MagicMock(return_value=mock_res)
     asyncio.run(naive_mpc_optim(idd, logger, debug=True))
+    assert (tmp_path / "last_run.json").is_file()  # the run was recorded in tmp_path, not data/
     call = idd["opt"].perform_naive_mpc_optim.call_args
     assert call.args[4] == [0.3, 0.5]
     assert call.args[5] == [0.4, 0.6]
 
 
-def test_naive_mpc_soc_scalar_broadcasts_shape_preserved_n1():
+def test_naive_mpc_soc_scalar_broadcasts_shape_preserved_n1(tmp_path):
     """Regression: N=1 (default) keeps soc_init/soc_final as plain scalars
     reaching perform_naive_mpc_optim, byte-identical to master."""
     runtimeparams = dict(_FORECAST_LISTS)
     runtimeparams.update({"prediction_horizon": 10, "soc_init": 0.5, "soc_final": 0.6})
     idd = build_input_data_dict({"set_use_battery": True}, runtimeparams, "naive-mpc-optim")
+    # The wrapper records last_run.json and plan_latest.json under data_path; keep them out of data/
+    idd["emhass_conf"] = {**idd["emhass_conf"], "data_path": tmp_path}
     idx = idd["df_input_data_dayahead"].index[:10]
     mock_res = pd.DataFrame(
         {"P_PV": 0.0, "P_Load": 0.0, "P_grid": 0.0, "optim_status": "Optimal"}, index=idx
     )
     idd["opt"].perform_naive_mpc_optim = MagicMock(return_value=mock_res)
     asyncio.run(naive_mpc_optim(idd, logger, debug=True))
+    assert (tmp_path / "last_run.json").is_file()  # the run was recorded in tmp_path, not data/
     call = idd["opt"].perform_naive_mpc_optim.call_args
     assert call.args[4] == 0.5
     assert call.args[5] == 0.6
     assert not isinstance(call.args[4], list)
 
 
-def test_dayahead_soc_lists_reach_perform_dayahead_forecast_optim_n2():
+def test_dayahead_soc_lists_reach_perform_dayahead_forecast_optim_n2(tmp_path):
     """#610: the dayahead branch of treat_runtimeparams goes through the
     else-branch (_passthrough_soc_runtime in utils.py), which used to crash
     on float() for a list. Must now pass runtime soc_init/soc_final lists
@@ -128,30 +134,36 @@ def test_dayahead_soc_lists_reach_perform_dayahead_forecast_optim_n2():
         runtimeparams,
         "dayahead-optim",
     )
+    # The wrapper records last_run.json and plan_latest.json under data_path; keep them out of data/
+    idd["emhass_conf"] = {**idd["emhass_conf"], "data_path": tmp_path}
     idx = idd["df_input_data_dayahead"].index
     mock_res = pd.DataFrame(
         {"P_PV": 0.0, "P_Load": 0.0, "P_grid": 0.0, "optim_status": "Optimal"}, index=idx
     )
     idd["opt"].perform_dayahead_forecast_optim = MagicMock(return_value=mock_res)
     asyncio.run(dayahead_forecast_optim(idd, logger, debug=True))
+    assert (tmp_path / "last_run.json").is_file()  # the run was recorded in tmp_path, not data/
     call = idd["opt"].perform_dayahead_forecast_optim.call_args
     assert call.kwargs["soc_init"] == [0.3, 0.5]
     assert call.kwargs["soc_final"] == [0.4, 0.6]
 
 
-def test_dayahead_soc_scalar_reaches_perform_dayahead_forecast_optim_n1():
+def test_dayahead_soc_scalar_reaches_perform_dayahead_forecast_optim_n1(tmp_path):
     """Regression: N=1 scalar soc_init/soc_final still reaches
     perform_dayahead_forecast_optim as a plain float (today's behaviour,
     unaffected by the else-branch list-safety fix)."""
     runtimeparams = dict(_FORECAST_LISTS)
     runtimeparams.update({"soc_init": 0.5, "soc_final": 0.6})
     idd = build_input_data_dict({"set_use_battery": True}, runtimeparams, "dayahead-optim")
+    # The wrapper records last_run.json and plan_latest.json under data_path; keep them out of data/
+    idd["emhass_conf"] = {**idd["emhass_conf"], "data_path": tmp_path}
     idx = idd["df_input_data_dayahead"].index
     mock_res = pd.DataFrame(
         {"P_PV": 0.0, "P_Load": 0.0, "P_grid": 0.0, "optim_status": "Optimal"}, index=idx
     )
     idd["opt"].perform_dayahead_forecast_optim = MagicMock(return_value=mock_res)
     asyncio.run(dayahead_forecast_optim(idd, logger, debug=True))
+    assert (tmp_path / "last_run.json").is_file()  # the run was recorded in tmp_path, not data/
     call = idd["opt"].perform_dayahead_forecast_optim.call_args
     assert call.kwargs["soc_init"] == 0.5
     assert call.kwargs["soc_final"] == 0.6

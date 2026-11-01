@@ -481,9 +481,9 @@ horizon or a rich [heat topology](heat_topology.md).
 
 Concretely: a 48-hour (96-step) day-ahead optimization of a hybrid system with
 several tanks and mutual-exclusion groups can fail to solve within any practical
-`lp_solver_timeout` at a tight gap: the solve times out and EMHASS falls back to the
-relaxed plan (`Optimal (Relaxed)`, without the on/off constraints), because the
-solver keeps trying to *prove* optimality long after it has *found* the optimum.
+`lp_solver_timeout` at a tight gap: the solve times out and EMHASS publishes the
+best plan found so far (`Optimal (Incumbent)`), because the solver keeps trying to
+*prove* optimality long after it has *found* the optimum.
 Loosening `lp_solver_mip_rel_gap` a little (e.g. from the default `0.01` to `0.02`)
 tells it to stop once the solution is provably within 2% of optimal - which can
 collapse the same problem to a few seconds. In practice the quality cost is negligible (the returned plan is

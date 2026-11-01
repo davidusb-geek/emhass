@@ -146,7 +146,6 @@ p {
 
 a {
   background-color: transparent;
-  -webkit-text-decoration-skip: objects;
   color: darkblue;
   text-decoration: none;
 }
@@ -224,7 +223,7 @@ strong {
 
 mark {
   background-color: darkblue;
-  color: #3d3d3d;
+  color: #ccf3ff;
 }
 
 sub,
@@ -562,6 +561,30 @@ https://github.com/feathericons/feather */
   background: none !important;
 }
 
+/* icon-only buttons (page and view toggles): keep the look of the links they replaced */
+.icon-button,
+.icon-button:hover,
+.icon-button:active {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: none;
+}
+
+.icon-button {
+  color: darkblue;
+  line-height: inherit;
+  animation: none;
+}
+
+.icon-button:hover {
+  color: #251fe3;
+}
+
+.icon-button:active {
+  color: #070f71;
+}
+
 /* -------------- */
 
 /* EMHASS added style */
@@ -826,6 +849,12 @@ tr:hover td:last-child {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    animation: none;
+  }
+}
+
 .tick {
   /* tick symbol  */
   color: #bfebbc;
@@ -891,7 +920,6 @@ select,
 
 /* Alert box styling */
 .alert {
-  display: box;
   overflow-x: auto;
   align-items: center;
   align-self: center;
@@ -1036,7 +1064,8 @@ select,
 
 .header-footer h4,
 .header-footer div,
-.header-footer a {
+.header-footer a,
+.header-footer .icon-button {
   line-height: 0;
   margin: auto 0;
 
@@ -1320,12 +1349,18 @@ p {
     border: #3f3f3f;
   }
 
-  a:hover {
+  .icon-button {
+    color: #ccf3ff;
+  }
+
+  a:hover,
+  .icon-button:hover {
     color: #d2e8f0;
   }
 
 
-  a:active {
+  a:active,
+  .icon-button:active {
     color: #aaccd6;
   }
 

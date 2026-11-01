@@ -7,7 +7,11 @@
 
 //on page reload get saved data
 window.onload = async function () {
-  await loadBasicOrAdvanced();
+  try {
+    await loadBasicOrAdvanced();
+  } catch (error) {
+    showViewError(error);
+  }
   initStickyTables();
 
   //add listener for basic and advanced html switch
@@ -16,23 +20,34 @@ window.onload = async function () {
     .addEventListener("click", () => SwitchBasicOrAdvanced());
 };
 
+//action buttons of the advanced view
+const ADVANCED_ACTION_IDS = [
+  "dayahead-optim",
+  "forecast-model-fit",
+  "forecast-model-predict",
+  "forecast-model-tune",
+  "forecast-calibration",
+  "regressor-model-fit",
+  "regressor-model-predict",
+  "export-influxdb-to-csv",
+  "perfect-optim",
+  "publish-data",
+  "naive-mpc-optim",
+];
+
+//elements the view needs once loaded (loadButtons, the loader status, the saved inputs), per view
+const VIEW_CONTROL_IDS = {
+  basic: ["dayahead-optim-basic", "loader"],
+  advanced: [...ADVANCED_ACTION_IDS, "input-plus", "input-minus", "input-select", "input-clear", "loader", "input-container"],
+};
+//id of the first element of each template, which identifies the displayed view
+const VIEW_ROOT_ID = { basic: "basic", advanced: "advance" };
+
 //add listeners to buttons (based on page)
 async function loadButtons(page) {
   switch (page) {
     case "advanced":
-      [
-        "dayahead-optim",
-        "forecast-model-fit",
-        "forecast-model-predict",
-        "forecast-model-tune",
-        "forecast-calibration",
-        "regressor-model-fit",
-        "regressor-model-predict",
-        "export-influxdb-to-csv",
-        "perfect-optim",
-        "publish-data",
-        "naive-mpc-optim",
-      ].forEach((id) =>
+      ADVANCED_ACTION_IDS.forEach((id) =>
         document
           .getElementById(id)
           .addEventListener("click", () => formAction(id, "advanced"))
@@ -50,7 +65,7 @@ async function loadButtons(page) {
         .addEventListener("click", () => ClearInputData());
       
       // Check if InfluxDB is enabled and show/hide export section
-      await checkInfluxDBAndShowExport();
+      checkInfluxDBAndShowExport(); //not awaited: it handles its own errors and must not delay the view setup
       break;
     case "basic":
       document
@@ -60,36 +75,54 @@ async function loadButtons(page) {
   }
 }
 
+const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
+
+//a template or export-check request still pending after this long fails instead of leaving the page waiting
+//(browsers without AbortSignal.timeout keep waiting, as before). Written without `?.`: this page's script has no
+//ES2020 syntax (optional chaining), and a parse error would break the whole page, not just the timeout.
+const REQUEST_TIMEOUT_MS = 30000;
+
+//fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
+async function loadView(page) {
+  const file = page + ".html";
+  const htmlData = await getHTMLData(file);
+  const probe = document.createElement("template");
+  probe.innerHTML = htmlData;
+  const missing = VIEW_CONTROL_IDS[page].filter((id) => probe.content.querySelector(`#${id}`) === null);
+  const root = probe.content.firstElementChild;
+  if (root === null || root.id !== VIEW_ROOT_ID[page]) {
+    missing.unshift(VIEW_ROOT_ID[page]);
+  }
+  if (missing.length) {
+    throw new Error(`${file} is incomplete (missing ${missing.join(", ")})`);
+  }
+  document.getElementById("TabSelection").innerHTML = htmlData; //container element to house basic or advanced data
+  await loadButtons(page); //load buttons based on basic or advanced
+  if (document.getElementById("alert-text").textContent.includes(VIEW_ERROR_PREFIX)) {
+    document.getElementById("alert").style.display = "none"; //only a failed earlier view load is recovered, not another action's error
+  }
+}
+
 //on check present basic or advanced html inside form element
 async function loadBasicOrAdvanced(RequestedPage) {
-  let basicFile = "basic.html";
-  let advencedFile = "advanced.html";
-  let formContainer = document.getElementById("TabSelection"); //container element to house basic or advanced data
-  let htmlData
   //first check any function  arg
   if (arguments.length == 1) {
     switch (RequestedPage) {
       case "basic":
-        htmlData = await getHTMLData(basicFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("basic"); //load buttons based on basic or advanced
+        await loadView("basic");
         if (testStorage()) {
           localStorage.setItem("TabSelection", "basic");
         } //remember mode (save to localStorage)
         return "basic"; //return basic to get saved data
       case "advanced":
-        htmlData = await getHTMLData(advencedFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("advanced");
+        await loadView("advanced");
         if (testStorage()) {
           localStorage.setItem("TabSelection", "advanced");
         }
         getSavedData();
         return "advanced";
       default:
-        htmlData = await getHTMLData(advencedFile);
-        formContainer.innerHTML = htmlData;
-        loadButtons("advanced");
+        await loadView("advanced");
         getSavedData();
         return "advanced";
     }
@@ -101,41 +134,56 @@ async function loadBasicOrAdvanced(RequestedPage) {
       localStorage.getItem("TabSelection") === "advanced"
     ) {
       //if advance
-      let htmlData = await getHTMLData(advencedFile);
-      formContainer.innerHTML = htmlData;
-      loadButtons("advanced");
+      await loadView("advanced");
       getSavedData();
       return "advanced";
     } else {
       //else run basic (first time)
-      htmlData = await getHTMLData(basicFile);
-      formContainer.innerHTML = htmlData;
-      loadButtons("basic");
+      await loadView("basic");
       return "basic";
     }
   } else {
     //if localStorage not supported, set to advanced page
-    htmlData = await getHTMLData(advencedFile);
-    formContainer.innerHTML = htmlData;
-    loadButtons("advanced");
+    await loadView("advanced");
     return "advanced";
   }
 }
 
 //on button press, check current displayed page data and switch
-function SwitchBasicOrAdvanced() {
-  let formContainerChildID =
-    document.getElementById("TabSelection").firstElementChild.id;
-  if (formContainerChildID === "basic") {
-    loadBasicOrAdvanced("advanced");
-  } else {
-    loadBasicOrAdvanced("basic");
+let switching = false; //a click while a switch is still loading is ignored, so loads cannot overlap
+async function SwitchBasicOrAdvanced() {
+  if (switching) {
+    return;
   }
+  switching = true;
+  try {
+    const current = document.getElementById("TabSelection").firstElementChild;
+    await loadBasicOrAdvanced(current && current.id === "basic" ? "advanced" : "basic");
+  } catch (error) {
+    showViewError(error); //the current view is left untouched
+  } finally {
+    switching = false;
+  }
+}
+
+//report a failed view load in the alert box (the view's own status icons may not exist)
+function showViewError(error) {
+  document.getElementById("alert-text").textContent =
+    "\r\n\u2022 " + VIEW_ERROR_PREFIX + error.message;
+  document.getElementById("alert").style.display = "block";
+  document.getElementById("alert").style.textAlign = "left";
 }
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-  const response = await fetch(`static/` + htmlFile);
+  //revalidate: the template changes with the release, and loadView checks it against this script
+  const response = await fetch(`static/` + htmlFile, {
+    cache: "no-cache",
+    signal: AbortSignal.timeout && AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`${htmlFile} request failed with HTTP ${response.status}`);
+  }
   let blob = await response.blob(); //get data blob
   let htmlTemplateData = await new Response(blob).text(); //obtain html from blob
   return htmlTemplateData;
@@ -365,9 +413,12 @@ function getSavedData() {
       }
       if (selectElement.value == "List") {
         //if List is selected, show saved json data into box
-        let storedJson = JSON.parse(
-          localStorage.getItem("input_container_content")
-        );
+        let storedJson = {};
+        try {
+          storedJson = JSON.parse(localStorage.getItem("input_container_content")) || {};
+        } catch (error) {
+          console.error("Ignoring invalid saved runtime data:", error); //the view is still usable without it
+        }
         if (Object.keys(storedJson).length > 0) {
           input_container.innerHTML = "";
           for (const ikey in storedJson) {
@@ -555,11 +606,18 @@ async function ClearInputElements() {
 //}
 
 // Check if InfluxDB is configured and show/hide export section
+let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
+  const thisCheck = ++influxChecks;
   try {
-    const response = await fetch("/get-config");
+    const response = await fetch("/get-config", {
+      signal: AbortSignal.timeout && AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (response.ok) {
       const config = await response.json();
+      if (thisCheck !== influxChecks) {
+        return; //superseded by a newer check
+      }
       const exportSection = document.getElementById("export-influxdb-section");
       if (exportSection) {
         // Show export if InfluxDB is configured (has host and port)

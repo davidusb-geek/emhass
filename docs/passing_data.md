@@ -55,6 +55,8 @@ The possible dictionary keys to pass data are:
 
 - `shared_tank_start_temperatures` a per-storage start-temperature override keyed by storage id, e.g. `{"dhw": 48.5}`. It is applied after the `heat_topology` compile, so it patches manual and compiled tanks alike: the per-run equivalent of `soc_init` or `heater_start_temperatures` for an MPC loop that reads a live tank temperature sensor. Unknown ids and non-numeric values are ignored with a warning.
 
+- `shared_tank_prior_heat` per-storage heat already produced but not yet arrived because of `thermal_inertia`, keyed by storage id: thermal kWh for each of the last L steps, oldest first, e.g. `{"house": [0.8, 1.4]}`. The initial condition for the lag under rolling MPC (see [heat_topology.md](heat_topology.md)). Absent keeps the cold-start behaviour; a malformed entry is ignored with a warning.
+
 - `pv_power_forecast` for the central (P50) PV power production forecast.
 
 - `pv_power_forecast_p10` as an optional conservative P10 companion to `pv_power_forecast`. It must use the same representation (list or timestamped mapping) and the same source timeline as P50. When present, the pair is validated/aligned together and `weather_forecast_pv_quantile_bias` applies `bias * P10 + (1 - bias) * P50`. Omitting the companion leaves the existing P50-only behavior unchanged.
@@ -270,6 +272,36 @@ rest_command:
 ```{warning}
 The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
 ```
+
+### Batteries that are not always connected: EV / V2G availability windows (naive-mpc-optim)
+
+With `number_of_batteries > 1` one of the batteries can be an electric vehicle on a bidirectional (V2G / V2H) charger. Such a battery is only part of the system while the car is plugged in, it must reach a charge level by the time the driver leaves, and the car itself usually limits how much and how deep it may be discharged. Three optional runtime keys (only used by `naive-mpc-optim`) model this without changing `number_of_batteries` between runs, so the problem structure, the optimization cache and the published per-battery sensors stay the same whether the car is there or not:
+
+- `battery_availability`: one entry per battery. Each entry is `null` (always available, the default), a number, or a list with one value per timestep. A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected) that scales that battery's `battery_charge_power_max` and `battery_discharge_power_max` for that timestep: `1` = connected at full power, `0` = not connected. While a battery is unavailable it neither charges nor discharges, so its SOC stays frozen. A list shorter than the horizon is padded with its last value. With a single battery a flat list is read as its time series.
+- `battery_discharge_energy_max`: one entry per battery, the maximum energy (Wh, battery side) the battery may deliver over the horizon, or `null` for no cap. Use it for a V2G warranty or cycle budget (for example a car whose manufacturer allows a fixed number of discharged kWh over its lifetime). The cap applies to one optimization run only: EMHASS does not remember what was discharged in earlier runs, so send the budget that is still left on every MPC call. A bare number applies to every battery.
+- `soc_target` / `soc_target_timestep` (see the previous section) also accept one entry per battery. A battery with a target but no timestep (`null`) gets the target at its **last available timestep**, i.e. the departure. Because the SOC is frozen after departure, also pass `soc_final` for that battery equal to the target, so the end-of-horizon SOC agrees with it (EMHASS logs a warning when it is lower).
+
+A minimum SOC below which the car refuses to discharge is the per-battery `battery_minimum_state_of_charge`; a lower discharge power accepted by the car is the per-battery `battery_discharge_power_max`. If a battery starts below its minimum SOC and cannot recover into its band inside its availability window (for instance a car that is not plugged in at all), the minimum is not enforced for it in that run instead of making the problem infeasible. The same holds for a battery above its maximum SOC that cannot come down inside its window or its discharge budget. With `set_battery_dynamic` the ramp limits also apply around a disconnection, so the optimizer ramps a battery down over the steps before its availability drops to zero.
+
+Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged in for the next 72 quarter-hours, must leave at 84 %, may discharge at most 11 kW and at most 10 kWh, and never below 20 %:
+
+```json
+{
+  "number_of_batteries": 2,
+  "battery_nominal_energy_capacity": [36160, 75000],
+  "battery_charge_power_max": [17600, 25000],
+  "battery_discharge_power_max": [19200, 11000],
+  "battery_minimum_state_of_charge": [0.1, 0.2],
+  "battery_maximum_state_of_charge": [1.0, 0.9],
+  "soc_init": [0.78, 0.71],
+  "soc_final": [0.5, 0.84],
+  "battery_availability": [null, [1, 1, 1, "... 72 ones, then zeros ..."]],
+  "soc_target": [null, 0.84],
+  "battery_discharge_energy_max": [null, 10000]
+}
+```
+
+When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
 
 ### Capping the demand charge at the peak already incurred (naive-mpc-optim and dayahead-optim)
 
@@ -589,6 +621,32 @@ Each sensor is retrieved with `avg_over_time(<selector>[<optimization_time_step>
 ```{note}
 As with InfluxDB, if `use_victoriametrics` is set in `config.json` the parameters given at runtime in the POST payload (for example `historic_days_to_retrieve`) still take precedence, so make sure the fit/predict automations pass consistent values. When both `use_influxdb` and `use_victoriametrics` are enabled InfluxDB is used and a warning is logged.
 ```
+
+### Series scraped from the Prometheus integration
+
+If VictoriaMetrics already scrapes the Home Assistant [Prometheus integration](https://www.home-assistant.io/integrations/prometheus/), EMHASS can read that history directly, without also feeding the `influxdb` integration. Those series name the metric after the domain, device class and unit, and keep the full entity id in an `entity` label:
+
+```text
+homeassistant_sensor_power_w{entity="sensor.power_load", domain="sensor", friendly_name="Power load"}
+```
+
+Set `victoriametrics_entity_label` to `entity` so that the whole entity id is matched against that label (instead of the `entity_id` and `domain` labels described above), and point `victoriametrics_metric_regex` at the sensor metrics:
+
+```json
+{
+  "use_victoriametrics": true,
+  "victoriametrics_host": "192.168.1.10",
+  "victoriametrics_port": 8428,
+  "victoriametrics_database": "",
+  "victoriametrics_metric_regex": "homeassistant_sensor_.+",
+  "victoriametrics_entity_label": "entity"
+}
+```
+
+- Keep the `homeassistant_sensor_` prefix in the regex. The integration also exports `homeassistant_entity_available`, `homeassistant_last_updated_time_seconds` and `homeassistant_state_change_*` for every entity, with the same `entity` label.
+- Leave `victoriametrics_database` empty: scraped series carry no `db` label.
+- Units are not converted. A power sensor exported in kW (`homeassistant_sensor_power_kw`) is read in kW, so rescale it with an arithmetic expression such as `{{'sensor.grid_power' * 1000}}`.
+- A label that changes value over time, such as a renamed `friendly_name`, starts a new series under the same metric name. EMHASS joins series that share a metric name, so the history stays continuous. If both series have samples in the bucket where the change happened, the first value is kept and a duplicate timestamps warning is logged.
 
 
 ## Passing in secret parameters
