@@ -5544,7 +5544,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         ]
         df = self.prepare_forecast_data()
         df["outdoor_temperature_forecast"] = 20.0
-        df["ghi"] = 800.0
         df["ghi"] = 0.0
         df.loc[df.index[0:4], "ghi"] = 800.0
         opt = self.create_optimization()
@@ -11464,8 +11463,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         FAILS on the assertion that all ON runs are >= N. That is the desired RED
         behaviour on base code.
         """
-        # Price pr
-... [truncated for diff preview]
         # Price profile chosen to produce on-off-on short cycling under base code:
         # cheap at t=1, expensive at t=2-3, cheap again at t=4-5.
         # With 3 required operating hours (=6 timesteps at 30min), the base solver
