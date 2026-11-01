@@ -13,6 +13,7 @@ import re
 import tempfile
 import unittest
 import unittest.mock
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import aiofiles
@@ -20,6 +21,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import time_machine
 from aioresponses import aioresponses
 from aioresponses.core import normalize_url
 
@@ -6099,3 +6101,68 @@ class TestRepeatedHourForecastTransport(unittest.IsolatedAsyncioTestCase):
         df = fcst._load_forecast_data(str(csv_path), None, index)
         self.assertEqual(list(df.index.tz_convert("UTC")), list(index.tz_convert("UTC")))
         self.assertEqual(df["yhat"].tolist(), [self._marker(t) for t in index])
+
+
+class TestWeatherCsvLength(unittest.IsolatedAsyncioTestCase):
+    """A weather CSV with fewer rows than forecast steps is rejected, not returned unaligned (#1249)."""
+
+    # (instant, grid length) in Europe/Paris: an ordinary day, a spring-forward and a fall-back day
+    GRIDS = {
+        "normal": (datetime(2025, 3, 22, 12, 0, tzinfo=UTC), 48),
+        "spring-forward": (datetime(2025, 3, 29, 23, 10, tzinfo=UTC), 46),
+        "fall-back": (datetime(2025, 10, 25, 22, 10, tzinfo=UTC), 50),
+    }
+
+    async def _forecast(self, now):
+        import pytz
+
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        retrieve_hass_conf["time_zone"] = pytz.timezone("Europe/Paris")
+        with time_machine.travel(now, tick=False):
+            return Forecast(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                params_json,
+                emhass_conf,
+                logger,
+                get_data_from_file=True,
+            )
+
+    @staticmethod
+    def _write_csv(directory, rows):
+        path = pathlib.Path(directory) / "weather.csv"
+        path.write_text("".join(f"2021-04-29 00:00:00+00:00,{i + 1}\n" for i in range(rows)))
+        return str(path)
+
+    async def test_weather_csv_shorter_than_the_grid_fails_closed(self):
+        for name, (now, steps) in self.GRIDS.items():
+            with self.subTest(grid=name), tempfile.TemporaryDirectory() as tmp:
+                fcst = await self._forecast(now)
+                self.assertEqual(len(fcst.forecast_dates), steps)
+                for rows in (steps - 1, 0):
+                    with self.assertLogs(logger, level="ERROR") as logs:
+                        result = await fcst.get_weather_forecast(
+                            method="csv", csv_path=self._write_csv(tmp, rows)
+                        )
+                    self.assertIsNone(result)
+                    self.assertTrue(
+                        any(f"{rows} rows for {steps} forecast steps" in m for m in logs.output),
+                        logs.output,
+                    )
+
+    async def test_weather_csv_that_covers_the_grid_is_read_by_position(self):
+        for name, (now, steps) in self.GRIDS.items():
+            with self.subTest(grid=name), tempfile.TemporaryDirectory() as tmp:
+                fcst = await self._forecast(now)
+                for rows in (steps, steps + 5):  # a longer file keeps using the first rows
+                    result = await fcst.get_weather_forecast(
+                        method="csv", csv_path=self._write_csv(tmp, rows)
+                    )
+                    self.assertIsInstance(result, pd.DataFrame)
+                    self.assertTrue(result.index.equals(fcst.forecast_dates))
+                    self.assertEqual(result["yhat"].tolist(), list(range(1, steps + 1)))

@@ -660,9 +660,14 @@ async def _handle_action_dispatch(
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
         try:
-            await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except SocFractionError:
-            return await grab_log(action_str), 400
+            success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        except SocFractionError as exc:
+            # The message names only this request's own value, unlike the shared log's tail.
+            return f"EMHASS >> ERROR: {exc}\n", 400
+        if not success:
+            # Not the shared action-log tail: it can hold the lines of concurrent requests, which
+            # include their runtime parameters. The reason is in the action log.
+            return "EMHASS >> Weather forecast failed, see the action log for the reason... \n", 400
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 
     if action_name == "export-influxdb-to-csv":
