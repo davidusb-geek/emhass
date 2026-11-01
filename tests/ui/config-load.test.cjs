@@ -8,6 +8,8 @@ const saved = { battery_nominal_energy_capacity: 23456, costfun: 'self-consumpti
 
 // a reply that never completes; it ends only when the request's own timeout aborts it
 const STALL = Symbol('stall');
+// the same, but rejecting with an AbortError, as Chrome 103-123 does for AbortSignal.timeout
+const STALL_ABORT_ERROR = Symbol('stall-abort-error');
 function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
   const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
@@ -23,8 +25,8 @@ function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
       calls.push({ url, method: options && options.method, signal: options && options.signal, cache: options && options.cache });
-      const settle = r => (r === STALL
-        ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)))
+      const settle = r => ((r === STALL || r === STALL_ABORT_ERROR)
+        ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(r === STALL ? options.signal.reason : new DOMException('The user aborted a request.', 'AbortError'))))
         : r);
       const override = staticReply(url);
       if (override !== undefined) return settle(override);
@@ -233,4 +235,14 @@ test('the definitions and the list template are revalidated, not served from the
     const call = s.calls.find(c => c.url.includes(name));
     assert.equal(call.cache, 'no-cache', `${name} may be served stale after an upgrade`);
   }
+});
+test('a timed-out save is reported as an unknown outcome whichever error the browser aborts with', async () => {
+  const s = setup(() => STALL_ABORT_ERROR); s.state.view = 'box';
+  const out = []; s.ctx.showChangeStatus = (st, log) => out.push(log.join(' '));
+  await s.ctx.saveConfiguration({});
+  assert.match(out[0], /may still have saved it/);
+  const plain = setup(() => { throw new DOMException('The user aborted a request.', 'AbortError'); }); plain.state.view = 'box';
+  const out2 = []; plain.ctx.showChangeStatus = (st, log) => out2.push(log.join(' '));
+  await plain.ctx.saveConfiguration({});
+  assert.doesNotMatch(out2[0], /may still have saved/, 'an abort that is not our timeout is not an unknown outcome');
 });

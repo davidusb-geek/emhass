@@ -1103,6 +1103,7 @@ async function saveConfiguration(param_definitions) {
   }
 
   //finally, send built config to emhass
+  const timeout = AbortSignal.timeout?.(REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(`set-config`, {
       method: "POST",
@@ -1110,13 +1111,14 @@ async function saveConfiguration(param_definitions) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(config),
-      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
+      signal: timeout,
     });
     const saved = response.status === 200 || response.status === 201;
     showChangeStatus(response.status, saved ? [] : await readErrorLog(response));
   } catch (error) {
-    //a request that timed out may still have been applied by the server
-    const outcome = error.name === "TimeoutError" ? " The server may still have saved it." : "";
+    //a request that timed out may still have been applied by the server (older Chrome aborts with an
+    //AbortError rather than a TimeoutError, so ask the signal)
+    const outcome = timeout?.aborted ? " The server may still have saved it." : "";
     showChangeStatus(0, [`Unable to save the configuration: ${error.message}.${outcome} Reload the page to check the stored settings.`]);
   }
 }
