@@ -1241,6 +1241,8 @@ async function showChangeStatus(status, logJson) {
   if (status === 200 || status === 201) {
     //if status is 200 or 201, then show a tick
     loading.innerHTML = `<p class=tick>&#x2713;</p>`;
+    //a request that succeeds ends the failure shown for the one before it
+    document.getElementById("alert").style.display = "none";
   } else {
     //then show a cross
     loading.classList.remove("loading");

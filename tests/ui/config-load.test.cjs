@@ -209,3 +209,21 @@ test('a stalled /set-config is reported and a later save succeeds', async () => 
   stall = false; await s.ctx.saveConfiguration({});
   assert.equal(out[1].st, 200);
 });
+
+test('a successful request clears the error shown for the failed one before it', async () => {
+  let fail = true;
+  const s = setup(() => (fail ? json(500, ['failed to retrieve default config file']) : json(200, saved)));
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.equal(s.nodes.alert.style.display, 'block');
+  fail = false;
+  await s.ctx.ToggleView({}, '<div></div>', true);
+  assert.deepEqual(s.state.rendered, saved); assert.equal(s.nodes.alert.style.display, 'none');
+});
+test('a successful save clears the error of a save that timed out', async () => {
+  let stall = true;
+  const s = setup(() => (stall ? STALL : json(200, []))); s.state.view = 'box';
+  await s.ctx.saveConfiguration({});
+  assert.equal(s.nodes.alert.style.display, 'block'); assert.match(s.nodes['alert-text'].textContent, /may still have saved it/);
+  stall = false; await s.ctx.saveConfiguration({});
+  assert.equal(s.nodes.alert.style.display, 'none');
+});
