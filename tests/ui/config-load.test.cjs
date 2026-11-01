@@ -10,6 +10,14 @@ const saved = { battery_nominal_energy_capacity: 23456, costfun: 'self-consumpti
 const STALL = Symbol('stall');
 // the same, but rejecting with an AbortError, as Chrome 103-123 does for AbortSignal.timeout
 const STALL_ABORT_ERROR = Symbol('stall-abort-error');
+// AbortSignal.timeout's own timer does not keep the event loop alive on every Node, so a test waiting only on it
+// is cancelled ('Promise resolution is still pending but the event loop has already resolved'). A ref'd timer
+// aborts a real AbortSignal with the same TimeoutError and keeps the loop alive until it fires.
+function timeoutSignal(ms) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms);
+  return controller.signal;
+}
 function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
   const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
@@ -20,7 +28,7 @@ function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {
   const boxEl = { value: box, innerHTML: '' };
   nodes['configuration-container'].getElementsByClassName = () => (state.view === 'list' ? [{}] : []);
   // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
-  const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => AbortSignal.timeout(40) },
+  const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => timeoutSignal(40) },
     document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
