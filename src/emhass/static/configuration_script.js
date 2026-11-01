@@ -141,6 +141,11 @@ async function getParamDefinitions() {
   }
 }
 
+//an empty object would render the parameter defaults as if they were the saved settings
+function isUsableConfig(config) {
+  return config !== null && typeof config === "object" && !Array.isArray(config) && Object.keys(config).length > 0;
+}
+
 //obtain emhass config (from saved params extracted/simplified into the config format)
 //returns null when the configuration could not be obtained (never an empty config)
 async function obtainConfig() {
@@ -159,7 +164,7 @@ async function obtainConfig() {
     //else extract json rom data
     let blob = await response.blob(); //get data blob
     config = await new Response(blob).json(); //obtain json from blob
-    if (config === null || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length === 0) {
+    if (!isUsableConfig(config)) {
       throw new Error("the response is not a non-empty configuration object");
     }
     showChangeStatus(response_status, {});
@@ -200,7 +205,7 @@ async function ObtainDefaultConfig() {
     //else extract json rom data
     let blob = await response.blob(); //get data blob
     config = await new Response(blob).json(); //obtain json from blob
-    if (config === null || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length === 0) {
+    if (!isUsableConfig(config)) {
       throw new Error("the response is not a non-empty configuration object");
     }
     showChangeStatus(response_status, {});
@@ -1143,7 +1148,9 @@ async function saveConfiguration(param_definitions) {
     const saved = response.status === 200 || response.status === 201;
     showChangeStatus(response.status, saved ? [] : await readErrorLog(response));
   } catch (error) {
-    showChangeStatus(0, [`Unable to save the configuration: ${error.message}. Reload the page to check the stored settings.`]);
+    //a request that timed out may still have been applied by the server
+    const outcome = error.name === "TimeoutError" ? " The server may still have saved it." : "";
+    showChangeStatus(0, [`Unable to save the configuration: ${error.message}.${outcome} Reload the page to check the stored settings.`]);
   }
 }
 

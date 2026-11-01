@@ -156,6 +156,7 @@ test('/set-config non-JSON error reports the HTTP status', async () => {
 test('rejected /set-config request is reported with the error message', async () => {
   const { out } = await save(() => { throw new TypeError('Failed to fetch'); });
   assert.notEqual(out.status, 200); assert.match(out.log.join(' '), /Failed to fetch/);
+  assert.doesNotMatch(out.log.join(' '), /may still have saved/, 'a failed request is not reported as an unknown outcome');
 });
 
 // bounded requests: a stalled request ends in a visible error instead of leaving the page waiting
@@ -204,7 +205,7 @@ test('a stalled /set-config is reported and a later save succeeds', async () => 
   const s = setup(() => (stall ? STALL : json(200, []))); s.state.view = 'box';
   const out = []; s.ctx.showChangeStatus = (st, log) => out.push({ st, log });
   await s.ctx.saveConfiguration({});
-  assert.notEqual(out[0].st, 200); assert.match(out[0].log.join(' '), /Unable to save.*(abort|time)/is);
+  assert.notEqual(out[0].st, 200); assert.match(out[0].log.join(' '), /Unable to save.*(abort|time).*server may still have saved it/is);
   stall = false; await s.ctx.saveConfiguration({});
   assert.equal(out[1].st, 200);
 });
