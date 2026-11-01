@@ -77,7 +77,8 @@ def test_decorative_svgs_are_hidden_and_icon_controls_are_named(path):
     assert svgs
     for svg, owner in svgs:
         assert svg.get("aria-hidden") == "true", svg
-        assert owner is not None and (owner.get("title") or owner.get("aria-label")), svg
+        assert owner is not None, svg
+        assert (owner.get("title") or owner.get("aria-label") or "").strip(), svg
 
 
 @pytest.mark.parametrize(
@@ -89,7 +90,7 @@ def test_click_only_toggles_are_buttons(path, control_id):
     """A control that only has a click handler must be keyboard focusable: a button."""
     matches = [(t, a) for t, a, _ in _parse(path).elements if a.get("id") == control_id]
     assert [(tag, attrs.get("type")) for tag, attrs in matches] == [("button", "button")]
-    assert matches[0][1].get("title")
+    assert (matches[0][1].get("title") or "").strip()
 
 
 @pytest.mark.parametrize("path", FRAGMENTS, ids=lambda p: p.name)
