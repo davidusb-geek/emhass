@@ -134,8 +134,8 @@ async function obtainConfig() {
     //else extract json rom data
     let blob = await response.blob(); //get data blob
     config = await new Response(blob).json(); //obtain json from blob
-    if (config === null || typeof config !== "object" || Array.isArray(config)) {
-      throw new Error("the response is not a configuration object");
+    if (config === null || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length === 0) {
+      throw new Error("the response is not a non-empty configuration object");
     }
     showChangeStatus(response_status, {});
     return config;
@@ -174,8 +174,8 @@ async function ObtainDefaultConfig() {
     //else extract json rom data
     let blob = await response.blob(); //get data blob
     config = await new Response(blob).json(); //obtain json from blob
-    if (config === null || typeof config !== "object" || Array.isArray(config)) {
-      throw new Error("the response is not a configuration object");
+    if (config === null || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length === 0) {
+      throw new Error("the response is not a non-empty configuration object");
     }
     showChangeStatus(response_status, {});
     return config;

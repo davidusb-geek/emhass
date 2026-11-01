@@ -60,7 +60,7 @@ test('rejected GET /get-config request fails closed and reports the error', asyn
   await s.load(); failClosed(s);
   assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
 });
-for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null']]) {
+for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null'], ['an empty object', '{}']]) {
   test(`HTTP 200 with ${name} fails closed`, async () => {
     const s = setup(() => new Response(body, { status: 200 }));
     await s.load(); failClosed(s);
@@ -107,7 +107,7 @@ test('Defaults keeps the current form when the GET /get-config/defaults request 
   assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
   assert.deepEqual(setConfigCalls(s), []);
 });
-for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null']]) {
+for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', '[]'], ['JSON null', 'null'], ['an empty object', '{}']]) {
   test(`Defaults keeps the current form when GET /get-config/defaults returns 200 with ${name}`, async () => {
     const s = setup(() => new Response(body, { status: 200 }));
     s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
