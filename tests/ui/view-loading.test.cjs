@@ -124,7 +124,7 @@ for (const [view, html, hidden, pattern] of [
   ['Basic', () => BASIC, 'basic', /missing basic[,)]/],
 ]) {
   test(`${view} template without #${hidden} is rejected before it replaces the working view`, async () => {
-    const broken = html().replace(new RegExp(`id=["']?${hidden}["']?(?=[\s>])`), 'id=renamed');
+    const broken = html().replace(new RegExp(`id=["']?${hidden}["']?(?=[\\s>])`), 'id=renamed');
     const other = view === 'Advanced' ? 'basic' : 'advanced';
     const s = setup({ stored: other, replies: { ...healthy, [`${view.toLowerCase()}.html`]: ok(broken) } });
     await s.load();
