@@ -5308,10 +5308,19 @@ class TestWeatherCsvShorterThanGrid(unittest.IsolatedAsyncioTestCase):
         params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
         params["optim_conf"]["weather_forecast_method"] = "solar.forecast"
         params_json = orjson.dumps(params).decode("utf-8")
-        with fixture_clock(), aioresponses() as mocked:
-            mocked.get(re.compile(r"https://api\.forecast\.solar/estimate/.*"), status=429)
-            result = await weather_forecast_cache(emhass_conf, params_json, "{}", logger)
+        # a private data folder: a weather cache left in the repository's would be served instead
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            shutil.copytree(emhass_conf["data_path"], data, ignore=shutil.ignore_patterns("*.pkl"))
+            with fixture_clock(), aioresponses() as mocked:
+                mocked.get(re.compile(r"https://api\.forecast\.solar/estimate/.*"), status=429)
+                result = await weather_forecast_cache(
+                    {**emhass_conf, "data_path": data}, params_json, "{}", logger
+                )
+                requests = sum(len(v) for v in mocked.requests.values())
         self.assertIs(result, False)
+        # an HTTP error is not retried, unlike a transport failure
+        self.assertEqual(requests, 1)
 
     async def test_weather_forecast_cache_does_not_hide_a_raised_provider_failure(self):
         """A failure the provider raises is not turned into the False result."""
