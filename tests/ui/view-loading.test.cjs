@@ -30,7 +30,7 @@ function setup({ stored, replies, savedInputs, realSavedData }) {
       createElement: () => ({ content: { querySelector: sel => (idsOf(ctx.probeHtml || '').includes(sel.slice(1)) ? {} : null),
           get firstElementChild() { const id = idsOf(ctx.probeHtml || '')[0]; return id === undefined ? null : { id }; } },
         set innerHTML(html) { ctx.probeHtml = html; } }) },
-    fetch: async (url, options) => { calls.push({ url, signal: options && options.signal }); return settle(replies[url.replace('static/', '').split('?')[0]](), options); } };
+    fetch: async (url, options) => { calls.push({ url, signal: options && options.signal, cache: options && options.cache }); return settle(replies[url.replace('static/', '').split('?')[0]](), options); } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
   if (!realSavedData) ctx.getSavedData = () => {};
   ctx.dictInputs = () => {}; ctx.initStickyTables = () => {};
@@ -233,4 +233,10 @@ test('template and export-check requests carry a timeout signal', async () => {
   const calls = s.calls.filter(c => /basic\.html|advanced\.html|get-config/.test(c.url));
   assert.ok(calls.length >= 2);
   for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`); s.done();
+});
+test('the templates are revalidated, not served from the 12 h static cache', async () => {
+  const s = setup({ stored: 'advanced', replies: healthy }); await s.load(); await s.toggle();
+  const calls = s.calls.filter(c => /basic\.html|advanced\.html/.test(c.url));
+  assert.ok(calls.length >= 2);
+  for (const c of calls) assert.equal(c.cache, 'no-cache', `${c.url} may be served stale after an upgrade`); s.done();
 });

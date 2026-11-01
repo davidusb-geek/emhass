@@ -78,13 +78,8 @@ async function loadButtons(page) {
 const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
 
 //a template or export-check request still pending after this long fails instead of leaving the page waiting
+//(browsers without AbortSignal.timeout keep waiting, as before)
 const REQUEST_TIMEOUT_MS = 30000;
-function requestSignal() {
-  //browsers without AbortSignal.timeout keep waiting, as before
-  return typeof AbortSignal !== "undefined" && AbortSignal.timeout
-    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    : undefined;
-}
 
 //fetch the basic or advanced html and replace the current view, only if it holds the controls it needs
 async function loadView(page) {
@@ -180,7 +175,11 @@ function showViewError(error) {
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-  const response = await fetch(`static/` + htmlFile, { signal: requestSignal() });
+  //revalidate: the template changes with the release, and loadView checks it against this script
+  const response = await fetch(`static/` + htmlFile, {
+    cache: "no-cache",
+    signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
+  });
   if (!response.ok) {
     throw new Error(`${htmlFile} request failed with HTTP ${response.status}`);
   }
@@ -610,7 +609,7 @@ let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
   const thisCheck = ++influxChecks;
   try {
-    const response = await fetch("/get-config", { signal: requestSignal() });
+    const response = await fetch("/get-config", { signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS) });
     if (response.ok) {
       const config = await response.json();
       if (thisCheck !== influxChecks) {
