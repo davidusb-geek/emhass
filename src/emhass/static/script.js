@@ -397,9 +397,12 @@ function getSavedData() {
       }
       if (selectElement.value == "List") {
         //if List is selected, show saved json data into box
-        let storedJson = JSON.parse(
-          localStorage.getItem("input_container_content")
-        );
+        let storedJson = {};
+        try {
+          storedJson = JSON.parse(localStorage.getItem("input_container_content")) || {};
+        } catch (error) {
+          console.error("Ignoring invalid saved runtime data:", error); //the view is still usable without it
+        }
         if (Object.keys(storedJson).length > 0) {
           input_container.innerHTML = "";
           for (const ikey in storedJson) {
@@ -587,11 +590,16 @@ async function ClearInputElements() {
 //}
 
 // Check if InfluxDB is configured and show/hide export section
+let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
+  const thisCheck = ++influxChecks;
   try {
     const response = await fetch("/get-config");
     if (response.ok) {
       const config = await response.json();
+      if (thisCheck !== influxChecks) {
+        return; //superseded by a newer check
+      }
       const exportSection = document.getElementById("export-influxdb-section");
       if (exportSection) {
         // Show export if InfluxDB is configured (has host and port)

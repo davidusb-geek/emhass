@@ -10,9 +10,10 @@ const idsOf = html => [...html.matchAll(/\bid=["']?([\w-]+)/g)].map(m => m[1]);
 
 // Minimal DOM: setting innerHTML registers the elements it declares, so the real
 // script wires the real templates' controls. Not a browser rendering test.
-function setup({ stored, replies }) {
+function setup({ stored, replies, savedInputs, realSavedData }) {
   const registry = {}, storage = stored ? { TabSelection: stored } : {};
-  const element = id => ({ id, style: {}, textContent: '', innerHTML: '', listeners: {},
+  if (savedInputs !== undefined) storage.input_container_content = savedInputs;
+  const element = id => ({ id, style: {}, textContent: '', innerHTML: '', value: 'List', listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
   const container = element('TabSelection');
   Object.defineProperty(container, 'innerHTML', {
@@ -30,7 +31,8 @@ function setup({ stored, replies }) {
         set innerHTML(html) { ctx.probeHtml = html; } }) },
     fetch: async (url) => { calls.push(url); return replies[url.replace('static/', '')](); } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
-  ctx.getSavedData = () => {}; ctx.initStickyTables = () => {};
+  if (!realSavedData) ctx.getSavedData = () => {};
+  ctx.dictInputs = () => {}; ctx.initStickyTables = () => {};
   const rejections = [];
   const onRejection = e => rejections.push(e);
   process.on('unhandledRejection', onRejection);
@@ -135,6 +137,23 @@ for (const [view, html, hidden, pattern] of [
     assert.match(alertText(s), pattern); assert.equal(s.registry.alert.style.display, 'block'); s.done();
   });
 }
+test('invalid saved runtime data does not undo a successful switch to Advanced', async () => {
+  const s = setup({ replies: healthy, savedInputs: '{not json', realSavedData: true });
+  await s.load(); await s.toggle();
+  assert.equal(s.container.firstElementChild.id, 'advance'); assert.equal(s.storage.TabSelection, 'advanced');
+  assert.notEqual(s.registry.alert.style.display, 'block', 'no view-loading error for a view that did load');
+  assert.equal(s.rejections.length, 0); s.done();
+});
+test('only the newest InfluxDB check may update the export section', async () => {
+  const s = setup({ stored: 'advanced', replies: healthy }); await s.load();
+  const pending = [];
+  s.ctx.fetch = () => new Promise(resolve => pending.push(resolve));
+  const first = s.ctx.checkInfluxDBAndShowExport(), second = s.ctx.checkInfluxDBAndShowExport();
+  const reply = body => new Response(JSON.stringify(body), { status: 200 });
+  pending[1](reply({})); await second;                                   // newer: not configured
+  pending[0](reply({ influxdb_host: 'db', influxdb_port: 8086 })); await first; // older, resolves last
+  assert.equal(s.registry['export-influxdb-section'].style.display, 'none'); s.done();
+});
 test('an incomplete Advanced template keeps the working Basic view', async () => {
   const incomplete = ADVANCED.replace(/id=["']?dayahead-optim["']?(?=[\s>])/, 'id=renamed');
   const s = setup({ replies: { ...healthy, 'advanced.html': ok(incomplete) } });
