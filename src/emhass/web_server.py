@@ -664,7 +664,9 @@ async def _handle_action_dispatch(
         except SocFractionError:
             return await grab_log(action_str), 400
         if not success:
-            return await grab_log(action_str), 400
+            # Not the shared action-log tail: it can hold the lines of concurrent requests, which
+            # include their runtime parameters. The reason is in the action log.
+            return "EMHASS >> Weather forecast failed, see the action log for the reason... \n", 400
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 
     if action_name == "export-influxdb-to-csv":

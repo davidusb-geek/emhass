@@ -266,18 +266,44 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/action/weather-forecast-cache", json={})
         self.assertEqual(response.status_code, 400)
 
-    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
     @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
-    async def test_action_weather_cache_failure_is_400(self, mock_load, mock_cache, mock_grab):
+    async def test_action_weather_cache_failure_is_400_without_the_shared_log(
+        self, mock_load, mock_cache
+    ):
+        """A failed cache action answers 400 but must not echo other requests' log lines.
+
+        The action log is shared and holds every request's runtime parameters (which can include
+        API keys), so the failure response may not return its tail.
+        """
         mock_load.return_value = ({}, "profit", "{}")
-        mock_cache.return_value = False
-        # a non-ERROR log line, so only the returned False can make this a 400
-        mock_grab.return_value = ["WARNING the forecast was rejected"]
-        response = await self.client.post("/action/weather-forecast-cache", json={})
+        mock_cache.return_value = False  # no ERROR line: only the returned False makes this a 400
+        with tempfile.TemporaryDirectory() as tmp:
+            self.mock_conf["data_path"] = pathlib.Path(tmp)
+            (pathlib.Path(tmp) / web_server.action_log_str).write_text(
+                "INFO - emhass.web_server -  >> Performing weather forecast, try to caching result\n"
+                "INFO - emhass.web_server - Passed runtime parameters: "
+                "{'solcast_api_key': 'SECRET-KEY-123'}\n"
+                "INFO - emhass.web_server - last line\n"
+            )
+            response = await self.client.post("/action/weather-forecast-cache", json={})
+        body = await response.get_data(as_text=True)
         self.assertEqual(response.status_code, 400)
-        mock_grab.assert_awaited_once_with(" >> Performing weather forecast, try to caching result")
-        self.assertIn("WARNING the forecast was rejected", await response.get_data(as_text=True))
+        self.assertIn("Weather forecast failed", body)
+        self.assertNotIn("SECRET-KEY-123", body)
+
+    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_weather_cache_transport_failure_is_not_hidden(
+        self, mock_load, mock_cache
+    ):
+        """A raised provider or network failure is a server error (500), not a 200 or a 400 result."""
+        import aiohttp
+
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_cache.side_effect = aiohttp.ClientConnectionError("provider unreachable")
+        response = await self.client.post("/action/weather-forecast-cache", json={})
+        self.assertEqual(response.status_code, 500)
 
     @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)

@@ -183,7 +183,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
-The action answers with HTTP 400 and the action log when the forecast could not be produced. Earlier versions answered 200 in these cases, so clients that relied on that status should be updated. The failures are:
+The action answers with HTTP 400 when the forecast could not be produced; the reason is in the action log, which the response does not return because it is shared by all requests. Earlier versions answered 200 in these cases, so clients that relied on that status should be updated. The failures are:
 - Solcast returning an HTTP error, or the daily call cap already being used.
 - An invalid `weather_forecast_method`.
 - A runtime `pv_power_forecast` list that is rejected, for example one with a non-finite value or one paired with a `pv_power_forecast_p10` list of a different length. A list that is too short or of the wrong type is only ignored, as in the other actions, and the configured method applies.
