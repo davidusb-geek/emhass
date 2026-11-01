@@ -194,7 +194,12 @@ async function getListHTML() {
       throw new Error(`HTTP ${response.status}`);
     }
     let blob = await response.blob(); //get data blob
-    return await new Response(blob).text(); //obtain html from blob
+    const html = await new Response(blob).text(); //obtain html from blob
+    //an empty template cannot render a form: report it instead of failing closed without a message
+    if (!html.trim()) {
+      throw new Error("the file is empty");
+    }
+    return html;
   } catch (error) {
     errorAlert(`Unable to obtain configuration_list.html file: ${error.message}`);
     return null;

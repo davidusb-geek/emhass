@@ -183,6 +183,13 @@ for (const [name, staticReply] of [
     assert.deepEqual(setConfigCalls(s), []);
   });
 }
+for (const [name, body] of [['an empty body', ''], ['a blank body', ' '+String.fromCharCode(10)+' ']]) {
+  test(`an HTTP 200 list template with ${name} fails closed with a visible, actionable error`, async () => {
+    const s = setup(() => json(200, saved), { staticReply: url => (url.includes('configuration_list') ? new Response(body, { status: 200 }) : undefined) });
+    await s.load(); failClosed(s);
+    assert.match(s.nodes['alert-text'].textContent, /configuration_list\.html.*empty/);
+  });
+}
 test('every configuration request is made with a timeout signal', async () => {
   const s = setup(() => json(200, saved)); await s.load();
   await s.ctx.ToggleView({}, '<div></div>', true);
