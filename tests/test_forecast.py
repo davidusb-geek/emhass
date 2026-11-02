@@ -2130,6 +2130,97 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((p_pv.between_time("00:00", "04:45") == 0.0).all())
         self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
 
+    # Issue #1267: a Forecast.Solar response omits night-time observations.
+    # The interpolation path must not infer any PV over that long gap.
+    async def test_solar_forecast_overnight_gap_is_zero(self):
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("30min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("30min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-10-28 16:00", tz=self.fcst.time_zone),
+            periods=48,
+            freq="30min",
+        )
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        watts = {
+            "2026-10-28 16:00:00": 350,
+            "2026-10-28 16:30:00": 356,
+            "2026-10-28 17:00:00": 163,
+            "2026-10-29 08:00:00": 364,
+            "2026-10-29 08:30:00": 512,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}},
+                repeat=True,
+            )
+            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+
+        night = pd.date_range(
+            "2026-10-28 17:30", "2026-10-29 07:30",
+            freq="30min", tz=self.fcst.time_zone,
+        )
+        self.assertTrue((forecast.loc[night, "yhat"] == 0).all(), forecast.loc[night])
+        self.assertEqual(forecast.loc[pd.Timestamp("2026-10-28 17:00", tz=self.fcst.time_zone), "yhat"], 163)
+        self.assertEqual(forecast.loc[pd.Timestamp("2026-10-29 08:00", tz=self.fcst.time_zone), "yhat"], 364)
+
+    async def test_solar_forecast_long_daylight_source_gap_is_not_interpolated(self):
+        """A missing 12:00 source hour must not fabricate 11:30-12:30 solar."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("30min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("30min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-08-22 09:00", tz=self.fcst.time_zone),
+            periods=12, freq="30min",
+        )
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        watts = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 11:00:00": 200,
+            "2026-08-22 13:00:00": 400,
+            "2026-08-22 14:00:00": 500,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}}, repeat=True,
+            )
+            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        ts = lambda hhmm: pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+        self.assertEqual(forecast.loc[ts("10:30"), "yhat"], 150)
+        for hhmm in ("11:30", "12:00", "12:30"):
+            self.assertEqual(forecast.loc[ts(hhmm), "yhat"], 0)
+        self.assertEqual(forecast.loc[ts("13:30"), "yhat"], 450)
+
+    async def test_solar_forecast_non_divisor_grid_preserves_source_samples(self):
+        """45-minute target slots must interpolate from original hourly points."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("45min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("45min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-08-22 05:00", tz=self.fcst.time_zone),
+            periods=5, freq="45min",
+        )
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        watts = {
+            "2026-08-22 05:00:00": 100,
+            "2026-08-22 06:00:00": 200,
+            "2026-08-22 07:00:00": 300,
+            "2026-08-22 08:00:00": 400,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}}, repeat=True,
+            )
+            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        for hhmm, value in (("05:00", 100), ("05:45", 175), ("06:30", 250), ("07:15", 325), ("08:00", 400)):
+            ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+            self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
+
     def _solar_forecast_plants(self, n_plants):
         """Configure n identical forecast.solar arrays and skip the on-disk cache."""
         self.plant_conf["pv_module_model"] = ["module"] * n_plants
