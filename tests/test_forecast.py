@@ -2360,6 +2360,27 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:00", tz=tz), "yhat"], 300)
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
 
+    async def test_solar_forecast_recorded_response_has_no_phantom_night_pv(self):
+        """A recorded response brackets the night with off-grid 0 W sunset/sunrise readings."""
+        test_data_path = emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            payload = cPickle.loads(bz2.decompress(await f.read()))
+        tz = "Europe/Paris"
+        dates = pd.date_range("2022-10-24 17:00", periods=36, freq="30min", tz=tz)
+        forecast = await self._fetch_solar_forecast(dates, [payload["result"]["watts"]])
+        night = forecast.loc[
+            pd.Timestamp("2022-10-24 19:00", tz=tz) : pd.Timestamp("2022-10-25 08:00", tz=tz),
+            "yhat",
+        ]
+        self.assertTrue((night == 0).all(), night[night != 0])
+        # Sunset (18:39, 0 W) and sunrise (08:05, 0 W) tails are interpolated, not dropped.
+        self.assertAlmostEqual(
+            forecast.loc[pd.Timestamp("2022-10-24 18:30", tz=tz), "yhat"], 186 * 9 / 39, places=3
+        )
+        self.assertAlmostEqual(
+            forecast.loc[pd.Timestamp("2022-10-25 08:30", tz=tz), "yhat"], 783 * 25 / 55, places=3
+        )
+
     async def test_solar_forecast_multiple_arrays_are_gap_checked_independently(self):
         """Each array is gap-checked on its own before the arrays are summed."""
         tz = "Europe/Paris"
