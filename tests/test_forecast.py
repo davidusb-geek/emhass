@@ -2197,6 +2197,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+
         def ts(hhmm):
             return pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
 
@@ -2226,7 +2227,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with aioresponses() as mocked:
             mocked.get(
                 re.compile(r"https://api\.forecast\.solar/estimate/.*"),
-                payload={"result": {"watts": watts}}, repeat=True,
+                payload={"result": {"watts": watts}},
+                repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
         for hhmm, value in (
