@@ -981,14 +981,27 @@ class Forecast:
                                 ambiguous="infer",
                                 nonexistent="shift_forward",
                             )
-                            data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                            # Gap filling
-                            mask_up = data_tmp.copy(deep=True).ffill().isnull()
-                            mask_down = data_tmp.copy(deep=True).bfill().isnull()
-                            data_tmp.loc[mask_up["yhat"], :] = 0.0
-                            data_tmp.loc[mask_down["yhat"], :] = 0.0
-                            data_tmp.interpolate(inplace=True, limit_area="inside")
-                            data_tmp = data_tmp.fillna(0.0)
+                            # Keep source timestamps when resampling: dropping them before
+                            # interpolation loses observations on non-hour-divisor grids.
+                            data_tmp = data_tmp[~data_tmp.index.duplicated(keep="last")]
+                            data_tmp = data_tmp.sort_index()
+                            combined = data_tmp.reindex(
+                                data_tmp.index.union(self.forecast_dates)
+                            )
+                            # Only bridge adjacent provider readings up to one hour
+                            # apart. Forecast.Solar omits night-time samples, so
+                            # unbounded interpolation invents solar power overnight.
+                            source_times = combined.index.to_series().where(
+                                combined["yhat"].notna()
+                            )
+                            source_gap = source_times.bfill() - source_times.ffill()
+                            combined["yhat"] = combined["yhat"].interpolate(
+                                method="time", limit_area="inside"
+                            )
+                            combined["yhat"] = combined["yhat"].where(
+                                source_gap <= pd.Timedelta(hours=1), 0.0
+                            )
+                            data_tmp = combined.reindex(self.forecast_dates).fillna(0.0)
                         array_data = data_tmp
                         break
                     except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:
