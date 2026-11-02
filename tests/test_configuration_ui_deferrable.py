@@ -337,7 +337,7 @@ process.stdout.write(appended);
 def test_dynamic_row_true_default_renders_checked():
     proc = _run_node(_capture_dynamic_row_script("is_electric_load"))
     assert proc.returncode == 0, proc.stderr
-    assert "value=true" in proc.stdout
+    assert 'value="true"' in proc.stdout
     assert re.search(r"\bchecked\b", proc.stdout)
 
 
@@ -345,7 +345,7 @@ def test_dynamic_row_true_default_renders_checked():
 def test_dynamic_row_false_default_renders_unchecked():
     proc = _run_node(_capture_dynamic_row_script("set_deferrable_load_single_constant"))
     assert proc.returncode == 0, proc.stderr
-    assert "value=false" in proc.stdout
+    assert 'value="false"' in proc.stdout
     assert not re.search(r"\bchecked\b", proc.stdout)
 
 
