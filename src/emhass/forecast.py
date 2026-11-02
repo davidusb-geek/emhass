@@ -952,8 +952,8 @@ class Forecast:
         if hole_slots.any():
             hole_dates = self.forecast_dates[hole_slots.to_numpy()]
             self.logger.warning(
-                "forecast.solar has no reading for %d forecast step(s), from %s to %s "
-                "(a gap of more than one hour next to a non-zero reading); using 0 W PV for them",
+                "forecast.solar has no reading for %d forecast step(s) (first: %s, last: %s) "
+                "in a gap of more than one hour next to a non-zero reading; using 0 W PV for them",
                 len(hole_dates),
                 hole_dates[0],
                 hole_dates[-1],
