@@ -142,7 +142,7 @@ test('List/Box toggle still switches views when GET /get-config succeeds', async
   await s.ctx.ToggleView({}, '<div></div>', false);
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['configuration-container'].innerHTML, /config-box/);
-  assert.deepEqual(JSON.parse(s.boxEl.innerHTML), saved);
+  assert.deepEqual(JSON.parse(s.boxEl.value), saved);
 });
 
 async function save(reply) {

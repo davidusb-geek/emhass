@@ -2886,6 +2886,9 @@ async def treat_runtimeparams(
             params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
                 "battery_discharge_energy_max", None
             )
+            # Per-deferrable-load availability, same shape and validation as
+            # battery_availability (done in Optimization.perform_optimization).
+            params["passed_data"]["def_availability"] = runtimeparams.get("def_availability", None)
             # Peak grid import already incurred this billing period (issue #623,
             # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
             # Coercion/validation happens in Optimization.perform_optimization.
@@ -4930,6 +4933,7 @@ async def build_params(
         "soc_target_timestep": None,
         "battery_availability": None,
         "battery_discharge_energy_max": None,
+        "def_availability": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
         "capacity_charge_consideration": None,

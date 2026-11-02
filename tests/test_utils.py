@@ -2043,6 +2043,16 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_target"], [None, 0.8])
         self.assertEqual(params_out["passed_data"]["soc_target_timestep"], [None, 5])
 
+    async def test_treat_runtimeparams_passes_def_availability(self):
+        """def_availability reaches naive-mpc-optim unchanged; validation happens in
+        Optimization.perform_optimization, as for battery_availability."""
+        mask = [None, [1, 1, 0, 0, 0.5]]
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"prediction_horizon": 10, "def_availability": mask}
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["def_availability"], mask)
+
     async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
         """A percentage saved in the plant config fails even when the request adds nothing."""
         params = await TestUtils.get_test_params()
