@@ -985,9 +985,7 @@ class Forecast:
                             # interpolation loses observations on non-hour-divisor grids.
                             data_tmp = data_tmp[~data_tmp.index.duplicated(keep="last")]
                             data_tmp = data_tmp.sort_index()
-                            combined = data_tmp.reindex(
-                                data_tmp.index.union(self.forecast_dates)
-                            )
+                            combined = data_tmp.reindex(data_tmp.index.union(self.forecast_dates))
                             # Only bridge adjacent provider readings up to one hour
                             # apart. Forecast.Solar omits night-time samples, so
                             # unbounded interpolation invents solar power overnight.
