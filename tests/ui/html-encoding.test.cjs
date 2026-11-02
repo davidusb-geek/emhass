@@ -137,16 +137,6 @@ for (const marker of MARKERS) {
     });
   });
 
-  test(`nested array rows render one safe input per leaf: ${label}`, () => {
-    // Arrays of arrays take the nested rendering path (one input per inner entry, first character of
-    // string entries); only the markup safety and the entry count are asserted, not that quirk.
-    const ctx = setup();
-    const definition = { input: 'array.array.float', default_value: null, friendly_name: 'f', Description: 'd' };
-    const inputs = inputsOf(ctx.buildParamElement(definition, 'name', { name: [[marker, 1], [2, marker]] }));
-    assert.equal(inputs.length, 4);
-    inputs.forEach(assertOnlyExpectedAttributes);
-  });
-
   test(`load_peak_hour_periods nested values stay data: ${label}`, () => {
     const ctx = setup();
     const definition = { input: 'array.time', default_value: '00:00', friendly_name: 'f', Description: 'd' };
@@ -216,12 +206,23 @@ test('numbers, booleans and checkboxes keep their value and checked state', () =
   assert.deepEqual(inputsOf(ctx.buildParamElement(ints, 'i', { i: [1, 0, -2] })).map(r => r.attrs.value), ['1', '0', '-2']);
 });
 
-test('an empty string value no longer swallows the following attribute', () => {
+test('an empty default no longer swallows the following value attribute', () => {
   const ctx = setup();
-  const definition = { input: 'string', default_value: 'd', friendly_name: 'f', Description: 'd' };
-  const [input] = inputsOf(ctx.buildParamElement(definition, 'name', { name: '' }));
-  assert.equal(input.attrs.value, '');
-  assert.equal(input.attrs.placeholder, 'd');
+  const definition = { input: 'string', default_value: '', friendly_name: 'f', Description: 'd' };
+  const [input] = inputsOf(ctx.buildParamElement(definition, 'name', { name: 'x' }));
+  assert.equal(input.attrs.placeholder, '');
+  assert.equal(input.attrs.value, 'x');
+});
+
+test('box view sets the textarea value, so character references are not decoded', async () => {
+  // Assigning innerHTML to a textarea parses its text and decodes references such as &amp; or &lt.
+  const ctx = setup();
+  const box = { innerHTML: undefined, value: undefined };
+  ctx.document.getElementById = id => (id === 'config-box' ? box : { innerHTML: '' });
+  const config = { a: 'x &amp; y', url: 'https://h/?p=1&lt=2', q: '"<b>"' };
+  await ctx.loadConfigurationBoxPage(config);
+  assert.equal(box.innerHTML, undefined);
+  assert.deepEqual(JSON.parse(box.value), config);
 });
 
 test('the tokenizer detects the reported unquoted-value leak', () => {

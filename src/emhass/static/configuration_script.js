@@ -524,8 +524,7 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+    .replaceAll('"', "&quot;");
 }
 
 //create html input element/s for a param container (called by buildParamContainers)
@@ -1210,7 +1209,8 @@ async function loadConfigurationBoxPage(config) {
       <textarea id="config-box" rows="30" placeholder="{}"></textarea>
       `;
   //set created textarea box with retrieved config
-  document.getElementById("config-box").innerHTML = JSON.stringify(
+  //.value, not innerHTML: a textarea's HTML parsing would decode &amp; etc. in the data (#1290)
+  document.getElementById("config-box").value = JSON.stringify(
     config,
     null,
     2
