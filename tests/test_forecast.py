@@ -2241,6 +2241,163 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
             self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
 
+    async def _fetch_solar_forecast(self, forecast_dates, watts_per_array):
+        """Run get_weather_forecast(solar.forecast) against mocked per-array watts."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = forecast_dates.freq
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(forecast_dates.freq)
+        self.fcst.forecast_dates = forecast_dates
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        n_plants = len(watts_per_array)
+        self.plant_conf["pv_module_model"] = ["module"] * n_plants
+        self.plant_conf["surface_tilt"] = [30] * n_plants
+        self.plant_conf["surface_azimuth"] = [180] * n_plants
+        with aioresponses() as mocked:
+            for watts in watts_per_array:
+                mocked.get(
+                    re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                    payload={"result": {"watts": watts}},
+                )
+            return await self.fcst.get_weather_forecast(method="solar.forecast")
+
+    async def test_solar_forecast_overnight_gap_is_zero_for_every_time_step(self):
+        """Overnight gap stays zero and source points survive for 5-60 minute grids."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-10-28 16:00:00": 300,
+            "2026-10-28 17:00:00": 100,
+            "2026-10-29 08:00:00": 200,
+            "2026-10-29 09:00:00": 400,
+        }
+        for step in (5, 15, 30, 45, 60):
+            with self.subTest(step=step):
+                dates = pd.date_range(
+                    pd.Timestamp("2026-10-28 16:00", tz=tz),
+                    pd.Timestamp("2026-10-29 09:00", tz=tz),
+                    freq=f"{step}min",
+                )
+                forecast = await self._fetch_solar_forecast(dates, [watts])
+                self.assertEqual(list(forecast.index), list(dates))
+                night = forecast.loc[
+                    pd.Timestamp("2026-10-28 17:00", tz=tz)
+                    + pd.Timedelta(seconds=1) : pd.Timestamp("2026-10-29 08:00", tz=tz)
+                    - pd.Timedelta(seconds=1),
+                    "yhat",
+                ]
+                self.assertTrue((night == 0).all(), night[night != 0])
+                # Interpolation inside the first hour is linear: 300 -> 100.
+                if 30 % step == 0:
+                    ts = pd.Timestamp("2026-10-28 16:30", tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], 200.0)
+                # Source points are preserved on grids that contain them.
+                if 60 % step == 0:
+                    ts = pd.Timestamp("2026-10-29 08:00", tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], 200.0)
+
+    async def test_solar_forecast_gap_handling_across_dst_changes(self):
+        """Hourly daytime data on DST change days: no phantom night PV, no lost samples."""
+        tz = "Europe/Paris"
+        for day, nxt in (("2026-03-28", "2026-03-29"), ("2026-10-24", "2026-10-25")):
+            with self.subTest(day=day):
+                watts = {
+                    f"{day} 15:00:00": 400,
+                    f"{day} 16:00:00": 200,
+                    f"{nxt} 09:00:00": 300,
+                    f"{nxt} 10:00:00": 500,
+                }
+                dates = pd.date_range(
+                    pd.Timestamp(f"{day} 15:00", tz=tz),
+                    pd.Timestamp(f"{nxt} 10:00", tz=tz),
+                    freq="30min",
+                )
+                forecast = await self._fetch_solar_forecast(dates, [watts])
+                self.assertEqual(list(forecast.index), list(dates))
+                for naive, expected in ((f"{day} 15:30", 300), (f"{nxt} 09:30", 400)):
+                    ts = pd.Timestamp(naive, tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], expected)
+                mid = forecast.loc[
+                    pd.Timestamp(f"{day} 16:30", tz=tz) : pd.Timestamp(f"{nxt} 08:30", tz=tz),
+                    "yhat",
+                ]
+                self.assertTrue((mid == 0).all(), mid[mid != 0])
+
+    async def test_solar_forecast_source_points_inside_dst_hour_are_kept(self):
+        """Hourly points spanning the spring-forward gap (02:00 does not exist) stay hourly."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-03-29 01:00:00": 100,
+            "2026-03-29 03:00:00": 300,
+            "2026-03-29 04:00:00": 500,
+        }
+        dates = pd.date_range(
+            pd.Timestamp("2026-03-29 01:00", tz=tz),
+            pd.Timestamp("2026-03-29 04:00", tz=tz),
+            freq="30min",
+        )
+        forecast = await self._fetch_solar_forecast(dates, [watts])
+        self.assertEqual(list(forecast.index), list(dates))
+        # 01:00 and 03:00 local are one real hour apart; 03:00 -> 04:00 likewise.
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 01:00", tz=tz), "yhat"], 100)
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
+        self.assertTrue((forecast["yhat"] >= 0).all())
+
+    async def test_solar_forecast_nonexistent_local_time_does_not_duplicate_samples(self):
+        """A source stamp in the skipped spring-forward hour must not break reindexing."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-03-29 01:00:00": 100,
+            "2026-03-29 02:00:00": 250,  # does not exist locally; shifted onto 03:00
+            "2026-03-29 03:00:00": 300,
+            "2026-03-29 04:00:00": 500,
+        }
+        dates = pd.date_range(
+            pd.Timestamp("2026-03-29 01:00", tz=tz),
+            pd.Timestamp("2026-03-29 04:00", tz=tz),
+            freq="30min",
+        )
+        forecast = await self._fetch_solar_forecast(dates, [watts])
+        self.assertEqual(list(forecast.index), list(dates))
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:00", tz=tz), "yhat"], 300)
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
+
+    async def test_solar_forecast_multiple_arrays_are_gap_checked_independently(self):
+        """Each array is gap-checked on its own before the arrays are summed."""
+        tz = "Europe/Paris"
+        array_a = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 11:00:00": 200,
+            "2026-08-22 12:00:00": 300,
+            "2026-08-22 13:00:00": 400,
+        }
+        array_b = {"2026-08-22 10:00:00": 10, "2026-08-22 13:00:00": 40}
+        dates = pd.date_range(pd.Timestamp("2026-08-22 10:00", tz=tz), periods=7, freq="30min")
+        forecast = await self._fetch_solar_forecast(dates, [array_a, array_b])
+        # Array B has a three-hour source gap, so it contributes only at its own points.
+        expected = {"10:00": 110, "10:30": 150, "11:00": 200, "12:00": 300, "13:00": 440}
+        for hhmm, value in expected.items():
+            ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=tz)
+            self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
+
+    async def test_solar_forecast_irregular_source_spacing(self):
+        """Irregular timestamps interpolate by time within an hour, and are zero beyond it."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 10:20:00": 200,
+            "2026-08-22 11:20:00": 500,
+            "2026-08-22 12:21:00": 800,
+        }
+        dates = pd.date_range(pd.Timestamp("2026-08-22 10:00", tz=tz), periods=6, freq="30min")
+        forecast = await self._fetch_solar_forecast(dates, [watts])
+
+        def at(hhmm):
+            return forecast.loc[pd.Timestamp(f"2026-08-22 {hhmm}", tz=tz), "yhat"]
+
+        self.assertAlmostEqual(at("10:00"), 100)
+        self.assertAlmostEqual(at("10:30"), 200 + (500 - 200) * 10 / 60)
+        self.assertEqual(at("12:00"), 0.0)  # 11:20 -> 12:21 is longer than one hour
+        self.assertEqual(at("12:30"), 0.0)
+
     def _solar_forecast_plants(self, n_plants):
         """Configure n identical forecast.solar arrays and skip the on-disk cache."""
         self.plant_conf["pv_module_model"] = ["module"] * n_plants
