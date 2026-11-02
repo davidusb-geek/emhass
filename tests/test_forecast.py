@@ -2160,12 +2160,18 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
 
         night = pd.date_range(
-            "2026-10-28 17:30", "2026-10-29 07:30",
-            freq="30min", tz=self.fcst.time_zone,
+            "2026-10-28 17:30",
+            "2026-10-29 07:30",
+            freq="30min",
+            tz=self.fcst.time_zone,
         )
         self.assertTrue((forecast.loc[night, "yhat"] == 0).all(), forecast.loc[night])
-        self.assertEqual(forecast.loc[pd.Timestamp("2026-10-28 17:00", tz=self.fcst.time_zone), "yhat"], 163)
-        self.assertEqual(forecast.loc[pd.Timestamp("2026-10-29 08:00", tz=self.fcst.time_zone), "yhat"], 364)
+        self.assertEqual(
+            forecast.loc[pd.Timestamp("2026-10-28 17:00", tz=self.fcst.time_zone), "yhat"], 163
+        )
+        self.assertEqual(
+            forecast.loc[pd.Timestamp("2026-10-29 08:00", tz=self.fcst.time_zone), "yhat"], 364
+        )
 
     async def test_solar_forecast_long_daylight_source_gap_is_not_interpolated(self):
         """A missing 12:00 source hour must not fabricate 11:30-12:30 solar."""
@@ -2174,7 +2180,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("30min")
         self.fcst.forecast_dates = pd.date_range(
             start=pd.Timestamp("2026-08-22 09:00", tz=self.fcst.time_zone),
-            periods=12, freq="30min",
+            periods=12,
+            freq="30min",
         )
         self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
         watts = {
@@ -2186,11 +2193,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with aioresponses() as mocked:
             mocked.get(
                 re.compile(r"https://api\.forecast\.solar/estimate/.*"),
-                payload={"result": {"watts": watts}}, repeat=True,
+                payload={"result": {"watts": watts}},
+                repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
         def ts(hhmm):
             return pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+
         self.assertEqual(forecast.loc[ts("10:30"), "yhat"], 150)
         for hhmm in ("11:30", "12:00", "12:30"):
             self.assertEqual(forecast.loc[ts(hhmm), "yhat"], 0)
@@ -2203,7 +2212,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("45min")
         self.fcst.forecast_dates = pd.date_range(
             start=pd.Timestamp("2026-08-22 05:00", tz=self.fcst.time_zone),
-            periods=5, freq="45min",
+            periods=5,
+            freq="45min",
         )
         self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
         # Non-linear profile: losing 06:00 and 07:00 produces the wrong values.
@@ -2219,7 +2229,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 payload={"result": {"watts": watts}}, repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
-        for hhmm, value in (("05:00", 100), ("05:45", 175), ("06:30", 400), ("07:15", 550), ("08:00", 400)):
+        for hhmm, value in (
+            ("05:00", 100),
+            ("05:45", 175),
+            ("06:30", 400),
+            ("07:15", 550),
+            ("08:00", 400),
+        ):
             ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
             self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
 
