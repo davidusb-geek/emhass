@@ -1,0 +1,35 @@
+name: Issue 1267 Forecast.Solar regression
+on:
+  push:
+    branches:
+      - fix/issue1267-forecast-solar-night-gaps
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install EMHASS and test dependencies
+        run: uv sync --extra test
+      - name: Run issue 1267 regressions
+        run: >
+          uv run pytest -q tests/test_forecast.py
+          -k "test_solar_forecast_overnight_gap_is_zero or
+          test_solar_forecast_long_daylight_source_gap_is_not_interpolated or
+          test_solar_forecast_non_divisor_grid_preserves_source_samples or
+          test_solar_forecast_15min_step_interpolates_interior_slots"
+      - name: Ruff on touched Python files
+        run: |
+          uv run ruff check src/emhass/forecast.py tests/test_forecast.py
+          uv run ruff format --check src/emhass/forecast.py tests/test_forecast.py
