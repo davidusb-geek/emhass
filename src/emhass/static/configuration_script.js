@@ -643,7 +643,9 @@ function buildParamElement(
         let selected = ""
         //if item in select is the same as the config value, then append "selected" tag
         if (options==value) {selected = `selected="selected"`}
-        inputs += `<option ${selected}>${escapeHtml(options)}</option>`;
+        //explicit value: without it the browser derives the value from the option text,
+        //stripping and collapsing whitespace, so saveConfiguration would read it altered
+        inputs += `<option ${selected} value="${escapeHtml(options)}">${escapeHtml(options)}</option>`;
       }
       inputs += `</select>`;
       return inputs;
