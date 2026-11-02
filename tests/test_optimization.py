@@ -5640,6 +5640,52 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             res["predicted_temp_heater0"].iloc[1], res2["predicted_temp_heater0"].iloc[1]
         )
 
+        # Fallback path coverage (when load is not in param_thermal)
+        # 1. Degree-day model
+        opt_fallback = self.create_optimization()
+        opt_fallback.param_thermal.clear()
+        constraints = []
+        _, heat_demand_deg, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_deg >= -1e-8))
+
+        # 2. Building physics model
+        hc_physics = dict(self.optim_conf["def_load_config"][0]["thermal_battery"])
+        hc_physics.pop("specific_heating_demand", None)
+        hc_physics.pop("area", None)
+        hc_physics.update(
+            {
+                "u_value": 0.35,
+                "envelope_area": 380.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 240.0,
+            }
+        )
+        opt_fallback.optim_conf["def_load_config"][0]["thermal_battery"] = hc_physics
+        _, heat_demand_phys, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_phys >= -1e-8))
+
+        # 3. Hot-water draw-off model
+        hc_draw_off = {
+            "start_temperature": 50.0,
+            "supply_temperature": 55.0,
+            "volume": 0.3,
+            "thermal_loss": 0.05,
+            "min_temperatures": [45.0] * 48,
+            "max_temperatures": [65.0] * 48,
+            "draw_off_demand": [0.5] * 48,
+            "solar_absorption_area": 2.0,
+            "solar_absorption_factor": 0.8,
+        }
+        opt_fallback.optim_conf["def_load_config"][0]["thermal_battery"] = hc_draw_off
+        _, heat_demand_hw, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_hw >= -1e-8))
+
     def test_shared_tank_excess_gains_passive_warming_and_clipped_demand(self):
         """Shared tank temperature rises with building-physics excess gains while demand stays >= 0."""
         self.optim_conf["number_of_deferrable_loads"] = 1
