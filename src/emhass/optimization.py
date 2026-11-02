@@ -7370,6 +7370,7 @@ class Optimization:
                 stage_times=stage_times,
                 battery_availability=battery_availability,
                 battery_discharge_energy_max=battery_discharge_energy_max,
+                def_availability=def_availability,
             )
 
     def _perform_optimization_locked(
@@ -7397,6 +7398,7 @@ class Optimization:
         stage_times: dict[str, float] | None = None,
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
+        def_availability: float | list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Dynamic Resizing
