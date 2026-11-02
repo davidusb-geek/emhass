@@ -2189,7 +2189,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 payload={"result": {"watts": watts}}, repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
-        ts = lambda hhmm: pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+        def ts(hhmm):
+            return pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
         self.assertEqual(forecast.loc[ts("10:30"), "yhat"], 150)
         for hhmm in ("11:30", "12:00", "12:30"):
             self.assertEqual(forecast.loc[ts(hhmm), "yhat"], 0)
