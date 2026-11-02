@@ -2205,10 +2205,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             periods=5, freq="45min",
         )
         self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        # Non-linear profile: losing 06:00 and 07:00 produces the wrong values.
         watts = {
             "2026-08-22 05:00:00": 100,
             "2026-08-22 06:00:00": 200,
-            "2026-08-22 07:00:00": 300,
+            "2026-08-22 07:00:00": 600,
             "2026-08-22 08:00:00": 400,
         }
         with aioresponses() as mocked:
@@ -2217,7 +2218,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 payload={"result": {"watts": watts}}, repeat=True,
             )
             forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
-        for hhmm, value in (("05:00", 100), ("05:45", 175), ("06:30", 250), ("07:15", 325), ("08:00", 400)):
+        for hhmm, value in (("05:00", 100), ("05:45", 175), ("06:30", 400), ("07:15", 550), ("08:00", 400)):
             ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
             self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
 
