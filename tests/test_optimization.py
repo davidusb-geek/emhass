@@ -5618,6 +5618,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         balance = opt.param_thermal[0]["thermal_balance"].value
         self.assertTrue(np.all(demand >= -1e-8))
         self.assertTrue(np.any(balance < 0.0))  # Net gain reflected in signed balance
+        np.testing.assert_allclose(demand, np.maximum(balance, 0.0))
 
         # Cache hit with refreshed GHI re-evaluates surface solar gain
         cached_problem = opt.prob
@@ -5649,6 +5650,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             constraints, 0, df, np.zeros(48)
         )
         self.assertTrue(np.all(heat_demand_deg >= -1e-8))
+        raw_deg = utils.calculate_heating_demand(
+            specific_heating_demand=50.0,
+            floor_area=50.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            base_temperature=18.0,
+            annual_reference_hdd=3000.0,
+            optimization_time_step=30,
+        )
+        bal_deg = opt_fallback._apply_surface_solar_gain(
+            self.optim_conf["def_load_config"][0]["thermal_battery"], df, np.array(raw_deg[:48]), 48
+        )
+        self.assertTrue(np.any(bal_deg < 0.0))
+        np.testing.assert_allclose(heat_demand_deg, np.maximum(bal_deg, 0.0))
 
         # 2. Building physics model
         hc_physics = dict(self.optim_conf["def_load_config"][0]["thermal_battery"])
@@ -5667,6 +5681,24 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             constraints, 0, df, np.zeros(48)
         )
         self.assertTrue(np.all(heat_demand_phys >= -1e-8))
+        bal_phys = utils.calculate_thermal_balance_physics(
+            u_value=0.35,
+            envelope_area=380.0,
+            ventilation_rate=0.4,
+            heated_volume=240.0,
+            indoor_target_temperature=15.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            optimization_time_step=30,
+            solar_irradiance_forecast=None,
+            window_area=None,
+            shgc=0.6,
+            internal_gains_forecast=None,
+            internal_gains_factor=0.0,
+            sense="heat",
+        )
+        bal_phys = opt_fallback._apply_surface_solar_gain(hc_physics, df, np.array(bal_phys[:48]), 48)
+        self.assertTrue(np.any(bal_phys < 0.0))
+        np.testing.assert_allclose(heat_demand_phys, np.maximum(bal_phys, 0.0))
 
         # 3. Hot-water draw-off model
         hc_draw_off = {
@@ -5685,6 +5717,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             constraints, 0, df, np.zeros(48)
         )
         self.assertTrue(np.all(heat_demand_hw >= -1e-8))
+        raw_hw, _ = opt_fallback._resolve_draw_off_demand(hc_draw_off, 0.05, 48)
+        bal_hw = opt_fallback._apply_surface_solar_gain(hc_draw_off, df, raw_hw, 48)
+        self.assertTrue(np.any(bal_hw < 0.0))
+        np.testing.assert_allclose(heat_demand_hw, np.maximum(bal_hw, 0.0))
 
     def test_shared_tank_excess_gains_passive_warming_and_clipped_demand(self):
         """Shared tank temperature rises with building-physics excess gains while demand stays >= 0."""
