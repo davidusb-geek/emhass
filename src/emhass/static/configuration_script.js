@@ -516,6 +516,17 @@ function buildParamContainers(
   }
 }
 
+//HTML-encode a configuration-derived value for use inside a double-quoted
+//attribute or as element text, so it is always parsed as data (#1290).
+//String() keeps the textual form template interpolation produced before.
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 //create html input element/s for a param container (called by buildParamContainers)
 function buildParamElement(
   parameter_definition_object,
@@ -632,7 +643,9 @@ function buildParamElement(
         let selected = ""
         //if item in select is the same as the config value, then append "selected" tag
         if (options==value) {selected = `selected="selected"`}
-        inputs += `<option ${selected}>${options}</option>`;
+        //explicit value: without it the browser derives the value from the option text,
+        //stripping and collapsing whitespace, so saveConfiguration would read it altered
+        inputs += `<option ${selected} value="${escapeHtml(options)}">${escapeHtml(options)}</option>`;
       }
       inputs += `</select>`;
       return inputs;
@@ -646,7 +659,7 @@ function buildParamElement(
       let checked_attr = type === "checkbox" && value === true ? "checked" : "";
       return `
           ${type_specific_html}
-          <input class="param_input" type="${type}" placeholder=${parameter_definition_object["default_value"]} value=${value} ${checked_attr}>
+          <input class="param_input" type="${type}" placeholder="${escapeHtml(parameter_definition_object["default_value"])}" value="${escapeHtml(value)}" ${checked_attr}>
           ${type_specific_html_end}
           `;
     }
@@ -657,7 +670,7 @@ function buildParamElement(
     if (value === null) {
       return `
           ${type_specific_html}
-          <input class="param_input" type="${type}" placeholder="${placeholder}" value="">
+          <input class="param_input" type="${type}" placeholder="${escapeHtml(placeholder)}" value="">
           ${type_specific_html_end}
           `;
     }
@@ -666,9 +679,9 @@ function buildParamElement(
     if (typeof Object.values(value)[0] === "object" && Object.values(value)[0] !== null) {
       for (let param of Object.values(value)) {
         for (let items of Object.values(param)) {
-          inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${
+          inputs += `<input class="param_input" type="${type}" placeholder="${escapeHtml(Object.values(items)[0])}" value="${escapeHtml(
             Object.values(items)[0]
-          }>`;
+          )}">`;
         }
         inputs += `</br>`;
       }
@@ -684,7 +697,7 @@ function buildParamElement(
         let checked_attr = type === "checkbox" && param === true ? "checked" : "";
         inputs += `
           ${type_specific_html}
-          <input class="param_input" type="${type}" placeholder=${parameter_definition_object["default_value"]} value=${param} ${checked_attr}>
+          <input class="param_input" type="${type}" placeholder="${escapeHtml(parameter_definition_object["default_value"])}" value="${escapeHtml(param)}" ${checked_attr}>
           ${type_specific_html_end}
           `;
       }
@@ -1198,7 +1211,8 @@ async function loadConfigurationBoxPage(config) {
       <textarea id="config-box" rows="30" placeholder="{}"></textarea>
       `;
   //set created textarea box with retrieved config
-  document.getElementById("config-box").innerHTML = JSON.stringify(
+  //.value, not innerHTML: a textarea's HTML parsing would decode &amp; etc. in the data (#1290)
+  document.getElementById("config-box").value = JSON.stringify(
     config,
     null,
     2
