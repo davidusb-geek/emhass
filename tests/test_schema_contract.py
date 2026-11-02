@@ -878,6 +878,7 @@ def _run_array_control_probe(js_src, section, params, *, click=None, typed=None)
         _extract_function_src(js_src, name)
         for name in (
             "checkConfigParam",
+            "escapeHtml",
             "buildParamElement",
             "plusElements",
             "minusElements",
