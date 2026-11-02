@@ -156,7 +156,7 @@ The flag must come from the curtailment entity, never from the forecast error it
 
 ### solar.forecast 
 
-A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
+A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts. EMHASS interpolates between the readings Solar.Forecast returns, but only across gaps of up to one hour. Time with no reading for longer, such as the night between the last and the first reading of a day, is set to 0 W PV and not interpolated. Solar.Forecast brackets each night with 0 W sunrise and sunset readings, so a gap of more than one hour next to a non-zero reading is treated as missing data: EMHASS logs a warning naming the affected steps and uses 0 W PV for them, so the plan is conservative rather than based on invented production.
 
 For example, for a 5 kW installation:
 ```bash

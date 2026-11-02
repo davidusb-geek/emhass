@@ -2196,7 +2196,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 payload={"result": {"watts": watts}},
                 repeat=True,
             )
-            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+            with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        # The hole is reported, not hidden: 11:30, 12:00 and 12:30 are set to 0 W.
+        self.assertTrue(
+            any("no reading for 3 forecast step(s)" in line for line in logs.output), logs.output
+        )
 
         def ts(hhmm):
             return pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
@@ -2205,6 +2210,28 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         for hhmm in ("11:30", "12:00", "12:30"):
             self.assertEqual(forecast.loc[ts(hhmm), "yhat"], 0)
         self.assertEqual(forecast.loc[ts("13:30"), "yhat"], 450)
+
+    async def test_solar_forecast_warns_only_for_long_gap_next_to_nonzero_reading(self):
+        """A long gap between 0 W readings is a night; next to a non-zero reading it is a hole."""
+        tz = "Europe/Paris"
+        dates = pd.date_range(pd.Timestamp("2026-08-22 06:00", tz=tz), periods=9, freq="30min")
+        for before, after, expect_warning in (
+            (0, 0, False),
+            (0, 300, True),
+            (300, 0, True),
+            (300, 300, True),
+        ):
+            with self.subTest(before=before, after=after):
+                watts = {"2026-08-22 06:00:00": before, "2026-08-22 10:00:00": after}
+                if expect_warning:
+                    with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                        forecast = await self._fetch_solar_forecast(dates, [watts])
+                    self.assertTrue(any("no reading for 7 forecast" in x for x in logs.output))
+                else:
+                    with self.assertNoLogs(self.fcst.logger, level="WARNING"):
+                        forecast = await self._fetch_solar_forecast(dates, [watts])
+                between = forecast.loc[dates[1] : dates[-2], "yhat"]
+                self.assertTrue((between == 0).all(), between)
 
     async def test_solar_forecast_non_divisor_grid_preserves_source_samples(self):
         """45-minute target slots must interpolate from original hourly points."""
@@ -2249,6 +2276,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.forecast_dates = forecast_dates
         self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
         n_plants = len(watts_per_array)
+        self.retrieve_hass_conf["solar_forecast_kwp"] = 5
         self.plant_conf["pv_module_model"] = ["module"] * n_plants
         self.plant_conf["surface_tilt"] = [30] * n_plants
         self.plant_conf["surface_azimuth"] = [180] * n_plants
@@ -2355,7 +2383,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             pd.Timestamp("2026-03-29 04:00", tz=tz),
             freq="30min",
         )
-        forecast = await self._fetch_solar_forecast(dates, [watts])
+        with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+            forecast = await self._fetch_solar_forecast(dates, [watts])
+        self.assertTrue(any("shares an instant" in line for line in logs.output), logs.output)
         self.assertEqual(list(forecast.index), list(dates))
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:00", tz=tz), "yhat"], 300)
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
@@ -2367,7 +2397,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             payload = cPickle.loads(bz2.decompress(await f.read()))
         tz = "Europe/Paris"
         dates = pd.date_range("2022-10-24 17:00", periods=36, freq="30min", tz=tz)
-        forecast = await self._fetch_solar_forecast(dates, [payload["result"]["watts"]])
+        with self.assertNoLogs(self.fcst.logger, level="WARNING"):
+            forecast = await self._fetch_solar_forecast(dates, [payload["result"]["watts"]])
         night = forecast.loc[
             pd.Timestamp("2022-10-24 19:00", tz=tz) : pd.Timestamp("2022-10-25 08:00", tz=tz),
             "yhat",
