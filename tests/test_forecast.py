@@ -2130,8 +2130,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((p_pv.between_time("00:00", "04:45") == 0.0).all())
         self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
 
-    # Issue #1267: a Forecast.Solar response omits night-time observations.
-    # The interpolation path must not infer any PV over that long gap.
+    # Issue #1267: a night with no readings at all (here without 0 W sunset/sunrise
+    # brackets) must not be bridged; the missing night is reported as a gap.
     async def test_solar_forecast_overnight_gap_is_zero(self):
         self._isolate_weather_cache_dir()
         self.fcst.freq = pd.Timedelta("30min")
@@ -2157,7 +2157,16 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 payload={"result": {"watts": watts}},
                 repeat=True,
             )
-            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+            with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        self.assertTrue(
+            any(
+                "no reading for 29 forecast step(s) (first: 2026-10-28 17:30:00+01:00, "
+                "last: 2026-10-29 07:30:00+01:00)" in x
+                for x in logs.output
+            ),
+            logs.output,
+        )
 
         night = pd.date_range(
             "2026-10-28 17:30",
@@ -2200,7 +2209,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
         # The hole is reported, not hidden: 11:30, 12:00 and 12:30 are set to 0 W.
         self.assertTrue(
-            any("no reading for 3 forecast step(s)" in line for line in logs.output), logs.output
+            any(
+                "no reading for 3 forecast step(s) (first: 2026-08-22 11:30:00+02:00, "
+                "last: 2026-08-22 12:30:00+02:00)" in line
+                for line in logs.output
+            ),
+            logs.output,
         )
 
         def ts(hhmm):
@@ -2385,7 +2399,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
             forecast = await self._fetch_solar_forecast(dates, [watts])
-        self.assertTrue(any("shares an instant" in line for line in logs.output), logs.output)
+        self.assertTrue(
+            any(
+                "returned 1 reading(s)" in line and "shares an instant" in line
+                for line in logs.output
+            ),
+            logs.output,
+        )
         self.assertEqual(list(forecast.index), list(dates))
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:00", tz=tz), "yhat"], 300)
         self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
@@ -2423,7 +2443,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         array_b = {"2026-08-22 10:00:00": 10, "2026-08-22 13:00:00": 40}
         dates = pd.date_range(pd.Timestamp("2026-08-22 10:00", tz=tz), periods=7, freq="30min")
-        forecast = await self._fetch_solar_forecast(dates, [array_a, array_b])
+        with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+            forecast = await self._fetch_solar_forecast(dates, [array_a, array_b])
+        # Only array B has a hole: its gap is reported, array A's is not.
+        self.assertEqual(sum("no reading for" in x for x in logs.output), 1, logs.output)
         # Array B has a three-hour source gap, so it contributes only at its own points.
         expected = {"10:00": 110, "10:30": 150, "11:00": 200, "12:00": 300, "13:00": 440}
         for hhmm, value in expected.items():
