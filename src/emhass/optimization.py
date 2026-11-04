@@ -2020,7 +2020,7 @@ class Optimization:
         self.logger.info(f"{limit_name} configured as time-varying with {data_length} values")
         return limit_array
 
-    def _setup_stress_cost(self, cost_conf_key, max_power, var_name_prefix):
+    def _setup_stress_cost(self, cost_conf_key, segments_conf_key, max_power, var_name_prefix):
         """
         Generic setup for a stress cost (battery or inverter).
         """
@@ -2043,7 +2043,7 @@ class Optimization:
             "unit_cost": stress_unit_cost,
             "max_power": max_power,
             # Defaults to 10 segments if not provided in config
-            "segments": self.plant_conf.get(f"{var_name_prefix}_stress_segments", 10),
+            "segments": self.plant_conf.get(segments_conf_key, 10),
         }
 
     def _build_stress_segments(self, max_power, stress_unit_cost, segments):
@@ -8458,7 +8458,10 @@ class Optimization:
                     self.plant_conf.get("inverter_ac_input_max", 0),
                 )
                 inv_stress_conf = self._setup_stress_cost(
-                    "inverter_stress_cost", P_nom_inverter_max, "inv"
+                    "inverter_stress_cost",
+                    "inverter_stress_segments",
+                    P_nom_inverter_max,
+                    "inv",
                 )
                 if inv_stress_conf["active"]:
                     self.vars["inv_stress_cost"] = inv_stress_conf["vars"]
