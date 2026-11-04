@@ -9,6 +9,7 @@
 
 # Allow the EMHASS source tree
 !src/
+!src/emhass/
 !src/emhass/**
 
 # Allow only the two required default data files (ignores other local CSVs/PKLs in data/)

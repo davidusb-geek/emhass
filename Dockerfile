@@ -28,7 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Copy uv binaries directly from official image (faster and cleaner than curl installer)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /uvx /usr/local/bin/
 
 # 1. Install ONLY persistent runtime shared libraries in a cached layer
 RUN apt-get update \
@@ -86,7 +86,8 @@ RUN apt-get update \
     && rm -rf /var/cache/apt/* /var/lib/apt/lists/*
 
 # 5. Declare BUILD_VERSION and labels last so version bumps don't bust the build cache
-ARG BUILD_VERSION
+ARG build_version
+ARG BUILD_VERSION=${build_version}
 LABEL \
     io.hass.name="emhass" \
     io.hass.description="EMHASS: Energy Management for Home Assistant" \
