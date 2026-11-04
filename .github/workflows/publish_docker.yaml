@@ -1,6 +1,5 @@
 #template modified from: https://docs.docker.com/build/ci/github-actions/multi-platform/ & https://docs.github.com/en/actions/use-cases-and-examples/publishing-packages/publishing-docker-images
 name: "Publish Docker"
-
 on:
   release:
     types: [published]
@@ -12,7 +11,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -22,21 +21,22 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          [
-            { target_arch: amd64, buildx: "linux/amd64", os_version: debian },
-            { target_arch: aarch64, buildx: "linux/arm64", os_version: debian },
-          ]
+          - { target_arch: amd64, buildx: "linux/amd64", os_version: debian }
+          - { target_arch: aarch64, buildx: "linux/arm64", os_version: debian }
     steps:
-      # Pull git repo and build each architecture image separately (with QEMU and Buildx)
-      - name: lowercase repo
+      - name: Lowercase repo
         run: |
-          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >> "${GITHUB_ENV}"
+
       - name: Checkout the repository
         uses: actions/checkout@v6
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
       - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
@@ -54,12 +54,21 @@ jobs:
           build-args: |
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
+            BUILD_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.platform.target_arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform.target_arch }}
           load: true
+
       # Extract a list of the installed Debian packages, export as artifact for vulnerability scanning with OSV
       - name: Export Debian package list
-        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+        run: |
+          mkdir -p OSV
+          docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+
       - name: Export Python package list
-        run: docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
+        run: |
+          docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
+
       - name: Upload package list as digest
         uses: actions/upload-artifact@v6
         with:
@@ -67,13 +76,14 @@ jobs:
           path: ./OSV/*
           if-no-files-found: error
           retention-days: 1
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
 
-      # Build Docker image for pushing to registry
+      # Build Docker image for pushing to registry (reuses cached layers from previous step)
       - name: Build and push Docker image by digest
         id: build
         uses: docker/build-push-action@v7
@@ -83,14 +93,18 @@ jobs:
           build-args: |
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
+            BUILD_VERSION=${{ github.ref_name }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.platform.target_arch }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true,push=true
+
       # Export the build images as artifact for the next job of merging
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
+
       - name: Upload digest
         uses: actions/upload-artifact@v6
         with:
@@ -99,7 +113,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Google OSV-Scanner (check known vulnerabilities for Python & Debian packages )
+  # Google OSV-Scanner (check known vulnerabilities for Python & Debian packages)
   osv-scan:
     needs:
       - build
@@ -107,27 +121,25 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          [
-            { target_arch: amd64 },
-            { target_arch: aarch64 },
-          ]
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
+          - { target_arch: amd64 }
+          - { target_arch: aarch64 }
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
       fail-on-vuln: false
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
-        --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
+        --lockfile=uv.lock:./${{ matrix.platform.target_arch }}.lock
     permissions:
       security-events: write
       contents: read
       actions: read
 
-  # Merge platforms into images into a multi-platform image
+  # Merge platforms into a multi-platform image
   merge:
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
@@ -137,33 +149,39 @@ jobs:
       - osv-scan
       - build
     steps:
-      - name: lowercase repo
+      - name: Lowercase repo
         run: |
-          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >> "${GITHUB_ENV}"
+
       - name: Download digests
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
+
       - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}@sha256:%s ' *)
+
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ steps.meta.outputs.version }}
