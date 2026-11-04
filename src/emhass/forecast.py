@@ -116,6 +116,8 @@ solcast_backoff_seconds = (1, 2, 4)
 forecast_solar_request_timeout = 12
 forecast_solar_max_attempts = 3
 forecast_solar_backoff_seconds = (1, 2, 4)
+# Readings further apart than this are not interpolated (the free tier's resolution is 1 h).
+forecast_solar_max_source_gap = pd.Timedelta(hours=1)
 
 # Python 3.10 keeps asyncio.TimeoutError distinct from the builtin TimeoutError.
 # aiohttp's total timeout raises the asyncio one, which is not a ClientError,
@@ -919,6 +921,46 @@ class Forecast:
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
+    def _resample_solar_forecast(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Resample one forecast.solar array onto ``self.forecast_dates``.
+
+        The provider's own timestamps are kept while interpolating. Reindexing straight
+        onto the grid drops the off-grid 0 W sunrise/sunset readings that bracket each
+        night, and interpolation then joins the evening and morning daylight values.
+        Readings more than one hour apart (the free tier's resolution) are not bridged:
+        the slots between them are 0 W, and a warning names them when a neighbouring
+        reading is above zero, since that is a hole in the daytime data and not a night.
+        """
+        shared_instant = data.index.duplicated(keep="last")
+        if shared_instant.any():
+            self.logger.warning(
+                "forecast.solar returned %d reading(s) at a local time that does not exist "
+                "(daylight saving change) and shares an instant with another reading; "
+                "keeping the last reading of each instant",
+                int(shared_instant.sum()),
+            )
+        data = data[~shared_instant]
+        combined = data.reindex(data.index.union(self.forecast_dates))
+        source_times = combined.index.to_series().where(combined["yhat"].notna())
+        source_gap = source_times.bfill() - source_times.ffill()
+        bridged = source_gap <= forecast_solar_max_source_gap  # False outside the readings (NaT)
+        long_gap = source_gap > forecast_solar_max_source_gap
+        daytime_hole = long_gap & (
+            (combined["yhat"].ffill() != 0) | (combined["yhat"].bfill() != 0)
+        )
+        hole_slots = daytime_hole.reindex(self.forecast_dates)
+        if hole_slots.any():
+            hole_dates = self.forecast_dates[hole_slots.to_numpy()]
+            self.logger.warning(
+                "forecast.solar has no reading for %d forecast step(s) (first: %s, last: %s) "
+                "in a gap of more than one hour next to a non-zero reading; using 0 W PV for them",
+                len(hole_dates),
+                hole_dates[0],
+                hole_dates[-1],
+            )
+        combined["yhat"] = combined["yhat"].interpolate(method="time").where(bridged, 0.0)
+        return combined.reindex(self.forecast_dates)
+
     async def _get_weather_solar_forecast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from solar.forecast or cache."""
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
@@ -981,14 +1023,7 @@ class Forecast:
                                 ambiguous="infer",
                                 nonexistent="shift_forward",
                             )
-                            data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                            # Gap filling
-                            mask_up = data_tmp.copy(deep=True).ffill().isnull()
-                            mask_down = data_tmp.copy(deep=True).bfill().isnull()
-                            data_tmp.loc[mask_up["yhat"], :] = 0.0
-                            data_tmp.loc[mask_down["yhat"], :] = 0.0
-                            data_tmp.interpolate(inplace=True, limit_area="inside")
-                            data_tmp = data_tmp.fillna(0.0)
+                            data_tmp = self._resample_solar_forecast(data_tmp)
                         array_data = data_tmp
                         break
                     except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:

@@ -5696,7 +5696,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             internal_gains_factor=0.0,
             sense="heat",
         )
-        bal_phys = opt_fallback._apply_surface_solar_gain(hc_physics, df, np.array(bal_phys[:48]), 48)
+        bal_phys = opt_fallback._apply_surface_solar_gain(
+            hc_physics, df, np.array(bal_phys[:48]), 48
+        )
         self.assertTrue(np.any(bal_phys < 0.0))
         np.testing.assert_allclose(heat_demand_phys, np.maximum(bal_phys, 0.0))
 
