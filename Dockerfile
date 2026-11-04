@@ -51,13 +51,13 @@ RUN apt-get update \
 COPY .python-version /app/
 RUN uv python install && uv venv
 
-# 3. Copy project files (src/emhass/ already includes templates, static, and package data)
+# 3. Copy project files (allowed via !src/emhass/ and !src/emhass/** in .dockerignore)
 COPY pyproject.toml README.md gunicorn.conf.py /app/
 COPY src/emhass/ /app/src/emhass/
 COPY data/opt_res_latest.csv /app/data/opt_res_latest.csv
 COPY data/long_train_data.pkl /app/data/long_train_data.pkl
 
-# 4. Install build-only packages, compile Python wheels, generate uv.lock, and purge compilers in ONE layer
+# 4. Install build-only packages, generate uv.lock, sync environment from lock, and purge compilers in ONE layer
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
@@ -70,9 +70,8 @@ RUN apt-get update \
         libhdf5-dev \
         libhdf5-serial-dev \
     && ln -sf /usr/include/hdf5/serial /usr/include/hdf5/include \
-    && ( [ "${TARGETARCH}" = "aarch64" ] && uv pip install --verbose ndindex || echo "Skipping ndindex" ) \
-    && uv pip install --verbose . \
     && uv lock \
+    && uv sync --frozen --verbose \
     && apt-get remove --purge -y --auto-remove \
         gcc \
         g++ \
