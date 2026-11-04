@@ -801,15 +801,40 @@ def test_set_config_refuses_more_than_one_inverter_and_writes_nothing(web):
     assert _web_state(web) == before
 
 
-def test_set_config_reports_the_specific_inverter_fault_before_the_refusal(web):
+def test_set_config_reports_every_inverter_fault_before_the_refusal(web):
     assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
     before = _web_state(web)
     status, body = web.post({"number_of_inverters": 2})
     assert status == 400
-    # Both come back at once: the specific fault, then the refusal.
-    assert len(body) == 2
+    # All come back at once: both caps and both index lists, then the refusal.
+    assert len(body) == 5
     assert "inverter_ac_output_max" in body[0]
-    assert "not supported" in body[1]
+    assert "not supported" in body[-1]
+    assert _web_state(web) == before
+
+
+def test_set_config_lists_every_inverter_fault_and_the_refusal(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post(
+        _two_inverter_conf(
+            inverter_efficiency_dc_ac=[0.9, 0.9, 0.9],
+            inverter_stress_cost="abc",
+            inverter_ac_output_max=5000,
+            pv_plant_inverter_index=[7],
+        )
+    )
+    assert status == 400
+    assert len(body) == 5, body
+    expected = (
+        "inverter_efficiency_dc_ac",
+        "inverter_stress_cost",
+        "inverter_ac_output_max",
+        "pv_plant_inverter_index",
+        "not supported",
+    )
+    for message, name in zip(body, expected, strict=True):
+        assert name in message
     assert _web_state(web) == before
 
 
@@ -935,6 +960,71 @@ def test_action_is_a_400_for_a_runtime_inverter_count_above_one(web):
     with _AppLogCapture(web.ws.app.logger) as captured:
         assert asyncio.run(go()) == 400
     assert any("number_of_inverters=2" in m for m in captured.messages)
+
+
+@pytest.mark.parametrize(
+    "runtime,reason",
+    [
+        ({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE}, "expected 0 <= efficiency <= 1"),
+        ({"inverter_is_hybrid": True, DC_AC: [[1000, "x"]]}, "must be a list of at least 2"),
+        ({"inverter_is_hybrid": True, DC_AC: 5}, "must be a list of at least 2"),
+    ],
+)
+def test_action_is_a_400_with_the_reason_for_a_malformed_runtime_curve(web, runtime, reason):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post("/action/dayahead-optim", json=runtime)
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any(DC_AC in m and reason in m for m in captured.messages), captured.messages
+
+
+@pytest.mark.parametrize("action", ["weather-forecast-cache", "export-influxdb-to-csv"])
+def test_the_other_runtime_actions_are_a_400_for_a_malformed_runtime_curve(web, action):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post(
+            f"/action/{action}", json={"inverter_is_hybrid": True, DC_AC: INVALID_CURVE}
+        )
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any(DC_AC in m for m in captured.messages), captured.messages
+
+
+@pytest.mark.parametrize(
+    "conf,curve",
+    [
+        ({"inverter_is_hybrid": True}, INVALID_CURVE),
+        ({"inverter_is_hybrid": True}, [[1000, "x"]]),
+        ({"inverter_is_hybrid": True}, 5),
+        (_two_inverter_conf(), DISCHARGE_CURVE),
+        (_two_inverter_conf(), [INVALID_CURVE, []]),
+    ],
+)
+def test_a_strict_curve_fault_is_an_inverter_config_error_and_logged(caplog, conf, curve):
+    plant_conf = {**conf, DC_AC: curve}
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(utils.InverterConfigError) as excinfo:
+            utils.check_inverter_power_curves(plant_conf, logger)
+    assert isinstance(excinfo.value, ValueError)  # existing `except ValueError` still catches it
+    assert _errors(caplog, DC_AC), "the reason must be logged when the error is raised"
+
+
+def test_a_strict_hybrid_off_supplied_curve_is_an_inverter_config_error():
+    with pytest.raises(utils.InverterConfigError, match="requires inverter_is_hybrid"):
+        utils.check_inverter_power_curves(
+            {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}, logger, supplied=[DC_AC]
+        )
 
 
 # --------------------------------------------------------------------------- #
