@@ -76,6 +76,7 @@ from emhass.utils import (
     get_forecast_start,
     replace_file,
     set_df_index_freq,
+    validate_num_inverters,
 )
 
 header_accept = "application/json"
@@ -1824,15 +1825,25 @@ class Forecast:
         plant. A shorter list, or a single value where a list is expected, raises a
         ValueError naming the parameter and the expected count. A longer list is accepted
         with a warning, since only the first entries are read. Nothing is checked when
-        ``pv_module_model`` is not a list.
+        ``pv_module_model`` is not a list, except for ``pv_plant_inverter_index`` below.
+
+        With ``number_of_inverters`` above 1 (#1150) the entries are matched to inverters by
+        position, so a longer list is an error as well, and ``pv_plant_inverter_index``
+        must be a list with exactly one inverter number per plant (one when
+        ``pv_module_model`` is not a list).
 
         :param keys: The plant_conf keys the calling forecast path reads per plant
         :type keys: tuple[str, ...]
         """
         models = self.plant_conf.get("pv_module_model")
         if not isinstance(models, list):
+            # One plant: the siblings are plain values, but above one inverter the plant
+            # still has to say which inverter it is on.
+            if validate_num_inverters(self.plant_conf) > 1:
+                self._check_pv_plant_inverter_index(1)
             return
         n_plants = len(models)
+        multiple_inverters = validate_num_inverters(self.plant_conf) > 1
         for key in keys:
             value = self.plant_conf.get(key)
             if not isinstance(value, list):
@@ -1845,11 +1856,33 @@ class Forecast:
                     f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
                     "each PV plant needs its own value"
                 )
+            if len(value) > n_plants and multiple_inverters:
+                raise ValueError(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
+                    "with more than one inverter each PV plant needs exactly one value"
+                )
             if len(value) > n_plants:
                 self.logger.warning(
                     f"{key} has {len(value)} entries but pv_module_model has {n_plants}; "
                     "the extra entries are ignored"
                 )
+        if multiple_inverters:
+            self._check_pv_plant_inverter_index(n_plants)
+
+    def _check_pv_plant_inverter_index(self, n_plants: int) -> None:
+        """Require one inverter number per PV plant in ``pv_plant_inverter_index`` (#1150)."""
+        index = self.plant_conf.get("pv_plant_inverter_index")
+        if not isinstance(index, list):
+            raise ValueError(
+                "pv_plant_inverter_index must be a list with one inverter number per PV "
+                f"plant when number_of_inverters is above 1 ({n_plants} plants), got "
+                f"{type(index).__name__}"
+            )
+        if len(index) != n_plants:
+            raise ValueError(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model "
+                f"has {n_plants}: each PV plant needs the number of its inverter"
+            )
 
     def _calculate_pvlib_power(self, df_weather: pd.DataFrame) -> pd.Series:
         """
