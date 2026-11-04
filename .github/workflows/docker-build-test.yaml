@@ -68,14 +68,14 @@ jobs:
             { target_arch: aarch64 }
           ]
     # Check Docker image debian and python packages list for known vulnerabilities
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
       fail-on-vuln: false
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
-        --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
+        --lockfile=uv.lock:./${{ matrix.platform.target_arch }}.lock
     permissions:
       actions: read
       security-events: write
