@@ -205,6 +205,49 @@ class TestBatteryIdentification(unittest.TestCase):
         self.assertEqual(res.status, "ok", msg=str(res.messages))
         self.assertTrue(res.is_ok)
 
+    # -- #1072: same-source agreement near the efficiency ceiling --------------
+    def test_near_ceiling_agreeing_crosscheck_is_low_confidence(self):
+        # Same RTE 0.988 as above, but with enough closed cycles for the
+        # energy-balance cross-check to run. On clean data it agrees with the
+        # slope ratio, and since both come from the same samples that agreement
+        # cannot vouch for a near-ceiling value: demote rather than publish.
+        df = _make_history(10000.0, 0.988, n_cycles=8)
+        res = self._identify(df)
+        self.assertIsNotNone(res.rte_crosscheck_energy_balance)
+        self.assertEqual(res.status, "low_confidence", msg=str(res.messages))
+        self.assertFalse(res.is_ok)
+        self.assertTrue(any("cross-check" in m for m in res.messages), msg=str(res.messages))
+
+    def test_edge_band_is_on_one_way_efficiency(self):
+        # RTE 0.975 is below 0.985 but its one-way sqrt (0.987) is above it.
+        # The edge is defined on the one-way figure, so this must be held too.
+        df = _make_history(10000.0, 0.975, n_cycles=8)
+        res = self._identify(df)
+        self.assertIsNotNone(res.rte_crosscheck_energy_balance)
+        self.assertEqual(res.status, "low_confidence", msg=str(res.messages))
+
+    def test_agreement_below_edge_band_still_publishes(self):
+        # Counterfactual for the edge condition: RTE 0.96 (one-way 0.980) sits
+        # below the band, where close agreement is just what a healthy fit
+        # looks like, so the same fixture shape must still publish.
+        df = _make_history(10000.0, 0.96, n_cycles=8)
+        res = self._identify(df)
+        self.assertIsNotNone(res.rte_crosscheck_energy_balance)
+        self.assertEqual(res.status, "ok", msg=str(res.messages))
+
+    def test_closeness_threshold_on_round_trip_gap(self):
+        # Counterfactual for the closeness condition, on the RTE gap: 0.008
+        # from the fitted 0.988 still counts as agreement and is held, 0.011
+        # does not and is left to the other guardrails.
+        df = _make_history(10000.0, 0.988, n_cycles=8)
+        for rte_eb, expected in ((0.980, "low_confidence"), (0.977, "ok")):
+            with self.subTest(rte_eb=rte_eb):
+                bid = BatteryIdentification(self.logger)
+                bid._energy_balance_rte = lambda segments, capacity_wh, v=rte_eb: (v, 8)
+                res = bid.identify(df, self.power_col, self.soc_col, 10000.0)
+                self.assertEqual(res.rte_crosscheck_energy_balance, rte_eb)
+                self.assertEqual(res.status, expected, msg=str(res.messages))
+
     # -- default-no-op sanity: to_dict is JSON-serialisable scalars -----------
     def test_result_to_dict_is_scalar_json(self):
         import json

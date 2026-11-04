@@ -91,6 +91,14 @@ SQRT_RTE_LOW = 0.80  # one-way efficiency = sqrt(RTE) plausible range
 # No real AC-coupled pack is near-lossless: a one-way efficiency above 0.995
 # (RTE > 0.99) is a sampling artifact, not physics (#1069).
 SQRT_RTE_HIGH = 0.995
+# Same-source agreement gate (#1072). The energy-balance cross-check is built
+# from the same sampled series as the slope-ratio RTE, so when a sampling
+# artifact inflates one it inflates both, and close agreement is not
+# independent confirmation (#1069: 0.991 vs 0.989 on a pack metered at 0.83).
+# Close agreement is also what a healthy fit looks like, so the gate only fires
+# near the top of the band, where those artifacts land.
+AGREEMENT_MAX_RTE_GAP = 0.01  # |slope-ratio RTE - energy-balance RTE| counted as agreement
+AGREEMENT_EDGE_MARGIN = 0.01  # applies when eta > SQRT_RTE_HIGH - this margin
 
 # Energy-balance cross-check is only meaningful over an approximately CLOSED
 # window: if the net SoC drift is large relative to the total SoC swung, the
@@ -124,7 +132,8 @@ class BatteryIdentificationResult:
     * ``ok`` - estimate passed every guardrail; safe to publish / persist.
     * ``insufficient_data`` - not enough deep segments / cycles.
     * ``rejected_sanity_check`` - a value fell outside physical bounds.
-    * ``low_confidence`` - CI too wide or TLS/Theil-Sen cross-checks diverged.
+    * ``low_confidence`` - CI too wide, TLS/Theil-Sen cross-checks diverged, or
+      a near-ceiling RTE is backed only by its same-source cross-check.
 
     Only an ``ok`` result should be written to disk or published to HA.
     """
@@ -478,7 +487,7 @@ class BatteryIdentification:
         self, segments: list[_Segment], capacity_wh: float
     ) -> tuple[float | None, int]:
         """
-        Independent RTE cross-check via the window energy balance
+        RTE cross-check via the window energy balance
         ``eff^2 * E_in - eff * dE_stored - E_out = 0`` solved for eff = sqrt(RTE).
 
         This uses the capacity estimate (via ``dE_stored``), so it is weakly
@@ -637,10 +646,23 @@ class BatteryIdentification:
                     f"{min_segs} cycles per direction; staying observe-only."
                 )
 
-        # Independent energy-balance RTE cross-check.
+        # Energy-balance RTE cross-check (same samples as the slope ratio, see
+        # AGREEMENT_MAX_RTE_GAP).
         rte_eb, n_cycles = self._energy_balance_rte(segments, capacity_wh)
         result.rte_crosscheck_energy_balance = None if rte_eb is None else round(rte_eb, 4)
         result.n_equal_soc_cycles = n_cycles
+        if (
+            rte_eb is not None
+            and eta > SQRT_RTE_HIGH - AGREEMENT_EDGE_MARGIN
+            and abs(rte - rte_eb) < AGREEMENT_MAX_RTE_GAP
+        ):
+            _downgrade(
+                f"Round-trip efficiency {rte:.4f} (one-way sqrt {eta:.4f}) is above "
+                f"{SQRT_RTE_HIGH - AGREEMENT_EDGE_MARGIN:.3f}, near the {SQRT_RTE_HIGH} "
+                f"ceiling, and the energy-balance cross-check ({rte_eb:.4f}) agrees within "
+                f"{AGREEMENT_MAX_RTE_GAP}, but both come from the same samples, so the "
+                "agreement does not confirm it; staying observe-only."
+            )
 
         if result.status == "ok":
             result.messages.append(
