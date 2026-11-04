@@ -21,6 +21,7 @@ import copy
 import json
 import logging
 import pathlib
+import tracemalloc
 
 import orjson
 import pytest
@@ -663,10 +664,11 @@ def test_inverter_config_faults_returns_messages_and_leaves_the_input_alone():
     snapshot = copy.deepcopy(config)
     messages = faults(config)
     assert config == snapshot
-    # Above one inverter: the specific fault first, then the refusal.
-    assert len(messages) == 2
+    # Above one inverter: every specific fault (here both caps and both index lists),
+    # then the refusal last.
+    assert len(messages) == 5
     assert "inverter_ac_output_max" in messages[0]
-    assert "not supported" in messages[1] and "number_of_inverters=2" in messages[1]
+    assert "not supported" in messages[-1] and "number_of_inverters=2" in messages[-1]
     refusal = faults(_two())
     assert len(refusal) == 1 and "not supported" in refusal[0]
     # One inverter: only the specific fault, no refusal.
@@ -741,17 +743,18 @@ def test_treat_runtimeparams_logs_a_bad_saved_count_without_runtime_params(bad, 
     assert any("number_of_inverters must be a positive integer" in m for m in errors), errors
 
 
-def test_require_usable_inverter_config_logs_the_fault_then_the_refusal(caplog):
+def test_require_usable_inverter_config_logs_every_fault_then_the_refusal(caplog):
     require = _get_func("require_usable_inverter_config")
     conf = {"number_of_inverters": 2}
     with caplog.at_level(logging.ERROR):
         with pytest.raises(_error_class()) as excinfo:
             require(conf, logger)
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 2
+    # Both caps, both index lists, then the refusal: each logged on its own.
+    assert len(errors) == 5
     assert "inverter_ac_output_max" in errors[0]
-    assert "not supported" in errors[1]
-    # The raised error carries both, so a body built from it says so too.
+    assert "not supported" in errors[-1]
+    # The raised error carries all of them, so a body built from it says so too.
     message = str(excinfo.value)
     assert "inverter_ac_output_max" in message and "not supported" in message
     assert message.index("inverter_ac_output_max") < message.index("not supported")
@@ -833,3 +836,214 @@ def test_build_params_n_gt_1_logs_the_specific_fault_then_the_refusal(caplog):
     refusal = next(i for i, m in enumerate(errors) if "not supported" in m)
     assert fault < refusal
     assert not any(".." in m for m in errors)
+
+
+# ───────────────── round 1 review: size-proportional validation (F2) ──────────
+
+_BIG = 10**6  # large enough that a per-inverter list shows up as MBs, small enough to be base-safe
+
+
+def _peak_kib(func) -> float:
+    tracemalloc.start()
+    try:
+        func()
+        return tracemalloc.get_traced_memory()[1] / 1024
+    finally:
+        tracemalloc.stop()
+
+
+def test_huge_inverter_count_does_not_allocate_per_inverter_lists():
+    """Validation work is proportional to the size of the input, not to number_of_inverters."""
+    conf = {
+        "number_of_inverters": _BIG,
+        "inverter_efficiency_dc_ac": 0.97,
+        "inverter_efficiency_ac_dc": 0.96,
+        "inverter_stress_cost": 0.1,
+        "compute_curtailment": True,
+        "inverter_ac_output_max": [5000],
+        "inverter_ac_input_max": [5000],
+        "battery_inverter_index": [0],
+        "pv_plant_inverter_index": [1],
+    }
+    check = _get_func("check_inverter_params")
+    raised: list = []
+
+    def run():
+        with pytest.raises(_error_class()) as excinfo:
+            check(conf, logger)
+        raised.append(str(excinfo.value))
+
+    peak = _peak_kib(run)
+    # A broadcast list of 10**6 entries is 8 MB each; the bound is far below that.
+    assert peak < 2048, f"peak {peak:.0f} KiB: validation allocated per inverter"
+    assert "inverter_ac_output_max has 1 entry" in raised[0]
+    assert "inverter_ac_input_max has 1 entry" in raised[0]
+
+
+def test_huge_inverter_count_coverage_message_is_bounded():
+    conf = _two(number_of_inverters=_BIG)
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    message = str(excinfo.value)
+    # inverters 0 and 1 are attached; 2..11 are listed, the rest are counted.
+    assert "inverter 2 has no battery and no PV plant" in message
+    assert "inverter 11 has no battery and no PV plant" in message
+    assert "inverter 12 has no battery" not in message
+    assert f"and {_BIG - 2 - 10} more inverters have no battery and no PV plant" in message
+    assert len(message) < 4096
+
+
+def test_coverage_message_with_one_more_than_ten_missing_uses_the_singular():
+    conf = _two(number_of_inverters=13)  # 0 and 1 attached, 2..12 missing
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    message = str(excinfo.value)
+    assert "inverter 11 has no battery and no PV plant" in message
+    assert "inverter 12 has no battery" not in message
+    assert "and 1 more inverter has no battery and no PV plant" in message
+
+
+def test_coverage_message_up_to_ten_missing_is_unchanged():
+    conf = _two(
+        number_of_inverters=4,
+        inverter_ac_output_max=[1, 2, 3, 4],
+        inverter_ac_input_max=[1, 2, 3, 4],
+        pv_plant_inverter_index=[0],
+    )
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    assert str(excinfo.value) == "; ".join(
+        f"inverter {k} has no battery and no PV plant: add {k} to "
+        "battery_inverter_index or pv_plant_inverter_index"
+        for k in (1, 2, 3)
+    )
+
+
+def test_coverage_message_with_exactly_ten_missing_lists_all_ten_and_no_tail():
+    conf = _two(
+        number_of_inverters=11,
+        inverter_ac_output_max=[1] * 11,
+        inverter_ac_input_max=[1] * 11,
+        pv_plant_inverter_index=[0],
+    )
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    message = str(excinfo.value)
+    assert message.count("has no battery and no PV plant") == 10
+    assert "more inverter" not in message
+
+
+# ───────────────── round 1 review: OverflowError (F3) ─────────────────────────
+
+
+def test_validate_num_inverters_rejects_an_int_too_large_for_a_float():
+    with pytest.raises(_error_class(), match="number_of_inverters must be a positive integer"):
+        _get_func("validate_num_inverters")({"number_of_inverters": 10**400})
+
+
+def test_huge_battery_count_is_an_inverter_error_not_an_overflow():
+    conf = _two(number_of_batteries=10**400)
+    with pytest.raises(_error_class(), match="number_of_batteries must be a positive integer"):
+        _get_func("check_inverter_params")(conf, logger)
+
+
+# ───────────────── round 1 review: every fault at once (F4) ───────────────────
+
+_FOUR_FAULTS = {
+    "inverter_efficiency_dc_ac": [0.9, 0.9, 0.9],
+    "inverter_stress_cost": "abc",
+    "inverter_ac_output_max": 5000,
+    "pv_plant_inverter_index": [7],
+}
+
+
+def test_check_inverter_params_reports_every_fault_in_check_order():
+    conf = _two(**_FOUR_FAULTS)
+    snapshot = copy.deepcopy(conf)
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    message = str(excinfo.value)
+    problems = getattr(excinfo.value, "problems", None)
+    assert problems is not None and len(problems) == 4, message
+    for problem, name in zip(problems, _FOUR_FAULTS, strict=True):
+        assert name in str(problem), problem
+    assert message == ". ".join(str(p) for p in problems)
+    assert conf == snapshot  # nothing applied when anything is wrong
+
+
+def test_inverter_config_faults_lists_every_fault_then_the_refusal():
+    messages = _get_func("inverter_config_faults")(_two(**_FOUR_FAULTS))
+    assert len(messages) == 5
+    for message, name in zip(messages, [*_FOUR_FAULTS, "not supported"], strict=True):
+        assert name in message
+
+
+def test_only_the_first_bad_element_of_a_parameter_is_reported():
+    conf = _two(inverter_efficiency_dc_ac=["abc", "def"])
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    assert "inverter_efficiency_dc_ac[0]" in str(excinfo.value)
+    assert "inverter_efficiency_dc_ac[1]" not in str(excinfo.value)
+
+
+def test_a_single_fault_keeps_its_exact_message():
+    conf = _two(inverter_efficiency_dc_ac=[0.9, 0.9, 0.9])
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    assert str(excinfo.value) == (
+        "inverter_efficiency_dc_ac has 3 entries but number_of_inverters=2; provide a scalar "
+        "(broadcast to every inverter) or a list of exactly 2 entries"
+    )
+    with pytest.raises(_error_class()) as one:
+        _get_func("check_inverter_params")({"inverter_efficiency_dc_ac": [0.9, 0.9]}, logger)
+    assert str(one.value) == (
+        "inverter_efficiency_dc_ac has 2 entries but number_of_inverters=1; provide a single "
+        "value or a list of exactly 1 entry"
+    )
+
+
+def test_one_inverter_faults_are_collected_too():
+    conf = {"inverter_efficiency_dc_ac": [0.9, 0.9], "inverter_ac_output_max": [1, 2]}
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    message = str(excinfo.value)
+    assert "inverter_efficiency_dc_ac" in message and "inverter_ac_output_max" in message
+    assert conf == {"inverter_efficiency_dc_ac": [0.9, 0.9], "inverter_ac_output_max": [1, 2]}
+
+
+def test_a_bad_battery_count_is_reported_once_and_skips_the_dependent_checks():
+    conf = _two(number_of_batteries="abc")
+    faults = _get_func("inverter_config_faults")(conf)
+    assert faults[0] == "number_of_batteries must be a positive integer, got 'abc'"
+    assert [f for f in faults if "number_of_batteries" in f] == faults[:1]
+    assert not any("has no battery and no PV plant" in f for f in faults)
+
+
+def test_the_coverage_check_waits_for_both_index_lists_to_be_usable():
+    conf = _two(pv_plant_inverter_index=[9], battery_inverter_index=[0])
+    with pytest.raises(_error_class()) as excinfo:
+        _get_func("check_inverter_params")(conf, logger)
+    assert "pv_plant_inverter_index[0]=9" in str(excinfo.value)
+    assert "has no battery and no PV plant" not in str(excinfo.value)
+
+
+def test_hybrid_warning_is_logged_even_when_there_are_faults(caplog):
+    conf = _two(inverter_is_hybrid=True, inverter_ac_output_max=5000)
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(_error_class()):
+            _get_func("check_inverter_params")(conf, logger)
+    assert any("inverter_is_hybrid is ignored" in r.getMessage() for r in caplog.records)
+
+
+def test_require_usable_inverter_config_logs_and_raises_every_problem(caplog):
+    conf = _two(**_FOUR_FAULTS)
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(_error_class()) as excinfo:
+            _get_func("require_usable_inverter_config")(conf, logger)
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 5
+    message = str(excinfo.value)
+    for name in _FOUR_FAULTS:
+        assert name in message
+    assert "not supported" in message
+    assert ".." not in message
