@@ -22,7 +22,9 @@ jobs:
           - { os: ubuntu-latest, python-version: "3.13" }
           - { os: ubuntu-latest, python-version: "3.14" }
           - { os: macos-latest, python-version: "3.12" }
+          - { os: macos-latest, python-version: "3.14" }
           - { os: windows-latest, python-version: "3.12" }
+          - { os: windows-latest, python-version: "3.14" }
     env:
       OS: ${{ matrix.os }}
       
