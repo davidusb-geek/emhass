@@ -11,114 +11,90 @@ ARG os_version=debian
 
 FROM ghcr.io/home-assistant/$TARGETARCH-base-$os_version:bookworm AS base
 
-# check if TARGETARCH was passed by build-arg
+# Check if TARGETARCH was passed by build-arg
 ARG TARGETARCH
 ENV TARGETARCH=${TARGETARCH:?}
 
-WORKDIR /app
-COPY pyproject.toml /app/
-COPY .python-version /app/
-COPY gunicorn.conf.py /app/
+# Set Python and uv environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_NO_CACHE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH" \
+    WORKER_CLASS=uvicorn.workers.UvicornWorker \
+    PORT=5000 \
+    IP=0.0.0.0
 
+WORKDIR /app
+
+# Copy uv binaries directly from official image (faster and cleaner than curl installer)
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /uvx /usr/local/bin/
+
+# 1. Install ONLY persistent runtime shared libraries in a cached layer
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    # Basic utilities
-    gnupg \
-    curl \
-    ca-certificates \
-    # Numpy dependencies
-    libgfortran5 \
-    libopenblas0-pthread \
-    libopenblas-dev \
-    libatlas3-base \
-    libatlas-base-dev \
-    # h5py / tables dependencies
-    libsz2 \
-    libaec0 \
-    libhdf5-hl-100 \
-    libhdf5-103-1 \
-    libhdf5-dev \
-    libhdf5-serial-dev \
-    # build packages
-    gcc \
-    g++ \
-    patchelf \
-    cmake \
-    ninja-build \
-    # Runtime dependencies
-    tini \
-    # Cleanup apt caches to reduce image size
-    && rm -rf /var/cache/apt/* \
-    && rm -rf /var/lib/apt/lists/* \
-    # Install uv
-    && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh \
-    # Install python
-    && uv python install \
-    # Setup HDF5 symlinks
-    && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
-    # Create directories
-    && mkdir -p /data/ \
-    && mkdir -p /share/emhass/
+        ca-certificates \
+        tini \
+        # Numpy / Scipy runtime dependencies
+        libgfortran5 \
+        libopenblas0-pthread \
+        libatlas3-base \
+        # HDF5 / PyTables runtime dependencies
+        libsz2 \
+        libaec0 \
+        libhdf5-hl-100 \
+        libhdf5-103-1 \
+    && mkdir -p /data/ /share/emhass/ \
+    && rm -rf /var/cache/apt/* /var/lib/apt/lists/*
 
-# copy required EMHASS files
+# 2. Install Python and create virtualenv (cached unless .python-version changes)
+COPY .python-version /app/
+RUN uv python install && uv venv
+
+# 3. Copy project files (allowed via !src/emhass/ and !src/emhass/** in .dockerignore)
+COPY pyproject.toml README.md gunicorn.conf.py /app/
 COPY src/emhass/ /app/src/emhass/
-
-# webserver files
-COPY src/emhass/templates/ /app/src/emhass/templates/
-COPY src/emhass/static/ /app/src/emhass/static/
-COPY src/emhass/static/data/ /app/src/emhass/static/data/
-COPY src/emhass/static/img/ /app/src/emhass/static/img/
-
-# emhass extra packadge data
-COPY src/emhass/data/ /app/src/emhass/data/
-
-# pre generated optimization results
 COPY data/opt_res_latest.csv /app/data/opt_res_latest.csv
 COPY data/long_train_data.pkl /app/data/long_train_data.pkl
-COPY README.md /app/
-COPY pyproject.toml /app/
 
-# secrets file (secrets_emhass.yaml) can be copied into the container with volume mounts with docker run
-# options.json file will be automatically generated and passed from Home Assistant using the addon
+# 4. Install build-only packages, generate uv.lock, sync environment from lock, and purge compilers in ONE layer
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        patchelf \
+        cmake \
+        ninja-build \
+        libopenblas-dev \
+        libatlas-base-dev \
+        libhdf5-dev \
+        libhdf5-serial-dev \
+    && ln -sf /usr/include/hdf5/serial /usr/include/hdf5/include \
+    && uv lock \
+    && uv sync --frozen --verbose \
+    && apt-get remove --purge -y --auto-remove \
+        gcc \
+        g++ \
+        patchelf \
+        cmake \
+        ninja-build \
+        libopenblas-dev \
+        libatlas-base-dev \
+        libhdf5-dev \
+        libhdf5-serial-dev \
+    && rm -rf /var/cache/apt/* /var/lib/apt/lists/*
 
-#set python env variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-
-# Docker Labels for hass
+# 5. Declare BUILD_VERSION and labels last so version bumps don't bust the build cache
+ARG build_version
+ARG BUILD_VERSION=${build_version}
 LABEL \
     io.hass.name="emhass" \
     io.hass.description="EMHASS: Energy Management for Home Assistant" \
-    io.hass.version=${BUILD_VERSION} \
+    io.hass.version="${BUILD_VERSION}" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.source="https://github.com/davidusb-geek/emhass" \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
-
-# Set up venv and add it to the PATH so it persists across RUN layers
-RUN uv venv
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Swapped bashisms [[ == ]] for POSIX compliant [ = ] for Debian dash shell compatibility
-RUN [ "${TARGETARCH}" = "aarch64" ] && uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
-
-# install packages and build EMHASS
-RUN uv pip install --verbose .
-RUN uv lock
-
-# remove build only packages
-RUN apt-get remove --purge -y --auto-remove \
-    gcc \
-    g++ \
-    patchelf \
-    cmake \
-    ninja-build \
-    && rm -rf /var/lib/apt/lists/*
-
-# Environment variables for flexibility
-ENV WORKER_CLASS=uvicorn.workers.UvicornWorker
-ENV PORT=5000
-ENV IP=0.0.0.0
 
 # Entrypoint script inline
 ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "-c", "set -e && \

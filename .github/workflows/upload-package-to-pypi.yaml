@@ -1,57 +1,70 @@
 name: Upload Python Package to PyPI
-
 on:
   release:
     types: [published]
   workflow_dispatch:
 
 jobs:
-  # Google OSV-Scanner  
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v6
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version-file: ".python-version"
-    - name: Build a binary wheel and a source tarball
-      run:  uv build
-    - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
-      with:
-        name: python-package-distributions
-        path: dist/
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version-file: ".python-version"
+
+      - name: Generate lockfile and build distribution packages
+        run: |
+          uv lock
+          uv build
+
+      - name: Upload lockfile for OSV scan
+        uses: actions/upload-artifact@v6
+        with:
+          name: uv-lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
   osv-scan:
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0"
     needs:
-    - build
+      - build
     with:
+      download-artifact: "uv-lock"
       scan-args: |-
-        --recursive
-        ./
+        --lockfile=uv.lock:./uv.lock
     permissions:
       security-events: write
       contents: read
       actions: read
+
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
     needs:
-    - osv-scan
-    runs-on: ubuntu-latest
+      - osv-scan
+    runs-on: ubuntu-24.04
     environment:
       name: pypi
       url: https://pypi.org/p/emhass
     permissions:
       id-token: write
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v6
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Download all the dists
+        uses: actions/download-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distribution 📦 to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
