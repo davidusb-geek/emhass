@@ -3,7 +3,7 @@ name = "emhass"
 dynamic = ["version"]
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
@@ -13,13 +13,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "numpy>=2.0.0, <2.3.0",
+    "numpy>=2.0.0, <2.6.0",
     "scipy>=1.15.0",
     "pandas>=2.2.0",
     "pvlib>=0.11.0",
@@ -126,7 +126,7 @@ ignore = ["E501", "B008", "B905", "C901"]
 dev = ["emhass"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 fix = true
 show-fixes = true
