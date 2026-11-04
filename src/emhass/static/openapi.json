@@ -635,35 +635,47 @@
             "type": "boolean",
             "default": false,
             "title": "Inverter is a hybrid",
-            "description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False)"
+            "description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False). Ignored when number_of_inverters is greater than 1"
           },
           "inverter_ac_output_max": {
-            "type": "integer",
-            "default": 5000,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 5000
+            },
             "title": "Max hybrid inverter AC output power",
             "x-unit": "W",
-            "description": "Maximum hybrid inverter output power from combined PV and battery discharge. (unit: W)"
+            "description": "Maximum hybrid inverter output power from combined PV and battery discharge, in watts. With number_of_inverters = 1 this is a single value. Above one inverter it must be a list of exactly number_of_inverters entries, one cap per inverter: a single value is refused there, because it would be the 5000 W default or a one-inverter site total rather than a per-inverter cap. (unit: W)"
           },
           "inverter_ac_input_max": {
-            "type": "integer",
-            "default": 5000,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 5000
+            },
             "title": "Max hybrid inverter AC input power",
             "x-unit": "W",
-            "description": "Maximum hybrid inverter input power from grid to charge battery. (unit: W)"
+            "description": "Maximum hybrid inverter input power from grid to charge battery, in watts. With number_of_inverters = 1 this is a single value. Above one inverter it must be a list of exactly number_of_inverters entries, one cap per inverter: a single value is refused there, because it would be the 5000 W default or a one-inverter site total rather than a per-inverter cap. (unit: W)"
           },
           "inverter_efficiency_dc_ac": {
-            "type": "number",
-            "default": 1.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 1.0
+            },
             "title": "Hybrid inverter efficency DC to AC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100). With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: fraction)"
           },
           "inverter_efficiency_ac_dc": {
-            "type": "number",
-            "default": 1.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 1.0
+            },
             "title": "Hybrid inverter efficency AC to DC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100). With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: fraction)"
           },
           "inverter_power_curve_dc_ac": {
             "type": "array",
@@ -676,7 +688,7 @@
             },
             "title": "Hybrid inverter DC to AC power curve",
             "x-unit": "W",
-            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. With number_of_inverters > 1, give a list of exactly number_of_inverters entries, each one curve or [] (the scalar efficiency of that inverter applies); a single curve is not broadcast, because its points are absolute AC watts for one inverter. A curve for the AC-to-DC direction on an inverter with no battery in battery_inverter_index is kept but ignored. Above one inverter, inverter_is_hybrid is not consulted. (unit: W)"
           },
           "inverter_power_curve_ac_dc": {
             "type": "array",
@@ -689,14 +701,17 @@
             },
             "title": "Hybrid inverter AC to DC power curve",
             "x-unit": "W",
-            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. With number_of_inverters > 1, give a list of exactly number_of_inverters entries, each one curve or [] (the scalar efficiency of that inverter applies); a single curve is not broadcast, because its points are absolute AC watts for one inverter. A curve for the AC-to-DC direction on an inverter with no battery in battery_inverter_index is kept but ignored. Above one inverter, inverter_is_hybrid is not consulted. (unit: W)"
           },
           "inverter_stress_cost": {
-            "type": "number",
-            "default": 0.0,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.0
+            },
             "title": "Hybrid Inverter Stress Cost",
             "x-unit": "¤/kWh",
-            "description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. (unit: ¤/kWh)"
+            "description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: ¤/kWh)"
           },
           "inverter_stress_segments": {
             "type": "integer",
@@ -706,10 +721,36 @@
             "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
           },
           "compute_curtailment": {
-            "type": "boolean",
-            "default": false,
+            "type": "array",
+            "items": {
+              "type": "boolean",
+              "default": false
+            },
             "title": "Set compute curtailment (grid export limit)",
-            "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon"
+            "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon. With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries."
+          },
+          "number_of_inverters": {
+            "type": "integer",
+            "default": 1,
+            "title": "Number of inverters",
+            "x-unit": "count",
+            "description": "Number of physical inverters in the plant (default 1). More than one inverter is not supported yet: a value above 1 is refused with an error. The per-inverter settings are described in docs/config.md. (unit: count)"
+          },
+          "battery_inverter_index": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Inverter of each battery",
+            "description": "Which inverter each battery is attached to: one 0-based inverter number per battery, in the order of the battery lists, so the list needs exactly number_of_batteries entries. Required when number_of_inverters is greater than 1; ignored, with a warning, when it is 1. Two batteries may share an inverter. Every inverter must appear in this list or in pv_plant_inverter_index."
+          },
+          "pv_plant_inverter_index": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Inverter of each PV plant",
+            "description": "Which inverter each PV plant is attached to: one 0-based inverter number per PV plant, in the order of pv_module_model. Required when number_of_inverters is greater than 1; ignored, with a warning, when it is 1. Several plants may share an inverter. Every inverter must appear in this list or in battery_inverter_index."
           },
           "cop_solver": {
             "type": "string",

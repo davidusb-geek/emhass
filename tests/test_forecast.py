@@ -560,6 +560,91 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
         self.assertEqual(len(p_pv_forecast), len(df_weather))
 
+    def test_pvlib_long_pv_plant_list_is_an_error_above_one_inverter(self):
+        """With number_of_inverters above 1 the entries are matched to inverters by position,
+        so the surplus entries that a single inverter ignores become an error (#1150)."""
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1]
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("surface_azimuth has 3 entries but pv_module_model has 2", str(ctx.exception))
+        self.assertIn("exactly one value", str(ctx.exception))
+
+    def test_pvlib_pv_plant_inverter_index_must_have_one_entry_per_plant(self):
+        """The index list is checked against the plant count here, not at config time,
+        because the plant count depends on the forecast method (#1150)."""
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        for index in ([0], [0, 1, 1]):
+            self.plant_conf["pv_plant_inverter_index"] = index
+            with self.assertRaises(ValueError) as ctx:
+                self.fcst._calculate_pvlib_power(df_weather)
+            self.assertIn(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model has 2",
+                str(ctx.exception),
+            )
+        self.plant_conf["pv_plant_inverter_index"] = None
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_plant_inverter_index must be a list", str(ctx.exception))
+
+    def test_pvlib_matching_pv_plant_inverter_index_runs_above_one_inverter(self):
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertNoLogs(logger, level="WARNING"):
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_one_plant_still_needs_its_inverter_index_above_one_inverter(self):
+        """A scalar pv_module_model is one plant: the early return for a non-list model
+        must not skip the index check above one inverter (#1150)."""
+        self.plant_conf["pv_module_model"] = self.plant_conf["pv_module_model"][0]
+        self.plant_conf["pv_inverter_model"] = self.plant_conf["pv_inverter_model"][0]
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 270
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        self.plant_conf["number_of_inverters"] = 2
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        for index in ([0, 1], []):
+            self.plant_conf["pv_plant_inverter_index"] = index
+            with self.assertRaises(ValueError) as ctx:
+                self.fcst._calculate_pvlib_power(df_weather)
+            self.assertIn(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model has 1",
+                str(ctx.exception),
+            )
+        self.plant_conf["pv_plant_inverter_index"] = None
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_plant_inverter_index must be a list", str(ctx.exception))
+        self.plant_conf["pv_plant_inverter_index"] = [1]
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        # One inverter: the index is not read for a single plant either.
+        self.plant_conf["number_of_inverters"] = 1
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1, 1]
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_pv_plant_inverter_index_is_not_read_with_one_inverter(self):
+        """At one inverter the index list is ignored: a wrong length is not a forecast error,
+        and a longer sibling list keeps its warning instead of becoming an error."""
+        self._two_plant_conf()
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1, 1, 0]
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        self.assertFalse(any("pv_plant_inverter_index" in line for line in captured.output))
+
     def test_pvlib_single_plant_scalars_unchanged(self):
         """A non-list pv_module_model takes the single-plant path exactly as before."""
         self.plant_conf["pv_module_model"] = self.plant_conf["pv_module_model"][0]
