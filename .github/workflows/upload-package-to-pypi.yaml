@@ -16,8 +16,18 @@ jobs:
         with:
           python-version-file: ".python-version"
 
-      - name: Build a binary wheel and a source tarball
-        run: uv build
+      - name: Generate lockfile and build distribution packages
+        run: |
+          uv lock
+          uv build
+
+      - name: Upload lockfile for OSV scan
+        uses: actions/upload-artifact@v6
+        with:
+          name: uv-lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Store the distribution packages
         uses: actions/upload-artifact@v6
@@ -30,9 +40,9 @@ jobs:
     needs:
       - build
     with:
+      download-artifact: "uv-lock"
       scan-args: |-
-        --recursive
-        ./
+        --lockfile=uv.lock:./uv.lock
     permissions:
       security-events: write
       contents: read
