@@ -10,6 +10,7 @@ import math
 import os
 import pathlib
 import shutil
+import stat
 import time
 import uuid
 from collections.abc import Sequence
@@ -5370,14 +5371,39 @@ def check_batt_params(
 REPLACE_FILE_RETRIES = 20
 
 
+def _copy_owner_and_mode(path: str, tmp: str) -> None:
+    """Give the new file the owner and permissions of the one it replaces, as writing
+    into the old file would have kept them. Best effort: where the process or the
+    filesystem will not take one of them (not root, a user namespace, FUSE), the new
+    file keeps what it was created with. Not on Windows, where the only mode bit is
+    read-only, and a read-only new file could not be moved into place."""
+    if os.name == "nt":
+        return
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+    try:
+        os.chmod(tmp, stat.S_IMODE(st.st_mode) & 0o777)
+    except OSError:
+        pass
+
+
 async def replace_file(path, content: str | bytes) -> None:
     """Write ``content`` to ``path`` through a temporary file and os.replace, so a
     reader running at the same time sees the old file or the new one, never a
     partly written one."""
+    # Replace what a symlink points to, not the link itself.
+    path = os.path.realpath(path)
     tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
         async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
             await f.write(content)
+        _copy_owner_and_mode(path, tmp)
         # On Windows a file that another handle has open cannot be replaced until it is
         # closed. Readers hold it for milliseconds, so retry briefly there.
         for attempt in range(REPLACE_FILE_RETRIES + 1):
