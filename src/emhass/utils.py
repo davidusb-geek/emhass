@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import copy
 import csv
 import itertools
@@ -5366,6 +5367,9 @@ def check_batt_params(
     return parameter[parameter_name]
 
 
+REPLACE_FILE_RETRIES = 20
+
+
 async def replace_file(path, content: str | bytes) -> None:
     """Write ``content`` to ``path`` through a temporary file and os.replace, so a
     reader running at the same time sees the old file or the new one, never a
@@ -5374,7 +5378,16 @@ async def replace_file(path, content: str | bytes) -> None:
     try:
         async with aiofiles.open(tmp, "wb" if isinstance(content, bytes) else "w") as f:
             await f.write(content)
-        os.replace(tmp, path)
+        # On Windows a file that another handle has open cannot be replaced until it is
+        # closed. Readers hold it for milliseconds, so retry briefly there.
+        for attempt in range(REPLACE_FILE_RETRIES + 1):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == REPLACE_FILE_RETRIES:
+                    raise
+                await asyncio.sleep(0.05)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)

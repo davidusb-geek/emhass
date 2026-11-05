@@ -59,6 +59,9 @@
           "400": {
             "description": "Empty/invalid config"
           },
+          "409": {
+            "description": "Another save is running; nothing was saved, retry"
+          },
           "500": {
             "description": "Save failure"
           }
