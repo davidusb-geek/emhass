@@ -86,8 +86,10 @@ In `automations.yaml`:
 ```
 in configuration page/`config.json` 
 ```json
-"method_ts_round": "first"
-"continual_publish": true
+{
+  "method_ts_round": "first",
+  "continual_publish": true
+}
 ```
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `optimization_time_step` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate one value *(for each entity)* for every 30 minutes of the forecast window: 48 values for an ordinary 24-hour window. The window is `delta_forecast_daily` local calendar days, so it has a different number of values only when it contains a daylight saving change, and then by the size of that change (46 or 50 values for a one-hour change, 47 or 49 for a 30-minute change as in Australia/Lord_Howe); a run after that day's change gets 48 again. See [`delta_forecast_daily`](config.md).

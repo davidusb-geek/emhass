@@ -294,6 +294,26 @@ def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
     assert key(**{AC_DC: CHARGE_CURVE}) != key(**{AC_DC: [[1000, 0.75], [4000, 0.90]]})
 
 
+def test_inverter_count_and_index_lists_invalidate_the_optimization_cache_key():
+    """The new keys are plant_conf keys, so ``plant_conf_hash`` makes any change to them
+    a cache miss (docs/develop.md asks for this to be pinned)."""
+    from emhass.command_line import OptimizationCache
+
+    rh = {"optimization_time_step": pd.to_timedelta(5, "minutes")}
+
+    def key(**conf):
+        params = _build_params(conf)
+        return OptimizationCache._compute_cache_key(
+            params["optim_conf"], params["plant_conf"], "profit", rh
+        )
+
+    assert key() == key()
+    assert key(number_of_inverters=2) != key()
+    assert key(battery_inverter_index=[0]) != key()
+    assert key(pv_plant_inverter_index=[0]) != key()
+    assert key(battery_inverter_index=[0]) != key(pv_plant_inverter_index=[0])
+
+
 def test_invalid_persisted_curve_is_disabled_by_build_params(caplog):
     """Static configuration recovers: the bad curve is cleared with an error naming it,
     the other direction and the scalar efficiencies are untouched."""
@@ -356,6 +376,262 @@ def test_runtime_curve_is_validated_on_the_runtime_path():
                 EMHASS_CONF,
             )
         )
+
+
+# --------------------------------------------------------------------------- #
+# A list of curves, one per inverter (#1150)
+# --------------------------------------------------------------------------- #
+
+# Inverter 0 carries the battery, inverter 1 only a PV plant.
+TWO_INVERTER_PLANT = {
+    "number_of_inverters": 2,
+    "inverter_ac_output_max": [5000, 6000],
+    "inverter_ac_input_max": [4000, 4000],
+    "battery_inverter_index": [0],
+    "pv_plant_inverter_index": [1],
+}
+
+
+def _two_inverter_conf(**overrides) -> dict:
+    return {**TWO_INVERTER_PLANT, **overrides}
+
+
+def _warnings(caplog, needle: str) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and needle in r.getMessage()
+    ]
+
+
+def _errors(caplog, needle: str) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.ERROR and needle in r.getMessage()
+    ]
+
+
+def test_a_one_entry_curve_list_unwraps_at_one_inverter(caplog):
+    conf = {"inverter_is_hybrid": True, DC_AC: [DISCHARGE_CURVE], AC_DC: [[]]}
+    assert utils.inverter_power_curve_faults(conf) == []
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+    assert conf[DC_AC] == DISCHARGE_CURVE
+    assert conf[AC_DC] == []
+    assert utils.inverter_power_curve_faults(conf) == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_one_entry_curve_list_is_still_validated_at_one_inverter():
+    conf = {"inverter_is_hybrid": True, DC_AC: [INVALID_CURVE]}
+    assert any("efficiency" in f for f in utils.inverter_power_curve_faults(conf))
+    with pytest.raises(ValueError, match="efficiency"):
+        utils.check_inverter_power_curves(dict(conf), logger)
+    recovered = dict(conf)
+    utils.check_inverter_power_curves(recovered, logger, recover=True)
+    assert recovered[DC_AC] == []
+
+
+def test_a_curve_list_of_the_wrong_length_is_a_fault_at_one_inverter(caplog):
+    conf = {"inverter_is_hybrid": True, DC_AC: [DISCHARGE_CURVE, []]}
+    faults = utils.inverter_power_curve_faults(conf)
+    assert len(faults) == 1 and DC_AC in faults[0] and "number_of_inverters=1" in faults[0]
+    assert "give one curve" in faults[0]
+    with pytest.raises(ValueError, match="number_of_inverters=1"):
+        utils.check_inverter_power_curves(dict(conf), logger)
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == []
+    assert _errors(caplog, "number_of_inverters=1")
+
+
+def test_a_two_point_curve_is_not_mistaken_for_a_list_of_two_curves():
+    """Told apart by shape, not by length: the two points of a bare curve are not two
+    inverters' entries."""
+    assert len(DISCHARGE_CURVE) == 2
+    conf = _two_inverter_conf(**{DC_AC: DISCHARGE_CURVE})
+    faults = utils.inverter_power_curve_faults(conf)
+    assert len(faults) == 1
+    assert "single curve" in faults[0] and "not broadcast" in faults[0]
+    assert "number_of_inverters=2" in faults[0]
+    with pytest.raises(ValueError, match="single curve"):
+        utils.check_inverter_power_curves(dict(conf), logger)
+
+
+def test_a_bare_curve_above_one_inverter_clears_the_whole_parameter_when_recovering(caplog):
+    conf = _two_inverter_conf(**{DC_AC: DISCHARGE_CURVE, AC_DC: [CHARGE_CURVE, []]})
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == []
+    assert conf[AC_DC] == [CHARGE_CURVE, []]
+    assert _errors(caplog, DC_AC)
+
+
+@pytest.mark.parametrize("curves", [[], [[], []], [DISCHARGE_CURVE, []], [[], DISCHARGE_CURVE]])
+def test_a_list_of_curves_and_empties_is_accepted_above_one_inverter(curves):
+    conf = _two_inverter_conf(**{DC_AC: curves})
+    assert utils.inverter_power_curve_faults(conf) == []
+    utils.check_inverter_power_curves(conf, logger)
+    assert conf[DC_AC] == curves
+
+
+def test_unset_curves_stay_empty_above_one_inverter():
+    conf = _two_inverter_conf()
+    utils.check_inverter_power_curves(conf, logger)
+    utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert DC_AC not in conf or conf[DC_AC] == []
+
+
+@pytest.mark.parametrize("length", [1, 3])
+def test_a_curve_list_of_the_wrong_length_is_a_fault_above_one_inverter(length):
+    conf = _two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE] * length})
+    faults = utils.inverter_power_curve_faults(conf)
+    assert len(faults) == 1
+    assert (
+        f"has {length} {'curve' if length == 1 else 'curves'}" in faults[0]
+        and "number_of_inverters=2" in faults[0]
+    )
+    with pytest.raises(ValueError, match="number_of_inverters=2"):
+        utils.check_inverter_power_curves(dict(conf), logger)
+    recovered = dict(conf)
+    utils.check_inverter_power_curves(recovered, logger, recover=True)
+    assert recovered[DC_AC] == []
+
+
+def test_each_curve_entry_is_validated_and_named_above_one_inverter(caplog):
+    conf = _two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, INVALID_CURVE]})
+    faults = utils.inverter_power_curve_faults(conf)
+    assert len(faults) == 1 and f"{DC_AC}[1]" in faults[0] and "efficiency" in faults[0]
+    with pytest.raises(ValueError, match=rf"{DC_AC}\[1\]"):
+        utils.check_inverter_power_curves(dict(conf), logger)
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == [DISCHARGE_CURVE, []]  # only the faulty entry is cleared
+    assert _errors(caplog, f"{DC_AC}[1]")
+
+
+def test_a_malformed_curve_value_is_reported_above_one_inverter(caplog):
+    for malformed in (5, "abc", [5, 6], [["a", 1], ["b", 2]]):
+        conf = _two_inverter_conf(**{DC_AC: malformed})
+        assert utils.inverter_power_curve_faults(conf), malformed
+        with pytest.raises(ValueError):
+            utils.check_inverter_power_curves(dict(conf), logger)
+        with caplog.at_level(logging.ERROR):
+            utils.check_inverter_power_curves(conf, logger, recover=True)
+        assert conf[DC_AC] == []
+
+
+def test_inverter_is_hybrid_is_not_consulted_above_one_inverter(caplog):
+    for hybrid in (False, True):
+        conf = _two_inverter_conf(inverter_is_hybrid=hybrid, **{DC_AC: [DISCHARGE_CURVE, []]})
+        with caplog.at_level(logging.WARNING):
+            utils.check_inverter_power_curves(conf, logger)
+            utils.check_inverter_power_curves(conf, logger, supplied=(DC_AC,))
+        assert not [r for r in caplog.records if "inverter_is_hybrid" in r.getMessage()]
+
+
+def test_curve_ending_below_that_inverters_cap_warns_above_one_inverter(caplog):
+    """DISCHARGE_CURVE ends at 5000 W: that is the cap of inverter 0 but below inverter 1's."""
+    conf = _two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, DISCHARGE_CURVE]})
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+    warnings = _warnings(caplog, "supported power domain")
+    assert len(warnings) == 1
+    assert f"{DC_AC}[1]" in warnings[0] and "inverter_ac_output_max[1]=6000" in warnings[0]
+
+
+def test_a_cap_that_is_not_a_list_skips_the_below_cap_warning(caplog):
+    conf = _two_inverter_conf(inverter_ac_output_max=15000, **{DC_AC: [DISCHARGE_CURVE, []]})
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+    assert _warnings(caplog, "supported power domain") == []
+
+
+def test_a_charge_curve_for_an_inverter_without_a_battery_is_kept_and_warned_about(caplog):
+    conf = _two_inverter_conf(**{AC_DC: [CHARGE_CURVE, CHARGE_CURVE]})
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger)
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[AC_DC] == [CHARGE_CURVE, CHARGE_CURVE]
+    assert any(f"{AC_DC}[1]" in w and "no battery" in w for w in _warnings(caplog, "kept"))
+    assert not _warnings(caplog, f"{AC_DC}[0]")
+
+
+def test_a_supplied_charge_curve_for_an_inverter_without_a_battery_is_a_fault():
+    conf = _two_inverter_conf(**{AC_DC: [[], CHARGE_CURVE]})
+    with pytest.raises(ValueError, match=rf"{AC_DC}\[1\].*no battery"):
+        utils.check_inverter_power_curves(conf, logger, supplied=(AC_DC,))
+    # An inverter that does have a battery takes the same curve.
+    ok = _two_inverter_conf(**{AC_DC: [CHARGE_CURVE, []]})
+    utils.check_inverter_power_curves(ok, logger, supplied=(AC_DC,))
+    # A discharge curve needs no battery.
+    pv_only = _two_inverter_conf(**{DC_AC: [[], DISCHARGE_CURVE]})
+    utils.check_inverter_power_curves(pv_only, logger, supplied=(DC_AC,))
+
+
+def test_battery_topology_is_only_used_when_the_index_list_is_usable(caplog):
+    conf = _two_inverter_conf(**{AC_DC: [CHARGE_CURVE, CHARGE_CURVE]})
+    del conf["battery_inverter_index"]
+    with caplog.at_level(logging.WARNING):
+        utils.check_inverter_power_curves(conf, logger, supplied=(AC_DC,))
+    assert not [r for r in caplog.records if "no battery" in r.getMessage()]
+
+
+def test_check_inverter_power_curves_is_idempotent_with_curve_lists():
+    for conf in (
+        {"inverter_is_hybrid": True, DC_AC: [DISCHARGE_CURVE]},
+        _two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, INVALID_CURVE], AC_DC: [CHARGE_CURVE, []]}),
+        _two_inverter_conf(**{DC_AC: DISCHARGE_CURVE}),
+    ):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+        once = json.loads(json.dumps(conf))
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+        assert conf == once
+
+
+def test_an_unusable_inverter_count_leaves_saved_curves_alone(caplog):
+    """The count fault is reported by check_inverter_params; the curves are not cleared for it."""
+    conf = {"number_of_inverters": "two", "inverter_is_hybrid": True, DC_AC: DISCHARGE_CURVE}
+    with caplog.at_level(logging.ERROR):
+        utils.check_inverter_power_curves(conf, logger, recover=True)
+    assert conf[DC_AC] == DISCHARGE_CURVE
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    with pytest.raises(ValueError, match="number_of_inverters"):
+        utils.check_inverter_power_curves(conf, logger)
+    assert utils.inverter_power_curve_faults(conf) == []  # the count is another check's fault
+
+
+def test_build_params_clears_only_the_faulty_curve_entry_above_one_inverter(caplog):
+    with caplog.at_level(logging.ERROR):
+        params = _build_params(_two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, INVALID_CURVE]}))
+    assert params["plant_conf"][DC_AC] == [DISCHARGE_CURVE, []]
+    assert _errors(caplog, f"{DC_AC}[1]")
+
+
+def test_build_params_unwraps_a_one_entry_curve_list_at_one_inverter():
+    params = _build_params({"inverter_is_hybrid": True, DC_AC: [DISCHARGE_CURVE], AC_DC: [[]]})
+    assert params["plant_conf"][DC_AC] == DISCHARGE_CURVE
+    assert params["plant_conf"][AC_DC] == []
+
+
+def test_runtime_one_entry_curve_list_unwraps_at_one_inverter():
+    base = _build_params({"inverter_is_hybrid": True})
+    params_json = orjson.dumps(base).decode("utf-8")
+    rh_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+    *_, treated_plant = asyncio.run(
+        utils.treat_runtimeparams(
+            orjson.dumps({AC_DC: [CHARGE_CURVE]}).decode("utf-8"),
+            params_json,
+            rh_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            EMHASS_CONF,
+        )
+    )
+    assert treated_plant[AC_DC] == CHARGE_CURVE
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +736,295 @@ def test_startup_params_survive_an_invalid_persisted_curve(web):
     )
     assert params["plant_conf"][DC_AC] == []
     assert (web.conf["data_path"] / "params.pkl").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Web: per-inverter configuration (#1150)
+# --------------------------------------------------------------------------- #
+
+
+def _web_state(web) -> tuple[bytes, bytes]:
+    return (
+        web.conf["config_path"].read_bytes(),
+        (web.conf["data_path"] / "params.pkl").read_bytes(),
+    )
+
+
+def test_set_config_saves_the_ui_shaped_lists_as_the_one_inverter_scalars(web):
+    status, _ = web.post(
+        {
+            "inverter_is_hybrid": True,
+            "inverter_ac_output_max": [6000],
+            "inverter_ac_input_max": [4000],
+            "inverter_efficiency_dc_ac": [0.97],
+            "inverter_efficiency_ac_dc": [0.96],
+            "inverter_stress_cost": [0.0],
+            "compute_curtailment": [False],
+            DC_AC: [DISCHARGE_CURVE],
+            AC_DC: [[]],
+            "battery_inverter_index": [None],
+            "pv_plant_inverter_index": [None],
+        }
+    )
+    assert status == 200
+    saved = json.loads(web.conf["config_path"].read_text())
+    assert saved["inverter_ac_output_max"] == 6000
+    assert saved["inverter_ac_input_max"] == 4000
+    assert saved["inverter_efficiency_dc_ac"] == 0.97
+    assert saved["inverter_efficiency_ac_dc"] == 0.96
+    assert saved["inverter_stress_cost"] == 0.0
+    assert saved["compute_curtailment"] is False
+    assert saved[DC_AC] == DISCHARGE_CURVE and saved[AC_DC] == []
+    # An empty array input points at nothing: the keys keep their null default
+    # instead of gaining a [null] list.
+    assert saved["battery_inverter_index"] is None
+    assert saved["pv_plant_inverter_index"] is None
+
+
+def test_set_config_rejects_a_wrong_length_list_at_one_inverter(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post({"inverter_efficiency_dc_ac": [0.9, 0.9]})
+    assert status == 400
+    assert "inverter_efficiency_dc_ac" in " ".join(body) and "number_of_inverters=1" in " ".join(
+        body
+    )
+    assert _web_state(web) == before
+
+
+def test_set_config_refuses_more_than_one_inverter_and_writes_nothing(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post(_two_inverter_conf())
+    assert status == 400
+    assert "number_of_inverters=2" in " ".join(body) and "not supported" in " ".join(body)
+    assert _web_state(web) == before
+
+
+def test_set_config_reports_every_inverter_fault_before_the_refusal(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post({"number_of_inverters": 2})
+    assert status == 400
+    # All come back at once: both caps and both index lists, then the refusal.
+    assert len(body) == 5
+    assert "inverter_ac_output_max" in body[0]
+    assert "not supported" in body[-1]
+    assert _web_state(web) == before
+
+
+def test_set_config_lists_every_inverter_fault_and_the_refusal(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post(
+        _two_inverter_conf(
+            inverter_efficiency_dc_ac=[0.9, 0.9, 0.9],
+            inverter_stress_cost="abc",
+            inverter_ac_output_max=5000,
+            pv_plant_inverter_index=[7],
+        )
+    )
+    assert status == 400
+    assert len(body) == 5, body
+    expected = (
+        "inverter_efficiency_dc_ac",
+        "inverter_stress_cost",
+        "inverter_ac_output_max",
+        "pv_plant_inverter_index",
+        "not supported",
+    )
+    for message, name in zip(body, expected, strict=True):
+        assert name in message
+    assert _web_state(web) == before
+
+
+def test_set_config_lists_a_curve_fault_and_the_refusal_together(web):
+    assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
+    before = _web_state(web)
+    status, body = web.post(_two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, INVALID_CURVE]}))
+    assert status == 400
+    assert len(body) == 2
+    assert f"{DC_AC}[1]" in body[0] and "efficiency" in body[0]
+    assert "not supported" in body[1]
+    # A fault in the other inverter settings comes between the two.
+    status, body = web.post(
+        _two_inverter_conf(inverter_ac_output_max=5000, **{DC_AC: [INVALID_CURVE, []]})
+    )
+    assert status == 400
+    assert len(body) == 3
+    assert f"{DC_AC}[0]" in body[0]
+    assert "inverter_ac_output_max" in body[1]
+    assert "not supported" in body[2]
+    assert _web_state(web) == before
+
+
+def test_set_config_rejects_a_single_curve_above_one_inverter(web):
+    status, body = web.post(_two_inverter_conf(**{DC_AC: DISCHARGE_CURVE}))
+    assert status == 400
+    assert "single curve" in " ".join(body)
+
+
+def test_get_config_still_serves_a_saved_configuration_with_more_than_one_inverter(web):
+    web.conf["config_path"].write_text(json.dumps(_two_inverter_conf()))
+    status, body = web.get()
+    assert status == 200
+    assert body["number_of_inverters"] == 2
+    # And the fault that would be refused at the next action does not break the page either.
+    web.conf["config_path"].write_text(json.dumps({"number_of_inverters": 2}))
+    assert web.get()[0] == 200
+    web.conf["config_path"].write_text(json.dumps({"number_of_inverters": "two"}))
+    assert web.get()[0] == 200
+    # The configuration page can be repaired afterwards.
+    assert web.post({"number_of_inverters": 1})[0] == 200
+
+
+def test_startup_params_survive_a_saved_configuration_with_more_than_one_inverter(web):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    config.update(_two_inverter_conf())
+    params = asyncio.run(
+        web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"])
+    )
+    assert params["plant_conf"]["number_of_inverters"] == 2
+    assert (web.conf["data_path"] / "params.pkl").exists()
+
+
+class _AppLogCapture(logging.Handler):
+    """Collects what the web app logs at error level.
+
+    Other test modules silence the app logger (test_web_server sets it to CRITICAL), so
+    the level is raised for the duration instead of relying on propagation to caplog.
+    """
+
+    def __init__(self, app_logger):
+        super().__init__(logging.ERROR)
+        self.app_logger = app_logger
+        self.previous_level = app_logger.level
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+    def __enter__(self):
+        self.app_logger.addHandler(self)
+        self.app_logger.setLevel(logging.ERROR)
+        return self
+
+    def __exit__(self, *exc):
+        self.app_logger.removeHandler(self)
+        self.app_logger.setLevel(self.previous_level)
+
+
+def test_action_is_a_400_not_a_500_with_more_than_one_inverter_saved(web):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    config.update(_two_inverter_conf())
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post("/action/dayahead-optim", json={})
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any("more than one inverter is not supported" in m for m in captured.messages)
+
+
+@pytest.mark.parametrize("bad_count", ["abc", 0, -1, 1.5, True])
+def test_action_is_a_400_with_a_logged_reason_for_a_bad_runtime_count(web, bad_count):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post(
+            "/action/dayahead-optim", json={"number_of_inverters": bad_count}
+        )
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any("number_of_inverters must be a positive integer" in m for m in captured.messages), (
+        captured.messages
+    )
+
+
+def test_action_is_a_400_for_a_runtime_inverter_count_above_one(web):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post("/action/dayahead-optim", json={"number_of_inverters": 2})
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any("number_of_inverters=2" in m for m in captured.messages)
+
+
+@pytest.mark.parametrize(
+    "runtime,reason",
+    [
+        ({"inverter_is_hybrid": True, DC_AC: INVALID_CURVE}, "expected 0 <= efficiency <= 1"),
+        ({"inverter_is_hybrid": True, DC_AC: [[1000, "x"]]}, "must be a list of at least 2"),
+        ({"inverter_is_hybrid": True, DC_AC: 5}, "must be a list of at least 2"),
+    ],
+)
+def test_action_is_a_400_with_the_reason_for_a_malformed_runtime_curve(web, runtime, reason):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post("/action/dayahead-optim", json=runtime)
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any(DC_AC in m and reason in m for m in captured.messages), captured.messages
+
+
+@pytest.mark.parametrize("action", ["weather-forecast-cache", "export-influxdb-to-csv"])
+def test_the_other_runtime_actions_are_a_400_for_a_malformed_runtime_curve(web, action):
+    config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
+    asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    async def go():
+        client = web.ws.app.test_client()
+        response = await client.post(
+            f"/action/{action}", json={"inverter_is_hybrid": True, DC_AC: INVALID_CURVE}
+        )
+        return response.status_code
+
+    with _AppLogCapture(web.ws.app.logger) as captured:
+        assert asyncio.run(go()) == 400
+    assert any(DC_AC in m for m in captured.messages), captured.messages
+
+
+@pytest.mark.parametrize(
+    "conf,curve",
+    [
+        ({"inverter_is_hybrid": True}, INVALID_CURVE),
+        ({"inverter_is_hybrid": True}, [[1000, "x"]]),
+        ({"inverter_is_hybrid": True}, 5),
+        (_two_inverter_conf(), DISCHARGE_CURVE),
+        (_two_inverter_conf(), [INVALID_CURVE, []]),
+    ],
+)
+def test_a_strict_curve_fault_is_an_inverter_config_error_and_logged(caplog, conf, curve):
+    plant_conf = {**conf, DC_AC: curve}
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(utils.InverterConfigError) as excinfo:
+            utils.check_inverter_power_curves(plant_conf, logger)
+    assert isinstance(excinfo.value, ValueError)  # existing `except ValueError` still catches it
+    assert _errors(caplog, DC_AC), "the reason must be logged when the error is raised"
+
+
+def test_a_strict_hybrid_off_supplied_curve_is_an_inverter_config_error():
+    with pytest.raises(utils.InverterConfigError, match="requires inverter_is_hybrid"):
+        utils.check_inverter_power_curves(
+            {"inverter_is_hybrid": False, DC_AC: DISCHARGE_CURVE}, logger, supplied=[DC_AC]
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -8681,6 +8681,79 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("inv_stress_cost", opt_res_with_stress.columns)
         self.assertGreater(opt_res_with_stress["inv_stress_cost"].sum(), 0)
 
+    def test_inverter_stress_segments_reaches_constraints(self):
+        """inverter_stress_segments sets how many segments the inverter stress curve uses.
+
+        The lookup used to build the key from the "inv" variable prefix
+        (inv_stress_segments), so the configured value was never read and 10
+        segments were always used. Without the key the default stays 10.
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": True,
+                "compute_curtailment": False,
+                "inverter_ac_output_max": 5000,
+                "inverter_ac_input_max": 5000,
+                "inverter_stress_cost": 1.0,
+                "battery_nominal_energy_capacity": 5000,
+                "battery_discharge_power_max": 5000,
+                "battery_charge_power_max": 5000,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+            }
+        )
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.1, 0.2, 0.3, 0.4]
+        df_input[self.fcst.var_load_cost] = [0.5, 0.6, 0.7, 0.8]
+
+        def run(plant_conf):
+            opt = Optimization(
+                self.retrieve_hass_conf,
+                self.optim_conf,
+                plant_conf,
+                self.fcst.var_load_cost,
+                self.fcst.var_prod_price,
+                self.costfun,
+                emhass_conf,
+                logger,
+            )
+            with mock.patch.object(
+                opt, "_add_stress_constraints", wraps=opt._add_stress_constraints
+            ) as spy:
+                opt.perform_optimization(
+                    df_input,
+                    df_input["p_pv_forecast"].values,
+                    df_input["p_load_forecast"].values,
+                    df_input[opt.var_load_cost].values,
+                    df_input[opt.var_prod_price].values,
+                    soc_init=0.5,
+                    soc_final=0.0,
+                )
+            self.assertEqual(opt.optim_status, "Optimal")
+            # Only the inverter has a stress cost here, so this is its one call;
+            # args are (constraints, power_expression, stress_var, seg_params).
+            self.assertEqual(spy.call_count, 1)
+            return len(spy.call_args.args[3])
+
+        conf = copy.deepcopy(self.plant_conf)
+        conf["inverter_stress_segments"] = 3
+        self.assertEqual(run(conf), 3)
+
+        conf.pop("inverter_stress_segments")
+        self.assertEqual(run(conf), 10)
+
     def test_battery_stress_cost_charging_spread(self):
         """Test that battery stress cost encourages spreading charging over time."""
         # Setup plant configuration for a non-hybrid system

@@ -6741,6 +6741,15 @@ class TestRuntimeBanner(unittest.TestCase):
         self.assertIn("runtime info unavailable", cm.records[0].getMessage())
 
 
+class TestValidateNumBatteriesOverflow(unittest.TestCase):
+    def test_an_int_too_large_for_a_float_is_a_value_error(self):
+        # float(10**400) raises OverflowError, which must not escape the documented
+        # ValueError contract (callers catch ValueError).
+        with self.assertRaises(ValueError) as ctx:
+            utils.validate_num_batteries({"number_of_batteries": 10**400})
+        self.assertIn("number_of_batteries must be a positive integer", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()

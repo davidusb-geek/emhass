@@ -49,6 +49,7 @@ from emhass.utils import (
     DRY_RUN_ACTIONS,
     DRY_RUN_FLAGS,
     HEAT_TOPOLOGY_KEYS,
+    InverterConfigError,
     SocFractionError,
     build_config,
     build_legacy_config_params,
@@ -61,6 +62,7 @@ from emhass.utils import (
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
     get_keys_to_mask,
+    inverter_config_faults,
     inverter_power_curve_faults,
     param_to_config,
     read_flag,
@@ -541,10 +543,15 @@ async def parameter_set():
 
     # Reject an unusable inverter curve before anything is written: build_params would
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
-    # here would leave the user believing the curve is active.
-    curve_faults = inverter_power_curve_faults(request_data)
-    if curve_faults:
-        return await make_response(curve_faults, 400)
+    # here would leave the user believing the curve is active. The per-inverter settings
+    # (#1150) are checked in the same pass, so one answer lists every fault: the curves
+    # first, then the inverter settings, then the refusal of more than one inverter.
+    inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
+        request_data
+    )
+    if inverter_faults:
+        app.logger.warning("Rejected config save: inverter settings invalid: %s", inverter_faults)
+        return await make_response(inverter_faults, 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
@@ -661,7 +668,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except SocFractionError as exc:
+        except (SocFractionError, InverterConfigError) as exc:
             # The message names only this request's own value, unlike the shared log's tail.
             return f"EMHASS >> ERROR: {exc}\n", 400
         if not success:
@@ -675,7 +682,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
-        except SocFractionError:
+        except (SocFractionError, InverterConfigError):
             return await grab_log(action_str), 400
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 200

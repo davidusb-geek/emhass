@@ -3,7 +3,7 @@ name = "emhass"
 dynamic = ["version"]
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
@@ -13,13 +13,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "numpy>=2.0.0, <2.3.0",
+    "numpy>=2.0.0, <2.6.0",
     "scipy>=1.15.0",
     "pandas>=2.2.0",
     "pvlib>=0.11.0",
@@ -56,11 +56,6 @@ test = [
     "tabulate",
     "hatchling",
     "aioresponses",
-    # aioresponses 0.7.8 (latest) builds an aiohttp ClientResponse without the
-    # stream_writer argument that aiohttp>=3.13 made required, so the mock-based
-    # tests fail under aiohttp 3.13+. Cap aiohttp here (test extra only) until
-    # aioresponses ships 3.13 support; production installs stay unpinned.
-    "aiohttp<3.13",
     # freezes the clock for the DST regression suite in tests/dst_1189
     "time-machine",
 ]
@@ -79,7 +74,6 @@ emhass = { workspace = true }
 [tool.uv]
 default-groups = "all"
 package = true
-override-dependencies = ["yarl<1.24"]
 
 [tool.hatch.version]
 path = "src/emhass/__init__.py"
@@ -126,7 +120,7 @@ ignore = ["E501", "B008", "B905", "C901"]
 dev = ["emhass"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 fix = true
 show-fixes = true

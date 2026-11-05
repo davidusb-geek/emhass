@@ -49,14 +49,24 @@ The `thermal_config` for DHW comes from the runtime payload, not the static conf
 
 The cleanest way to assemble the `desired_temperatures` array is to compute it outside Home Assistant (Node-RED Function node, AppDaemon, a small Python script) and inject the finished list into the EMHASS payload. The contract EMHASS sees is just a list of length `prediction_horizon` floats.
 
-Reference Python sketch for the deadline profile (30-minute timesteps, 24 h horizon):
+Reference Python sketch for the deadline profile (30-minute timesteps, 24 h horizon). Index `k` of the list is the instant `first_step + k x timestep`, in **elapsed time**, where `first_step` is the first optimization step of the request (with `method_ts_round: first` in the EMHASS configuration, which is not a runtime key, the step that contains the request time). Both the clock reading and the deadline are therefore converted to UTC instants before they are subtracted: subtracting two local datetimes is a wall-clock difference, which is an hour off across a daylight saving change.
 
 ```python
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+
+def first_step_of(now, timestep_min=30):
+    """First optimization step for method_ts_round "first": the latest step
+    boundary not after `now`, on the local clock (`now` must be timezone-aware)."""
+    step_s = timestep_min * 60
+    offset_s = now.utcoffset().total_seconds()
+    first_s = ((now.timestamp() + offset_s) // step_s) * step_s - offset_s
+    return datetime.fromtimestamp(first_s, tz=now.tzinfo)
 
 
 def build_dhw_profile(
-    now,
+    first_step,
     horizon=48,
     timestep_min=30,
     base=45.0,
@@ -69,26 +79,31 @@ def build_dhw_profile(
 ):
     """Return a list of length `horizon` with the deadline-driven target temps.
 
-    Each spike fires in the last `*_window_slots` timesteps that end at or
-    before the deadline hour. After a deadline passes today, the next spike
-    rolls forward to tomorrow.
+    `first_step` is the timezone-aware first optimization step (see
+    first_step_of). Each spike fires in the last `*_window_slots` timesteps that
+    end at or before the deadline hour. After a deadline has passed, the next
+    spike rolls forward to tomorrow.
     """
     profile = [base] * horizon
+    first_utc = first_step.astimezone(timezone.utc)
     for hour, temp, slots in (
         (morning_hour, morning_temp, morning_window_slots),
         (evening_hour, evening_temp, evening_window_slots),
     ):
-        deadline = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        if deadline <= now:
-            deadline += timedelta(days=1)
-        deadline_step = int((deadline - now).total_seconds() // (timestep_min * 60))
+        deadline = first_step.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if deadline <= first_step:
+            deadline += timedelta(days=1)  # the same local clock time tomorrow
+        elapsed_s = (deadline.astimezone(timezone.utc) - first_utc).total_seconds()
+        deadline_step = int(elapsed_s // (timestep_min * 60))
         for k in range(max(0, deadline_step - slots), min(horizon, deadline_step)):
             profile[k] = temp
     return profile
 ```
 
+Call it as `build_dhw_profile(first_step_of(datetime.now(ZoneInfo("Your/Zone"))))`. The floor in `first_step_of` assumes the request and EMHASS fall in the same step; check the first timestamp of the returned plan against `first_step` before acting on it (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
+
 ```{note}
-The Python deadline sketch above is integration-layer date arithmetic, separate from EMHASS `delta_forecast_daily`. EMHASS resolves its own forecast window as local calendar days; the DHW profile is converted into timestep indices by this external helper. If a deadline must stay at the same local wall-clock hour across a daylight-saving transition, make that property explicit in the helper and test the relevant timezone transition rather than relying on the EMHASS forecast-window rule.
+The Python deadline sketch above is integration-layer date arithmetic, separate from EMHASS `delta_forecast_daily`. EMHASS resolves its own forecast window as local calendar days; the DHW profile is converted into timestep indices by this external helper, in elapsed time from the first step. A deadline hour that falls in the repeated hour of a daylight saving change is ambiguous, and one in the skipped hour does not exist; the result then follows Python's `zoneinfo` rules and was not separately verified. Test the relevant timezone transition if your deadline can fall there.
 ```
 
 Once your runtime layer (Node-RED, AppDaemon, etc.) holds the array, the HA `rest_command` payload simply forwards it:

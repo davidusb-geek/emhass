@@ -235,10 +235,30 @@ This is appropriate because a hot water tank sits in a room at roughly constant 
 
 * **draw_off_demand**: Daily profile of hot water draw-off energy in kWh per timestep (default: none).
     * A list of energy values representing one day of hot water consumption
-    * The profile is automatically tiled (repeated) to fill the optimization horizon
+    * The profile is automatically tiled (repeated) to fill the optimization horizon, **starting at the first optimization step**, not at midnight: entry 0 is the energy of step 0, whatever the clock time of that step is. A list that is at least as long as the horizon is used as it is: its first horizon-length values are used and any excess is discarded
     * Each value represents the energy withdrawn during that timestep
     * Example for 30-minute timesteps: `[0,0,0,0,0,0, 0,0,0,0,0,0, 0.5,0.3,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]`
-      (morning shower around 06:00, evening shower around 18:00)
+      (morning shower around 06:00, evening shower around 18:00, **only if the first optimization step is 00:00**; see below to keep the clock times)
+
+Because the tiling is positional, a daily profile written for clock times lands on the wrong hours when the first step is not midnight (for a run whose first step is 22:00, entry 12, the "06:00" shower, is applied six hours later, at 04:00), and it drifts by an hour after a daylight saving change, because a day then has 46 or 50 half-hour steps while the profile repeats every 48. To keep the clock times, send a list for the whole horizon, looked up by the local clock time of each step. The first step is the one that contains the request time with `method_ts_round` set to `first` (see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs)):
+
+```python
+from datetime import timedelta, timezone
+
+
+def draw_off_for_grid(first_step, daily, horizon, step_min=30):
+    """kWh per step for `horizon` steps from `first_step` (timezone-aware).
+
+    `daily` has one value per step of a 00:00-24:00 local day (48 for 30 minutes).
+    Each step takes the value of its local clock time, also across a daylight saving change.
+    """
+    first_utc = first_step.astimezone(timezone.utc)
+    out = []
+    for i in range(horizon):
+        local = (first_utc + timedelta(minutes=step_min * i)).astimezone(first_step.tzinfo)
+        out.append(daily[(local.hour * 60 + local.minute) // step_min])
+    return out
+```
 
 When `draw_off_demand` is absent (or empty), the existing behavior applies — building heating demand with outdoor-temperature-dependent losses. This preserves backward compatibility for floor heating use cases.
 
@@ -593,7 +613,7 @@ This configuration:
 - Uses 45°C supply temperature (typical for domestic hot water)
 - Has a constant 0.035 kW standby loss (well-insulated tank)
 - Defines a daily draw-off profile (48 half-hour timesteps): morning shower at 06:00 (0.5 + 0.3 kWh) and evening shower at 18:00 (0.8 + 0.5 + 0.3 kWh)
-- The profile repeats automatically if the optimization horizon exceeds 24 hours
+- The profile repeats automatically if the optimization horizon exceeds the profile length, counted from the first optimization step (see Hot water tank mode)
 - Maintains tank temperature between 40-60°C
 
 ### Example 6: Hot water tank
