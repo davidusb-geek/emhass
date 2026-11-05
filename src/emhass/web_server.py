@@ -130,6 +130,12 @@ def _dry_run_slot() -> Path:
     return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
 
 
+def _live_optim_slot() -> Path:
+    """One live optimization at a time across workers sharing a data folder."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+
+
 # Add custom filter for trusted HTML content
 def mark_safe(value):
     """Mark pre-rendered HTML plots as safe (use only for trusted content)"""
@@ -1048,9 +1054,33 @@ async def healthz():
 
 @app.route("/action/<action_name>", methods=["POST"])
 async def action_call(action_name: str):
+    """Reject concurrent live optimizations before loading inputs or writing results.
+
+    The non-blocking file lock also protects against another Gunicorn worker.
+    publish-data and dry runs are not locked; atomic result files remain readable.
     """
-    Receive Post action, run action according to passed slug(action_name)
-    """
+    if action_name not in {"naive-mpc-optim", "dayahead-optim", "perfect-optim"}:
+        return await _action_call_unlocked(action_name)
+
+    with open(_live_optim_slot(), "a+") as slot:
+        if not try_lock_file(slot):
+            # Do not log to the shared action log: its ERROR lines can make
+            # the in-flight request incorrectly report a failure.
+            response = await make_response(
+                "EMHASS >> Another live optimization is running. "
+                "Retry shortly; this request was not run.\n",
+                429,
+            )
+            response.headers["Retry-After"] = "2"
+            return response
+        try:
+            return await _action_call_unlocked(action_name)
+        finally:
+            unlock_file(slot)
+
+
+async def _action_call_unlocked(action_name: str):
+    """Existing action dispatch, called with the live-optimization slot if needed."""
     global continual_publish_thread
     global injection_dict
 
