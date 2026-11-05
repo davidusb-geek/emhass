@@ -77,11 +77,12 @@ let ev_steps = Number.isFinite(ev_remaining_kwh)
 // The deadline as an epoch instant in ms, stored by your flow when the departure is known (a stored "minutes
 // remaining" value would go stale). The difference of two instants is elapsed time; two local clock readings
 // would be an hour off across a daylight saving change. No fabricated default: without a deadline there is no EV window.
+const now_ms = Date.now();   // one clock reading for the deadline and the first step
 const deadline_ms = Number(flow.get("ev_deadline_ms"));
-const minutes_until_deadline = Number.isFinite(deadline_ms) ? (deadline_ms - Date.now()) / 60000 : NaN;
+const minutes_until_deadline = Number.isFinite(deadline_ms) ? (deadline_ms - now_ms) / 60000 : NaN;
 // Step indices count from the first optimization step, which with method_ts_round "first" started
 // minutes_into_step minutes ago (epoch based: assumes a UTC offset that is a whole number of steps).
-const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
+const minutes_into_step = (now_ms % (timestep_min * 60000)) / 60000;
 // EMHASS reads the clock after this node: in the last minute before a step boundary its first step may be the
 // next one, so count one step fewer (the EV can then only stop earlier, never run in the deadline step).
 const margin = minutes_into_step > timestep_min - 1 ? 1 : 0;
