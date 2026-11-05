@@ -21,6 +21,7 @@ import orjson
 import pandas as pd
 
 from emhass import last_run, plan_store, utils
+from emhass.atomic_file import atomic_write
 from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
 from emhass.battery_identification import BatteryIdentification
 from emhass.forecast import Forecast
@@ -117,10 +118,8 @@ def _record_optim_snapshot(
 def _write_results(input_data_dict: dict, opt_res: pd.DataFrame, filename: str) -> None:
     """Write the results CSV that publish-data reads, except on a dry run."""
     if not is_dry_run(input_data_dict):
-        opt_res.to_csv(
-            input_data_dict["emhass_conf"]["data_path"] / filename,
-            index_label="timestamp",
-        )
+        target = input_data_dict["emhass_conf"]["data_path"] / filename
+        atomic_write(target, lambda stream: opt_res.to_csv(stream, index_label="timestamp"))
 
 
 def _saves_entities(input_data_dict: dict, params: dict) -> bool:
