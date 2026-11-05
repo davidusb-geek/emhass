@@ -1183,6 +1183,7 @@
           "number_of_batteries": {
             "type": "integer",
             "default": 1,
+            "minimum": 1,
             "maximum": 100,
             "title": "Number of batteries",
             "x-unit": "count",
