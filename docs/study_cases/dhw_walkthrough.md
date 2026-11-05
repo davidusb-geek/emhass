@@ -53,6 +53,7 @@ Reference Python sketch for the deadline profile (30-minute timesteps, 24 h hori
 
 ```python
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 
 def first_step_of(now, timestep_min=30):

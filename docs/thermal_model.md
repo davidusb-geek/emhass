@@ -100,7 +100,8 @@ rest_command:
       content-type: application/json
     payload: >
       {#- The comfort window is decided per step from the local clock time of that step, so it
-          stays correct across a daylight saving change and cannot end before it starts.
+          stays correct across a daylight saving change. The window must not cross midnight
+          (comfort_start earlier than comfort_end on the same day).
           Step i is the instant first_step + i * 1800 s, the first step being the one that
           contains now (method_ts_round "first", optimization_time_step 30). -#}
       {%- set step_s = 1800 -%}
