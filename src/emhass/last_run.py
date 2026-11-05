@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from emhass.atomic_file import atomic_write
+
 _LAST_RUN_FILENAME = "last_run.json"
 _lock = threading.Lock()
 _cache: dict | None = None
@@ -96,8 +98,7 @@ def record(
         _cache = snap
         target = _path(data_path)
         try:
-            payload = json.dumps(snap, indent=2)
-            target.write_text(payload, encoding="utf-8")
+            atomic_write(target, lambda stream: json.dump(snap, stream, indent=2))
         except OSError as exc:
             _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
 
@@ -156,14 +157,11 @@ def snapshot(
 def read(data_path: Path) -> dict | None:
     """Return the most recent snapshot, or None if no run yet.
 
-    Reads the in-memory cache first; falls back to the on-disk file for
-    cold-start after a restart. A corrupted JSON file logs a warning and
-    returns None.
+    Read the shared on-disk file each time: a cached value from another worker
+    may have been superseded. A corrupt JSON file logs a warning and returns None.
     """
     global _cache
     with _lock:
-        if _cache is not None:
-            return dict(_cache)
         path = _path(data_path)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
