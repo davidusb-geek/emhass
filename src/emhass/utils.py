@@ -2546,7 +2546,7 @@ async def treat_runtimeparams(
         # loop above may have overwritten them with a raw runtime value (#610).
         # N=1 is a no-op (see check_batt_params); this only does real work once
         # number_of_batteries > 1.
-        num_batteries = validate_num_batteries(params["plant_conf"])
+        num_batteries = require_valid_battery_count(params["plant_conf"], logger)
         for batt_param_name, batt_default in BATT_ARRAY_PARAMS_PLANT_CONF.items():
             _warn_if_runtime_scalar_masks_batt_list(
                 num_batteries,
@@ -2758,7 +2758,7 @@ async def treat_runtimeparams(
                 params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
                 forecast_dates = extended_forecast_dates
             reject_configured_soc_fractions(params["plant_conf"], params["optim_conf"], logger)
-            num_batteries = validate_num_batteries(params["plant_conf"])
+            num_batteries = require_valid_battery_count(params["plant_conf"], logger)
             if num_batteries == 1:
                 # Unchanged from before #610: soc_init/soc_final stay plain
                 # floats, not [x] lists, so downstream consumers written for
@@ -5282,14 +5282,21 @@ def _coerce_batt_element(
     return value
 
 
+# Every per-battery setting is expanded to one entry per battery, so the count has to
+# be bounded: an unbounded one lets a single request allocate memory in proportion to
+# the number it sends. 100 is far above any real plant.
+MAX_BATTERIES = 100
+
+
 def validate_num_batteries(plant_conf: dict) -> int:
     """
     Read and validate plant_conf["number_of_batteries"] (#610).
 
-    Accepts a positive integer (an integral float or numeric string is coerced);
-    zero, negative, fractional, boolean or non-numeric values raise ValueError
-    here, at config time, rather than surfacing as an empty per-battery list
-    deep inside the optimization build.
+    Accepts a positive integer up to MAX_BATTERIES (an integral float or numeric
+    string is coerced); zero, negative, fractional, boolean, non-numeric or
+    larger values raise BatteryConfigError (a ValueError) here, at config time,
+    rather than surfacing as an empty or oversized per-battery list deep inside
+    the optimization build.
 
     :param plant_conf: the plant configuration dict
     :type plant_conf: dict
@@ -5297,16 +5304,55 @@ def validate_num_batteries(plant_conf: dict) -> int:
     :rtype: int
     """
     raw = plant_conf.get("number_of_batteries", 1)
-    invalid = ValueError(f"number_of_batteries must be a positive integer, got {raw!r}")
+    shown = repr(raw)
+    if len(shown) > 40:
+        shown = shown[:37] + "..."
+    invalid = BatteryConfigError(f"number_of_batteries must be a positive integer, got {shown}")
     if isinstance(raw, bool) or not isinstance(raw, int | float | str):
         raise invalid
-    try:
-        value = float(raw)
-    except (ValueError, OverflowError):  # OverflowError: an int too large for a float
-        raise invalid from None
-    if not value.is_integer() or value < 1:
+    if isinstance(raw, int):
+        value = raw  # compared as is: an int can be too large for a float
+    else:
+        try:
+            value = float(raw)
+        except ValueError:
+            raise invalid from None
+        if not value.is_integer():  # also false for inf and nan
+            raise invalid
+    if value < 1:
         raise invalid
+    if value > MAX_BATTERIES:
+        raise BatteryConfigError(
+            f"number_of_batteries must be at most {MAX_BATTERIES}, got {shown}"
+        )
     return int(value)
+
+
+def require_valid_battery_count(plant_conf: dict, logger: logging.Logger) -> int:
+    """validate_num_batteries for a run: the fault is logged at error level before the
+    BatteryConfigError is raised, which is what lets the web server return the action
+    log with its 400, as for SocFractionError and InverterConfigError."""
+    try:
+        return validate_num_batteries(plant_conf)
+    except BatteryConfigError as err:
+        logger.error("%s", err)
+        raise
+
+
+def battery_count_faults(config: dict) -> list[str]:
+    """The fault with number_of_batteries in a configuration about to be saved, if any.
+
+    A null value is not a fault: the web UI saves an emptied number input as null and
+    build_params drops it, so the default of 1 applies. build_params drops only a real
+    null, so the string "null" is checked like any other value.
+    """
+    if config.get("number_of_batteries") is None:
+        return []
+    try:
+        validate_num_batteries(config)
+    except BatteryConfigError as err:
+        return [str(err)]
+    return []
 
 
 def check_batt_params(
@@ -5497,6 +5543,10 @@ def dry_run_request_problem(runtimeparams: dict, dry_run: bool) -> str | None:
 
 class SocFractionError(ValueError):
     """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
+
+
+class BatteryConfigError(ValueError):
+    """number_of_batteries is not a whole number from 1 to MAX_BATTERIES (#610)."""
 
 
 class InverterConfigError(ValueError):
