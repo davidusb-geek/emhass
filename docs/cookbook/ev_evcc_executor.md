@@ -39,6 +39,7 @@ the charger's nominal power. This is the same base setup as the
 
 ```yaml
 number_of_deferrable_loads: 3
+method_ts_round: first                 # the step indices count from the first optimization step
 nominal_power_of_deferrable_loads:
   - 3000          # water heater
   - 750           # pool pump
@@ -92,7 +93,7 @@ script:
           - action: persistent_notification.create
             data:
               title: EV cannot reach its target by the deadline
-              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ((ev_steps - ev_plan_steps) * charger_kw * timestep_min / 60) | round(1) }} kWh will not be delivered."
+              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ([ev_remaining_kwh - ev_plan_steps * charger_kw * timestep_min / 60, 0] | max) | round(1) }} kWh will not be delivered."
       - action: rest_command.emhass_mpc
         data:
           horizon: "{{ horizon }}"
