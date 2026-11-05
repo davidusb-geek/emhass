@@ -74,14 +74,19 @@ const ev_remaining_kwh = Number(flow.get("ev_remaining_kwh"));   // missing or n
 // mixed-integer problem at the nominal power; fractional hours are solved as "Optimal (Relaxed)".
 let ev_steps = Number.isFinite(ev_remaining_kwh)
     ? Math.max(0, Math.ceil(Math.round(ev_remaining_kwh / (charger_kw * timestep_min / 60) * 1e6) / 1e6)) : 0;
-// Elapsed minutes to the deadline (difference of two instants, not of two local clock readings, which is
-// an hour off across a daylight saving change). No fabricated default: without a deadline there is no EV window.
-const minutes_until_deadline = flow.get("minutes_until_deadline");
+// The deadline as an epoch instant in ms, stored by your flow when the departure is known (a stored "minutes
+// remaining" value would go stale). The difference of two instants is elapsed time; two local clock readings
+// would be an hour off across a daylight saving change. No fabricated default: without a deadline there is no EV window.
+const deadline_ms = Number(flow.get("ev_deadline_ms"));
+const minutes_until_deadline = Number.isFinite(deadline_ms) ? (deadline_ms - Date.now()) / 60000 : NaN;
 // Step indices count from the first optimization step, which with method_ts_round "first" started
 // minutes_into_step minutes ago (epoch based: assumes a UTC offset that is a whole number of steps).
 const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
+// EMHASS reads the clock after this node: in the last minute before a step boundary its first step may be the
+// next one, so count one step fewer (the EV can then only stop earlier, never run in the deadline step).
+const margin = minutes_into_step > timestep_min - 1 ? 1 : 0;
 let end_step = Number.isFinite(minutes_until_deadline)
-    ? Math.max(0, Math.min(Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min), horizon_steps)) : 0;
+    ? Math.max(0, Math.min(Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min), horizon_steps) - margin) : 0;
 // An end of 0 means "no limit", not "stop now", so it is never sent for the EV. Plan no more steps than
 // fit before the deadline (the deadline stays strict), and no EV at all when not one full step is left.
 if (ev_steps > end_step) {
