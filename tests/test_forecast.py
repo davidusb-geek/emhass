@@ -22,7 +22,6 @@ import numpy as np
 import orjson
 import pandas as pd
 import time_machine
-from aioresponses import aioresponses
 from aioresponses.core import normalize_url
 
 from emhass import forecast as forecast_module
@@ -32,6 +31,7 @@ from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from tests.aioresponses_compat import aioresponses
 from tests.fixture_clock import fixture_clock
 
 # The root folder
