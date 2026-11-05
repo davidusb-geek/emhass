@@ -61,7 +61,7 @@ Two values you compute fresh per MPC call, both counted on the EMHASS time grid 
 Three rules keep the deadline strict:
 
 - **Count elapsed time from the first step, not the clock reading.** Subtracting two local datetimes (`deadline - now()`) is wall-clock arithmetic: across a daylight saving change it is an hour off, and it counts from `now()` while the step indices count from the first step. Use `as_timestamp()` and the first step of the grid (set `method_ts_round` to `first`).
-- **`end_timesteps_of_each_deferrable_load = 0` means no limit, not "stop now".** A deadline that is less than one full step after the first step gives `0`, and EMHASS then plans the charge at the cheapest slot of the whole horizon, after the deadline. The script below does not send an EV window in that case.
+- **`end_timesteps_of_each_deferrable_load = 0` means no limit, not "stop now".** A deadline that is less than one full step after the first step gives `0`, and EMHASS then plans the charge at the cheapest slot of the whole horizon, after the deadline. The script below does not send an EV window in that case, and it does not turn an invalid deadline time into no limit: `today_at()` fails on an invalid time and the script stops.
 - **If the energy does not fit before the deadline, do not stretch the deadline.** `ev_steps > end_step` makes the problem infeasible (EMHASS returns `Infeasible` and publishes no plan, which also stops every other load). The script plans at most `end_step` steps, which charges in every step before the deadline, and raises a notification that the target will be missed. When less than one full step remains (`end_step = 0`) the EV is not planned. The charge is never silently planned after the deadline.
 
 Why whole steps: with the default `treat_deferrable_load_as_semi_cont: true` a load runs at its nominal power or not at all. A requirement that is a whole number of steps is solved as a normal mixed-integer problem; a fractional requirement such as `2.2` hours at 30-minute steps is solved as `Optimal (Relaxed)`: the energy is exact, but the integer constraints are dropped and one step runs at a partial power (4.4 kW in a test with an 11 kW charger). Rounding up to whole steps delivers at most one step of extra energy (5.5 kWh for 11 kW and 30 minutes). Pass hours that are not a multiple of the step only if your charger can follow a partial-power step.
@@ -97,7 +97,7 @@ script:
           - action: persistent_notification.create
             data:
               title: EV cannot reach its target by the deadline
-              message: "{{ ev_steps }} steps needed, {{ end_step }} available. The EV is planned for {{ ev_plan_steps }} steps."
+              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ((ev_steps - ev_plan_steps) * charger_kw * timestep_min / 60) | round(1) }} kWh will not be delivered."
       - action: rest_command.emhass_mpc
         data:
           horizon: "{{ horizon }}"
@@ -125,7 +125,7 @@ rest_command:
 Replace `sensor.YOUR_EV_REMAINING_KWH` with the actual sensor your integration publishes. The contract is: a sensor that reports kWh remaining to deliver before the next deadline. `| float` has no default on purpose: an unavailable sensor makes the script fail instead of planning with an invented energy value.
 
 ```{note}
-Do not mix the two ways of giving the operating requirement in one call. As soon as `operating_timesteps_of_each_deferrable_load` is passed, EMHASS ignores `operating_hours_of_each_deferrable_load` for **every** load: in a test, a heater given `1.0` hours next to an EV given timesteps ran for no step at all. Give all loads as timesteps (`ceil(hours / step_hours)`), as above, or all as hours.
+Do not mix the two ways of giving the operating requirement in one call. As soon as `operating_timesteps_of_each_deferrable_load` is passed, EMHASS ignores `operating_hours_of_each_deferrable_load` for **every** load: in a test, a heater given `1.0` hours next to an EV given timesteps ran for no step at all. Give **every** configured deferrable load as timesteps (`ceil(hours / step_hours)`), as above, or all as hours; a load that is left out of the timesteps list keeps its static hours and is zeroed too. The setting is per request: in a test of four consecutive requests, a later request that passed only hours was not affected by an earlier request's timesteps.
 ```
 
 ```{note}

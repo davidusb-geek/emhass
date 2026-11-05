@@ -113,14 +113,14 @@ const connected = flow.get("ev_connected") === true;
 const soc = flow.get("ev_soc_percent");
 const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) < soc_max_age_ms;
 let ev_steps = 0;
-if (connected && soc_fresh && end_step > 0) {
+if (connected && soc_fresh) {
     const kwh = Math.max(0, (target_soc - soc) / 100 * capacity_kwh);
     // Whole steps, rounded up (the round() removes float noise). A whole number of steps is solved as a
     // normal mixed-integer problem with every step at the nominal power; a fractional hour count is
     // solved as "Optimal (Relaxed)" with one partial-power step.
     ev_steps = Math.ceil(Math.round(kwh / (charger_kw * step_min / 60) * 1e6) / 1e6);
-    if (ev_steps > end_step) {                                 // would be Infeasible: plan what fits and say so
-        node.warn(`EV needs ${ev_steps} steps but only ${end_step} remain before departure; the target will be missed`);
+    if (ev_steps > end_step) {                                 // would be Infeasible or unlimited: plan what fits and say so
+        node.warn(`EV needs ${ev_steps} steps but ${end_step > 0 ? "only " + end_step : "none"} remain before departure; the target will be missed`);
         ev_steps = end_step;
     }
 }
