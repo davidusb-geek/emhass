@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import bz2
 import copy
@@ -41,6 +42,7 @@ except ImportError:
 
 import logging
 import math
+import numbers
 import os
 import pickle
 import pickle as cPickle
@@ -74,6 +76,7 @@ from emhass.utils import (
     describe_invalid_forecast_value,
     get_days_list,
     get_forecast_start,
+    pv_carrying_inverters,
     replace_file,
     set_df_index_freq,
     validate_num_inverters,
@@ -125,6 +128,48 @@ forecast_solar_max_source_gap = pd.Timedelta(hours=1)
 # so both have to be named or a timed-out request escapes the retry loop.
 # 3.11+ aliases them; listing both is the same handler there.
 forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError)
+
+# Per-plant PV power (#1150). Solcast and solar.forecast store one extra column per plant
+# next to the summed ``yhat`` of the cached frame (``yhat_plant0``, ``yhat_plant1``, ...), so
+# the plants ride the shared weather cache. Only a frame with two or more plants carries them.
+PV_PLANT_COLUMN_PREFIX = "yhat_plant"
+_PV_PLANT_COLUMN = re.compile(re.escape(PV_PLANT_COLUMN_PREFIX) + r"\d+")
+
+
+def _is_pv_plant_column(name) -> bool:
+    """Whether a weather-frame column is a per-plant PV column (``yhat_plant{j}``)."""
+    return isinstance(name, str) and _PV_PLANT_COLUMN.fullmatch(name) is not None
+
+
+def _describe_invalid_solar_forecast_kwp(kwp: list, n_planes: int) -> str | None:
+    """Return why a per-plane ``solar_forecast_kwp`` list is unusable, or ``None`` if it is fine.
+
+    The list needs exactly one finite, positive number per plane (``bool`` is not a number
+    here). The message names the bad positions and what is wrong with them but never echoes
+    a value, and lists at most the first five positions, so it stays short whatever was
+    passed.
+    """
+    if len(kwp) != n_planes:
+        return (
+            f"solar_forecast_kwp has {len(kwp)} entries but pv_module_model has {n_planes}: "
+            "give one kWp value per plane, or a single number for all planes"
+        )
+    problems = []
+    for position, value in enumerate(kwp):
+        if isinstance(value, bool) or not isinstance(value, numbers.Real):
+            problems.append(f"entry {position} is a {type(value).__name__}")
+            continue
+        try:
+            usable = math.isfinite(value) and value > 0
+        except OverflowError:  # an integer too large for a float
+            usable = False
+        if not usable:
+            problems.append(f"entry {position} is zero, negative or not finite")
+    if not problems:
+        return None
+    shown = "; ".join(problems[:5])
+    more = f" (and {len(problems) - 5} more)" if len(problems) > 5 else ""
+    return f"solar_forecast_kwp needs a finite number above zero for every plane: {shown}{more}"
 
 
 def _solcast_overlap_average(
@@ -238,6 +283,13 @@ class Forecast:
     for each forecasting method.
 
     """
+
+    # The PV power of each plant from the last ``get_power_from_weather`` call, before the mix
+    # and the adjustment: one ``yhat_plant{j}`` column per plant, or None when the run has
+    # fewer than two plant series. Reset at the start of every call. Solcast and solar.forecast
+    # store each plant clipped at zero and the other methods as computed (a pvlib plant can be
+    # a little below zero at night); ``split_pv_plants`` clips again, so the result is the same.
+    pv_plant_raw: pd.DataFrame | None = None
 
     # Weather covariate columns that ``get_weather_covariates`` can supply to the mlforecaster
     # (via the ``mlforecaster_weather_features`` option). The keys are the Open-Meteo
@@ -727,14 +779,74 @@ class Forecast:
             bias = max(0.0, min(1.0, bias))
         return bias
 
+    @staticmethod
+    def _parse_solcast_roof_ids(raw_rooftop_ids: str) -> list[str]:
+        """Split ``solcast_rooftop_id`` into its rooftop IDs, in the order given.
+
+        Separators are commas and whitespace; empty tokens are dropped. Plant ``j`` of a
+        Solcast run is rooftop ``j`` of this list.
+        """
+        return [rid for rid in re.split(r"[,\s]+", raw_rooftop_ids.strip()) if rid]
+
+    @staticmethod
+    def _with_pv_plant_columns(total: pd.DataFrame, plant_series: list[pd.Series]) -> pd.DataFrame:
+        """Add one ``yhat_plant{j}`` column per plant next to the summed ``yhat``.
+
+        Only done for two or more plants, so a single-plant frame (and its cache) is exactly
+        what it was before. Each plant is stored clipped at zero; ``yhat`` is not touched.
+        """
+        if len(plant_series) < 2:
+            return total
+        for j, series in enumerate(plant_series):
+            total[f"{PV_PLANT_COLUMN_PREFIX}{j}"] = series.clip(lower=0).to_numpy()
+        return total
+
+    def _solcast_plant_count_agrees(self) -> bool:
+        """With more than one inverter, check the Solcast plants against the plant settings.
+
+        The rooftop count must equal the PV plant count (the length of ``pv_module_model``),
+        and ``pv_plant_inverter_index`` needs one inverter number per plant. Always True with
+        one inverter, and the rooftop count is skipped when there is no rooftop id to count
+        (the fetch path reports that one). Logs one error when a check fails.
+        """
+        if validate_num_inverters(self.plant_conf) <= 1:
+            return True
+        models = self.plant_conf.get("pv_module_model")
+        n_plants = len(models) if isinstance(models, list) else 1
+        try:
+            self._check_pv_plant_inverter_index(n_plants)
+        except ValueError as exc:
+            self.logger.error("%s", exc)
+            return False
+        raw_rooftop_ids = self.retrieve_hass_conf.get("solcast_rooftop_id")
+        if not isinstance(raw_rooftop_ids, str):
+            return True
+        roof_ids = self._parse_solcast_roof_ids(raw_rooftop_ids)
+        if not roof_ids or len(roof_ids) == n_plants:
+            return True
+        self.logger.error(
+            "solcast_rooftop_id lists %d rooftops but pv_module_model has %d PV "
+            "plants: with number_of_inverters above 1 each rooftop is one PV plant, "
+            "matched by position, so the counts have to be equal",
+            len(roof_ids),
+            n_plants,
+        )
+        return False
+
     async def _get_weather_solcast(
         self, w_forecast_cache_path: str
     ) -> pd.DataFrame | Literal[False]:
         """Helper to retrieve weather data from Solcast or cache.
 
-        Returns ``False`` for an HTTP error or when the daily cap is already full.
-        A timeout or connection error is raised after its retries.
+        Returns ``False`` for an HTTP error, when the daily cap is already full, or (above
+        one inverter) when the rooftop count or ``pv_plant_inverter_index`` does not fit
+        ``pv_module_model``. A timeout or connection error is raised after its retries.
         """
+        # Above one inverter the rooftops are the PV plants, matched by position, so the
+        # plant settings have to agree with them. Checked first, so a cached forecast cannot
+        # skip it, and before any request or quota use.
+        if not self._solcast_plant_count_agrees():
+            return False
         # The explicit `weather-forecast-cache` action sets weather_forecast_cache
         # and is meant to refresh the cache from the Solcast API. Reading the cache
         # first here would return a stale-but-present cache early (for Solcast,
@@ -773,11 +885,7 @@ class Forecast:
         # reservation. Drop empty tokens so an empty / whitespace / separator-
         # only value does not reserve a bogus one-call budget or issue a
         # request against an empty rooftop ID.
-        roof_ids = [
-            rid
-            for rid in re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
-            if rid
-        ]
+        roof_ids = self._parse_solcast_roof_ids(self.retrieve_hass_conf["solcast_rooftop_id"])
         if not roof_ids:
             self.logger.error(
                 "The solcast_rooftop_id parameter has no usable rooftop IDs "
@@ -799,6 +907,8 @@ class Forecast:
         }
         days_solcast = int(len(self.forecast_dates) * self.freq.seconds / 3600)
         total_data = pd.DataFrame()
+        # Each rooftop's own series, in rooftop order, before the sum.
+        roof_series = []
 
         # Conservative-bias blend factor, read once before the roof loop.
         # Default 0.0 = pure P50 (no-op). See _parse_pv_quantile_bias for the
@@ -883,6 +993,7 @@ class Forecast:
                             total_data = data_tmp.copy()
                         else:
                             total_data = total_data + data_tmp
+                        roof_series.append(data_tmp["yhat"])
                         break
                     except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:
                         self.logger.error(
@@ -915,7 +1026,7 @@ class Forecast:
                         self.logger.info("Retrying Solcast fetch in %ss", backoff)
                         await asyncio.sleep(backoff)
 
-        data = total_data
+        data = self._with_pv_plant_columns(total_data, roof_series)
         if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
             "passed_data"
         ].get("weather_forecast_cache_only", False):
@@ -962,8 +1073,47 @@ class Forecast:
         combined["yhat"] = combined["yhat"].interpolate(method="time").where(bridged, 0.0)
         return combined.reindex(self.forecast_dates)
 
-    async def _get_weather_solar_forecast(self, w_forecast_cache_path: str) -> pd.DataFrame:
-        """Helper to retrieve weather data from solar.forecast or cache."""
+    def _solar_forecast_kwp_per_plane(self) -> tuple[list | None, str | None]:
+        """Read ``solar_forecast_kwp`` as one kWp value per plane, if it is a list.
+
+        A scalar (or a missing setting) is not a list: it keeps its old meaning, the same kWp
+        for every plane, and ``(None, None)`` comes back. A list may also arrive as text, as a
+        rest_command template renders it; any other string goes into the URL unchanged, as
+        before.
+
+        :return: ``(per_plane_values, None)``, ``(None, None)`` for a scalar, or
+            ``(None, fault)`` with a short diagnostic that never echoes the setting
+        """
+        setting = self.retrieve_hass_conf.get("solar_forecast_kwp")
+        if isinstance(setting, str) and setting.strip().startswith("["):
+            try:
+                setting = ast.literal_eval(setting.strip())
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                setting = None
+            if not isinstance(setting, list):
+                return None, (
+                    "solar_forecast_kwp starts with [ but is not a list of numbers: "
+                    "give one kWp value per plane, such as [3.5, 4], or a single number"
+                )
+        if not isinstance(setting, list):
+            return None, None
+        fault = _describe_invalid_solar_forecast_kwp(
+            setting, len(self.plant_conf["pv_module_model"])
+        )
+        return (None, fault) if fault is not None else (setting, None)
+
+    async def _get_weather_solar_forecast(
+        self, w_forecast_cache_path: str
+    ) -> pd.DataFrame | Literal[False]:
+        """Helper to retrieve weather data from solar.forecast or cache.
+
+        Returns ``False`` for a ``solar_forecast_kwp`` list that does not fit the planes (also
+        when a cache file exists), in a dry run with no saved forecast, and for an HTTP error.
+        """
+        kwp_per_plane, kwp_fault = self._solar_forecast_kwp_per_plane()
+        if kwp_fault is not None:
+            self.logger.error(kwp_fault)
+            return False
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
         if cached_data is not None:
             return cached_data
@@ -990,10 +1140,17 @@ class Forecast:
         headers = {"Accept": header_accept}
         data = pd.DataFrame()
         self._check_pv_plant_lists(self._PV_PLANT_LIST_KEYS_SOLAR_FORECAST)
+        # Each plane's own series, in plane order, before the sum.
+        plane_series = []
 
         timeout = aiohttp.ClientTimeout(total=forecast_solar_request_timeout)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for i in range(len(self.plant_conf["pv_module_model"])):
+                kwp_for_plane = (
+                    kwp_per_plane[i]
+                    if kwp_per_plane is not None
+                    else self.retrieve_hass_conf["solar_forecast_kwp"]
+                )
                 url = (
                     "https://api.forecast.solar/estimate/"
                     + str(round(self.lat, 2))
@@ -1004,7 +1161,7 @@ class Forecast:
                     + "/"
                     + str(self.plant_conf["surface_azimuth"][i] - 180)
                     + "/"
-                    + str(self.retrieve_hass_conf["solar_forecast_kwp"])
+                    + str(kwp_for_plane)
                 )
                 array_data = None
                 for attempt in range(1, forecast_solar_max_attempts + 1):
@@ -1047,18 +1204,52 @@ class Forecast:
                         ]
                         self.logger.info("Retrying forecast.solar fetch in %ss", backoff)
                         await asyncio.sleep(backoff)
+                plane_series.append(array_data["yhat"])
                 if len(data) == 0:
                     data = copy.deepcopy(array_data)
                 else:
                     data = data + array_data
 
+        data = self._with_pv_plant_columns(data, plane_series)
         if self.params["passed_data"].get("weather_forecast_cache", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
     def _get_weather_csv(self, csv_path: str) -> pd.DataFrame | None:
-        """Helper to retrieve weather data from CSV, or None if it is shorter than the grid."""
-        data = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
+        """Helper to retrieve weather data from CSV, or None if it is shorter than the grid.
+
+        With one inverter the file is a timestamp column and one ``yhat`` column. Above one
+        inverter it has one ``yhat`` column per PV-carrying inverter, in ascending inverter
+        order; with two or more of them the frame gets a ``yhat_plant{j}`` column for each
+        and ``yhat`` is their sum.
+        """
+        pv_inverters = self._pv_inverters_above_one()
+        if pv_inverters is not None and not pv_inverters:
+            return None
+        plant_columns = (
+            [f"{PV_PLANT_COLUMN_PREFIX}{j}" for j in range(len(pv_inverters))]
+            if pv_inverters is not None and len(pv_inverters) >= 2
+            else []
+        )
+        if pv_inverters is None:
+            data = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
+        else:
+            # Above one inverter the column count is the point, so it is checked: with
+            # `names` a short file would be padded with NaN and a wide one would shift
+            # its first column into the index.
+            data = pd.read_csv(csv_path, header=None)
+            expected = 1 + len(pv_inverters)
+            if data.shape[1] != expected:
+                self.logger.error(
+                    "The per-inverter PV forecast CSV has %d columns but %d are expected: "
+                    "a timestamp column and one value column for each of the %d PV "
+                    "inverters in pv_plant_inverter_index",
+                    data.shape[1],
+                    expected,
+                    len(pv_inverters),
+                )
+                return None
+            data.columns = ["ts", *(plant_columns or ["yhat"])]
         if len(data) < len(self.forecast_dates):
             self.logger.error(
                 "Passed data from CSV is not long enough: %d rows for %d forecast steps",
@@ -1071,10 +1262,41 @@ class Forecast:
             data.index = self.forecast_dates
             data.drop("ts", axis=1, inplace=True)
             data = data.copy().loc[self.forecast_dates]
+            if plant_columns:
+                data["yhat"] = self._sum_in_order([data[name] for name in plant_columns])
         return data
 
-    def _get_weather_list(self) -> pd.DataFrame:
+    @staticmethod
+    def _sum_in_order(series: list[pd.Series]) -> pd.Series:
+        """Add the series up one after the other, so a NaN stays a NaN in the total."""
+        total = series[0].copy()
+        for other in series[1:]:
+            total = total + other
+        return total
+
+    def _pv_inverters_above_one(self) -> list[int] | None:
+        """The PV-carrying inverters (distinct ``pv_plant_inverter_index`` values), or None.
+
+        None with one inverter, where the index is not read. An unusable index, or an index
+        with no inverter in it, is logged here and comes back as an empty list, which the
+        callers take as "no forecast".
+        """
+        if validate_num_inverters(self.plant_conf) <= 1:
+            return None
+        try:
+            pv_inverters = pv_carrying_inverters(self.plant_conf)
+        except ValueError as exc:
+            self.logger.error("Cannot use the PV forecast per inverter: %s", exc)
+            return []
+        if not pv_inverters:
+            self.logger.error("No inverter has a PV plant, so there is no PV forecast to use")
+        return pv_inverters
+
+    def _get_weather_list(self) -> pd.DataFrame | None:
         """Helper to retrieve weather data from a passed external PV forecast."""
+        pv_inverters = self._pv_inverters_above_one()
+        if pv_inverters is not None:
+            return self._get_weather_list_per_inverter(pv_inverters) if pv_inverters else None
         data_list = self.params["passed_data"]["pv_power_forecast"]
         p10_list = self.params["passed_data"].get("pv_power_forecast_p10")
         forecast_dates = self.forecast_dates_tz
@@ -1094,39 +1316,125 @@ class Forecast:
 
         data_list = data_list[: len(forecast_dates)]
 
+        data_list = self._blend_external_pv_p10(data_list, p10_list, len(forecast_dates))
+        if data_list is None:
+            return None
+
+        data_dict = {"ts": forecast_dates, "yhat": data_list}
+        data = pd.DataFrame.from_dict(data_dict)
+        data.set_index("ts", inplace=True)
+        return data
+
+    def _blend_external_pv_p10(
+        self, data_list: list, p10_list: list | None, n_steps: int
+    ) -> list | None:
+        """Apply the external P10 companion to one passed P50 series, or return it as it is.
+
+        Returns None (after logging) when the companion cannot be used. Without a companion
+        the P50 series comes back unchanged.
+        """
         # #1128: an explicitly supplied external P10 companion must already
         # have passed the strict pair validation/alignment in treat_runtimeparams.
         # Still guard the Forecast boundary so a malformed direct caller cannot
         # silently ignore or truncate P10. Validate even at bias=0: providing an
         # invalid companion is an input error, while omitting the companion keeps
         # the historical P50-only behavior unchanged.
-        if p10_list is not None:
-            if len(p10_list) < len(forecast_dates):
+        if p10_list is None:
+            return data_list
+        if len(p10_list) < n_steps:
+            self.logger.error(
+                "Passed pv_power_forecast_p10 is not long enough for the forecast horizon"
+            )
+            return None
+        p10_list = p10_list[:n_steps]
+        try:
+            p50_values = np.asarray(data_list, dtype=float)
+            p10_values = np.asarray(p10_list, dtype=float)
+        except (TypeError, ValueError):
+            self.logger.error(
+                "Passed pv_power_forecast/pv_power_forecast_p10 contain non-numeric values"
+            )
+            return None
+        if not np.isfinite(p50_values).all() or not np.isfinite(p10_values).all():
+            self.logger.error(
+                "Passed pv_power_forecast/pv_power_forecast_p10 contain non-finite values"
+            )
+            return None
+        bias = self._parse_pv_quantile_bias()
+        if bias > 0.0:
+            return (bias * p10_values + (1.0 - bias) * p50_values).tolist()
+        return data_list
+
+    def _get_weather_list_per_inverter(self, pv_inverters: list[int]) -> pd.DataFrame | None:
+        """Weather frame from a PV forecast passed as one series per inverter.
+
+        The payload is the nested list ``treat_runtimeparams`` aligned: one entry per
+        inverter, empty for an inverter with no PV plant. Only the PV-carrying inverters are
+        read, in ascending order, so ``yhat`` is the sum of their series and, with two or
+        more, plant ``j`` is the ``j``-th of them (``yhat_plant{j}``). The P10 companion, when
+        there is one, is blended into each series on its own, as it is for one inverter.
+        """
+        passed_data = self.params["passed_data"]
+        nested = passed_data["pv_power_forecast"]
+        nested_p10 = passed_data.get("pv_power_forecast_p10")
+        n_inverters = validate_num_inverters(self.plant_conf)
+        n_steps = len(self.forecast_dates_tz)
+        payloads = {"pv_power_forecast": nested}
+        if nested_p10 is not None:
+            payloads["pv_power_forecast_p10"] = nested_p10
+        for key, payload in payloads.items():
+            if not isinstance(payload, list) or len(payload) != n_inverters:
                 self.logger.error(
-                    "Passed pv_power_forecast_p10 is not long enough for the forecast horizon"
+                    "Passed %s needs one entry per inverter (number_of_inverters is %d)",
+                    key,
+                    n_inverters,
                 )
                 return None
-            p10_list = p10_list[: len(forecast_dates)]
+        series = []
+        for inverter in pv_inverters:
+            p50 = nested[inverter]
+            p10 = None if nested_p10 is None else nested_p10[inverter]
+            if not isinstance(p50, list) or len(p50) < n_steps:
+                self.logger.error(
+                    "Passed pv_power_forecast for inverter %d is not long enough for the "
+                    "forecast horizon",
+                    inverter,
+                )
+                return None
+            if p10 is not None and len(p10) != len(p50):
+                self.logger.error(
+                    "Passed pv_power_forecast/pv_power_forecast_p10 length mismatch for "
+                    "inverter %d: %d/%d",
+                    inverter,
+                    len(p50),
+                    len(p10),
+                )
+                return None
+            values = self._blend_external_pv_p10(p50[:n_steps], p10, n_steps)
+            if values is None:
+                return None
             try:
-                p50_values = np.asarray(data_list, dtype=float)
-                p10_values = np.asarray(p10_list, dtype=float)
+                array = np.asarray(values, dtype=float)
             except (TypeError, ValueError):
                 self.logger.error(
-                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-numeric values"
+                    "Passed pv_power_forecast for inverter %d contains non-numeric values",
+                    inverter,
                 )
                 return None
-            if not np.isfinite(p50_values).all() or not np.isfinite(p10_values).all():
+            if array.ndim != 1 or not np.isfinite(array).all():
                 self.logger.error(
-                    "Passed pv_power_forecast/pv_power_forecast_p10 contain non-finite values"
+                    "Passed pv_power_forecast for inverter %d is not a series of finite numbers",
+                    inverter,
                 )
                 return None
-            bias = self._parse_pv_quantile_bias()
-            if bias > 0.0:
-                data_list = (bias * p10_values + (1.0 - bias) * p50_values).tolist()
-
-        data_dict = {"ts": forecast_dates, "yhat": data_list}
-        data = pd.DataFrame.from_dict(data_dict)
-        data.set_index("ts", inplace=True)
+            series.append(pd.Series(array))
+        data = pd.DataFrame(
+            {"yhat": self._sum_in_order(series).to_numpy()},
+            index=pd.Index(self.forecast_dates_tz, name="ts"),
+        )
+        if len(series) >= 2:
+            for plant, plant_series in enumerate(series):
+                data[f"{PV_PLANT_COLUMN_PREFIX}{plant}"] = plant_series.to_numpy()
         return data
 
     def _list_method_needs_weather(self) -> bool:
@@ -1185,7 +1493,9 @@ class Forecast:
             )
             return data
         for col in weather.columns:
-            if col == "yhat":
+            # The cache file is shared across methods, so the frame may carry the per-plant
+            # PV columns of another method; the list method's PV is the passed list alone.
+            if col == "yhat" or _is_pv_plant_column(col):
                 continue
             # Both frames are built on the same forecast horizon; "nearest"
             # only absorbs sub-second index rounding between the list index
@@ -1206,8 +1516,10 @@ class Forecast:
             'solar.forecast'. Defaults to 'open-meteo'.
         :type method: str, optional
         :return: The forecast frame. Solcast returns ``False`` for an HTTP error or when \
-            the daily cap is already full. ``None`` when the method is invalid or a runtime \
-            list is rejected. A transport failure is raised after its retries.
+            the daily cap is already full. Solcast and solar.forecast also return ``False`` \
+            for a plant setting that does not fit the forecast. ``None`` when the method is \
+            invalid or a runtime list is rejected. A transport failure is raised after its \
+            retries.
         :rtype: pd.DataFrame | Literal[False] | None
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
@@ -1920,6 +2232,7 @@ class Forecast:
         # Handle list (mixed orientation) vs single configuration
         if isinstance(self.plant_conf["pv_module_model"], list):
             p_pv_forecast = pd.Series(0, index=df_weather.index)
+            plant_results = []
             for i in range(len(self.plant_conf["pv_module_model"])):
                 result = run_single_config(
                     self.plant_conf["pv_module_model"][i],
@@ -1930,7 +2243,12 @@ class Forecast:
                     self.plant_conf["strings_per_inverter"][i],
                 )
                 p_pv_forecast = p_pv_forecast + result
+                plant_results.append(result)
+            # Keep each plant's own AC series. The sum above is untouched; the frame is
+            # built from the per-plant results, not from the aggregate.
+            self.pv_plant_raw = self._pv_plant_frame(plant_results)
         else:
+            self.pv_plant_raw = None
             p_pv_forecast = run_single_config(
                 self.plant_conf["pv_module_model"],
                 self.plant_conf["pv_inverter_model"],
@@ -1961,12 +2279,20 @@ class Forecast:
         :return: The DataFrame containing the electrical power in Watts
         :rtype: pd.DataFrame
         """
+        # The per-plant carrier belongs to this call only; it is filled below when the run
+        # has two or more plant series.
+        self.pv_plant_raw = None
         # If using csv method we consider that yhat is the PV power in W
         if (
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
             and self.retrieve_hass_conf["solar_forecast_kwp"] == 0
         ):
             p_pv_forecast = pd.Series(0, index=df_weather.index)
+            n_plants = self._expected_pv_plant_count()
+            if n_plants is not None and n_plants >= 2:
+                self.pv_plant_raw = self._pv_plant_frame(
+                    [pd.Series(0.0, index=df_weather.index)] * n_plants
+                )
         elif self.weather_forecast_method in [
             "solcast",
             "solar.forecast",
@@ -1975,6 +2301,8 @@ class Forecast:
         ]:
             p_pv_forecast = df_weather["yhat"]
             p_pv_forecast.name = None
+            # Copies, never views: the mix and the clip below write into ``yhat`` in place.
+            self.pv_plant_raw = self._pv_plant_columns_from_weather(df_weather)
         else:
             # We will transform the weather data into electrical power
             p_pv_forecast = self._calculate_pvlib_power(df_weather)
@@ -1994,6 +2322,166 @@ class Forecast:
         p_pv_forecast[p_pv_forecast < 0] = 0  # replace any negative PV values with zero
         self.logger.debug("get_power_from_weather returning:\n%s", p_pv_forecast)
         return p_pv_forecast
+
+    @staticmethod
+    def _pv_plant_frame(plant_series: list[pd.Series]) -> pd.DataFrame | None:
+        """Raw per-plant frame (``yhat_plant{j}`` columns) from the plants' series.
+
+        Returns None for fewer than two plants. The values are copied, so nothing that later
+        changes the aggregate (the mix, the clip, the adjustment) can reach them.
+        """
+        if len(plant_series) < 2:
+            return None
+        return pd.DataFrame(
+            {
+                f"{PV_PLANT_COLUMN_PREFIX}{j}": np.array(series, dtype=float)
+                for j, series in enumerate(plant_series)
+            },
+            index=plant_series[0].index,
+        )
+
+    def _expected_pv_plant_count(self) -> int | None:
+        """Number of PV plant series the active method produces, None when it cannot be told.
+
+        pvlib and solar.forecast: one plant per ``pv_module_model`` entry (one for a plain
+        value). Solcast: one plant per rooftop ID, in ``solcast_rooftop_id`` order. csv and
+        list: the one series that was passed, or above one inverter one per PV-carrying
+        inverter. ``weather_forecast_method`` is only set by ``get_weather_forecast``, so a
+        caller that never ran it (a script calling ``get_power_from_weather`` on its own) is
+        treated like pvlib.
+        """
+        method = getattr(self, "weather_forecast_method", None)
+        if method == "solcast":
+            rooftop_ids = self.retrieve_hass_conf.get("solcast_rooftop_id")
+            if not isinstance(rooftop_ids, str):
+                return None
+            return len(self._parse_solcast_roof_ids(rooftop_ids))
+        if method in ("csv", "list"):
+            pv_inverters = self._pv_inverters_above_one()
+            return 1 if pv_inverters is None else len(pv_inverters)
+        models = self.plant_conf.get("pv_module_model")
+        return len(models) if isinstance(models, list) else 1
+
+    def _pv_plant_columns_from_weather(self, df_weather: pd.DataFrame) -> pd.DataFrame | None:
+        """Per-plant series stored in a Solcast, solar.forecast, csv or list frame, or None.
+
+        The frame may be an older cache. When its ``yhat_plant{j}`` columns are not the ones
+        the method expects now, the frame is used for ``yhat`` only and the log says how to
+        refresh the cache.
+        """
+        expected = self._expected_pv_plant_count()
+        if expected is None or expected < 2:
+            return None
+        wanted = [f"{PV_PLANT_COLUMN_PREFIX}{j}" for j in range(expected)]
+        if self.weather_forecast_method in ("csv", "list"):
+            # More than one series only above one inverter, and only the ones this class
+            # built from the passed data; never a cache, so nothing to refresh.
+            if not set(wanted) <= set(df_weather.columns):
+                return None
+            return df_weather[wanted].copy()
+        present = {col for col in df_weather.columns if _is_pv_plant_column(col)}
+        if present != set(wanted):
+            # solar.forecast serves an existing cache file on the weather-forecast-cache
+            # action too, so only removing the file brings in a fresh one there.
+            refresh = (
+                "Run the weather-forecast-cache action to save one with them."
+                if self.weather_forecast_method == "solcast"
+                else "Delete weather_forecast_data.pkl in the data folder so the next "
+                "run saves one with them."
+            )
+            self.logger.info(
+                "The %s forecast in use has no per-plant PV series for the %d plants now "
+                "configured (it was saved by an earlier version or for a different number of "
+                "plants). The PV forecast is used as before, without the P_PV_plant columns. %s",
+                self.weather_forecast_method,
+                expected,
+                refresh,
+            )
+            return None
+        return df_weather[wanted].copy()
+
+    @staticmethod
+    def split_pv_plants(
+        p_pv_forecast: pd.Series, plants_raw: pd.DataFrame | None
+    ) -> pd.DataFrame | None:
+        """Split a final PV aggregate into per-plant series that add up to it (#1150).
+
+        ``plants_raw`` holds each plant's raw power, one column per plant in plant order. It
+        is only used for the proportions, so the aggregate may have been changed since (the
+        step 0 mix, the negative clip, the PV forecast adjustment). Each plant is clipped at
+        zero first, because a pvlib inverter reports a small negative AC power at night.
+
+        - Where the clipped plants add up to more than zero, plant ``j`` gets
+          ``aggregate * clipped_j / sum(clipped)``.
+        - Where they add up to zero but the aggregate is positive (the adjustment can lift a
+          zero raw step), each plant gets its share of the clipped horizon total, or an equal
+          share if that is zero as well.
+        - A step where the aggregate is zero (or below zero) is zero for every plant.
+        - A step where the aggregate is NaN or infinite is passed on unchanged to every plant,
+          so no value is invented. A NaN or infinite raw plant value counts as zero for the
+          proportions, which keeps every share finite.
+
+        So at every finite step with a non-negative aggregate the plants are all >= 0 and add
+        up to the aggregate, up to float rounding.
+
+        :param p_pv_forecast: The final aggregate PV power
+        :param plants_raw: The raw plant series, same length as the aggregate
+        :return: Frame with columns ``P_PV_plant0`` .. ``P_PV_plant{k-1}`` on the aggregate's
+            index, or None when there are fewer than two plants
+        """
+        if plants_raw is None or plants_raw.shape[1] < 2:
+            return None
+        n_plants = plants_raw.shape[1]
+        aggregate = p_pv_forecast.to_numpy(dtype=float)
+        raw = plants_raw.to_numpy(dtype=float)
+        clipped = np.where(np.isfinite(raw), np.clip(raw, 0.0, None), 0.0)
+        total = clipped.sum(axis=1)
+        producing = total > 0
+        share = np.divide(
+            clipped, total[:, None], out=np.zeros_like(clipped), where=producing[:, None]
+        )
+        finite = np.isfinite(aggregate)
+        target = np.where(finite & (aggregate > 0), aggregate, 0.0)
+        # Steps with nothing from any plant but a positive aggregate: horizon share, else equal.
+        needs_fallback = ~producing & (target > 0)
+        if needs_fallback.any():
+            horizon = clipped.sum(axis=0)
+            horizon_total = horizon.sum()
+            if np.isfinite(horizon_total) and horizon_total > 0:
+                share[needs_fallback] = horizon / horizon_total
+            else:
+                share[needs_fallback] = 1.0 / n_plants
+        plants = share * target[:, None]
+        plants[~finite] = aggregate[~finite][:, None]
+        return pd.DataFrame(
+            plants,
+            index=p_pv_forecast.index,
+            columns=[f"P_PV_plant{j}" for j in range(n_plants)],
+        )
+
+    def get_pv_plant_split(self, p_pv_forecast: pd.Series) -> pd.DataFrame | None:
+        """Split the final PV aggregate into the per-plant series of the last forecast (#1150).
+
+        Call it with the aggregate as it is used by the optimization, after
+        ``get_power_from_weather`` and after the PV forecast adjustment, so the plants add up
+        to what the optimization sees. Returns None when the last forecast has fewer than two
+        plant series. See ``split_pv_plants`` for the rules.
+
+        :param p_pv_forecast: The final aggregate PV power, as returned by
+            ``get_power_from_weather`` or by the adjustment
+        :return: The ``P_PV_plant{j}`` frame, or None
+        """
+        if self.pv_plant_raw is None:
+            return None
+        if len(self.pv_plant_raw) != len(p_pv_forecast):
+            self.logger.warning(
+                "The per-plant PV series have %d steps but the PV forecast has %d; "
+                "the P_PV_plant columns are left out.",
+                len(self.pv_plant_raw),
+                len(p_pv_forecast),
+            )
+            return None
+        return Forecast.split_pv_plants(p_pv_forecast, self.pv_plant_raw)
 
     @staticmethod
     def compute_solar_angles(df: pd.DataFrame, latitude: float, longitude: float) -> pd.DataFrame:
