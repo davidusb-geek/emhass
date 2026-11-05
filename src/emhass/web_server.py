@@ -498,17 +498,27 @@ async def parameter_set():
             "Unable to obtain default config. only parameters passed from request will be saved to config.json"
         )
 
-    # Retrieve sent config json. Nesting past Python's recursion limit raises
-    # RecursionError in the json module, which get_json does not turn into a 400.
+    # Retrieve sent config json. get_json does not turn two failures into a 400:
+    # nesting past Python's recursion limit (RecursionError in the json module) and a
+    # body that is not UTF-8 (UnicodeDecodeError, raised before it parses).
     try:
         request_data = await request.get_json(force=True)
-    except RecursionError:
-        app.logger.warning("Rejected config save: the body is nested too deeply")
+    except (RecursionError, UnicodeDecodeError) as e:
+        app.logger.warning("Rejected config save: the body cannot be read: %s", type(e).__name__)
         return await make_response([f"config is invalid: {ORJSON_LIMITS}"], 400)
 
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # The body was parsed by the standard json module, but config.json is written with
+    # orjson, which refuses more (ORJSON_LIMITS). Find that out now, but answer it after
+    # the checks below that name a setting, and before anything is built or written.
+    try:
+        orjson.dumps(request_data)
+        unwritable = None
+    except orjson.JSONEncodeError as e:
+        unwritable = e
 
     # Validate heat_topology at save time instead of at the next optimization
     # run: the compiler's ValueError names the offending field, so surface it
@@ -556,21 +566,23 @@ async def parameter_set():
     # here would leave the user believing the curve is active. The per-inverter settings
     # (#1150) are checked in the same pass, so one answer lists every fault: the curves
     # first, then the inverter settings, then the refusal of more than one inverter.
-    inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
-        request_data
-    )
+    try:
+        inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
+            request_data
+        )
+    except RecursionError:
+        # inverter_config_faults copies the whole body, which a body nested several
+        # hundred levels deep cannot survive. orjson has already refused such a body.
+        if unwritable is None:
+            raise
+        inverter_faults = []
     if inverter_faults:
         app.logger.warning("Rejected config save: inverter settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
 
-    # The body was parsed by the standard json module, but config.json is written with
-    # orjson, which refuses more (ORJSON_LIMITS). Refuse that here, after the checks
-    # that name a setting and before anything is built or written.
-    try:
-        orjson.dumps(request_data)
-    except orjson.JSONEncodeError as e:
-        app.logger.warning("Rejected config save: %s", e)
-        return await make_response([f"config is invalid: {e}. {ORJSON_LIMITS}"], 400)
+    if unwritable is not None:
+        app.logger.warning("Rejected config save: %s", unwritable)
+        return await make_response([f"config is invalid: {unwritable}. {ORJSON_LIMITS}"], 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)

@@ -87,6 +87,8 @@ def test_action_body_with_the_largest_64_bit_integer_still_reaches_the_action(we
         f'{{"battery_nominal_energy_capacity": {TOO_BIG}}}',
         f'{{"not_a_parameter": {TOO_BIG}}}',
         f'{{"not_a_parameter": {TOO_DEEP}}}',
+        # Deep enough that copying the body for the inverter checks hits the recursion limit.
+        '{"not_a_parameter": ' + "[" * 600 + "]" * 600 + "}",
     ],
 )
 def test_set_config_body_orjson_cannot_write_is_refused_and_writes_nothing(web, body):
@@ -152,3 +154,20 @@ def test_dry_run_body_nested_deeper_than_orjson_writes_is_refused(web):
     assert status == 400
     assert orjson.loads(text)["status"] == "not-run"
     set_input.assert_not_called()
+
+
+def test_set_config_body_that_is_not_utf8_is_refused(web):
+    config_before = web.conf["config_path"].read_bytes()
+
+    async def go():
+        from emhass import web_server
+
+        r = await web_server.app.test_client().post(
+            "/set-config",
+            data=b'{"battery_minimum_state_of_charge": "\xff\xfe"}',
+            headers={"Content-Type": "application/json"},
+        )
+        return r.status_code
+
+    assert asyncio.run(go()) == 400
+    assert web.conf["config_path"].read_bytes() == config_before
