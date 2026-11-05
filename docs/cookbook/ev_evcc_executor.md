@@ -92,7 +92,7 @@ script:
           - action: persistent_notification.create
             data:
               title: EV cannot reach its target by the deadline
-              message: "{{ ev_steps }} steps needed, {{ end_step }} available. The EV is planned for {{ ev_plan_steps }} steps."
+              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ((ev_steps - ev_plan_steps) * charger_kw * timestep_min / 60) | round(1) }} kWh will not be delivered."
       - action: rest_command.emhass_mpc
         data:
           horizon: "{{ horizon }}"
