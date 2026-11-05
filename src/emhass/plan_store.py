@@ -12,6 +12,8 @@ import logging
 import threading
 from pathlib import Path
 
+from emhass.atomic_file import atomic_write
+
 import pandas as pd
 
 _PLAN_FILENAME = "plan_latest.json"
@@ -47,7 +49,7 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
     with _lock:
         _cache = snap
         try:
-            _path(data_path).write_text(json.dumps(snap), encoding="utf-8")
+            atomic_write(_path(data_path), lambda stream: json.dump(snap, stream))
         except OSError as exc:
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
 
@@ -56,8 +58,8 @@ def read(data_path: Path) -> dict | None:
     """Return the latest plan snapshot, or None if no run yet."""
     global _cache
     with _lock:
-        if _cache is not None:
-            return dict(_cache)
+        # Other workers can commit a newer plan; the process-local cache is
+        # not authoritative in a multi-worker server.
         try:
             data = json.loads(_path(data_path).read_text(encoding="utf-8"))
         except FileNotFoundError:
