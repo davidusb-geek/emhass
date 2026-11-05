@@ -63,7 +63,9 @@ def read(data_path: Path) -> dict | None:
         try:
             data = json.loads(_path(data_path).read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return None
+            # Preserve the former in-memory fallback when the file was never
+            # created (or a write failed). When it exists, disk wins across workers.
+            return dict(_cache) if _cache is not None else None
         except (OSError, json.JSONDecodeError) as exc:
             _logger.warning("plan_store: corrupt or unreadable snapshot file", exc_info=exc)
             return None
