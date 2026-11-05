@@ -37,9 +37,10 @@ the step that contains the request, which the flow's step maths assumes (see
 ```yaml
 optimization_time_step: 30
 method_ts_round: first
+maximum_power_from_grid: 15000                           # the default 9000 W is a hard limit below the 11 kW charger; use your connection limit
 number_of_deferrable_loads: 3
 nominal_power_of_deferrable_loads: [3000, 750, 11000]   # 11 kW = 3 x 16 A
-operating_hours_of_each_deferrable_load: [4, 0, 0]       # EV hours set at runtime
+operating_hours_of_each_deferrable_load: [4, 0, 0]       # placeholder; runtime timesteps override it
 start_timesteps_of_each_deferrable_load: [0, 0, 0]
 end_timesteps_of_each_deferrable_load: [0, 0, 0]         # EV end set at runtime
 treat_deferrable_load_as_semi_cont: [true, true, true]   # EV: on at nominal or off
@@ -65,7 +66,7 @@ const map = { connected: "ev_connected", charging: "ev_charging",
 const key = map[msg.topic.split("/").pop()];
 if (!key) return null;
 const raw = String(msg.payload);
-flow.set(key, raw === "true" ? true : raw === "false" ? false : Number(raw));
+flow.set(key, raw === "true" ? true : raw === "false" ? false : (raw.trim() === "" ? NaN : Number(raw)));   // an empty payload is not 0
 if (key === "ev_soc_percent") flow.set("ev_soc_ts", Date.now());
 return null;
 ```
@@ -105,28 +106,40 @@ const first_step = Math.floor(now / 1000 / step_s) * step_s;
 // Next local departure, as an instant. Date handles the local clock, including DST.
 const [hh, mm] = departure_hhmm.split(":").map(Number);
 const dep = new Date(now); dep.setHours(hh, mm, 0, 0);
+const valid_time = Number.isInteger(hh) && Number.isInteger(mm) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60;   // "25:00" would roll over
 if (dep.getTime() <= now) dep.setDate(dep.getDate() + 1);
 let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s), horizon);
+if (!valid_time || !Number.isFinite(end_step)) {   // an invalid departure_hhmm must never become "no limit"
+    node.warn("Invalid departure time; the EV is not planned");
+    end_step = 0;
+}
+// EMHASS reads the clock after this node: in the last 60 s before a step boundary its first step may be the next one,
+// so count one step fewer (the EV can then only stop earlier, never run in the deadline step).
+const margin = (now / 1000) % step_s > step_s - 60 ? 1 : 0;
+end_step = Math.max(0, end_step - margin);
 
-// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 h.
+// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 steps.
 const connected = flow.get("ev_connected") === true;
 const soc = flow.get("ev_soc_percent");
 const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) < soc_max_age_ms;
-let ev_hours = 0;
-if (connected && soc_fresh && end_step > 0) {
+let ev_steps = 0;
+if (connected && soc_fresh) {
     const kwh = Math.max(0, (target_soc - soc) / 100 * capacity_kwh);
-    ev_hours = Math.round(kwh / charger_kw * 100) / 100;       // fractional hours are honoured
-    const max_hours = end_step * step_min / 60;
-    if (ev_hours > max_hours) {                                // would be Infeasible: clamp and say so
-        node.warn(`EV needs ${ev_hours} h but only ${max_hours} h remain before departure; clamping`);
-        ev_hours = max_hours;
+    // Whole steps, rounded up (the round() removes float noise). A whole number of steps is solved as a
+    // normal mixed-integer problem with every step at the nominal power; a fractional hour count is
+    // solved as "Optimal (Relaxed)" with one partial-power step.
+    ev_steps = Math.ceil(Math.round(kwh / (charger_kw * step_min / 60) * 1e6) / 1e6);
+    if (ev_steps > end_step) {                                 // would be Infeasible or unlimited: plan what fits and say so
+        node.warn(`EV needs ${ev_steps} steps but ${end_step > 0 ? "only " + end_step : "none"} remain before departure; the target will be missed`);
+        ev_steps = end_step;
     }
 }
-if (ev_hours === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
+if (ev_steps === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
 
-const charging = flow.get("ev_charging") === true;
+const charging = flow.get("ev_charging") === true && ev_steps > 0;   // a pin on an EV with no requirement makes the solve fall back to Optimal (Relaxed)
 const charge_w = Number(flow.get("ev_charge_power_w")) || 0;
-const soc_batt = Number(flow.get("battery_soc_percent"));
+const soc_raw = flow.get("battery_soc_percent");
+const soc_batt = typeof soc_raw === "number" ? soc_raw : NaN;   // null or "" must not become 0 %
 const load_cost = flow.get("load_cost_per_step"), prod_price = flow.get("prod_price_per_step");
 const ok = (a) => Array.isArray(a) && a.length >= horizon && a.every((v) => Number.isFinite(v));
 if (!ok(load_cost) || !ok(prod_price) || !Number.isFinite(soc_batt)) {
@@ -139,7 +152,7 @@ msg.payload = {
     prediction_horizon: horizon,
     soc_init: soc_batt / 100, soc_final: soc_batt / 100,
     load_cost_forecast: load_cost, prod_price_forecast: prod_price,
-    operating_hours_of_each_deferrable_load: [4, 0, ev_hours],
+    operating_timesteps_of_each_deferrable_load: [Math.ceil(4 * 60 / step_min), 0, ev_steps],   // all loads in steps: hours are ignored once timesteps are passed
     start_timesteps_of_each_deferrable_load: [0, 0, 0],
     end_timesteps_of_each_deferrable_load: [horizon, horizon, end_step],
     def_current_state: [false, false, charging],
@@ -251,7 +264,7 @@ follows the plan again after the next successful tick.
   The epoch floor for the first step assumes a UTC offset that is a whole number of steps
   (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 - **SOC staleness.** `soc_max_age_ms` in Step 3 catches a silent evcc or broken MQTT link
-  (no `vehicleSoc` message for three cycles) and plans 0 h for the EV, the safe failure. It
+  (no `vehicleSoc` message for three cycles) and plans 0 steps for the EV, the safe failure. It
   does not catch a stale vehicle answer: evcc republishes its cached SOC every cycle and
   publishes no observation time, and with the loadpoint default `soc.poll.mode: charging`
   the vehicle API is only queried while charging, so a car that sat unplugged for a day can
