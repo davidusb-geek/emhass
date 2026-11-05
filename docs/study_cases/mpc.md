@@ -6,6 +6,15 @@ The `dayahead-optim` action normally computes one local calendar-day schedule on
 
 EMHASS implements this with the `naive-mpc-optim` action. This page walks through wiring it up.
 
+Only one live optimization request is accepted at a time by `/action/*` (including
+`naive-mpc-optim`, `dayahead-optim` and `perfect-optim`). An overlapping request
+receives HTTP 429 with `Retry-After: 2` and **is not run**; do not interpret it
+as an updated plan. Callers should skip a tick while a request is outstanding,
+then run a fresh optimization with current inputs rather than queueing an old body.
+The lock is shared across the web server's workers; direct Python/CLI calls are
+not covered by this HTTP guard.
+
+
 ## Scenario
 
 | Component | Value |
