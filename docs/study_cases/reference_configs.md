@@ -5,7 +5,7 @@
 These are anonymized, abstract templates. They are not real users' systems. Each block is a starting point — the parameter values reflect typical hardware in the archetype, but you must verify against your own equipment. See [Configuration](../config.md) for the full parameter reference.
 
 ```{note}
-**Fractional hours are supported.** `operating_hours_of_each_deferrable_load` accepts fractional values; the optimizer targets exactly `nominal_power × hours` of energy (see [issue #373](https://github.com/davidusb-geek/emhass/issues/373)). The blueprints below use whole-hour values for readability, but you can specify e.g. `3.5`. For control finer than the optimization timestep you can also reduce `optimization_time_step` or pass `operating_timesteps_of_each_deferrable_load`.
+**Fractional hours are accepted.** `operating_hours_of_each_deferrable_load` accepts fractional values and the energy delivered is `nominal_power × hours` (see [issue #373](https://github.com/davidusb-geek/emhass/issues/373)); the blueprints below use whole-hour values for readability. A value that is not a whole number of timesteps is delivered with at least one step below the nominal power and, for semi-continuous loads, as `Optimal (Relaxed)` (see [`operating_hours_of_each_deferrable_load`](../config.md)). For whole steps at the nominal power pass `operating_timesteps_of_each_deferrable_load` (`naive-mpc-optim` runtime, one entry per load), or use a smaller `optimization_time_step`.
 ```
 
 ## 1. Single-family home — PV + battery + heat pump + EV + dynamic tariff
@@ -161,7 +161,7 @@ end_timesteps_of_each_deferrable_load:
   - 0           # runtime override (per EV departure)
 ```
 
-Pass per-EV `def_total_hours[1]`, `def_total_hours[2]`, `end_timesteps[1]`, `end_timesteps[2]` from each EV's source at runtime. See [EV walkthrough](ev.md) for the template pattern; replicate per EV.
+Pass per-EV `operating_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load` entries (all loads in timesteps, not mixed with hours) from each EV's source at runtime. See [EV walkthrough](ev.md) for the template pattern; replicate per EV.
 
 ## See also
 

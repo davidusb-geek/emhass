@@ -39,11 +39,12 @@ the charger's nominal power. This is the same base setup as the
 
 ```yaml
 number_of_deferrable_loads: 3
+method_ts_round: first                 # the step indices count from the first optimization step
 nominal_power_of_deferrable_loads:
   - 3000          # water heater
   - 750           # pool pump
   - 11000         # EV charger nominal power (e.g. 11 kW = 3-phase 16 A)
-operating_hours_of_each_deferrable_load: [5, 8, 0]   # EV hours overridden at runtime
+operating_hours_of_each_deferrable_load: [5, 8, 0]   # placeholder; runtime timesteps override it
 start_timesteps_of_each_deferrable_load: [0, 0, 0]
 end_timesteps_of_each_deferrable_load:   [48, 48, 0] # EV end overridden at runtime
 ```
@@ -56,11 +57,55 @@ Expected: EMHASS restarts cleanly and `naive-mpc-optim` returns a plan with a th
 <!-- transport: Home Assistant Core 2024.x (tested) -->
 
 Each MPC call computes the EV's remaining energy and deadline fresh. evcc reports live SOC, which the
-evcc Home Assistant integration exposes as a sensor, so a HA `rest_command` can read it and translate
-to EMHASS's `def_total_hours` (fractional hours are honoured, see Caveats) and `end_timesteps`. The
-deadline is computed in the template, not read from evcc:
+evcc Home Assistant integration exposes as a sensor, so a HA script can read it and translate it to
+EMHASS's `operating_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load`. The
+deadline is computed in the template, not read from evcc, and both numbers are counted on the EMHASS
+time grid: whole steps from the **first optimization step** (set `method_ts_round` to `first`), in
+elapsed time. The reasons for each choice (strict deadline, `0` meaning "no limit", whole steps instead of
+fractional hours, no mixing of hours and timesteps in one call) are explained in the
+[EV study case](../study_cases/ev.md#runtime-payload).
 
 ```yaml
+script:
+  emhass_mpc:
+    sequence:
+      - variables:
+          charger_kw: 11.0
+          timestep_min: 30                  # = optimization_time_step
+          horizon: 48                       # horizon_steps; the per-load lists below have one entry per deferrable (3 here)
+          deadline_time: "05:00"
+          ev_remaining_kwh: "{{ states('sensor.evcc_ev_remaining_kwh') | float(0) }}"
+          step_s: "{{ timestep_min * 60 }}"
+          # First step with method_ts_round "first": the latest step boundary not after now, on the local clock.
+          now_ts: "{{ as_timestamp(now()) }}"          # one clock reading for first_step and margin
+          utc_offset_s: "{{ now().utcoffset().total_seconds() }}"
+          first_step: "{{ ((now_ts + utc_offset_s) // step_s) * step_s - utc_offset_s }}"
+          # EMHASS reads the clock after this script. Within the last 60 s before a step boundary its first step may be the next one, which would put every index one step too late and let the EV run in the deadline step, so count one step fewer.
+          margin: "{{ 1 if (now_ts + utc_offset_s) % step_s > step_s - 60 else 0 }}"
+          # Next departure as an instant; elapsed seconds, not wall-clock arithmetic.
+          deadline_ts: >
+            {{ as_timestamp(today_at(deadline_time) if now() < today_at(deadline_time)
+               else today_at(deadline_time) + timedelta(days=1)) }}
+          end_step: "{{ [([((deadline_ts - first_step) // step_s) | int, horizon] | min) - margin, 0] | max }}"
+          ev_steps: "{{ [(ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int, 0] | max }}"
+          ev_plan_steps: "{{ [ev_steps, end_step] | min }}"
+          wh_steps: "{{ (states('sensor.wh_remaining_hours') | float(0) * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
+          pool_steps: "{{ (states('sensor.pool_remaining_hours') | float(0) * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
+      - if: "{{ ev_steps > end_step }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: emhass_ev_deadline
+              title: EV cannot reach its target by the deadline
+              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ([ev_remaining_kwh - ev_plan_steps * charger_kw * timestep_min / 60, 0] | max) | round(1) }} kWh will not be delivered."
+      - action: rest_command.emhass_mpc
+        data:
+          horizon: "{{ horizon }}"
+          wh_steps: "{{ wh_steps }}"
+          pool_steps: "{{ pool_steps }}"
+          ev_steps: "{{ ev_plan_steps }}"
+          ev_end: "{{ end_step if ev_plan_steps > 0 else horizon }}"
+
 rest_command:
   emhass_mpc:
     url: http://localhost:5000/action/naive-mpc-optim
@@ -68,25 +113,22 @@ rest_command:
     timeout: 120
     headers: {content-type: application/json}
     payload: >
-      {%- set charger_kw = 11.0 -%}
-      {%- set timestep_min = 30 -%}
-      {%- set horizon = 48 -%}                         {# horizon_steps; the per-load arrays below are length = your deferrable count (3 here) #}
-      {%- set ev_remaining_kwh = states('sensor.evcc_ev_remaining_kwh') | float(0) -%}
-      {%- set ev_hours = (ev_remaining_kwh / charger_kw) | round(2) -%}
-      {%- set deadline = today_at("05:00") if now() < today_at("05:00") else today_at("05:00") + timedelta(days=1) -%}
-      {%- set end_step = ((deadline - now()).total_seconds() / 60 / timestep_min) | int -%}
       {
         "prediction_horizon": {{ horizon }},
-        "soc_init": {{ states('sensor.battery_soc') | float(0) / 100 }},
-        "def_total_hours": [ {{ states('sensor.wh_remaining_hours') | float(0) }}, {{ states('sensor.pool_remaining_hours') | float(0) }}, {{ ev_hours }} ],
-        "end_timesteps_of_each_deferrable_load": [ {{ horizon }}, {{ horizon }}, {{ end_step }} ]
+        "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
+        "operating_timesteps_of_each_deferrable_load": [ {{ wh_steps }}, {{ pool_steps }}, {{ ev_steps }} ],
+        "end_timesteps_of_each_deferrable_load": [ {{ horizon }}, {{ horizon }}, {{ ev_end }} ]
       }
 ```
 
 The `sensor.*` names here are placeholders. Replace them with the entities your own setup publishes;
-the `evcc_*` names are not guaranteed entity ids from the evcc integration. Every read uses
-`| float(0)` on purpose, so an unavailable sensor degrades to 0 rather than injecting the literal
-string `unknown` and producing invalid JSON.
+the `evcc_*` names are not guaranteed entity ids from the evcc integration. The energy and hours reads use
+`| float(0)` on purpose, so an unavailable sensor degrades to "nothing requested" rather than injecting the literal
+string `unknown` and producing invalid JSON. The battery SOC has no default: an unavailable sensor makes the script fail instead of planning from an invented SOC. For the EV that means "no energy requested", so the EV is
+not planned (never an invented amount). Because the deadline is strict, the example plans at most
+`end_step` steps when the energy cannot be delivered before it (the notification says the target will be
+missed) and plans no EV at all when less than one step remains; it does not move the deadline. If you
+prefer a best-effort charge after the deadline in that case, make that decision explicitly in the template. The default `maximum_power_from_grid` (9000 W) is a hard limit below an 11 kW charger, so a night charge without PV or battery is infeasible for every load until you raise it to your connection limit.
 
 Expected: the MPC response's `P_deferrable2` (the EV) is non-zero only inside the charging window.
 
@@ -178,8 +220,10 @@ that power, forces the load ON at t=0, and suppresses the phantom startup penalt
 
 ```jinja
 {# add to the Step-2 payload, from evcc's live charge power #}
-"def_current_power": [ 0, 0, {{ states('sensor.evcc_ev_charge_power_w') | float(0) }} ]
+"def_current_power": [ 0, 0, {{ states('sensor.evcc_ev_charge_power_w') | float(0) if ev_steps > 0 else 0 }} ]
 ```
+
+Send the pin only while the EV has planned steps (`ev_steps > 0`, as above): a pin on an EV with no requirement makes the solve fall back to `Optimal (Relaxed)`.
 
 Expected: when the car is charging at, say, 6.8 kW, the plan's first EV timestep is pinned to 6.8 kW
 and the optimizer schedules around it instead of stopping it.
@@ -193,12 +237,16 @@ and the optimizer schedules around it instead of stopping it.
   `now` mapping enforces it at the charger's configured rate. If you want evcc to follow PV surplus
   inside a slot, use the `pv`/`minpv` variant in Step 4 and accept it may under-deliver versus the
   plan.
-- **The Step 2 deadline maths is separate from EMHASS forecast-window DST handling.** EMHASS
-  `delta_forecast_daily` uses local calendar-day semantics, while the example deadline is evaluated
-  by Home Assistant/Jinja and then converted into EMHASS timestep indices. If 05:00 must remain the
-  same local wall-clock deadline across a daylight-saving transition, validate or construct that
-  next local 05:00 using Home Assistant's configured timezone; do not assume EMHASS forecast-window
-  handling changes the template's datetime arithmetic.
+- **The Step 2 deadline maths is separate from EMHASS forecast-window DST handling.** The deadline is
+  an instant (`as_timestamp`) and the step count is elapsed time from the first optimization step, so a
+  night with a daylight-saving change gives 12 or 16 steps for a 22:00-05:00 night instead of 14 (checked
+  in Home Assistant for Australia/Sydney, including the repeated hour). EMHASS `delta_forecast_daily`
+  uses local calendar-day semantics, which is a different thing: `prediction_horizon` here is a fixed
+  step count. The epoch arithmetic assumes `method_ts_round: first`. The script counts one step fewer
+  in the last 60 s before a step boundary, so, provided EMHASS receives the request within 60 s of the script's clock reading, a
+  reading on the other side of the boundary can only make the EV stop earlier, never later; check the first timestamp of the returned plan
+  against `first_step` before acting on it (see
+  [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 - **A missed deadline rolls into the next day.** Once 05:00 passes, the Step 2 template sets the
   deadline to the next 05:00, so if the car did not reach target overnight (it under-delivered on a
   low-sun `pv`/`minpv` night, or it was unplugged) the leftover energy carries a next-day deadline.
