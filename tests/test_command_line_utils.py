@@ -20,7 +20,6 @@ import orjson
 import pandas as pd
 import pytz
 import time_machine
-from aioresponses import aioresponses
 
 from emhass import utils
 from emhass.command_line import (
@@ -54,6 +53,7 @@ from emhass.command_line import (
     weather_forecast_cache,
 )
 from emhass.forecast import Forecast
+from tests.aioresponses_compat import aioresponses
 from tests.fixture_clock import FIXTURE_NOW, fixture_clock
 
 # The root folder
