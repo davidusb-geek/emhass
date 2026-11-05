@@ -77,7 +77,14 @@ const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
 const end_step = Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min);
 
 // Battery SOC from your battery monitor, normalized to fraction 0..1
-const soc_percent = flow.get("battery_soc_percent") || 50;
+const soc_raw = flow.get("battery_soc_percent");
+const soc_percent = (typeof soc_raw === "number" ||
+    (typeof soc_raw === "string" && soc_raw.trim() !== ""))
+    ? Number(soc_raw) : NaN;
+if (!Number.isFinite(soc_percent) || soc_percent < 0 || soc_percent > 100) {
+    node.warn("Skipping MPC tick: battery SOC missing, non-numeric or outside 0-100%");
+    return null;
+}
 const soc_init = soc_percent / 100;
 
 // Per-timestep price arrays from your tariff source, sent as plain lists: one
@@ -148,7 +155,7 @@ The following are observed-in-production patterns from running this flow shape f
 - **Forecast resilience.** Single PV-forecast source is a single point of failure. Production-grade orchestrators run primary (commercial: Solcast, Forecast.Solar, etc.) + physics-fallback (Open-Meteo `global_tilted_irradiance` × DC_kWp × eta, clipped to inverter AC max) + a daily auto-calibration step (EMA-update of a correction factor from real-vs-modeled PV).
 - **State between ticks.** Use `flow.set(...)` / `flow.get(...)` (not `context.set/get`) so the values survive Node-RED redeploys of unrelated tabs.
 - **Price arrays.** As plain lists, `load_cost_forecast` and `prod_price_forecast` are positional from the first optimization step and must have at least `horizon_steps` entries of finite numbers (a list that starts one step early or late places every price on the wrong interval and still gives a valid-looking plan). EMHASS rejects a shorter list with an error instead of padding it, and fails the cycle on `NaN`, `null`, booleans or strings. Step 3 above checks both and skips the tick rather than sending a fabricated fallback. If your tariff source publishes timestamped prices, you can send them as a timestamped mapping instead and let EMHASS align them. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
-- **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. See [Battery-aware runtime params](battery_aware_runtime_params.md) for the full story.
+- **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. Step 3 preserves a valid 0% SOC and skips the tick if the source is missing, non-numeric, or outside 0-100%, rather than substituting a fabricated 50%. See [Battery-aware runtime params](battery_aware_runtime_params.md) for the full story.
 
 ## Credits
 
