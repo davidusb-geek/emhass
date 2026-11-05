@@ -235,7 +235,7 @@ This is appropriate because a hot water tank sits in a room at roughly constant 
 
 * **draw_off_demand**: Daily profile of hot water draw-off energy in kWh per timestep (default: none).
     * A list of energy values representing one day of hot water consumption
-    * The profile is automatically tiled (repeated) to fill the optimization horizon, **starting at the first optimization step**, not at midnight: entry 0 is the energy of step 0, whatever the clock time of that step is. A list that is at least as long as the horizon is used as it is
+    * The profile is automatically tiled (repeated) to fill the optimization horizon, **starting at the first optimization step**, not at midnight: entry 0 is the energy of step 0, whatever the clock time of that step is. A list that is at least as long as the horizon is used as it is: its first horizon-length values are used and any excess is discarded
     * Each value represents the energy withdrawn during that timestep
     * Example for 30-minute timesteps: `[0,0,0,0,0,0, 0,0,0,0,0,0, 0.5,0.3,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]`
       (morning shower around 06:00, evening shower around 18:00, **only if the first optimization step is 00:00**; see below to keep the clock times)
