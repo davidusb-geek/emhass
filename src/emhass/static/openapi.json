@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "EMHASS API",
-    "version": "1.0",
+    "version": "1.1",
     "description": "Machine-readable contract for the EMHASS JSON API. `default` values are sourced from param_definitions.json (the maintainer-declared source of truth); runtime currently loads config_defaults.json, which is kept aligned but not enforced in code."
   },
   "paths": {

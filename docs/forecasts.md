@@ -32,11 +32,11 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ### open-meteo 
 
-The default method for PV power forecast is the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/). For more detail see the [Open-Meteo API documentation](https://open-meteo.com/en/docs). This is obtained using `method=open-meteo`. This site proposes detailed forecasts based on Lat/Lon locations. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
+The default method for PV power forecast is the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/). For more detail see the [Open-Meteo API documentation](https://open-meteo.com/en/docs). This is obtained using `method=open-meteo`. This site proposes detailed forecasts based on Lat/Lon locations. The weather forecast data is then converted into PV power production using the `pv_module_model` and `pv_inverter_model` parameters defined in the configuration.
 
 ### solcast 
 
-The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast will be updated every 6 hours. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
+The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. `solcast_rooftop_id` can hold several rooftop IDs, separated by commas or spaces; the first one is plant 0 (see [PV plants and the per-plant series](#pv-plants-and-the-per-plant-series)). The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast will be updated every 6 hours. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
 For example:
 ```yaml
@@ -156,7 +156,7 @@ The flag must come from the curtailment entity, never from the forecast error it
 
 ### solar.forecast 
 
-A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts. EMHASS interpolates between the readings Solar.Forecast returns, but only across gaps of up to one hour. Time with no reading for longer, such as the night between the last and the first reading of a day, is set to 0 W PV and not interpolated. Solar.Forecast brackets each night with 0 W sunrise and sunset readings, so a gap of more than one hour next to a non-zero reading is treated as missing data: EMHASS logs a warning with the number of affected steps and the first and last of them, and uses 0 W PV for them. This is a conservative modelling choice, not an accurate substitute for the missing production: it can under-forecast PV. Time before the first or after the last reading is also 0 W, without a warning.
+A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the peak power in kW of one PV plane, which is the whole installation if you have a single plane; see below for several planes). It can be passed at runtime or set in the secrets file. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts. EMHASS interpolates between the readings Solar.Forecast returns, but only across gaps of up to one hour. Time with no reading for longer, such as the night between the last and the first reading of a day, is set to 0 W PV and not interpolated. Solar.Forecast brackets each night with 0 W sunrise and sunset readings, so a gap of more than one hour next to a non-zero reading is treated as missing data: EMHASS logs a warning with the number of affected steps and the first and last of them, and uses 0 W PV for them. This is a conservative modelling choice, not an accurate substitute for the missing production: it can under-forecast PV. Time before the first or after the last reading is also 0 W, without a warning.
 
 For example, for a 5 kW installation:
 ```bash
@@ -165,10 +165,38 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
+If your installation has several planes (several entries in `pv_module_model`), EMHASS sends one request per plane, using that plane's `surface_tilt` and `surface_azimuth`, and adds the answers up. A single number in `solar_forecast_kwp` is sent for every plane, so it should then be the size of one plane, not of the whole installation. If the planes differ in size, give a list with one kWp value per plane, in the order of `pv_module_model`:
+```bash
+# Two planes, 3.5 kW and 4 kW
+curl -i -H "Content-Type:application/json" -X POST -d '{
+	"solar_forecast_kwp":[3.5, 4]
+}' http://localhost:5000/action/dayahead-optim
+```
+Every entry has to be a number above zero and the list needs exactly one entry per plane. When EMHASS fetches the forecast, anything else stops it with an error naming `solar_forecast_kwp`, before a request is sent or a cache file is read. The list works from the secrets file and as a runtime parameter. The add-on options page only takes a single number for now.
+
 ```{note} 
 
-If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model parameters defined in the configuration will be ignored.
+If you use the Solcast method, or explicitly pass the PV power forecast values (see below), the `pv_module_model` and `pv_inverter_model` parameters defined in the configuration will be ignored. The Solar.Forecast method does not use the module and inverter models either, but it takes the number of planes from `pv_module_model` and reads `surface_tilt` and `surface_azimuth` for each plane.
 ```
+
+### PV plants and the per-plant series
+
+When your PV forecast comes from more than one source of production, EMHASS keeps each one as a separate "plant" next to the total. What a plant is depends on the method:
+
+| Method | A plant is | Order |
+|---|---|---|
+| `open-meteo` (and the deprecated `scrapper`) | one entry of `pv_module_model` (with the matching entries of the other PV lists) | the order of `pv_module_model` |
+| `solar.forecast` | one plane, that is one entry of `pv_module_model` | the order of `pv_module_model` |
+| `solcast` | one rooftop ID of `solcast_rooftop_id` | the order the IDs are written in (separated by commas or spaces) |
+| `csv`, `list` or a runtime `pv_power_forecast` | the one series you pass (with one inverter) | not applicable |
+
+With Solcast the plants are the rooftops. With one inverter they are not tied to `pv_module_model`: the first rooftop ID is plant 0 whatever `pv_module_model` says.
+
+When the forecast has two or more plants, the optimization results get one extra column per plant, `P_PV_plant0`, `P_PV_plant1` and so on (counting from 0), next to `P_PV`. They are in `opt_res_latest.csv`, in the plan returned by `/api/v1/plan` and in the power chart and table of the web UI. They are for looking at how the total splits between plants. The optimization does not use them, and no Home Assistant sensor is created for them. With a single plant (or `csv` or `list`) the results have no such columns and are the same as before.
+
+The plant columns always add up to `P_PV`, up to float rounding (the plan returned by `/api/v1/plan` rounds to 10 decimals), and none of them is negative. The shares come from each plant's own forecast. If `P_PV` is changed afterwards (in `naive-mpc-optim` the first step is mixed with the live PV power, and the PV forecast adjustment (see below) replaces the whole forecast), the plant columns follow the new total and keep each plant's share. A plant that comes out slightly below zero in the model (an inverter's night-time standby draw, for example) counts as zero. If every plant was at zero in a step where the new total is above zero, the total is shared in proportion to each plant's total over the whole forecast, or equally if that is zero too. Where `P_PV` is NaN, the plant columns are NaN too. With `compute_curtailment` the plants split `P_PV` as forecast: `P_PV_curtailment` is not split per plant.
+
+Plant series are only available from the weather methods that EMHASS runs itself. With one inverter they are not worked out from a `csv` file or a `list`.
 
 ### Caching PV Forecast
 For the MPC users, running optimizations regularly; You may wish to cache your PV forecast results, to reuse throughout the day.
@@ -183,11 +211,13 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
+
 The action answers with HTTP 400 when the forecast could not be produced; the reason is in the action log, which the response does not return because it is shared by all requests. Earlier versions answered 200 in these cases, so clients that relied on that status should be updated. The failures are:
 
 - Solcast or solar.forecast returning an HTTP error, solar.forecast staying unreachable after its retries, a missing or unusable Solcast API key or rooftop ID, or the Solcast daily call cap already being used. A network failure that Solcast or Open-Meteo raise is not one of these and still answers 500.
 - An invalid `weather_forecast_method`.
-- A runtime `pv_power_forecast` list that is rejected, for example one with a non-finite value or one paired with a `pv_power_forecast_p10` list of a different length. A list that is too short or of the wrong type is only ignored, as in the other actions, and the configured method applies.
+- A runtime `pv_power_forecast` list that is rejected, for example one with a non-finite value, one that holds lists or mappings while `number_of_inverters` is 1, or one paired with a `pv_power_forecast_p10` list of a different length. A flat list that is too short, or a value of the wrong type, is only ignored, as in the other actions, and the configured method applies.
+- With `solar.forecast`, a `solar_forecast_kwp` list that cannot be used: a wrong number of entries, or an entry that is not a number above zero.
 
 With the `csv` weather forecast method there is nothing to cache, because your file is read on every run, so the action does nothing and answers 200.
 
@@ -210,6 +240,8 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{
 	"weather_forecast_cache_only":true
 }' http://localhost:5000/action/naive-mpc-optim
 ```
+
+With two or more plants, the Solcast and solar.forecast cache file also holds each plant's series next to the total. A cache that was saved by an earlier version, or for a different number of plants than you have configured now (rooftop IDs for Solcast, entries of `pv_module_model` for solar.forecast), is still used for the total, exactly as before. It has no plant series, so that run has no `P_PV_plant` columns, and one line in the log at info level says so. Nothing is deleted or requested again because of this, so no API quota is spent. With Solcast, run the `weather-forecast-cache` action once to save a cache with the plant series. With solar.forecast, delete `weather_forecast_data.pkl` in the data folder: an existing solar.forecast cache file is used even by the `weather-forecast-cache` action, so the next run only fetches a new one once the file is gone. The Open-Meteo cache only holds weather data and is not affected, because the plants are computed again on every run.
 
 ### Caching Open-Meteo Weather Service Usage
 
