@@ -57,12 +57,12 @@ Two values you compute fresh per MPC call, both counted on the EMHASS time grid 
 | Variable | Source | Calculation |
 |----------|--------|-------------|
 | `operating_timesteps_of_each_deferrable_load[2]` | a sensor that reports remaining kWh to deliver | `ceil(kWh_remaining / (charger_kW x step_hours))`, a whole number of steps |
-| `end_timesteps_of_each_deferrable_load[2]` | departure deadline | whole steps that end at or before the deadline, counted from the **first optimization step**: `floor((deadline - first_step) / step)` in elapsed seconds |
+| `end_timesteps_of_each_deferrable_load[2]` | departure deadline | whole steps that end at or before the deadline, counted from the **first optimization step**: `floor((deadline - first_step) / step)` in elapsed seconds, one fewer in the last 60 s before a step boundary (see the script) |
 
 Three rules keep the deadline strict:
 
-- **Count elapsed time from the first step, not the clock reading.** Subtracting two local datetimes (`deadline - now()`) is wall-clock arithmetic: across a daylight saving change it is an hour off, and it counts from `now()` while the step indices count from the first step. Use `as_timestamp()` and the first step of the grid (set `method_ts_round` to `first`; with the default `nearest`, a call in the second half of a step starts one step later than `first_step` and the EV could run one step after the deadline). The script counts one step fewer when it runs in the last 60 s before a step boundary, so a clock reading on the other side of the boundary can only make the EV stop earlier, never later. Check the first timestamp of the returned plan against `first_step` before acting on it.
-- **`end_timesteps_of_each_deferrable_load = 0` means no limit, not "stop now".** A deadline that is less than one full step after the first step gives `0`, and EMHASS then plans the charge at the cheapest slot of the whole horizon, after the deadline. The script below does not send an EV window in that case, and it does not turn an invalid deadline time into no limit: `today_at()` fails on an invalid time and the script stops.
+- **Count elapsed time from the first step, not the clock reading.** Subtracting two local datetimes (`deadline - now()`) is wall-clock arithmetic: across a daylight saving change it is an hour off, and it counts from `now()` while the step indices count from the first step. Use `as_timestamp()` and the first step of the grid (set `method_ts_round` to `first`; with the default `nearest`, a call in the second half of a step starts one step later than `first_step` and the EV could run one step after the deadline). The script counts one step fewer when it runs in the last 60 s before a step boundary, so, provided EMHASS receives the request within 60 s of the script's clock reading, a reading on the other side of the boundary can only make the EV stop earlier, never later. Check the first timestamp of the returned plan against `first_step` before acting on it.
+- **`end_timesteps_of_each_deferrable_load = 0` means no limit, not "stop now".** A deadline that is less than one full step after the first step (or exactly one step, in the last 60 s before a boundary) gives `0`, and EMHASS then plans the charge at the cheapest slot of the whole horizon, after the deadline. The script below does not send an EV window in that case, and it does not turn an invalid deadline time into no limit: `today_at()` fails on an invalid time and the script stops.
 - **If the energy does not fit before the deadline, do not stretch the deadline.** `ev_steps > end_step` makes the problem infeasible (EMHASS returns `Infeasible` and publishes no plan, which also stops every other load). The script plans at most `end_step` steps, which charges in every step before the deadline, and raises a notification that the target will be missed. When less than one full step remains (`end_step = 0`) the EV is not planned. The charge is never silently planned after the deadline.
 
 Why whole steps: with the default `treat_deferrable_load_as_semi_cont: true` a load runs at its nominal power or not at all. A requirement that is a whole number of steps is solved as a normal mixed-integer problem; a fractional requirement such as `2.2` hours at 30-minute steps is solved as `Optimal (Relaxed)`: the energy is exact, but the integer constraints are dropped and at least one step runs at a partial power (4.4 kW in a test with an 11 kW charger). Rounding up to whole steps delivers at most one step of extra energy (5.5 kWh for 11 kW and 30 minutes). Pass hours that are not a multiple of the step only if your charger can follow a partial-power step.
@@ -81,10 +81,11 @@ script:
           ev_remaining_kwh: "{{ states('sensor.YOUR_EV_REMAINING_KWH') | float }}"
           step_s: "{{ timestep_min * 60 }}"
           # First step with method_ts_round "first": the latest step boundary not after now, on the local clock.
+          now_ts: "{{ as_timestamp(now()) }}"          # one clock reading for first_step and margin
           utc_offset_s: "{{ now().utcoffset().total_seconds() }}"
-          first_step: "{{ ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s }}"
+          first_step: "{{ ((now_ts + utc_offset_s) // step_s) * step_s - utc_offset_s }}"
           # EMHASS reads the clock after this script. Within the last 60 s before a step boundary its first step may be the next one, which would put every index one step too late and let the EV run in the deadline step, so count one step fewer.
-          margin: "{{ 1 if (as_timestamp(now()) + utc_offset_s) % step_s > step_s - 60 else 0 }}"
+          margin: "{{ 1 if (now_ts + utc_offset_s) % step_s > step_s - 60 else 0 }}"
           # Next departure as an instant; elapsed seconds, not wall-clock arithmetic.
           deadline_ts: >
             {{ as_timestamp(today_at(deadline_time) if now() < today_at(deadline_time)
