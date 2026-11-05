@@ -32,9 +32,9 @@ Reference table of the runtime params accepted by `treat_runtimeparams` that thi
 
 | Field | Type | Purpose |
 |---|---|---|
-| `operating_hours_of_each_deferrable_load` | `list[float]` | hours each deferrable should run (fractional allowed) |
+| `operating_timesteps_of_each_deferrable_load` | `list[int]` | steps each deferrable should run. Once it is passed, `operating_hours_of_each_deferrable_load` is ignored for every load, so give all loads in steps (see the [EV study case](../study_cases/ev.md#runtime-payload)) |
 | `start_timesteps_of_each_deferrable_load` | `list[int]` | earliest allowed step per deferrable |
-| `end_timesteps_of_each_deferrable_load` | `list[int]` | latest allowed step per deferrable |
+| `end_timesteps_of_each_deferrable_load` | `list[int]` | the load may not run at this step or later, counted from the first optimization step; `0` means no limit |
 | `load_cost_forecast` | `list[float]` | per-timestep tariff for load |
 | `prod_price_forecast` | `list[float]` | per-timestep sell price for production |
 | `soc_init` | `float` (0..1) | current battery state of charge as fraction |
@@ -68,13 +68,24 @@ const horizon_steps = 48;         // 48 × 30min = 24 elapsed hours (a fixed ste
 
 // Example: deferrable #2 is an EV, recompute its window each call
 const ev_remaining_kwh = flow.get("ev_remaining_kwh") || 0;
-const ev_hours = Math.ceil(ev_remaining_kwh / charger_kw);
-const minutes_until_deadline = flow.get("minutes_until_deadline") || 480;
+// Whole steps, rounded up (round() removes float noise). A whole number of steps is solved as a normal
+// mixed-integer problem at the nominal power; fractional hours are solved as "Optimal (Relaxed)".
+let ev_steps = Math.ceil(Math.round(ev_remaining_kwh / (charger_kw * timestep_min / 60) * 1e6) / 1e6);
+// Elapsed minutes to the deadline (difference of two instants, not of two local clock readings, which is
+// an hour off across a daylight saving change). No fabricated default: without a deadline there is no EV window.
+const minutes_until_deadline = flow.get("minutes_until_deadline");
 // Step indices count from the first optimization step, which with method_ts_round "first" started
 // minutes_into_step minutes ago (epoch based: assumes a UTC offset that is a whole number of steps).
-// An end of 0 means "no limit", so a deadline inside the first step needs handling by your flow.
 const minutes_into_step = (Date.now() % (timestep_min * 60000)) / 60000;
-const end_step = Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min);
+let end_step = Number.isFinite(minutes_until_deadline)
+    ? Math.min(Math.floor((minutes_until_deadline + minutes_into_step) / timestep_min), horizon_steps) : 0;
+// An end of 0 means "no limit", not "stop now", so it is never sent for the EV. Plan no more steps than
+// fit before the deadline (the deadline stays strict), and no EV at all when not one full step is left.
+if (ev_steps > end_step) {
+    if (ev_steps > 0) node.warn(`EV needs ${ev_steps} steps but only ${end_step} remain before the deadline; the target will be missed`);
+    ev_steps = end_step;
+}
+if (ev_steps === 0) end_step = horizon_steps;
 
 // Battery SOC from your battery monitor, normalized to fraction 0..1
 const soc_percent = flow.get("battery_soc_percent") || 50;
@@ -98,7 +109,7 @@ if (!isValid(load_cost) || !isValid(prod_price)) {
 
 msg.payload = {
     prediction_horizon: horizon_steps,
-    operating_hours_of_each_deferrable_load: [4, ev_hours],
+    operating_timesteps_of_each_deferrable_load: [Math.ceil(4 * 60 / timestep_min), ev_steps],   // all loads in steps: hours are ignored once timesteps are passed
     start_timesteps_of_each_deferrable_load: [0, 0],
     end_timesteps_of_each_deferrable_load: [horizon_steps, end_step],
     load_cost_forecast: load_cost,

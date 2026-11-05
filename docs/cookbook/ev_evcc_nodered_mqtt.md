@@ -112,17 +112,19 @@ let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s)
 const connected = flow.get("ev_connected") === true;
 const soc = flow.get("ev_soc_percent");
 const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) < soc_max_age_ms;
-let ev_hours = 0;
+let ev_steps = 0;
 if (connected && soc_fresh && end_step > 0) {
     const kwh = Math.max(0, (target_soc - soc) / 100 * capacity_kwh);
-    ev_hours = Math.round(kwh / charger_kw * 100) / 100;       // fractional hours are honoured
-    const max_hours = end_step * step_min / 60;
-    if (ev_hours > max_hours) {                                // would be Infeasible: clamp and say so
-        node.warn(`EV needs ${ev_hours} h but only ${max_hours} h remain before departure; clamping`);
-        ev_hours = max_hours;
+    // Whole steps, rounded up (the round() removes float noise). A whole number of steps is solved as a
+    // normal mixed-integer problem with every step at the nominal power; a fractional hour count is
+    // solved as "Optimal (Relaxed)" with one partial-power step.
+    ev_steps = Math.ceil(Math.round(kwh / (charger_kw * step_min / 60) * 1e6) / 1e6);
+    if (ev_steps > end_step) {                                 // would be Infeasible: plan what fits and say so
+        node.warn(`EV needs ${ev_steps} steps but only ${end_step} remain before departure; the target will be missed`);
+        ev_steps = end_step;
     }
 }
-if (ev_hours === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
+if (ev_steps === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
 
 const charging = flow.get("ev_charging") === true;
 const charge_w = Number(flow.get("ev_charge_power_w")) || 0;
@@ -139,7 +141,7 @@ msg.payload = {
     prediction_horizon: horizon,
     soc_init: soc_batt / 100, soc_final: soc_batt / 100,
     load_cost_forecast: load_cost, prod_price_forecast: prod_price,
-    operating_hours_of_each_deferrable_load: [4, 0, ev_hours],
+    operating_timesteps_of_each_deferrable_load: [Math.ceil(4 * 60 / step_min), 0, ev_steps],   // all loads in steps: hours are ignored once timesteps are passed
     start_timesteps_of_each_deferrable_load: [0, 0, 0],
     end_timesteps_of_each_deferrable_load: [horizon, horizon, end_step],
     def_current_state: [false, false, charging],
