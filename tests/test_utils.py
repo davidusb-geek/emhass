@@ -2043,6 +2043,16 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_target"], [None, 0.8])
         self.assertEqual(params_out["passed_data"]["soc_target_timestep"], [None, 5])
 
+    async def test_treat_runtimeparams_passes_def_availability(self):
+        """def_availability reaches naive-mpc-optim unchanged; validation happens in
+        Optimization.perform_optimization, as for battery_availability."""
+        mask = [None, [1, 1, 0, 0, 0.5]]
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"prediction_horizon": 10, "def_availability": mask}
+        )
+        params_out = orjson.loads(params_out)
+        self.assertEqual(params_out["passed_data"]["def_availability"], mask)
+
     async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
         """A percentage saved in the plant config fails even when the request adds nothing."""
         params = await TestUtils.get_test_params()
@@ -3995,6 +4005,44 @@ class TestHeatingDemand(unittest.TestCase):
             np.sum(demand_with_solar[solar_irradiance > 0.0]),
             np.sum(demand_no_solar[solar_irradiance > 0.0]),
             "Solar irradiance should reduce total heating demand during sunny periods",
+        )
+
+    def test_calculate_thermal_balance_physics_excess_gains_can_be_negative(self):
+        """Excess solar/internal gains are retained in signed balance but not demand."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([5.0, 5.0, 5.0, 5.0])
+        solar_irradiance = np.array([0.0, 800.0, 0.0, 800.0])
+        load_forecast = np.array([0.0, 0.0, 10000.0, 10000.0])
+
+        kwargs = {
+            "u_value": 0.35,
+            "envelope_area": 380.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 240.0,
+            "indoor_target_temperature": indoor_temp,
+            "outdoor_temperature_forecast": outdoor_temps,
+            "optimization_time_step": 60,
+            "solar_irradiance_forecast": solar_irradiance,
+            "window_area": 28.0,
+            "shgc": 0.6,
+            "internal_gains_forecast": load_forecast,
+            "internal_gains_factor": 0.8,
+        }
+
+        balance = utils.calculate_thermal_balance_physics(**kwargs)
+        demand = utils.calculate_heating_demand_physics(**kwargs)
+
+        # 2.64256 kW envelope/ventilation loss; 13.44 kW solar and 8 kW internal gains.
+        np.testing.assert_allclose(
+            balance,
+            [2.64256, -10.79744, -5.35744, -18.79744],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            demand,
+            [2.64256, 0.0, 0.0, 0.0],
+            atol=1e-8,
+            err_msg="Reported heating demand must stay clipped at zero",
         )
 
     def test_calculate_heating_demand_physics_scaling_with_timestep(self):
@@ -6691,6 +6739,15 @@ class TestRuntimeBanner(unittest.TestCase):
                     log_runtime_banner(test_logger)  # must not raise
         self.assertEqual(len(cm.output), 1)
         self.assertIn("runtime info unavailable", cm.records[0].getMessage())
+
+
+class TestValidateNumBatteriesOverflow(unittest.TestCase):
+    def test_an_int_too_large_for_a_float_is_a_value_error(self):
+        # float(10**400) raises OverflowError, which must not escape the documented
+        # ValueError contract (callers catch ValueError).
+        with self.assertRaises(ValueError) as ctx:
+            utils.validate_num_batteries({"number_of_batteries": 10**400})
+        self.assertIn("number_of_batteries must be a positive integer", str(ctx.exception))
 
 
 if __name__ == "__main__":

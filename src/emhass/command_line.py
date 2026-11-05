@@ -2291,6 +2291,37 @@ def _prepare_regressor_fit(ctx: SetupContext):
     return {"df_input_data": df_input_data}
 
 
+def _apply_cached_opt_runtime_updates(
+    opt: "Optimization",
+    input_data_dict: dict,
+    logger: logging.Logger,
+) -> None:
+    """Update runtime references and CVXPY parameters on a cached Optimization object.
+
+    Must be called under opt._solve_lock to ensure atomic setup and solve across
+    concurrent requests.
+    """
+    fcst = input_data_dict.get("fcst")
+    optim_conf = input_data_dict.get("optim_conf", {})
+    plant_conf = input_data_dict.get("plant_conf", {})
+    opt.logger = logger
+    if fcst is not None:
+        opt.var_load_cost = fcst.var_load_cost
+        opt.var_prod_price = fcst.var_prod_price
+    opt.plant_conf = plant_conf
+    opt.optim_conf = optim_conf
+    opt.update_thermal_start_temps(optim_conf)
+    opt.update_battery_power_limits(plant_conf)
+    runtime_solver_opts = [
+        "lp_solver_timeout",
+        "lp_solver_mip_rel_gap",
+        "num_threads",
+    ]
+    for key in runtime_solver_opts:
+        if key in optim_conf:
+            opt.optim_conf[key] = optim_conf[key]
+
+
 async def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -2390,8 +2421,9 @@ async def _set_input_data_dict(
             logger,
             emhass_conf,
         )
-    except utils.SocFractionError:
-        # The fraction-vs-percentage error is already logged. Stop before the solver.
+    except (utils.SocFractionError, utils.InverterConfigError):
+        # The fraction-vs-percentage and the inverter configuration errors are already
+        # logged. Stop before the solver.
         return False
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
@@ -2554,6 +2586,30 @@ async def _set_input_data_dict(
             # A coordinator backend asks remote solvers to run their part of a
             # live plan only: a dry run has no effect anywhere
             opt.fed_dry_run = bool((params.get("passed_data") or {}).get("dry_run", False))
+                # Cache hit - serialize updates under _solve_lock to prevent mutating
+                # shared instance while a concurrent optimization solve is running.
+                lock = getattr(opt, "_solve_lock", None)
+                if lock is not None:
+                    with lock:
+                        _apply_cached_opt_runtime_updates(
+                            opt,
+                            {
+                                "fcst": fcst,
+                                "optim_conf": optim_conf,
+                                "plant_conf": plant_conf,
+                            },
+                            logger,
+                        )
+                else:
+                    _apply_cached_opt_runtime_updates(
+                        opt,
+                        {
+                            "fcst": fcst,
+                            "optim_conf": optim_conf,
+                            "plant_conf": plant_conf,
+                        },
+                        logger,
+                    )
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,
@@ -2760,9 +2816,18 @@ async def perfect_forecast_optim(
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
-        opt_res = input_data_dict["opt"].perform_perfect_forecast_optim(
-            df_input_data, input_data_dict["days_list"]
-        )
+        opt = input_data_dict["opt"]
+        lock = getattr(opt, "_solve_lock", None)
+        if lock is not None:
+            with lock:
+                _apply_cached_opt_runtime_updates(opt, input_data_dict, logger)
+                opt_res = opt.perform_perfect_forecast_optim(
+                    df_input_data, input_data_dict["days_list"]
+                )
+        else:
+            opt_res = opt.perform_perfect_forecast_optim(
+                df_input_data, input_data_dict["days_list"]
+            )
     # Save CSV file for analysis
     if save_data_to_file:
         filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
@@ -2981,15 +3046,30 @@ async def dayahead_forecast_optim(
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
-        opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
-            df_input_data_dayahead,
-            input_data_dict["p_pv_forecast"],
-            input_data_dict["p_load_forecast"],
-            soc_init=soc_init,
-            soc_final=soc_final,
-            current_period_peak=current_period_peak,
-            stage_times=input_data_dict["stage_times"],
-        )
+        opt = input_data_dict["opt"]
+        lock = getattr(opt, "_solve_lock", None)
+        if lock is not None:
+            with lock:
+                _apply_cached_opt_runtime_updates(opt, input_data_dict, logger)
+                opt_res_dayahead = opt.perform_dayahead_forecast_optim(
+                    df_input_data_dayahead,
+                    input_data_dict["p_pv_forecast"],
+                    input_data_dict["p_load_forecast"],
+                    soc_init=soc_init,
+                    soc_final=soc_final,
+                    current_period_peak=current_period_peak,
+                    stage_times=input_data_dict["stage_times"],
+                )
+        else:
+            opt_res_dayahead = opt.perform_dayahead_forecast_optim(
+                df_input_data_dayahead,
+                input_data_dict["p_pv_forecast"],
+                input_data_dict["p_load_forecast"],
+                soc_init=soc_init,
+                soc_final=soc_final,
+                current_period_peak=current_period_peak,
+                stage_times=input_data_dict["stage_times"],
+            )
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3063,6 +3143,7 @@ async def naive_mpc_optim(
     battery_discharge_energy_max = input_data_dict["params"]["passed_data"].get(
         "battery_discharge_energy_max", None
     )
+    def_availability = input_data_dict["params"]["passed_data"].get("def_availability", None)
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
     capacity_charge_window = input_data_dict["params"]["passed_data"].get(
         "capacity_charge_window", None
@@ -3086,27 +3167,56 @@ async def naive_mpc_optim(
         "end_timesteps_of_each_deferrable_load"
     )
     with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
-        opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
-            df_input_data_dayahead,
-            input_data_dict["p_pv_forecast"],
-            input_data_dict["p_load_forecast"],
-            prediction_horizon,
-            soc_init,
-            soc_final,
-            soc_target=soc_target,
-            soc_target_timestep=soc_target_timestep,
-            battery_availability=battery_availability,
-            battery_discharge_energy_max=battery_discharge_energy_max,
-            current_period_peak=current_period_peak,
-            capacity_charge_window=capacity_charge_window,
-            capacity_charge_consideration=capacity_charge_consideration,
-            capacity_charge_current_interval_history=capacity_charge_current_interval_history,
-            def_total_hours=def_total_hours,
-            def_total_timestep=def_total_timestep,
-            def_start_timestep=def_start_timestep,
-            def_end_timestep=def_end_timestep,
-            stage_times=input_data_dict["stage_times"],
-        )
+        opt = input_data_dict["opt"]
+        lock = getattr(opt, "_solve_lock", None)
+        if lock is not None:
+            with lock:
+                _apply_cached_opt_runtime_updates(opt, input_data_dict, logger)
+                opt_res_naive_mpc = opt.perform_naive_mpc_optim(
+                    df_input_data_dayahead,
+                    input_data_dict["p_pv_forecast"],
+                    input_data_dict["p_load_forecast"],
+                    prediction_horizon,
+                    soc_init,
+                    soc_final,
+                    soc_target=soc_target,
+                    soc_target_timestep=soc_target_timestep,
+                    battery_availability=battery_availability,
+                    battery_discharge_energy_max=battery_discharge_energy_max,
+                    def_availability=def_availability,
+                    current_period_peak=current_period_peak,
+                    capacity_charge_window=capacity_charge_window,
+                    capacity_charge_consideration=capacity_charge_consideration,
+                    capacity_charge_current_interval_history=capacity_charge_current_interval_history,
+                    def_total_hours=def_total_hours,
+                    def_total_timestep=def_total_timestep,
+                    def_start_timestep=def_start_timestep,
+                    def_end_timestep=def_end_timestep,
+                    stage_times=input_data_dict["stage_times"],
+                )
+        else:
+            opt_res_naive_mpc = opt.perform_naive_mpc_optim(
+                df_input_data_dayahead,
+                input_data_dict["p_pv_forecast"],
+                input_data_dict["p_load_forecast"],
+                prediction_horizon,
+                soc_init,
+                soc_final,
+                soc_target=soc_target,
+                soc_target_timestep=soc_target_timestep,
+                battery_availability=battery_availability,
+                battery_discharge_energy_max=battery_discharge_energy_max,
+                def_availability=def_availability,
+                current_period_peak=current_period_peak,
+                capacity_charge_window=capacity_charge_window,
+                capacity_charge_consideration=capacity_charge_consideration,
+                capacity_charge_current_interval_history=capacity_charge_current_interval_history,
+                def_total_hours=def_total_hours,
+                def_total_timestep=def_total_timestep,
+                def_start_timestep=def_start_timestep,
+                def_end_timestep=def_end_timestep,
+                stage_times=input_data_dict["stage_times"],
+            )
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)

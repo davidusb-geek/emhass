@@ -323,6 +323,31 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/action/export-influxdb-to-csv", json={})
         self.assertEqual(response.status_code, 400)
 
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server.export_influxdb_to_csv", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_export_csv_inverter_config_error_is_400(
+        self, mock_load, mock_export, mock_grab
+    ):
+        from emhass.utils import InverterConfigError
+
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_export.side_effect = InverterConfigError("number_of_inverters=2 is not supported")
+        mock_grab.return_value = ["ERROR number_of_inverters=2 is not supported"]
+        response = await self.client.post("/action/export-influxdb-to-csv", json={})
+        self.assertEqual(response.status_code, 400)
+
+    @patch("emhass.web_server.weather_forecast_cache", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_action_weather_cache_inverter_config_error_is_400(self, mock_load, mock_cache):
+        from emhass.utils import InverterConfigError
+
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_cache.side_effect = InverterConfigError("inverter_ac_output_max must be a list")
+        response = await self.client.post("/action/weather-forecast-cache", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("inverter_ac_output_max", await response.get_data(as_text=True))
+
     @patch("emhass.web_server.set_input_data_dict")
     @patch("emhass.web_server.forecast_model_fit")
     @patch("emhass.web_server.get_injection_dict_forecast_model_fit")

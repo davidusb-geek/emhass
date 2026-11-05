@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import aiofiles
 import aiohttp
@@ -2044,7 +2044,7 @@ def calculate_heating_demand(
     return specific_heating_demand * floor_area * (hdd_per_timestep_scaled / annual_reference_hdd)
 
 
-def calculate_heating_demand_physics(
+def calculate_thermal_balance_physics(
     u_value: float,
     envelope_area: float,
     ventilation_rate: float,
@@ -2060,11 +2060,10 @@ def calculate_heating_demand_physics(
     sense: str = "heat",
 ) -> np.ndarray:
     """
-    Calculate heating or cooling demand per timestep based on building physics heat loss model.
+    Calculate the signed physics-based thermal balance per timestep.
 
-    More accurate than HDD method as it directly calculates transmission and ventilation
-    losses based on building thermal properties. Optionally accounts for solar gains
-    through windows to reduce heating demand.
+    Positive values mean the building loses heat and cools down. Negative values mean
+    solar/internal gains exceed losses and the building warms up.
 
     :param u_value: Overall thermal transmittance (U-value) in W/(m²·K). Typical values:
         - 0.2-0.3: Well-insulated modern building
@@ -2112,22 +2111,21 @@ def calculate_heating_demand_physics(
         Default: 0.0
     :type internal_gains_factor: float, optional
     :param sense: Thermal mode, ``"heat"`` (default) or ``"cool"``. In heating mode the
-        result is the positive heat the building loses (and must be replaced) when it is
+        result is the heat the building loses (and must be replaced) when it is
         colder outside than the target, with solar and internal gains subtracted. In
         cooling mode the result is the heat the building gains when it is hotter outside
         than the target, with solar and internal gains added, returned as a SIGNED
         negative value (heat gain) to match the sign convention of
-        :func:`calculate_thermal_loss_signed`. Default ``"heat"`` is byte-identical to the
-        previous behaviour.
+        :func:`calculate_thermal_loss_signed`.
     :type sense: str, optional
-    :return: Array of demand values (kWh) per timestep. Positive for heating (heat to
-        supply), zero or negative for cooling (heat gain to remove).
+    :return: Array of signed thermal balance values (kWh) per timestep. Positive values
+        are heat losses; negative values are net heat gains.
     :rtype: np.ndarray
 
     Example:
         >>> outdoor_temps = np.array([5, 8, 12, 15])
         >>> ghi = np.array([0, 100, 400, 600])  # W/m²
-        >>> demand = calculate_heating_demand_physics(
+        >>> balance = calculate_thermal_balance_physics(
         ...     u_value=0.3,
         ...     envelope_area=400,
         ...     ventilation_rate=0.5,
@@ -2190,12 +2188,10 @@ def calculate_heating_demand_physics(
         # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
         solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
 
-        # Heating: subtract solar gains from heat loss (but never go negative).
+        # Heating: subtract solar gains from heat loss.
         # Cooling: gain_sign flips this so solar gains ADD to the cooling load, which
         # is left unfloored because gains only ever deepen it.
         total_loss_kw = total_loss_kw - gain_sign * solar_gains_kw
-        if sense != "cool":
-            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
     # Validate internal_gains_factor is in expected range [0, 1]
     if internal_gains_factor < 0 or internal_gains_factor > 1:
@@ -2239,20 +2235,61 @@ def calculate_heating_demand_physics(
         # load_power is in W, convert to kW; factor is dimensionless (0-1)
         internal_gains_kw = internal_gains * internal_gains_factor / W_TO_KW
 
-        # Heating: subtract internal gains from heat loss (never go negative).
+        # Heating: subtract internal gains from heat loss.
         # Cooling: gain_sign flips this so internal gains ADD to the cooling load.
         total_loss_kw = total_loss_kw - gain_sign * internal_gains_kw
-        if sense != "cool":
-            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
-    # Convert to kWh for the timestep. Cooling demand is returned as a signed heat
+    # Convert to kWh for the timestep. Cooling balance is returned as a signed heat
     # gain (<= 0) so the shared thermal state equation (which subtracts the demand
     # term) raises indoor temperature when it is hot, matching calculate_thermal_loss_signed.
     hours_per_timestep = optimization_time_step / 60.0
-    demand = total_loss_kw * hours_per_timestep
+    balance = total_loss_kw * hours_per_timestep
     if sense == "cool":
-        demand = -demand
-    return demand
+        balance = -balance
+    return balance
+
+
+def calculate_heating_demand_physics(
+    u_value: float,
+    envelope_area: float,
+    ventilation_rate: float,
+    heated_volume: float,
+    indoor_target_temperature: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    optimization_time_step: int,
+    solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
+    window_area: float | None = None,
+    shgc: float = 0.6,
+    internal_gains_forecast: np.ndarray | pd.Series | None = None,
+    internal_gains_factor: float = 0.0,
+    sense: str = "heat",
+) -> np.ndarray:
+    """
+    Calculate heating or cooling demand per timestep based on building physics heat loss model.
+
+    This public demand helper preserves the historical reporting contract: heating
+    demand is never negative. Use :func:`calculate_thermal_balance_physics` when the
+    signed net balance is needed for indoor-temperature dynamics.
+    """
+    balance = calculate_thermal_balance_physics(
+        u_value=u_value,
+        envelope_area=envelope_area,
+        ventilation_rate=ventilation_rate,
+        heated_volume=heated_volume,
+        indoor_target_temperature=indoor_target_temperature,
+        outdoor_temperature_forecast=outdoor_temperature_forecast,
+        optimization_time_step=optimization_time_step,
+        solar_irradiance_forecast=solar_irradiance_forecast,
+        window_area=window_area,
+        shgc=shgc,
+        internal_gains_forecast=internal_gains_forecast,
+        internal_gains_factor=internal_gains_factor,
+        sense=sense,
+    )
+    sense = normalize_heat_cool_mode(sense, field_name="sense", context="thermal demand")
+    if sense == "cool":
+        return balance
+    return np.maximum(balance, 0.0)
 
 
 def update_params_with_ha_config(
@@ -2692,6 +2729,9 @@ async def treat_runtimeparams(
         "maximum_power_to_grid": params["plant_conf"].get("maximum_power_to_grid"),
     }
 
+    # Set once the runtime block below has validated the inverter parameters (#1150).
+    inverters_checked = False
+
     # If any runtime parameters where passed in action call
     if runtimeparams is not None:
         if type(runtimeparams) is str:
@@ -2810,6 +2850,11 @@ async def treat_runtimeparams(
         check_batt_charge_derating(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
+        # Per-inverter parameters (#1150): the same re-normalisation after the runtime
+        # merge, then the refusal of more than one inverter once every specific fault
+        # has been reported. Before the curve check, which reads the normalised caps.
+        require_usable_inverter_config(params["plant_conf"], logger)
+        inverters_checked = True
         # Strict: a curve in the request must be valid and usable (no recovery).
         check_inverter_power_curves(
             params["plant_conf"],
@@ -3125,6 +3170,9 @@ async def treat_runtimeparams(
             params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
                 "battery_discharge_energy_max", None
             )
+            # Per-deferrable-load availability, same shape and validation as
+            # battery_availability (done in Optimization.perform_optimization).
+            params["passed_data"]["def_availability"] = runtimeparams.get("def_availability", None)
             # Peak grid import already incurred this billing period (issue #623,
             # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
             # Coercion/validation happens in Optimization.perform_optimization.
@@ -3785,6 +3833,11 @@ async def treat_runtimeparams(
     # After the runtime merge when a request was supplied, and on the saved
     # config when it was not. A percentage in either place must fail here.
     reject_configured_soc_fractions(plant_conf, optim_conf, logger)
+    # The same for the inverter parameters (#1150): the CLI passes no runtime parameters,
+    # so the saved configuration is validated and refused here when the block above
+    # did not already do so.
+    if not inverters_checked:
+        require_usable_inverter_config(plant_conf, logger)
 
     # Shared tanks from the configuration file get the same check as runtime
     # ones (above), so a bad entry is reported and ignored instead of failing
@@ -5113,6 +5166,15 @@ async def build_params(
     check_batt_charge_derating(
         num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
     )
+    # Per-inverter parameters (#1150). Never raises here: an unusable value is logged and
+    # left for treat_runtimeparams to refuse, so /get-config and startup stay up and the
+    # configuration can be corrected. Every fault comes before the refusal of more
+    # than one inverter.
+    inverter_problems = _inverter_config_problems(params["plant_conf"], logger)
+    for inverter_problem in inverter_problems:
+        logger.error("%s", inverter_problem)
+    if inverter_problems:
+        logger.error("Actions are refused until the inverter configuration is corrected.")
     # Persisted configuration recovers (an unusable curve is cleared and logged) so the
     # service and configuration page stay reachable; /set-config validates strictly first.
     check_inverter_power_curves(params["plant_conf"], logger, recover=True)
@@ -5203,6 +5265,7 @@ async def build_params(
         "soc_target_timestep": None,
         "battery_availability": None,
         "battery_discharge_energy_max": None,
+        "def_availability": None,
         "current_period_peak": None,
         "capacity_charge_window": None,
         "capacity_charge_consideration": None,
@@ -5549,7 +5612,7 @@ def validate_num_batteries(plant_conf: dict) -> int:
         raise invalid
     try:
         value = float(raw)
-    except ValueError:
+    except (ValueError, OverflowError):  # OverflowError: an int too large for a float
         raise invalid from None
     if not value.is_integer() or value < 1:
         raise invalid
@@ -5746,6 +5809,18 @@ class SocFractionError(ValueError):
     """A state of charge was given above 1, where a fraction in [0, 1] is required (#935)."""
 
 
+class InverterConfigError(ValueError):
+    """An inverter setting is unusable, or asks for more than one inverter before that is supported (#1150).
+
+    ``problems`` lists every fault behind the error: just the error itself for a single
+    fault, the individual faults for one that joins several (see _join_inverter_faults).
+    """
+
+    def __init__(self, *args, problems: Sequence[InverterConfigError] | None = None):
+        super().__init__(*args)
+        self.problems: list[InverterConfigError] = list(problems) if problems else [self]
+
+
 def reject_configured_soc_fractions(
     plant_conf: dict, optim_conf: dict, logger: logging.Logger
 ) -> None:
@@ -5838,6 +5913,541 @@ def _warn_if_runtime_scalar_masks_batt_list(
         f"broadcast to all {num_batteries} batteries; pass a list of "
         f"{num_batteries} entries to keep per-battery values"
     )
+
+
+# Per-inverter parameters (#1150). The broadcast ones follow the battery rule: a scalar
+# is the same value for every inverter, an exact-length list is per inverter, and a
+# list of the wrong length is a hard error. The caps are never broadcast, since one
+# number cannot be both a per-unit cap and a site total. Values are the defaults that
+# fill a missing or null slot.
+INVERTER_BROADCAST_PARAMS: dict[str, bool | float] = {
+    "inverter_efficiency_dc_ac": 1.0,
+    "inverter_efficiency_ac_dc": 1.0,
+    "inverter_stress_cost": 0.0,
+    "compute_curtailment": False,
+}
+INVERTER_CAP_PARAMS: tuple[str, ...] = ("inverter_ac_output_max", "inverter_ac_input_max")
+INVERTER_INDEX_PARAMS: tuple[str, ...] = ("battery_inverter_index", "pv_plant_inverter_index")
+
+
+def _is_null_like(value) -> bool:
+    """True for None and for a stringly-typed "null", the two ways an empty value arrives."""
+    return value is None or (isinstance(value, str) and value.strip().lower() == "null")
+
+
+def validate_num_inverters(conf: dict) -> int:
+    """
+    Read and validate conf["number_of_inverters"] (#1150).
+
+    Accepts a positive integer (an integral float or numeric string is coerced);
+    zero, negative, fractional, boolean or non-numeric values raise
+    InverterConfigError. A missing key gives 1, the only shape before this
+    parameter existed. So does a null value (None, "null" or an empty string): the
+    web UI saves an emptied number input as null, and build_params skips null
+    values, which is how a null number_of_batteries becomes the default today.
+
+    :param conf: the plant_conf dict, or the flat configuration of a save request
+    :type conf: dict
+    :return: the validated inverter count (missing or null -> 1)
+    :rtype: int
+    """
+    raw = conf.get("number_of_inverters", 1)
+    if _is_null_like(raw) or (isinstance(raw, str) and not raw.strip()):
+        return 1
+    invalid = InverterConfigError(f"number_of_inverters must be a positive integer, got {raw!r}")
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        raise invalid
+    try:
+        value = float(raw)
+    except (ValueError, OverflowError):  # OverflowError: an int too large for a float
+        raise invalid from None
+    if not value.is_integer() or value < 1:
+        raise invalid
+    return int(value)
+
+
+def reject_multiple_inverters(conf: dict) -> None:
+    """Raise InverterConfigError when number_of_inverters is above 1 (#1150).
+
+    The per-inverter optimizer does not exist yet, so a second inverter would be
+    silently modelled as the first one's twin. The count and every per-inverter
+    setting are validated before this runs, so every fault is reported ahead
+    of this refusal.
+    """
+    num_inverters = validate_num_inverters(conf)
+    if num_inverters > 1:
+        raise InverterConfigError(
+            f"number_of_inverters={num_inverters}: more than one inverter is not supported "
+            "in this version yet. Set number_of_inverters to 1 (the per-inverter optimizer "
+            "is still to come)."
+        )
+
+
+def _inverter_label(name: str, index: int | None) -> str:
+    return name if index is None else f"{name}[{index}]"
+
+
+def _coerce_inverter_number(value, default: float | None, name: str, index: int | None = None):
+    """Coerce one numeric per-inverter element (#1150).
+
+    None or a stringly-typed "null" resolves to ``default``, a numeric string
+    becomes a float, and an int or float passes through. A bool, a nested list,
+    a non-numeric string or a non-finite number raises InverterConfigError naming
+    the parameter and the slot. With no default, a null element is an error.
+    """
+    label = _inverter_label(name, index)
+    if _is_null_like(value):
+        if default is None:
+            raise InverterConfigError(f"{label} has no value; a number is required")
+        return default
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            raise InverterConfigError(f"{label}: non-numeric string element {value!r}") from None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise InverterConfigError(f"{label} must be a number, got {value!r}")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:  # an int too large for a float
+        finite = False
+    if not finite:
+        raise InverterConfigError(f"{label} must be a finite number, got {value!r}")
+    return value
+
+
+def _coerce_inverter_flag(value, name: str, index: int | None = None) -> bool:
+    """Coerce one compute_curtailment element: a bool, None (false) or "true"/"false"."""
+    if isinstance(value, bool):
+        return value
+    if _is_null_like(value):
+        return False
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "false"):
+            return lowered == "true"
+    raise InverterConfigError(
+        f"{_inverter_label(name, index)} must be true or false, got {value!r}"
+    )
+
+
+def _coerce_inverter_element(value, default: bool | float, name: str, index: int | None = None):
+    if isinstance(default, bool):
+        return _coerce_inverter_flag(value, name, index)
+    return _coerce_inverter_number(value, default, name, index)
+
+
+def _inverter_index_is_unset(value) -> bool:
+    """True for an index list that points at nothing: absent, null, empty or all-blank.
+
+    The web UI saves an emptied array input as ``[null]``, so that counts as unset.
+    """
+    if not isinstance(value, list):
+        return _is_null_like(value) or (isinstance(value, str) and not value.strip())
+    return all(
+        _is_null_like(element) or (isinstance(element, str) and not element.strip())
+        for element in value
+    )
+
+
+def _inverter_index_values(conf: dict, key: str, num_inverters: int) -> list[int]:
+    """Read and validate one per-inverter index list for number_of_inverters > 1 (#1150).
+
+    Elements are 0-based inverter numbers: an int, an integral float or a numeric
+    string (a bool is rejected), each in ``[0, num_inverters)``. Returns plain ints
+    and raises InverterConfigError naming the key. A battery index must also have
+    one entry per battery.
+    """
+    value = conf.get(key)
+    owner = "battery" if key == "battery_inverter_index" else "PV plant"
+    if _inverter_index_is_unset(value):
+        raise InverterConfigError(
+            f"{key} is required when number_of_inverters={num_inverters}: list the 0-based "
+            f"inverter number of each {owner}"
+        )
+    if not isinstance(value, list):
+        raise InverterConfigError(
+            f"{key} must be a list with one 0-based inverter number per {owner}, got {value!r}"
+        )
+    numbers: list[int] = []
+    for position, element in enumerate(value):
+        label = f"{key}[{position}]"
+        number = element
+        if isinstance(element, str):
+            try:
+                number = float(element)
+            except ValueError:
+                raise InverterConfigError(
+                    f"{label} must be an inverter number, got {element!r}"
+                ) from None
+        if isinstance(number, bool) or not isinstance(number, int | float):
+            raise InverterConfigError(f"{label} must be an inverter number, got {element!r}")
+        if isinstance(number, float) and not number.is_integer():
+            raise InverterConfigError(f"{label} must be a whole number, got {element!r}")
+        number = int(number)
+        if not 0 <= number < num_inverters:
+            raise InverterConfigError(
+                f"{label}={number} is not an inverter: with number_of_inverters={num_inverters} "
+                f"the numbers run from 0 to {num_inverters - 1}"
+            )
+        numbers.append(number)
+    if key == "battery_inverter_index":
+        try:
+            num_batteries = validate_num_batteries(conf)
+        except ValueError as err:
+            raise InverterConfigError(str(err)) from err
+        if len(numbers) != num_batteries:
+            raise InverterConfigError(
+                f"{key} has {_entry_count(len(numbers))} but number_of_batteries={num_batteries}: "
+                "give the inverter of each battery"
+            )
+    return numbers
+
+
+class _Broadcast(NamedTuple):
+    """A scalar every inverter shares, repeated only once the configuration is usable (#1150)."""
+
+    value: bool | float
+
+
+def _join_inverter_faults(faults: Sequence[InverterConfigError]) -> InverterConfigError:
+    """One error for a list of faults: the fault itself, or all of them joined with ". "."""
+    if len(faults) == 1:
+        return faults[0]
+    return InverterConfigError(". ".join(str(fault) for fault in faults), problems=faults)
+
+
+def check_inverter_params(conf: dict, logger: logging.Logger) -> None:
+    """
+    Validate and normalise the per-inverter parameters of a configuration (#1150).
+
+    Works in place on the plant_conf and on the flat configuration of a save
+    request, and is idempotent: a second call changes nothing. Every parameter is
+    checked, so the user sees all faults at once: each unusable parameter is reported
+    once (its first bad element), and when there are several they come in one
+    InverterConfigError whose message joins them with ". " and whose ``problems``
+    attribute lists them. A configuration with any fault is left exactly as it was.
+    Nothing is refused for being above one inverter here; see reject_multiple_inverters.
+
+    One inverter (the default, and a missing ``number_of_inverters``) is a true
+    no-op for every existing configuration: a scalar is left exactly as written. The
+    web UI saves array inputs as lists, so a one-element list collapses to its
+    element (null and "null" become the default, a numeric string a float), any
+    other length is an error, and an index list that points at nothing (absent,
+    null, empty, all blank) is silent while a set one warns that it is ignored.
+
+    Above one inverter:
+
+    - ``inverter_efficiency_dc_ac``, ``inverter_efficiency_ac_dc``,
+      ``inverter_stress_cost`` and ``compute_curtailment`` take a scalar (broadcast to
+      every inverter) or a list of exactly ``number_of_inverters`` entries; a missing
+      key broadcasts the default.
+    - ``inverter_ac_output_max`` and ``inverter_ac_input_max`` must be a list of
+      exactly ``number_of_inverters`` finite entries of at least 0. A scalar is
+      refused, since it is either the 5000 W default or a one-inverter site total.
+    - ``battery_inverter_index`` (one entry per battery) and ``pv_plant_inverter_index``
+      are required lists of inverter numbers, and every inverter must carry a battery
+      or a PV plant. The PV list length depends on the forecast method and is checked
+      when the forecast is built.
+    - ``inverter_is_hybrid`` is ignored, with a warning, because each inverter's shape
+      comes from what the two index lists attach to it.
+
+    The work done is proportional to the size of the configuration, never to the value of
+    ``number_of_inverters``: a scalar broadcast is written out only once there is no fault,
+    when both caps are lists of exactly that length.
+
+    :param conf: the plant_conf dict, or the flat configuration of a save request
+    :type conf: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :raises InverterConfigError: when a setting is unusable
+    """
+    num_inverters = validate_num_inverters(conf)
+    updates, removals, faults = _inverter_param_faults(conf, num_inverters, logger)
+    if faults:
+        raise _join_inverter_faults(faults)
+    for name, value in updates.items():
+        conf[name] = [value.value] * num_inverters if isinstance(value, _Broadcast) else value
+    for name in removals:
+        del conf[name]
+
+
+def _inverter_param_faults(
+    conf: dict, num_inverters: int, logger: logging.Logger
+) -> tuple[dict, list[str], list[InverterConfigError]]:
+    """Run every per-inverter check and collect what to change and what is wrong (#1150).
+
+    Returns ``(updates, removals, faults)``: the keys to set, the keys to drop, and one
+    fault per unusable parameter in check order (the broadcast parameters, the caps, the
+    index lists, then the coverage of the inverters). ``conf`` is not touched. Checks that
+    depend on another setting are skipped when that setting is unusable, so a bad
+    ``number_of_batteries`` is reported once. ``num_inverters`` is the validated count.
+    """
+    updates: dict = {}
+    removals: list[str] = []
+    faults: list[InverterConfigError] = []
+    if num_inverters == 1:
+        _normalise_single_inverter(conf, updates, removals, faults, logger)
+    else:
+        _normalise_multiple_inverters(conf, num_inverters, updates, faults, logger)
+    return updates, removals, faults
+
+
+def _inverter_wrong_length(name: str, length: int, num_inverters: int) -> InverterConfigError:
+    if num_inverters == 1:
+        advice = "provide a single value or a list of exactly 1 entry"
+    else:
+        advice = (
+            f"provide a scalar (broadcast to every inverter) or a list of exactly "
+            f"{num_inverters} entries"
+        )
+    return InverterConfigError(
+        f"{name} has {_entry_count(length)} but number_of_inverters={num_inverters}; {advice}"
+    )
+
+
+def _entry_count(length: int) -> str:
+    return f"{length} entry" if length == 1 else f"{length} entries"
+
+
+def _normalise_single_inverter(
+    conf: dict,
+    updates: dict,
+    removals: list[str],
+    faults: list[InverterConfigError],
+    logger: logging.Logger,
+) -> None:
+    for name, default in INVERTER_BROADCAST_PARAMS.items():
+        value = conf.get(name)
+        if isinstance(value, list):
+            try:
+                if len(value) != 1:
+                    raise _inverter_wrong_length(name, len(value), 1)
+                updates[name] = _coerce_inverter_element(value[0], default, name, 0)
+            except InverterConfigError as err:
+                faults.append(err)
+    for name in INVERTER_CAP_PARAMS:
+        value = conf.get(name)
+        if isinstance(value, list):
+            try:
+                if len(value) != 1:
+                    raise _inverter_wrong_length(name, len(value), 1)
+                if _is_null_like(value[0]):
+                    # An emptied number input: the cap is simply not set, as for a null scalar.
+                    removals.append(name)
+                else:
+                    updates[name] = _coerce_inverter_number(value[0], None, name, 0)
+            except InverterConfigError as err:
+                faults.append(err)
+    for key in INVERTER_INDEX_PARAMS:
+        if _inverter_index_is_unset(conf.get(key)):
+            # What the web UI saves for an empty array input ([null]) points at nothing:
+            # drop it, as for a null cap, so a one-inverter save gains no new keys.
+            if key in conf:
+                removals.append(key)
+        else:
+            logger.warning(
+                f"{key} is ignored: number_of_inverters is 1, so there is only one "
+                "inverter to point at."
+            )
+
+
+def _broadcast_param_update(
+    conf: dict, name: str, default: bool | float, num_inverters: int
+) -> list | _Broadcast:
+    """The normalised value of one broadcast parameter above one inverter (#1150).
+
+    An exact-length list is coerced element by element. A scalar (or a missing value) is
+    coerced once and returned as a _Broadcast, so no per-inverter list exists until the
+    whole configuration is known to be usable.
+    """
+    value = conf.get(name)
+    if isinstance(value, list):
+        if len(value) != num_inverters:
+            raise _inverter_wrong_length(name, len(value), num_inverters)
+        return [
+            _coerce_inverter_element(element, default, name, position)
+            for position, element in enumerate(value)
+        ]
+    return _Broadcast(_coerce_inverter_element(value, default, name))
+
+
+def _cap_param_update(conf: dict, name: str, num_inverters: int) -> list:
+    """The normalised value of one cap parameter above one inverter (#1150)."""
+    value = conf.get(name)
+    if not isinstance(value, list):
+        found = "it is missing" if value is None else f"got {value!r}"
+        raise InverterConfigError(
+            f"{name} must be a list of {num_inverters} entries, one cap in watts per "
+            f"inverter, when number_of_inverters={num_inverters}, but {found}. A single "
+            "value is not broadcast: it is either the 5000 W default or a one-inverter "
+            "site total, not a per-inverter cap"
+        )
+    if len(value) != num_inverters:
+        raise InverterConfigError(
+            f"{name} has {_entry_count(len(value))} but number_of_inverters={num_inverters}; "
+            f"provide a list of exactly {num_inverters} caps, one per inverter"
+        )
+    caps = [
+        _coerce_inverter_number(element, None, name, position)
+        for position, element in enumerate(value)
+    ]
+    for position, cap in enumerate(caps):
+        if cap < 0:
+            raise InverterConfigError(f"{name}[{position}]={cap} must not be negative")
+    return caps
+
+
+# How many inverters with nothing attached are named before the rest are only counted.
+_MAX_UNATTACHED_LISTED = 10
+
+
+def _inverter_coverage_fault(
+    indexes: dict[str, list[int]], num_inverters: int
+) -> InverterConfigError | None:
+    """The fault for inverters that no battery and no PV plant is attached to (#1150).
+
+    Walks the inverter numbers only until ``_MAX_UNATTACHED_LISTED`` unattached ones are
+    found, so the work and the message stay bounded however large ``number_of_inverters``
+    is. The rest are counted from the total, which holds because every number in the
+    index lists was validated to be in range.
+    """
+    attached = set().union(*indexes.values())
+    unattached: list[int] = []
+    for number in range(num_inverters):
+        if number not in attached:
+            unattached.append(number)
+            if len(unattached) == _MAX_UNATTACHED_LISTED:
+                break
+    if not unattached:
+        return None
+    sentences = [
+        f"inverter {number} has no battery and no PV plant: add {number} to "
+        "battery_inverter_index or pv_plant_inverter_index"
+        for number in unattached
+    ]
+    more = num_inverters - len(attached) - len(unattached)
+    if more:
+        verb = "inverters have" if more > 1 else "inverter has"
+        sentences.append(f"and {more} more {verb} no battery and no PV plant")
+    return InverterConfigError("; ".join(sentences))
+
+
+def _normalise_multiple_inverters(
+    conf: dict,
+    num_inverters: int,
+    updates: dict,
+    faults: list[InverterConfigError],
+    logger: logging.Logger,
+) -> None:
+    for name, default in INVERTER_BROADCAST_PARAMS.items():
+        try:
+            updates[name] = _broadcast_param_update(conf, name, default, num_inverters)
+        except InverterConfigError as err:
+            faults.append(err)
+    for name in INVERTER_CAP_PARAMS:
+        try:
+            updates[name] = _cap_param_update(conf, name, num_inverters)
+        except InverterConfigError as err:
+            faults.append(err)
+    indexes: dict[str, list[int]] = {}
+    for key in INVERTER_INDEX_PARAMS:
+        try:
+            indexes[key] = _inverter_index_values(conf, key, num_inverters)
+        except InverterConfigError as err:
+            faults.append(err)
+    if len(indexes) == len(INVERTER_INDEX_PARAMS):
+        # Only when both lists are usable: otherwise "no battery" is a guess.
+        coverage_fault = _inverter_coverage_fault(indexes, num_inverters)
+        if coverage_fault:
+            faults.append(coverage_fault)
+        updates.update(indexes)
+    if conf.get("inverter_is_hybrid"):
+        logger.warning(
+            "inverter_is_hybrid is ignored above one inverter: each inverter's shape comes "
+            "from what battery_inverter_index and pv_plant_inverter_index attach to it."
+        )
+
+
+# Who calls what (#1150): build_params logs every problem and carries on, so the
+# configuration page and startup stay up; treat_runtimeparams raises through
+# require_usable_inverter_config, which logs first; /set-config collects the messages on
+# a copy with inverter_config_faults. All three share _inverter_config_problems, which
+# runs validate_num_inverters, check_inverter_params and reject_multiple_inverters.
+def _inverter_config_problems(conf: dict, logger: logging.Logger) -> list[InverterConfigError]:
+    """Everything wrong with the inverter settings of a configuration (#1150), in order.
+
+    An unusable count is the only problem reported for it. Otherwise every fault from
+    check_inverter_params comes first, one per unusable parameter, and above one
+    inverter the refusal from reject_multiple_inverters follows them, so the user learns
+    that more than one inverter is not supported yet without first fixing every fault.
+    """
+    try:
+        num_inverters = validate_num_inverters(conf)
+    except InverterConfigError as err:
+        return [err]
+    problems: list[InverterConfigError] = []
+    try:
+        check_inverter_params(conf, logger)
+    except InverterConfigError as err:
+        problems.extend(err.problems)
+    if num_inverters > 1:
+        try:
+            reject_multiple_inverters(conf)
+        except InverterConfigError as err:
+            problems.append(err)
+    return problems
+
+
+def require_usable_inverter_config(conf: dict, logger: logging.Logger) -> None:
+    """Validate the inverter parameters and refuse more than one inverter (#1150).
+
+    Every problem is logged at error level here before the error is raised, the specific
+    faults first and then the refusal of more than one inverter, which is what lets the
+    web server return the action log with its 400, as for SocFractionError. When there
+    are several, the raised error carries all of them, joined with ". ".
+
+    :param conf: the plant_conf dict
+    :type conf: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :raises InverterConfigError: when a setting is unusable or number_of_inverters is above 1
+    """
+    problems = _inverter_config_problems(conf, logger)
+    for problem in problems:
+        logger.error("%s", problem)
+    if len(problems) == 1:
+        # Raised as is: "from problems[0]" would make the error its own cause.
+        raise problems[0]
+    if problems:
+        raise _join_inverter_faults(problems) from problems[0]
+
+
+# Receives the warnings of the trial run in inverter_config_faults: a save request is
+# checked on a copy and its warnings are logged by the build that follows. Configured
+# once here, since getLogger returns the same logger on every call.
+_QUIET_INVERTER_LOGGER = logging.getLogger(f"{__name__}.inverter_config_faults")
+_QUIET_INVERTER_LOGGER.addHandler(logging.NullHandler())
+_QUIET_INVERTER_LOGGER.propagate = False
+
+
+def inverter_config_faults(config: dict) -> list[str]:
+    """
+    Return the reasons a save request's inverter settings would be refused (#1150).
+
+    Used by ``/set-config`` before anything is written. Runs the same checks as
+    require_usable_inverter_config on a copy, so the request is left alone and logs
+    nothing. The list holds every fault, one per unusable parameter (its first bad
+    entry), in check order. Above one inverter the refusal comes last, so the user
+    learns that more than one inverter is not supported yet from the first answer.
+
+    :param config: the submitted flat configuration
+    :type config: dict
+    :return: the messages (empty when the settings are usable)
+    :rtype: list[str]
+    """
+    problems = _inverter_config_problems(copy.deepcopy(config), _QUIET_INVERTER_LOGGER)
+    return [str(problem) for problem in problems]
 
 
 def _coerce_batt_weight_value(
@@ -6118,6 +6728,56 @@ _INVERTER_CURVE_PARAMS = (
 )
 
 
+def _inverter_curve_shape(curve) -> str:
+    """
+    Classify an inverter power curve value by shape (#1150).
+
+    - ``unset``: the explicit empty list, the default that keeps the scalar efficiency.
+    - ``single``: one curve, a list of ``[ac_power_w, efficiency]`` points. Its first
+      point starts with a number.
+    - ``per_inverter``: a list with one entry per inverter, each entry one curve or
+      ``[]``. Its first entry is ``[]`` or starts with a point.
+    - ``malformed``: anything else. The single-curve validator reports why.
+
+    Shape, not length, tells a per-inverter list from a curve: two inverters sharing a
+    two-point curve would otherwise be split into one point each (the same trap as
+    battery_charge_power_derating).
+    """
+    if inverter_power_curve_is_unset(curve):
+        return "unset"
+    if not isinstance(curve, list) or not isinstance(curve[0], list | tuple):
+        return "malformed"
+    first = curve[0]
+    if not first or isinstance(first[0], list | tuple):
+        return "per_inverter"
+    if isinstance(first[0], int | float) and not isinstance(first[0], bool):
+        return "single"
+    return "malformed"
+
+
+def _inverter_curve_shape_fault(
+    parameter_name: str, shape: str, curve, num_inverters: int
+) -> str | None:
+    """The reason a well-formed curve value does not fit number_of_inverters, or None."""
+    if shape == "per_inverter" and len(curve) != num_inverters:
+        if num_inverters == 1:
+            advice = "give one curve, or [] to keep the scalar efficiency"
+        else:
+            advice = f"give a list of exactly {num_inverters} entries, each a curve or []"
+        return (
+            f"{parameter_name} has {len(curve)} {'curve' if len(curve) == 1 else 'curves'} but "
+            f"number_of_inverters={num_inverters}; {advice}"
+        )
+    if shape == "single" and num_inverters > 1:
+        return (
+            f"{parameter_name} is a single curve, which is not broadcast above one inverter: "
+            f"its points are absolute AC watts for one inverter. With "
+            f"number_of_inverters={num_inverters}, give a list of exactly {num_inverters} "
+            f"entries, each a curve or []"
+        )
+    return None
+
+
 def inverter_power_curve_faults(config: dict) -> list[str]:
     """
     Return one message per unusable inverter power curve in an explicit save request (#746).
@@ -6125,18 +6785,43 @@ def inverter_power_curve_faults(config: dict) -> list[str]:
     Used by ``/set-config`` before anything is written, so a curve the user typed is
     rejected with its reason instead of being silently dropped. An absent parameter or
     an explicit empty list is fine (scalar efficiency); any other value is validated.
-    The hybrid flag is not checked, since a valid curve may be kept while
-    ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
+    The value is one curve, or a list with one curve (or ``[]``) per inverter (#1150):
+    the list length must equal ``number_of_inverters`` and a single curve is refused
+    above one inverter. The hybrid flag is not checked, since a valid curve may be kept
+    while ``inverter_is_hybrid`` is off (see :func:`check_inverter_power_curves`).
 
     :param config: the submitted flat configuration
     :type config: dict
     :return: validation messages (empty when every curve is usable)
     :rtype: list[str]
     """
+    try:
+        num_inverters = validate_num_inverters(config)
+    except InverterConfigError:
+        # Reported by inverter_config_faults; each curve is still checked on its own.
+        num_inverters = None
     faults = []
     for parameter_name, direction, *_ in _INVERTER_CURVE_PARAMS:
         curve = config.get(parameter_name, [])
-        if inverter_power_curve_is_unset(curve):
+        shape = _inverter_curve_shape(curve)
+        if shape == "unset":
+            continue
+        if shape == "malformed" or num_inverters is None:
+            fault = None
+        else:
+            fault = _inverter_curve_shape_fault(parameter_name, shape, curve, num_inverters)
+        if fault:
+            faults.append(fault)
+            continue
+        if shape == "per_inverter":
+            for position, entry in enumerate(curve):
+                if inverter_power_curve_is_unset(entry):
+                    continue
+                label = parameter_name if num_inverters == 1 else f"{parameter_name}[{position}]"
+                try:
+                    validate_inverter_power_curve(entry, label, direction)
+                except ValueError as err:
+                    faults.append(str(err))
             continue
         try:
             validate_inverter_power_curve(curve, parameter_name, direction)
@@ -6162,9 +6847,10 @@ def check_inverter_power_curves(
 
     Two contracts, chosen by the caller:
 
-    - strict (default, runtime parameters): a fault raises ValueError, because a
-      request that carries a curve expects it to be used and silently falling back
-      to the scalar would change the physics.
+    - strict (default, runtime parameters): a fault is logged at error level and raises
+      InverterConfigError (a ValueError), because a request that carries a curve expects
+      it to be used and silently falling back to the scalar would change the physics.
+      The web server turns it into a 400 that carries the logged reason.
     - ``recover=True`` (persisted configuration in ``build_params``): the unusable
       curve is cleared and logged at error level, so the scalar efficiency of that
       direction applies and the configuration page and service stay reachable to
@@ -6173,8 +6859,19 @@ def check_inverter_power_curves(
     A valid curve with ``inverter_is_hybrid`` false is dormant: it is kept, ignored
     by the optimizer, and warned about, so switching hybrid off in the UI never
     discards or rejects a stored curve. A curve named in ``supplied`` (set by the
-    current request) with hybrid off raises ValueError instead, as it would be
-    ignored without the requester knowing.
+    current request) with hybrid off is a fault instead, as it would be ignored
+    without the requester knowing.
+
+    The value is one curve, or (#1150) a list with one curve or ``[]`` per inverter,
+    told apart by shape (see :func:`_inverter_curve_shape`). With one inverter a
+    one-entry list unwraps to its curve and everything else behaves as above. Above
+    one inverter a single curve is refused, the list length must equal
+    ``number_of_inverters``, and ``inverter_is_hybrid`` is not consulted: each entry is
+    validated on its own, and the below-the-cap warning compares it with that
+    inverter's cap. An AC-to-DC entry for an inverter that has no battery in
+    ``battery_inverter_index`` gets the hybrid-off treatment (kept and warned about
+    when saved, a fault when supplied). In recover mode a faulty entry becomes
+    ``[]``, and a shape fault clears the whole parameter.
 
     :param plant_conf: the plant_conf dict
     :type plant_conf: dict
@@ -6184,14 +6881,61 @@ def check_inverter_power_curves(
     :type recover: bool
     :param supplied: curve parameter names provided by the current request
     :type supplied: tuple[str, ...] | list[str]
-    :raises ValueError: when a curve is unusable and ``recover`` is False
+    :raises InverterConfigError: when a curve is unusable and ``recover`` is False (a
+        ValueError, so existing handlers still catch it); the curve's reason is logged at
+        error level first, so the action log returned with the 400 names it. A count or
+        index fault is raised without a log line here: treat_runtimeparams has already
+        logged it through require_usable_inverter_config, and logging it again would
+        duplicate the line
     """
+    if recover:
+        _check_inverter_power_curves(plant_conf, logger, recover=True, supplied=supplied)
+        return
+    try:
+        _check_inverter_power_curves(plant_conf, logger, recover=False, supplied=supplied)
+    except InverterConfigError:
+        # A count or index fault: already logged by require_usable_inverter_config.
+        raise
+    except ValueError as err:
+        # What is left are the curve checks' own faults (the curve validator, the shape
+        # and topology faults), which nothing has logged yet.
+        logger.error("%s", err)
+        raise InverterConfigError(str(err)) from err
+
+
+def _check_inverter_power_curves(
+    plant_conf: dict,
+    logger: logging.Logger,
+    *,
+    recover: bool,
+    supplied: tuple[str, ...] | list[str],
+) -> None:
+    """The checks of :func:`check_inverter_power_curves`; strict faults raise plain ValueError."""
+    try:
+        num_inverters = validate_num_inverters(plant_conf)
+    except InverterConfigError:
+        if not recover:
+            raise
+        # A saved configuration with an unusable count is reported by
+        # check_inverter_params; its curves wait for a usable count instead of
+        # being cleared for an unrelated fault.
+        return
+    if num_inverters > 1:
+        _check_per_inverter_curves(
+            plant_conf, logger, num_inverters, recover=recover, supplied=supplied
+        )
+        return
     hybrid = plant_conf.get("inverter_is_hybrid", False)
     for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
         curve = plant_conf.get(parameter_name, [])
-        if inverter_power_curve_is_unset(curve):
-            continue
         try:
+            if _inverter_curve_shape(curve) == "per_inverter":
+                fault = _inverter_curve_shape_fault(parameter_name, "per_inverter", curve, 1)
+                if fault:
+                    raise ValueError(fault)
+                curve = plant_conf[parameter_name] = curve[0]
+            if inverter_power_curve_is_unset(curve):
+                continue
             points = validate_inverter_power_curve(curve, parameter_name, direction)
             if not hybrid and parameter_name in supplied:
                 raise ValueError(
@@ -6203,10 +6947,7 @@ def check_inverter_power_curves(
                 raise
             # At error level: a dropped curve is otherwise indistinguishable from a
             # working one, as the scalar efficiency applies either way.
-            logger.error(
-                f"{err}. Ignoring {parameter_name}: the scalar {scalar_name}="
-                f"{plant_conf.get(scalar_name, 1.0)} applies until the curve is corrected."
-            )
+            logger.error(_curve_recovery_message(err, parameter_name, plant_conf, scalar_name))
             plant_conf[parameter_name] = []
             continue
         if not hybrid:
@@ -6217,11 +6958,134 @@ def check_inverter_power_curves(
             continue
         limit = plant_conf.get(limit_name)
         if isinstance(limit, int | float) and points[-1][0] < limit:
-            logger.warning(
-                f"{parameter_name}: the curve ends at {points[-1][0]} W on the AC side, below "
-                f"{limit_name}={limit} W. The curve's last point is the supported power "
-                f"domain, so the optimizer will not plan beyond it."
+            logger.warning(_curve_below_cap_message(parameter_name, points, limit_name, limit))
+
+
+def _curve_recovery_message(
+    problem, label: str, plant_conf: dict, scalar_name: str, applies_to: str = ""
+) -> str:
+    """The error logged when a saved curve is cleared and the scalar efficiency applies."""
+    return (
+        f"{problem}. Ignoring {label}: the scalar {scalar_name}="
+        f"{plant_conf.get(scalar_name, 1.0)} applies {applies_to}until the curve is corrected."
+    )
+
+
+def _curve_below_cap_message(label: str, points: list, limit_name: str, limit) -> str:
+    """The warning for a curve whose last point is below the AC cap it sits under."""
+    return (
+        f"{label}: the curve ends at {points[-1][0]} W on the AC side, below "
+        f"{limit_name}={limit} W. The curve's last point is the supported power "
+        f"domain, so the optimizer will not plan beyond it."
+    )
+
+
+def _check_inverter_curve_entry(
+    plant_conf: dict,
+    logger: logging.Logger,
+    entry: list,
+    position: int,
+    *,
+    parameter_name: str,
+    direction: str,
+    limit_name: str,
+    scalar_name: str,
+    has_battery: bool | None,
+    recover: bool,
+    supplied: tuple[str, ...] | list[str],
+) -> list:
+    """Validate one entry of a per-inverter curve list and warn about it (#1150).
+
+    Returns the entry to keep: the entry itself, or ``[]`` when it is unusable and
+    ``recover`` is set (an unusable entry raises ValueError otherwise). ``has_battery``
+    is None when the battery index is not usable, so no topology is applied.
+    """
+    if inverter_power_curve_is_unset(entry):
+        return entry
+    label = f"{parameter_name}[{position}]"
+    without_battery = direction == "ac_dc" and has_battery is False
+    try:
+        points = validate_inverter_power_curve(entry, label, direction)
+        if without_battery and parameter_name in supplied:
+            raise ValueError(
+                f"{label}: inverter {position} has no battery in "
+                f"battery_inverter_index, and an AC-to-DC curve models charging a battery"
             )
+    except ValueError as err:
+        if not recover:
+            raise
+        logger.error(
+            _curve_recovery_message(err, label, plant_conf, scalar_name, f"to inverter {position} ")
+        )
+        return []
+    if without_battery:
+        logger.warning(
+            f"{label} is set but inverter {position} has no battery in "
+            f"battery_inverter_index: the curve is kept and ignored until a battery "
+            f"is attached to that inverter."
+        )
+        return entry
+    limits = plant_conf.get(limit_name)
+    limit = limits[position] if isinstance(limits, list) and position < len(limits) else None
+    if isinstance(limit, int | float) and not isinstance(limit, bool) and points[-1][0] < limit:
+        logger.warning(_curve_below_cap_message(label, points, f"{limit_name}[{position}]", limit))
+    return entry
+
+
+def _check_per_inverter_curves(
+    plant_conf: dict,
+    logger: logging.Logger,
+    num_inverters: int,
+    *,
+    recover: bool,
+    supplied: tuple[str, ...] | list[str],
+) -> None:
+    """The number_of_inverters > 1 half of :func:`check_inverter_power_curves` (#1150)."""
+    try:
+        battery_index = _inverter_index_values(plant_conf, "battery_inverter_index", num_inverters)
+    except InverterConfigError:
+        # Topology is only used when the index list is usable; its fault is reported
+        # by check_inverter_params.
+        battery_index = None
+    for parameter_name, direction, limit_name, scalar_name in _INVERTER_CURVE_PARAMS:
+        curve = plant_conf.get(parameter_name, [])
+        shape = _inverter_curve_shape(curve)
+        if shape == "unset":
+            continue
+        if shape == "malformed":
+            try:
+                validate_inverter_power_curve(curve, parameter_name, direction)
+                problem = f"{parameter_name} is neither a curve nor a list of curves: {curve!r}"
+            except ValueError as err:
+                problem = str(err)
+        else:
+            problem = _inverter_curve_shape_fault(parameter_name, shape, curve, num_inverters)
+        if problem:
+            if not recover:
+                raise ValueError(problem)
+            logger.error(
+                _curve_recovery_message(
+                    problem, parameter_name, plant_conf, scalar_name, "to every inverter "
+                )
+            )
+            plant_conf[parameter_name] = []
+            continue
+        plant_conf[parameter_name] = [
+            _check_inverter_curve_entry(
+                plant_conf,
+                logger,
+                entry,
+                position,
+                parameter_name=parameter_name,
+                direction=direction,
+                limit_name=limit_name,
+                scalar_name=scalar_name,
+                has_battery=None if battery_index is None else position in battery_index,
+                recover=recover,
+                supplied=supplied,
+            )
+            for position, entry in enumerate(curve)
+        ]
 
 
 def check_batt_charge_derating(

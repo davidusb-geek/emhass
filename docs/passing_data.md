@@ -303,6 +303,27 @@ Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged i
 
 When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
 
+### Deferrable loads that are not always available (naive-mpc-optim)
+
+A deferrable load can have steps in which it must not run, or may run only at reduced power: a heat pump switched to manual mode or outside its operating range, a boiler whose fuel is not released, a charger that is shared with something else. The optional runtime key `def_availability` (only used by `naive-mpc-optim`) has the same shape and validation as `battery_availability` above:
+
+- One entry per deferrable load, in the order of `nominal_power_of_deferrable_loads` (for a `heat_topology`, the order of its source-to-storage flows, i.e. the index of `P_deferrable<k>`). Each entry is `null` (always available, the default), a number, or a list with one value per timestep. With a single deferrable load a flat list is read as its time series.
+- A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected) that scales the load's nominal power for that timestep: `1` = full power, `0` = the load must not run. A list shorter than the horizon is padded with its last value.
+- `0` is a hard limit: it wins over everything that would otherwise force the load on (`def_current_state` with a single-constant load, the rest of a minimum on-time, `def_current_power`). Such a forced run ends at the first step the load cannot run.
+- A semi-continuous load runs at its ON level or not at all, and a sequence load (a list as its nominal power) runs its fixed power profile, so for both any value below `1` blocks the step. A fraction is a power ceiling for a continuous load (and for a load with a minimum power, as long as the ceiling stays above that minimum).
+- A sequence load is placed in one piece, so the available steps must leave room for one complete placement of its sequence; a sequence that is already running cannot be interrupted. Otherwise the run stops with an error that names the load.
+- The operating requirement (`operating_hours_of_each_deferrable_load` / `operating_timesteps_of_each_deferrable_load`) must still fit into the available steps, as it must fit into a window set with `start_timesteps_of_each_deferrable_load` / `end_timesteps_of_each_deferrable_load`.
+
+The mask is a parameter of the optimization problem, so changing it between runs does not rebuild the problem.
+
+Example: two deferrable loads; the second must not run for the first 4 timesteps and only at half power for the next 2:
+
+```json
+{
+  "def_availability": [null, [0, 0, 0, 0, 0.5, 0.5, 1]]
+}
+```
+
 ### Capping the demand charge at the peak already incurred (naive-mpc-optim and dayahead-optim)
 
 EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)). With `capacity_charge_interval_timesteps = 1` (default), it prices the highest eligible positive-import timestep; with `N > 1`, it prices the highest eligible completed tariff-interval average described below.
@@ -353,14 +374,19 @@ The optional runtime key `capacity_charge_window` masks the peak constraint to t
 
 EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed demand tariff over the caller-defined billing period: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
 
-As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon:
+As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon. The mask is aligned to the first optimization step (this needs `method_ts_round: first` in the EMHASS configuration, which is not a runtime key, and a request that reaches EMHASS within the same step as the render; check the first timestamp of the returned plan against `first_step` before relying on a positional mask), and the local clock time of each step is taken from its instant, so the marked hours stay correct when the horizon contains a daylight saving change (stepping a local datetime with `timedelta(minutes=30 * i)` is wall-clock arithmetic and shifts the mask by an hour after the change):
 
 ```yaml
-      {% set nf = now().replace(minute=(now().minute // 30) * 30, second=0, microsecond=0) %}
+      {%- set t_now = now() -%}
+      {%- set step_s = 1800 -%}
+      {%- set utc_offset_s = t_now.utcoffset().total_seconds() -%}
+      {%- set first_step = ((as_timestamp(t_now) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
       {% set ns = namespace(mask=[]) %}
       {% for i in range(48) %}
-        {% set dt = nf + timedelta(minutes=30 * i) %}
-        {% set ns.mask = ns.mask + [1 if (dt.weekday() < 5 and 16 <= dt.hour < 20) else 0] %}
+        {% set t = first_step + step_s * i %}
+        {% set weekday = t | timestamp_custom("%w", true) | int %}
+        {% set hour = t | timestamp_custom("%H", true) | int %}
+        {% set ns.mask = ns.mask + [1 if (1 <= weekday <= 5 and 16 <= hour < 20) else 0] %}
       {% endfor %}
       "capacity_charge_window": {{ ns.mask | tojson }}
 ```
@@ -416,7 +442,7 @@ At `N = 1` (default), the original per-timestep capacity-charge behavior applies
 
 `capacity_charge_current_interval_history` is `naive-mpc-optim` runtime state. It is a list of the **average positive grid-import power in Watts for each native timestep already elapsed in the currently open tariff interval**, oldest to newest.
 
-For a 5-minute optimizer and a clocked 30-minute tariff interval, a solve starting at 17:20 has four elapsed native intervals (17:00-05, 05-10, 10-15 and 15-20). Example:
+For a 5-minute optimizer and a clocked 30-minute tariff interval, a solve whose first optimization step is 17:20 (the step `method_ts_round` selects, not the time the request arrives) has four elapsed native intervals (17:00-05, 05-10, 10-15 and 15-20). Example:
 
 ```json
 {
@@ -433,7 +459,7 @@ The history length (`0` to `N - 1`) encodes the horizon's phase inside the open 
 average_W = elapsed_energy_Wh / (optimization_time_step_minutes / 60)
 ```
 
-If that 17:20 solve plans 3000 W for 17:20-25 and 1000 W for 17:25-30, the completed 17:00-17:30 interval is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`. In decision-index terms, with history length `m` and interval size `N = capacity_charge_interval_timesteps`, that first completed interval ends at decision index `e0 = N - 1 - m` (here `6 - 1 - 4 = 1`, the second of the two still-planned timesteps above); every subsequent completed interval ends `N` decision timesteps after that.
+If that solve plans 3000 W for 17:20-25 and 1000 W for 17:25-30, the completed 17:00-17:30 interval is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`. In decision-index terms, with history length `m` and interval size `N = capacity_charge_interval_timesteps`, that first completed interval ends at decision index `e0 = N - 1 - m` (here `6 - 1 - 4 = 1`, the second of the two still-planned timesteps above); every subsequent completed interval ends `N` decision timesteps after that.
 
 When `N > 1`, `current_period_peak` must use the **same tariff metric**: the highest eligible **completed clocked tariff-interval average** already incurred in the current billing period. Do not add the currently open interval to `current_period_peak` until that interval completes.
 

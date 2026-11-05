@@ -214,7 +214,7 @@ _This use case may not require any volume mounts (unless you use secrets_emhass.
  you can also pass location, key and url secret parameters via environment variables.
 
 ```bash
-docker build -t emhass/test --build-arg build_version=addon-local .
+docker build -t emhass/test --build-arg BUILD_VERSION=addon-local .
 
 docker run -it -p 5000:5000 --name emhass-test -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/test
 ```
@@ -230,7 +230,7 @@ export LAT="45.83"
 export LON="6.86"
 export ALT="4807.8"
 
-docker build -t emhass/test --build-arg build_version=addon-local .
+docker build -t emhass/test --build-arg BUILD_VERSION=addon-local .
 
 docker run -it -p 5000:5000 --name emhass-test -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE -e LAT -e LON -e ALT emhass/test
 ```

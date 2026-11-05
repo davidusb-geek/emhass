@@ -1,0 +1,25 @@
+# 1. Ignore everything by default
+*
+
+# 2. Explicitly allow ONLY the files required by the Dockerfile
+!.python-version
+!pyproject.toml
+!README.md
+!gunicorn.conf.py
+
+# Allow the EMHASS source tree
+!src/
+!src/emhass/
+!src/emhass/**
+
+# Allow only the two required default data files (ignores other local CSVs/PKLs in data/)
+!data/
+!data/opt_res_latest.csv
+!data/long_train_data.pkl
+
+# 3. Re-exclude Python cache or build artifacts that might exist inside src/emhass/
+**/__pycache__/
+**/*.py[cod]
+**/*.so
+**/*.egg-info/
+**/.DS_Store

@@ -125,7 +125,7 @@ For users that wish to run multiple different optimizations, you can set the run
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_ 
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_
-curl -i -H 'Content-Type:application/json' -X POST -d '{'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 This will tell continual_publish to loop every 5 minutes based on the optimization_time_step passed in MPC. All entities from the output of dayahead "dh_" and MPC "mpc_" will be published every 5 minutes.
 
@@ -144,7 +144,7 @@ You can choose to save one optimization for continual_publish and bypass another
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, Manually publish, excluded from continual_publish loop
-curl -i -H 'Content-Type:application/json' -X POST -d '{'continual_publish':false,'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"continual_publish":false,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 # Publish MPC output
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
@@ -163,7 +163,7 @@ POST action :
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_, save entity
 curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, save entity
-curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true", 'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save":true,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 You can then reference these .json saved entities via their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
 ```bash

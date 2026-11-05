@@ -9,4 +9,4 @@ clean_deploy: deploy
 	docker save -o emhass_${image_ref}.tar ${project}/${repo}:${image_ref}
 
 deploy:
-	docker build -t ${project}/${repo}:${image_ref} --build-arg build_version=standalone  -f Dockerfile .
+	docker build -t ${project}/${repo}:${image_ref} --build-arg BUILD_VERSION=standalone -f Dockerfile .

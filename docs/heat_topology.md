@@ -259,6 +259,15 @@ infeasible. Only the minimums of the first 6 timesteps trigger this; a minimum
 that rises later in the horizon (for example a scheduled legionella cycle) stays
 hard, because the plan can heat ahead for it.
 
+Because that penalty outweighs any energy price, a high `cost_track` price is
+not a way to keep a source off: during recovery the plan buys its heat anyway.
+To block a source in some steps (manual mode, outside its operating range, fuel
+not released), pass the runtime key `def_availability` with `0` for those steps
+at the source's flow index; see
+[passing_data.md](passing_data.md#deferrable-loads-that-are-not-always-available-naive-mpc-optim).
+A hard minimum that only a blocked source could hold makes the run infeasible,
+so keep such minimums for storages that another source can hold.
+
 The same happens to a maximum that free heat alone breaks. Sun through the
 windows (or a warm day) can carry a heated storage past its maximum with every
 source off, and no plan can prevent that. Before each run EMHASS follows the

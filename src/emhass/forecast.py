@@ -76,6 +76,7 @@ from emhass.utils import (
     get_forecast_start,
     replace_file,
     set_df_index_freq,
+    validate_num_inverters,
 )
 
 header_accept = "application/json"
@@ -116,6 +117,8 @@ solcast_backoff_seconds = (1, 2, 4)
 forecast_solar_request_timeout = 12
 forecast_solar_max_attempts = 3
 forecast_solar_backoff_seconds = (1, 2, 4)
+# Readings further apart than this are not interpolated (the free tier's resolution is 1 h).
+forecast_solar_max_source_gap = pd.Timedelta(hours=1)
 
 # Python 3.10 keeps asyncio.TimeoutError distinct from the builtin TimeoutError.
 # aiohttp's total timeout raises the asyncio one, which is not a ClientError,
@@ -919,6 +922,46 @@ class Forecast:
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
+    def _resample_solar_forecast(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Resample one forecast.solar array onto ``self.forecast_dates``.
+
+        The provider's own timestamps are kept while interpolating. Reindexing straight
+        onto the grid drops the off-grid 0 W sunrise/sunset readings that bracket each
+        night, and interpolation then joins the evening and morning daylight values.
+        Readings more than one hour apart (the free tier's resolution) are not bridged:
+        the slots between them are 0 W, and a warning names them when a neighbouring
+        reading is above zero, since that is a hole in the daytime data and not a night.
+        """
+        shared_instant = data.index.duplicated(keep="last")
+        if shared_instant.any():
+            self.logger.warning(
+                "forecast.solar returned %d reading(s) at a local time that does not exist "
+                "(daylight saving change) and shares an instant with another reading; "
+                "keeping the last reading of each instant",
+                int(shared_instant.sum()),
+            )
+        data = data[~shared_instant]
+        combined = data.reindex(data.index.union(self.forecast_dates))
+        source_times = combined.index.to_series().where(combined["yhat"].notna())
+        source_gap = source_times.bfill() - source_times.ffill()
+        bridged = source_gap <= forecast_solar_max_source_gap  # False outside the readings (NaT)
+        long_gap = source_gap > forecast_solar_max_source_gap
+        daytime_hole = long_gap & (
+            (combined["yhat"].ffill() != 0) | (combined["yhat"].bfill() != 0)
+        )
+        hole_slots = daytime_hole.reindex(self.forecast_dates)
+        if hole_slots.any():
+            hole_dates = self.forecast_dates[hole_slots.to_numpy()]
+            self.logger.warning(
+                "forecast.solar has no reading for %d forecast step(s) (first: %s, last: %s) "
+                "in a gap of more than one hour next to a non-zero reading; using 0 W PV for them",
+                len(hole_dates),
+                hole_dates[0],
+                hole_dates[-1],
+            )
+        combined["yhat"] = combined["yhat"].interpolate(method="time").where(bridged, 0.0)
+        return combined.reindex(self.forecast_dates)
+
     async def _get_weather_solar_forecast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from solar.forecast or cache."""
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
@@ -981,14 +1024,7 @@ class Forecast:
                                 ambiguous="infer",
                                 nonexistent="shift_forward",
                             )
-                            data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                            # Gap filling
-                            mask_up = data_tmp.copy(deep=True).ffill().isnull()
-                            mask_down = data_tmp.copy(deep=True).bfill().isnull()
-                            data_tmp.loc[mask_up["yhat"], :] = 0.0
-                            data_tmp.loc[mask_down["yhat"], :] = 0.0
-                            data_tmp.interpolate(inplace=True, limit_area="inside")
-                            data_tmp = data_tmp.fillna(0.0)
+                            data_tmp = self._resample_solar_forecast(data_tmp)
                         array_data = data_tmp
                         break
                     except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as exc:
@@ -1789,15 +1825,25 @@ class Forecast:
         plant. A shorter list, or a single value where a list is expected, raises a
         ValueError naming the parameter and the expected count. A longer list is accepted
         with a warning, since only the first entries are read. Nothing is checked when
-        ``pv_module_model`` is not a list.
+        ``pv_module_model`` is not a list, except for ``pv_plant_inverter_index`` below.
+
+        With ``number_of_inverters`` above 1 (#1150) the entries are matched to inverters by
+        position, so a longer list is an error as well, and ``pv_plant_inverter_index``
+        must be a list with exactly one inverter number per plant (one when
+        ``pv_module_model`` is not a list).
 
         :param keys: The plant_conf keys the calling forecast path reads per plant
         :type keys: tuple[str, ...]
         """
         models = self.plant_conf.get("pv_module_model")
         if not isinstance(models, list):
+            # One plant: the siblings are plain values, but above one inverter the plant
+            # still has to say which inverter it is on.
+            if validate_num_inverters(self.plant_conf) > 1:
+                self._check_pv_plant_inverter_index(1)
             return
         n_plants = len(models)
+        multiple_inverters = validate_num_inverters(self.plant_conf) > 1
         for key in keys:
             value = self.plant_conf.get(key)
             if not isinstance(value, list):
@@ -1810,11 +1856,33 @@ class Forecast:
                     f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
                     "each PV plant needs its own value"
                 )
+            if len(value) > n_plants and multiple_inverters:
+                raise ValueError(
+                    f"{key} has {len(value)} entries but pv_module_model has {n_plants}: "
+                    "with more than one inverter each PV plant needs exactly one value"
+                )
             if len(value) > n_plants:
                 self.logger.warning(
                     f"{key} has {len(value)} entries but pv_module_model has {n_plants}; "
                     "the extra entries are ignored"
                 )
+        if multiple_inverters:
+            self._check_pv_plant_inverter_index(n_plants)
+
+    def _check_pv_plant_inverter_index(self, n_plants: int) -> None:
+        """Require one inverter number per PV plant in ``pv_plant_inverter_index`` (#1150)."""
+        index = self.plant_conf.get("pv_plant_inverter_index")
+        if not isinstance(index, list):
+            raise ValueError(
+                "pv_plant_inverter_index must be a list with one inverter number per PV "
+                f"plant when number_of_inverters is above 1 ({n_plants} plants), got "
+                f"{type(index).__name__}"
+            )
+        if len(index) != n_plants:
+            raise ValueError(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model "
+                f"has {n_plants}: each PV plant needs the number of its inverter"
+            )
 
     def _calculate_pvlib_power(self, df_weather: pd.DataFrame) -> pd.Series:
         """

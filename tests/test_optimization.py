@@ -5437,6 +5437,350 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW",
             )
 
+    def test_thermal_battery_excess_gains_raise_predicted_temperature(self):
+        """Free gains warm an idle building, including inertia and cached forecast updates."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+
+        thermal_config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "thermal_loss": 0.0,
+            "min_temperatures": [0.0] * 48,
+            "max_temperatures": [35.0] * 48,
+            "u_value": 0.35,
+            "envelope_area": 380.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 240.0,
+            "indoor_target_temperature": 21.0,
+            "window_area": 80.0,
+            "shgc": 0.8,
+        }
+
+        for solar, internal in [(True, False), (False, True), (True, True)]:
+            for tau in [0.0, 2.0]:
+                with self.subTest(solar=solar, internal=internal, inertia=tau):
+                    config = dict(thermal_config)
+                    config["internal_gains_factor"] = 0.8 if internal else 0.0
+                    config["thermal_inertia_time_constant"] = tau
+                    self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+                    df = self.prepare_forecast_data()
+                    df["outdoor_temperature_forecast"] = 5.0
+                    df["ghi"] = 0.0
+                    df.loc[df.index[0], "ghi"] = 1000.0 if solar else 0.0
+                    p_load = np.zeros(48)
+                    p_load[0] = 5000.0 if internal else 0.0
+                    opt = self.create_optimization()
+                    load_cost = df[opt.var_load_cost].values
+                    prod_price = df[opt.var_prod_price].values
+                    res = opt.perform_optimization(
+                        df, self.p_pv_forecast.values.ravel(), p_load, load_cost, prod_price
+                    )
+                    self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+                    np.testing.assert_allclose(res["P_deferrable0"], 0.0, atol=1e-6)
+                    temps = res["predicted_temp_heater0"].to_numpy(dtype=float)
+                    demand = res["heating_demand_heater0"].to_numpy(dtype=float)
+                    self.assertGreater(temps[1], temps[0])
+                    # The 16 K difference gives 2.64256 kW transmission/ventilation loss.
+                    gains_kw = (64.0 if solar else 0.0) + (4.0 if internal else 0.0)
+                    expected_rise = (gains_kw - 2.64256) * opt.time_step * 3600 / (2400 * 0.88 * 50)
+                    self.assertAlmostEqual(temps[1], round(20.0 + expected_rise, 2), places=6)
+                    self.assertAlmostEqual(demand[0], 0.0, places=8)
+                    self.assertTrue(np.all(demand >= -1e-8))
+
+                    cached_problem = opt.prob
+                    df["outdoor_temperature_forecast"] = 21.0
+                    df["ghi"] = 0.0
+                    res = opt.perform_optimization(
+                        df, self.p_pv_forecast.values.ravel(), np.zeros(48), load_cost, prod_price
+                    )
+                    self.assertIs(opt.prob, cached_problem)
+                    self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+                    np.testing.assert_allclose(res["predicted_temp_heater0"], 20.0, atol=1e-6)
+                    np.testing.assert_allclose(res["heating_demand_heater0"], 0.0, atol=1e-8)
+                    np.testing.assert_allclose(
+                        opt.param_thermal[0]["thermal_balance"].value, 0.0, atol=1e-8
+                    )
+
+    def test_thermal_battery_excess_gains_bound_relief_heating_mode(self):
+        """Free solar/internal gains raising temperature above max_temperatures receive bound relief."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_battery": {
+                    "start_temperature": 22.0,
+                    "supply_temperature": 35.0,
+                    "volume": 10.0,
+                    "thermal_loss": 0.0,
+                    "min_temperatures": [18.0] * 48,
+                    "max_temperatures": [23.0] * 48,
+                    "u_value": 0.35,
+                    "envelope_area": 380.0,
+                    "ventilation_rate": 0.4,
+                    "heated_volume": 240.0,
+                    "indoor_target_temperature": 21.0,
+                    "window_area": 100.0,
+                    "shgc": 0.8,
+                }
+            }
+        ]
+        df = self.prepare_forecast_data()
+        df["outdoor_temperature_forecast"] = 20.0
+        df["ghi"] = 0.0
+        df.loc[df.index[0:4], "ghi"] = 800.0
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            np.zeros(48),
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+        temp = res["predicted_temp_heater0"].to_numpy(dtype=float)
+        self.assertGreater(temp.max(), 23.0)
+        demand = res["heating_demand_heater0"].to_numpy(dtype=float)
+        self.assertTrue(np.all(demand >= -1e-8))
+
+        # Without excess gains, verify that the configured maximum remains enforced
+        df_no_excess = df.copy()
+        df_no_excess["ghi"] = 0.0
+        res_no_excess = opt.perform_optimization(
+            df_no_excess,
+            self.p_pv_forecast.values.ravel(),
+            np.zeros(48),
+            df_no_excess[opt.var_load_cost].values,
+            df_no_excess[opt.var_prod_price].values,
+        )
+        self.assertEqual(res_no_excess["optim_status"].iloc[0], "Optimal")
+        temp_no_excess = res_no_excess["predicted_temp_heater0"].to_numpy(dtype=float)
+        self.assertLessEqual(temp_no_excess.max(), 23.0 + 1e-6)
+
+    def test_thermal_battery_surface_gain_cached_refresh_and_non_negative_demand(self):
+        """Surface gain applies to thermal balance, reported demand clips >= 0, and cache hit updates."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_battery": {
+                    "start_temperature": 20.0,
+                    "supply_temperature": 35.0,
+                    "volume": 20.0,
+                    "thermal_loss": 0.0,
+                    "min_temperatures": [15.0] * 48,
+                    "max_temperatures": [35.0] * 48,
+                    "specific_heating_demand": 50.0,
+                    "area": 50.0,
+                    "solar_absorption_area": 30.0,
+                    "solar_absorption_factor": 0.8,
+                }
+            }
+        ]
+        df = self.prepare_forecast_data()
+        df["outdoor_temperature_forecast"] = 10.0
+        df["ghi"] = 800.0  # surface solar gain exceeds heating demand
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            np.zeros(48),
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+        demand = res["heating_demand_heater0"].to_numpy(dtype=float)
+        balance = opt.param_thermal[0]["thermal_balance"].value
+        self.assertTrue(np.all(demand >= -1e-8))
+        self.assertTrue(np.any(balance < 0.0))  # Net gain reflected in signed balance
+        np.testing.assert_allclose(demand, np.maximum(balance, 0.0))
+
+        # Cache hit with refreshed GHI re-evaluates surface solar gain
+        cached_problem = opt.prob
+        df2 = df.copy()
+        df2["ghi"] = 0.0  # no sun on second run
+        res2 = opt.perform_optimization(
+            df2,
+            self.p_pv_forecast.values.ravel(),
+            np.zeros(48),
+            df2[opt.var_load_cost].values,
+            df2[opt.var_prod_price].values,
+        )
+        self.assertIs(opt.prob, cached_problem)
+        demand2 = res2["heating_demand_heater0"].to_numpy(dtype=float)
+        balance2 = opt.param_thermal[0]["thermal_balance"].value
+        self.assertTrue(np.all(demand2 > 0.0))
+        np.testing.assert_allclose(demand2, balance2)
+        # Assert first run's predicted temperature reflects surface solar gain compared to no-sun run
+        self.assertGreater(
+            res["predicted_temp_heater0"].iloc[1], res2["predicted_temp_heater0"].iloc[1]
+        )
+
+        # Fallback path coverage (when load is not in param_thermal)
+        # 1. Degree-day model
+        opt_fallback = self.create_optimization()
+        opt_fallback.param_thermal.clear()
+        constraints = []
+        _, heat_demand_deg, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_deg >= -1e-8))
+        raw_deg = utils.calculate_heating_demand(
+            specific_heating_demand=50.0,
+            floor_area=50.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            base_temperature=18.0,
+            annual_reference_hdd=3000.0,
+            optimization_time_step=30,
+        )
+        bal_deg = opt_fallback._apply_surface_solar_gain(
+            self.optim_conf["def_load_config"][0]["thermal_battery"], df, np.array(raw_deg[:48]), 48
+        )
+        self.assertTrue(np.any(bal_deg < 0.0))
+        np.testing.assert_allclose(heat_demand_deg, np.maximum(bal_deg, 0.0))
+
+        # 2. Building physics model
+        hc_physics = dict(self.optim_conf["def_load_config"][0]["thermal_battery"])
+        hc_physics.pop("specific_heating_demand", None)
+        hc_physics.pop("area", None)
+        hc_physics.update(
+            {
+                "u_value": 0.35,
+                "envelope_area": 380.0,
+                "ventilation_rate": 0.4,
+                "heated_volume": 240.0,
+            }
+        )
+        opt_fallback.optim_conf["def_load_config"][0]["thermal_battery"] = hc_physics
+        _, heat_demand_phys, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_phys >= -1e-8))
+        bal_phys = utils.calculate_thermal_balance_physics(
+            u_value=0.35,
+            envelope_area=380.0,
+            ventilation_rate=0.4,
+            heated_volume=240.0,
+            indoor_target_temperature=15.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            optimization_time_step=30,
+            solar_irradiance_forecast=None,
+            window_area=None,
+            shgc=0.6,
+            internal_gains_forecast=None,
+            internal_gains_factor=0.0,
+            sense="heat",
+        )
+        bal_phys = opt_fallback._apply_surface_solar_gain(
+            hc_physics, df, np.array(bal_phys[:48]), 48
+        )
+        self.assertTrue(np.any(bal_phys < 0.0))
+        np.testing.assert_allclose(heat_demand_phys, np.maximum(bal_phys, 0.0))
+
+        # 3. Hot-water draw-off model
+        hc_draw_off = {
+            "start_temperature": 50.0,
+            "supply_temperature": 55.0,
+            "volume": 0.3,
+            "thermal_loss": 0.05,
+            "min_temperatures": [45.0] * 48,
+            "max_temperatures": [65.0] * 48,
+            "draw_off_demand": [0.5] * 48,
+            "solar_absorption_area": 2.0,
+            "solar_absorption_factor": 0.8,
+        }
+        opt_fallback.optim_conf["def_load_config"][0]["thermal_battery"] = hc_draw_off
+        _, heat_demand_hw, _, _ = opt_fallback._add_thermal_battery_constraints(
+            constraints, 0, df, np.zeros(48)
+        )
+        self.assertTrue(np.all(heat_demand_hw >= -1e-8))
+        raw_hw, _ = opt_fallback._resolve_draw_off_demand(hc_draw_off, 0.05, 48)
+        bal_hw = opt_fallback._apply_surface_solar_gain(hc_draw_off, df, raw_hw, 48)
+        self.assertTrue(np.any(bal_hw < 0.0))
+        np.testing.assert_allclose(heat_demand_hw, np.maximum(bal_hw, 0.0))
+
+    def test_shared_tank_excess_gains_passive_warming_and_clipped_demand(self):
+        """Shared tank temperature rises with building-physics excess gains while demand stays >= 0."""
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 40.0, "efficiency": 3.0}}
+        ]
+        tank = {
+            "id": "house",
+            "load_ids": [0],
+            "volume": 7.0,
+            "density": 1000,
+            "heat_capacity": 4.186,
+            "u_value": 0.3,
+            "envelope_area": 300.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 350.0,
+            "indoor_target_temperature": 20.0,
+            "start_temperature": 20.0,
+            "min_temperatures": [19.0] * 48,
+            "max_temperatures": [30.0] * 48,
+            "window_area": 50.0,
+            "shgc": 0.8,
+            "internal_gains_factor": 0.8,
+        }
+        self.optim_conf["shared_thermal_tanks"] = [tank]
+        df = self.prepare_forecast_data()
+        df["outdoor_temperature_forecast"] = 15.0
+        df["ghi"] = 0.0
+        df.loc[df.index[0], "ghi"] = 1000.0
+        p_load = np.zeros(48)
+        p_load[0] = 5000.0
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            p_load,
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+        temps = res["predicted_temp_heater0"].values
+        demand = res["heating_demand_heater0"].values
+        # Ensure the heater was not dispatched at timestep 0, proving pure passive warming
+        np.testing.assert_allclose(res["P_deferrable0"].iloc[0], 0.0, atol=1e-6)
+        self.assertGreater(temps[1], temps[0])
+        self.assertTrue(np.all(demand >= -1e-8))
+        self.assertAlmostEqual(demand[0], 0.0, places=6)
+
     def test_thermal_battery_variable_temperature_bounds(self):
         """Test thermal battery with non-uniform per-timestep temperature bounds.
 
@@ -8336,6 +8680,79 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Check that stress cost is present and positive
         self.assertIn("inv_stress_cost", opt_res_with_stress.columns)
         self.assertGreater(opt_res_with_stress["inv_stress_cost"].sum(), 0)
+
+    def test_inverter_stress_segments_reaches_constraints(self):
+        """inverter_stress_segments sets how many segments the inverter stress curve uses.
+
+        The lookup used to build the key from the "inv" variable prefix
+        (inv_stress_segments), so the configured value was never read and 10
+        segments were always used. Without the key the default stays 10.
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": True,
+                "compute_curtailment": False,
+                "inverter_ac_output_max": 5000,
+                "inverter_ac_input_max": 5000,
+                "inverter_stress_cost": 1.0,
+                "battery_nominal_energy_capacity": 5000,
+                "battery_discharge_power_max": 5000,
+                "battery_charge_power_max": 5000,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+            }
+        )
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.1, 0.2, 0.3, 0.4]
+        df_input[self.fcst.var_load_cost] = [0.5, 0.6, 0.7, 0.8]
+
+        def run(plant_conf):
+            opt = Optimization(
+                self.retrieve_hass_conf,
+                self.optim_conf,
+                plant_conf,
+                self.fcst.var_load_cost,
+                self.fcst.var_prod_price,
+                self.costfun,
+                emhass_conf,
+                logger,
+            )
+            with mock.patch.object(
+                opt, "_add_stress_constraints", wraps=opt._add_stress_constraints
+            ) as spy:
+                opt.perform_optimization(
+                    df_input,
+                    df_input["p_pv_forecast"].values,
+                    df_input["p_load_forecast"].values,
+                    df_input[opt.var_load_cost].values,
+                    df_input[opt.var_prod_price].values,
+                    soc_init=0.5,
+                    soc_final=0.0,
+                )
+            self.assertEqual(opt.optim_status, "Optimal")
+            # Only the inverter has a stress cost here, so this is its one call;
+            # args are (constraints, power_expression, stress_var, seg_params).
+            self.assertEqual(spy.call_count, 1)
+            return len(spy.call_args.args[3])
+
+        conf = copy.deepcopy(self.plant_conf)
+        conf["inverter_stress_segments"] = 3
+        self.assertEqual(run(conf), 3)
+
+        conf.pop("inverter_stress_segments")
+        self.assertEqual(run(conf), 10)
 
     def test_battery_stress_cost_charging_spread(self):
         """Test that battery stress cost encourages spreading charging over time."""

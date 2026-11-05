@@ -22,7 +22,6 @@ import numpy as np
 import orjson
 import pandas as pd
 import time_machine
-from aioresponses import aioresponses
 from aioresponses.core import normalize_url
 
 from emhass import forecast as forecast_module
@@ -32,6 +31,7 @@ from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from tests.aioresponses_compat import aioresponses
 from tests.fixture_clock import fixture_clock
 
 # The root folder
@@ -559,6 +559,91 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with self.assertNoLogs(logger, level="WARNING"):
             p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
         self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_long_pv_plant_list_is_an_error_above_one_inverter(self):
+        """With number_of_inverters above 1 the entries are matched to inverters by position,
+        so the surplus entries that a single inverter ignores become an error (#1150)."""
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1]
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("surface_azimuth has 3 entries but pv_module_model has 2", str(ctx.exception))
+        self.assertIn("exactly one value", str(ctx.exception))
+
+    def test_pvlib_pv_plant_inverter_index_must_have_one_entry_per_plant(self):
+        """The index list is checked against the plant count here, not at config time,
+        because the plant count depends on the forecast method (#1150)."""
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        for index in ([0], [0, 1, 1]):
+            self.plant_conf["pv_plant_inverter_index"] = index
+            with self.assertRaises(ValueError) as ctx:
+                self.fcst._calculate_pvlib_power(df_weather)
+            self.assertIn(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model has 2",
+                str(ctx.exception),
+            )
+        self.plant_conf["pv_plant_inverter_index"] = None
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_plant_inverter_index must be a list", str(ctx.exception))
+
+    def test_pvlib_matching_pv_plant_inverter_index_runs_above_one_inverter(self):
+        self._two_plant_conf()
+        self.plant_conf["number_of_inverters"] = 2
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertNoLogs(logger, level="WARNING"):
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_one_plant_still_needs_its_inverter_index_above_one_inverter(self):
+        """A scalar pv_module_model is one plant: the early return for a non-list model
+        must not skip the index check above one inverter (#1150)."""
+        self.plant_conf["pv_module_model"] = self.plant_conf["pv_module_model"][0]
+        self.plant_conf["pv_inverter_model"] = self.plant_conf["pv_inverter_model"][0]
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 270
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        self.plant_conf["number_of_inverters"] = 2
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        for index in ([0, 1], []):
+            self.plant_conf["pv_plant_inverter_index"] = index
+            with self.assertRaises(ValueError) as ctx:
+                self.fcst._calculate_pvlib_power(df_weather)
+            self.assertIn(
+                f"pv_plant_inverter_index has {len(index)} entries but pv_module_model has 1",
+                str(ctx.exception),
+            )
+        self.plant_conf["pv_plant_inverter_index"] = None
+        with self.assertRaises(ValueError) as ctx:
+            self.fcst._calculate_pvlib_power(df_weather)
+        self.assertIn("pv_plant_inverter_index must be a list", str(ctx.exception))
+        self.plant_conf["pv_plant_inverter_index"] = [1]
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        # One inverter: the index is not read for a single plant either.
+        self.plant_conf["number_of_inverters"] = 1
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1, 1]
+        p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+
+    def test_pvlib_pv_plant_inverter_index_is_not_read_with_one_inverter(self):
+        """At one inverter the index list is ignored: a wrong length is not a forecast error,
+        and a longer sibling list keeps its warning instead of becoming an error."""
+        self._two_plant_conf()
+        self.plant_conf["pv_plant_inverter_index"] = [0, 1, 1, 0]
+        self.plant_conf["surface_azimuth"] = [270, 90, 180]
+        df_weather = self._synthetic_weather(self.fcst.forecast_dates)
+        with self.assertLogs(logger, level="WARNING") as captured:
+            p_pv_forecast = self.fcst._calculate_pvlib_power(df_weather)
+        self.assertEqual(len(p_pv_forecast), len(df_weather))
+        self.assertFalse(any("pv_plant_inverter_index" in line for line in captured.output))
 
     def test_pvlib_single_plant_scalars_unchanged(self):
         """A non-list pv_module_model takes the single-plant path exactly as before."""
@@ -2129,6 +2214,349 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertAlmostEqual(p_pv.loc[ts], 100.0 * (h - 4) + 100.0 * frac, places=6)
         self.assertTrue((p_pv.between_time("00:00", "04:45") == 0.0).all())
         self.assertTrue((p_pv.between_time("20:15", "23:45") == 0.0).all())
+
+    # Issue #1267: a night with no readings at all (here without 0 W sunset/sunrise
+    # brackets) must not be bridged; the missing night is reported as a gap.
+    async def test_solar_forecast_overnight_gap_is_zero(self):
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("30min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("30min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-10-28 16:00", tz=self.fcst.time_zone),
+            periods=48,
+            freq="30min",
+        )
+        self.fcst.params = {
+            "passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": False}
+        }
+        watts = {
+            "2026-10-28 16:00:00": 350,
+            "2026-10-28 16:30:00": 356,
+            "2026-10-28 17:00:00": 163,
+            "2026-10-29 08:00:00": 364,
+            "2026-10-29 08:30:00": 512,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}},
+                repeat=True,
+            )
+            with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        self.assertTrue(
+            any(
+                "no reading for 29 forecast step(s) (first: 2026-10-28 17:30:00+01:00, "
+                "last: 2026-10-29 07:30:00+01:00)" in x
+                for x in logs.output
+            ),
+            logs.output,
+        )
+
+        night = pd.date_range(
+            "2026-10-28 17:30",
+            "2026-10-29 07:30",
+            freq="30min",
+            tz=self.fcst.time_zone,
+        )
+        self.assertTrue((forecast.loc[night, "yhat"] == 0).all(), forecast.loc[night])
+        self.assertEqual(
+            forecast.loc[pd.Timestamp("2026-10-28 17:00", tz=self.fcst.time_zone), "yhat"], 163
+        )
+        self.assertEqual(
+            forecast.loc[pd.Timestamp("2026-10-29 08:00", tz=self.fcst.time_zone), "yhat"], 364
+        )
+
+    async def test_solar_forecast_long_daylight_source_gap_is_not_interpolated(self):
+        """A missing 12:00 source hour must not fabricate 11:30-12:30 solar."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("30min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("30min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-08-22 09:00", tz=self.fcst.time_zone),
+            periods=12,
+            freq="30min",
+        )
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        watts = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 11:00:00": 200,
+            "2026-08-22 13:00:00": 400,
+            "2026-08-22 14:00:00": 500,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}},
+                repeat=True,
+            )
+            with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        # The hole is reported, not hidden: 11:30, 12:00 and 12:30 are set to 0 W.
+        self.assertTrue(
+            any(
+                "no reading for 3 forecast step(s) (first: 2026-08-22 11:30:00+02:00, "
+                "last: 2026-08-22 12:30:00+02:00)" in line
+                for line in logs.output
+            ),
+            logs.output,
+        )
+
+        def ts(hhmm):
+            return pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+
+        self.assertEqual(forecast.loc[ts("10:30"), "yhat"], 150)
+        for hhmm in ("11:30", "12:00", "12:30"):
+            self.assertEqual(forecast.loc[ts(hhmm), "yhat"], 0)
+        self.assertEqual(forecast.loc[ts("13:30"), "yhat"], 450)
+
+    async def test_solar_forecast_warns_only_for_long_gap_next_to_nonzero_reading(self):
+        """A long gap between 0 W readings is a night; next to a non-zero reading it is a hole."""
+        tz = "Europe/Paris"
+        dates = pd.date_range(pd.Timestamp("2026-08-22 06:00", tz=tz), periods=9, freq="30min")
+        for before, after, expect_warning in (
+            (0, 0, False),
+            (0, 300, True),
+            (300, 0, True),
+            (300, 300, True),
+        ):
+            with self.subTest(before=before, after=after):
+                watts = {"2026-08-22 06:00:00": before, "2026-08-22 10:00:00": after}
+                if expect_warning:
+                    with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+                        forecast = await self._fetch_solar_forecast(dates, [watts])
+                    self.assertTrue(any("no reading for 7 forecast" in x for x in logs.output))
+                else:
+                    with self.assertNoLogs(self.fcst.logger, level="WARNING"):
+                        forecast = await self._fetch_solar_forecast(dates, [watts])
+                between = forecast.loc[dates[1] : dates[-2], "yhat"]
+                self.assertTrue((between == 0).all(), between)
+
+    async def test_solar_forecast_non_divisor_grid_preserves_source_samples(self):
+        """45-minute target slots must interpolate from original hourly points."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = pd.Timedelta("45min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("45min")
+        self.fcst.forecast_dates = pd.date_range(
+            start=pd.Timestamp("2026-08-22 05:00", tz=self.fcst.time_zone),
+            periods=5,
+            freq="45min",
+        )
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        # Non-linear profile: losing 06:00 and 07:00 produces the wrong values.
+        watts = {
+            "2026-08-22 05:00:00": 100,
+            "2026-08-22 06:00:00": 200,
+            "2026-08-22 07:00:00": 600,
+            "2026-08-22 08:00:00": 400,
+        }
+        with aioresponses() as mocked:
+            mocked.get(
+                re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                payload={"result": {"watts": watts}},
+                repeat=True,
+            )
+            forecast = await self.fcst.get_weather_forecast(method="solar.forecast")
+        for hhmm, value in (
+            ("05:00", 100),
+            ("05:45", 175),
+            ("06:30", 400),
+            ("07:15", 550),
+            ("08:00", 400),
+        ):
+            ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=self.fcst.time_zone)
+            self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
+
+    async def _fetch_solar_forecast(self, forecast_dates, watts_per_array):
+        """Run get_weather_forecast(solar.forecast) against mocked per-array watts."""
+        self._isolate_weather_cache_dir()
+        self.fcst.freq = forecast_dates.freq
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(forecast_dates.freq)
+        self.fcst.forecast_dates = forecast_dates
+        self.fcst.params = {"passed_data": {"weather_forecast_cache": False}}
+        n_plants = len(watts_per_array)
+        self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+        self.plant_conf["pv_module_model"] = ["module"] * n_plants
+        self.plant_conf["surface_tilt"] = [30] * n_plants
+        self.plant_conf["surface_azimuth"] = [180] * n_plants
+        with aioresponses() as mocked:
+            for watts in watts_per_array:
+                mocked.get(
+                    re.compile(r"https://api\.forecast\.solar/estimate/.*"),
+                    payload={"result": {"watts": watts}},
+                )
+            return await self.fcst.get_weather_forecast(method="solar.forecast")
+
+    async def test_solar_forecast_overnight_gap_is_zero_for_every_time_step(self):
+        """Overnight gap stays zero and source points survive for 5-60 minute grids."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-10-28 16:00:00": 300,
+            "2026-10-28 17:00:00": 100,
+            "2026-10-29 08:00:00": 200,
+            "2026-10-29 09:00:00": 400,
+        }
+        for step in (5, 15, 30, 45, 60):
+            with self.subTest(step=step):
+                dates = pd.date_range(
+                    pd.Timestamp("2026-10-28 16:00", tz=tz),
+                    pd.Timestamp("2026-10-29 09:00", tz=tz),
+                    freq=f"{step}min",
+                )
+                forecast = await self._fetch_solar_forecast(dates, [watts])
+                self.assertEqual(list(forecast.index), list(dates))
+                night = forecast.loc[
+                    pd.Timestamp("2026-10-28 17:00", tz=tz)
+                    + pd.Timedelta(seconds=1) : pd.Timestamp("2026-10-29 08:00", tz=tz)
+                    - pd.Timedelta(seconds=1),
+                    "yhat",
+                ]
+                self.assertTrue((night == 0).all(), night[night != 0])
+                # Interpolation inside the first hour is linear: 300 -> 100.
+                if 30 % step == 0:
+                    ts = pd.Timestamp("2026-10-28 16:30", tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], 200.0)
+                # Source points are preserved on grids that contain them.
+                if 60 % step == 0:
+                    ts = pd.Timestamp("2026-10-29 08:00", tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], 200.0)
+
+    async def test_solar_forecast_gap_handling_across_dst_changes(self):
+        """Hourly daytime data on DST change days: no phantom night PV, no lost samples."""
+        tz = "Europe/Paris"
+        for day, nxt in (("2026-03-28", "2026-03-29"), ("2026-10-24", "2026-10-25")):
+            with self.subTest(day=day):
+                watts = {
+                    f"{day} 15:00:00": 400,
+                    f"{day} 16:00:00": 200,
+                    f"{nxt} 09:00:00": 300,
+                    f"{nxt} 10:00:00": 500,
+                }
+                dates = pd.date_range(
+                    pd.Timestamp(f"{day} 15:00", tz=tz),
+                    pd.Timestamp(f"{nxt} 10:00", tz=tz),
+                    freq="30min",
+                )
+                forecast = await self._fetch_solar_forecast(dates, [watts])
+                self.assertEqual(list(forecast.index), list(dates))
+                for naive, expected in ((f"{day} 15:30", 300), (f"{nxt} 09:30", 400)):
+                    ts = pd.Timestamp(naive, tz=tz)
+                    self.assertAlmostEqual(forecast.loc[ts, "yhat"], expected)
+                mid = forecast.loc[
+                    pd.Timestamp(f"{day} 16:30", tz=tz) : pd.Timestamp(f"{nxt} 08:30", tz=tz),
+                    "yhat",
+                ]
+                self.assertTrue((mid == 0).all(), mid[mid != 0])
+
+    async def test_solar_forecast_source_points_inside_dst_hour_are_kept(self):
+        """Hourly points spanning the spring-forward gap (02:00 does not exist) stay hourly."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-03-29 01:00:00": 100,
+            "2026-03-29 03:00:00": 300,
+            "2026-03-29 04:00:00": 500,
+        }
+        dates = pd.date_range(
+            pd.Timestamp("2026-03-29 01:00", tz=tz),
+            pd.Timestamp("2026-03-29 04:00", tz=tz),
+            freq="30min",
+        )
+        forecast = await self._fetch_solar_forecast(dates, [watts])
+        self.assertEqual(list(forecast.index), list(dates))
+        # 01:00 and 03:00 local are one real hour apart; 03:00 -> 04:00 likewise.
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 01:00", tz=tz), "yhat"], 100)
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
+        self.assertTrue((forecast["yhat"] >= 0).all())
+
+    async def test_solar_forecast_nonexistent_local_time_does_not_duplicate_samples(self):
+        """A source stamp in the skipped spring-forward hour must not break reindexing."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-03-29 01:00:00": 100,
+            "2026-03-29 02:00:00": 250,  # does not exist locally; shifted onto 03:00
+            "2026-03-29 03:00:00": 300,
+            "2026-03-29 04:00:00": 500,
+        }
+        dates = pd.date_range(
+            pd.Timestamp("2026-03-29 01:00", tz=tz),
+            pd.Timestamp("2026-03-29 04:00", tz=tz),
+            freq="30min",
+        )
+        with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+            forecast = await self._fetch_solar_forecast(dates, [watts])
+        self.assertTrue(
+            any(
+                "returned 1 reading(s)" in line and "shares an instant" in line
+                for line in logs.output
+            ),
+            logs.output,
+        )
+        self.assertEqual(list(forecast.index), list(dates))
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:00", tz=tz), "yhat"], 300)
+        self.assertAlmostEqual(forecast.loc[pd.Timestamp("2026-03-29 03:30", tz=tz), "yhat"], 400)
+
+    async def test_solar_forecast_recorded_response_has_no_phantom_night_pv(self):
+        """A recorded response brackets the night with off-grid 0 W sunset/sunrise readings."""
+        test_data_path = emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            payload = cPickle.loads(bz2.decompress(await f.read()))
+        tz = "Europe/Paris"
+        dates = pd.date_range("2022-10-24 17:00", periods=36, freq="30min", tz=tz)
+        with self.assertNoLogs(self.fcst.logger, level="WARNING"):
+            forecast = await self._fetch_solar_forecast(dates, [payload["result"]["watts"]])
+        night = forecast.loc[
+            pd.Timestamp("2022-10-24 19:00", tz=tz) : pd.Timestamp("2022-10-25 08:00", tz=tz),
+            "yhat",
+        ]
+        self.assertTrue((night == 0).all(), night[night != 0])
+        # Sunset (18:39, 0 W) and sunrise (08:05, 0 W) tails are interpolated, not dropped.
+        self.assertAlmostEqual(
+            forecast.loc[pd.Timestamp("2022-10-24 18:30", tz=tz), "yhat"], 186 * 9 / 39, places=3
+        )
+        self.assertAlmostEqual(
+            forecast.loc[pd.Timestamp("2022-10-25 08:30", tz=tz), "yhat"], 783 * 25 / 55, places=3
+        )
+
+    async def test_solar_forecast_multiple_arrays_are_gap_checked_independently(self):
+        """Each array is gap-checked on its own before the arrays are summed."""
+        tz = "Europe/Paris"
+        array_a = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 11:00:00": 200,
+            "2026-08-22 12:00:00": 300,
+            "2026-08-22 13:00:00": 400,
+        }
+        array_b = {"2026-08-22 10:00:00": 10, "2026-08-22 13:00:00": 40}
+        dates = pd.date_range(pd.Timestamp("2026-08-22 10:00", tz=tz), periods=7, freq="30min")
+        with self.assertLogs(self.fcst.logger, level="WARNING") as logs:
+            forecast = await self._fetch_solar_forecast(dates, [array_a, array_b])
+        # Only array B has a hole: its gap is reported, array A's is not.
+        self.assertEqual(sum("no reading for" in x for x in logs.output), 1, logs.output)
+        # Array B has a three-hour source gap, so it contributes only at its own points.
+        expected = {"10:00": 110, "10:30": 150, "11:00": 200, "12:00": 300, "13:00": 440}
+        for hhmm, value in expected.items():
+            ts = pd.Timestamp(f"2026-08-22 {hhmm}", tz=tz)
+            self.assertAlmostEqual(forecast.loc[ts, "yhat"], value)
+
+    async def test_solar_forecast_irregular_source_spacing(self):
+        """Irregular timestamps interpolate by time within an hour, and are zero beyond it."""
+        tz = "Europe/Paris"
+        watts = {
+            "2026-08-22 10:00:00": 100,
+            "2026-08-22 10:20:00": 200,
+            "2026-08-22 11:20:00": 500,
+            "2026-08-22 12:21:00": 800,
+        }
+        dates = pd.date_range(pd.Timestamp("2026-08-22 10:00", tz=tz), periods=6, freq="30min")
+        forecast = await self._fetch_solar_forecast(dates, [watts])
+
+        def at(hhmm):
+            return forecast.loc[pd.Timestamp(f"2026-08-22 {hhmm}", tz=tz), "yhat"]
+
+        self.assertAlmostEqual(at("10:00"), 100)
+        self.assertAlmostEqual(at("10:30"), 200 + (500 - 200) * 10 / 60)
+        self.assertEqual(at("12:00"), 0.0)  # 11:20 -> 12:21 is longer than one hour
+        self.assertEqual(at("12:30"), 0.0)
 
     def _solar_forecast_plants(self, n_plants):
         """Configure n identical forecast.solar arrays and skip the on-disk cache."""
