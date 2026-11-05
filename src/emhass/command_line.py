@@ -2417,8 +2417,9 @@ async def _set_input_data_dict(
             logger,
             emhass_conf,
         )
-    except utils.SocFractionError:
-        # The fraction-vs-percentage error is already logged. Stop before the solver.
+    except (utils.SocFractionError, utils.InverterConfigError):
+        # The fraction-vs-percentage and the inverter configuration errors are already
+        # logged. Stop before the solver.
         return False
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
