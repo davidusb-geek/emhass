@@ -6,14 +6,24 @@ The `dayahead-optim` action normally computes one local calendar-day schedule on
 
 EMHASS implements this with the `naive-mpc-optim` action. This page walks through wiring it up.
 
-Only one live optimization request is accepted at a time by `/action/*` (including
-`naive-mpc-optim`, `dayahead-optim` and `perfect-optim`). An overlapping request
-receives HTTP 429 with `Retry-After: 2` and **is not run**; do not interpret it
-as an updated plan. Callers should skip a tick while a request is outstanding,
-then run a fresh optimization with current inputs rather than queueing an old body.
-The lock is shared across the web server's workers; direct Python/CLI calls are
-not covered by this HTTP guard.
+Only one live optimization request is accepted at a time by `/action/*` (`naive-mpc-optim`,
+`dayahead-optim` and `perfect-optim`). An overlapping request receives HTTP 429 with
+`Retry-After: 2` and **is not run**: the request that arrived first keeps running and the
+newer one is rejected, so a 429 is not an updated plan. Callers should skip a tick while a
+request is outstanding, then send a fresh optimization with current inputs rather than
+queueing an old body. Other actions (for example `publish-data`) and dry runs are not
+affected.
 
+Limits of this guard:
+
+- The lock is a file in the host's temporary directory, keyed by the data folder. It covers
+  all web server workers (`WEB_CONCURRENCY`) of one container or host. Containers that share a
+  data folder but not a temporary directory, direct Python calls and the command line are
+  not covered.
+- `opt_res_latest.csv`, `last_run.json` and `plan_latest.json` are each replaced atomically, so
+  a reader never sees a partial file. They are three files, so a reader can briefly see
+  one from the new run and another from the previous run, and `entity_save` files written
+  for `continual_publish` are likewise per entity.
 
 ## Scenario
 

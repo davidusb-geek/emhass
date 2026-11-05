@@ -12,9 +12,9 @@ import logging
 import threading
 from pathlib import Path
 
-from emhass.atomic_file import atomic_write
-
 import pandas as pd
+
+from emhass.atomic_file import atomic_write
 
 _PLAN_FILENAME = "plan_latest.json"
 _lock = threading.Lock()

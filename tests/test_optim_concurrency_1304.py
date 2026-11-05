@@ -3,6 +3,9 @@
 import asyncio
 import json
 import logging
+import os
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -71,6 +74,42 @@ class TestAtomicResults(unittest.TestCase):
             self.assertEqual(target.read_text(), "complete")
             self.assertFalse(list(Path(directory).glob("*.tmp")))
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_replaced_file_keeps_default_permissions_not_owner_only(self):
+        # tempfile creates 0o600 files; other containers/users read the data folder.
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "opt_res_latest.csv"
+            old_umask = os.umask(0o022)
+            try:
+                atomic_write(target, lambda stream: stream.write("x"))
+            finally:
+                os.umask(old_umask)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_replacing_existing_file_preserves_its_permissions(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "last_run.json"
+            target.write_text("old")
+            target.chmod(0o664)
+            atomic_write(target, lambda stream: stream.write("new"))
+            self.assertEqual(target.read_text(), "new")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o664)
+
+    def test_concurrent_writers_use_distinct_staging_names(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "opt_res_latest.csv"
+            names = []
+
+            def write(stream):
+                names.extend(p.name for p in Path(directory).glob(".*.tmp"))
+                stream.write("x")
+
+            for _ in range(3):
+                atomic_write(target, write)
+            self.assertEqual(len(names), 3)
+            self.assertEqual(len(set(names)), 3)
+
     def test_command_line_results_use_atomic_replace(self):
         with TemporaryDirectory() as directory:
             target = Path(directory) / "opt_res_latest.csv"
@@ -111,9 +150,7 @@ class TestAtomicResults(unittest.TestCase):
                 plan_store._cache = {"generated_at": "stale"}
                 self.assertEqual(last_run.read(data)["timestamp"], ts)
                 self.assertEqual(plan_store.read(data)["generated_at"], ts)
-                self.assertEqual(
-                    json.loads((data / "last_run.json").read_text())["timestamp"], ts
-                )
+                self.assertEqual(json.loads((data / "last_run.json").read_text())["timestamp"], ts)
                 self.assertEqual(
                     json.loads((data / "plan_latest.json").read_text())["generated_at"], ts
                 )
@@ -149,7 +186,8 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
 
         async def build(*args, **kwargs):
             started.set()
-            await release.wait()
+            # Bounded: if the guard were missing, a second request would reach here.
+            await asyncio.wait_for(release.wait(), timeout=5)
             return {
                 "emhass_conf": {"data_path": self.data_path},
                 "params": {"passed_data": {}},
@@ -161,22 +199,28 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
             calls.append(action)
             command_line._write_results(inputs, frame, "opt_res_latest.csv")
             command_line._record_optim_snapshot(
-                inputs, last_run.ACTION_NAIVE_MPC_OPTIM, frame, time.monotonic(), logging.getLogger(__name__)
+                inputs,
+                last_run.ACTION_NAIVE_MPC_OPTIM,
+                frame,
+                time.monotonic(),
+                logging.getLogger(__name__),
             )
             return "OK", 200
 
         with (
-            patch.object(web_server, "_load_params_and_runtime", AsyncMock(return_value=({}, "profit", "{}"))),
+            patch.object(
+                web_server, "_load_params_and_runtime", AsyncMock(return_value=({}, "profit", "{}"))
+            ),
             patch.object(web_server, "set_input_data_dict", side_effect=build),
             patch.object(web_server, "_handle_action_dispatch", side_effect=dispatch),
             patch.object(web_server, "check_file_log", AsyncMock(return_value=False)),
         ):
-            first_task = asyncio.create_task(
-                self.client.post("/action/naive-mpc-optim", json={})
-            )
+            first_task = asyncio.create_task(self.client.post("/action/naive-mpc-optim", json={}))
             try:
                 await asyncio.wait_for(started.wait(), timeout=5)
-                blocked = await self.client.post("/action/dayahead-optim", json={})
+                blocked = await asyncio.wait_for(
+                    self.client.post("/action/dayahead-optim", json={}), timeout=5
+                )
                 self.assertEqual(blocked.status_code, 429)
                 self.assertEqual(blocked.headers["Retry-After"], "2")
                 self.assertIn("not run", await blocked.get_data(as_text=True))
@@ -206,3 +250,73 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
                 setup.assert_not_awaited()
             finally:
                 utils.unlock_file(other_worker)
+
+    async def test_slot_is_released_after_a_failed_request(self):
+        with (
+            patch.object(
+                web_server, "_load_params_and_runtime", AsyncMock(side_effect=RuntimeError("boom"))
+            ),
+        ):
+            first = await self.client.post("/action/naive-mpc-optim", json={})
+            self.assertEqual(first.status_code, 500)
+        with patch.object(
+            web_server, "_load_params_and_runtime", AsyncMock(return_value=(None, "", ""))
+        ):
+            again = await self.client.post("/action/naive-mpc-optim", json={})
+        self.assertNotEqual(again.status_code, 429)
+
+    async def test_unrelated_actions_are_not_blocked_by_a_running_optimization(self):
+        with (
+            patch.object(
+                web_server, "_action_call_unlocked", AsyncMock(return_value="ok")
+            ) as unlocked,
+            open(web_server._live_optim_slot(), "a+") as other_worker,
+        ):
+            self.assertTrue(utils.try_lock_file(other_worker))
+            try:
+                for action in ("publish-data", "forecast-model-fit", "weather-forecast-cache"):
+                    response = await self.client.post(f"/action/{action}", json={})
+                    self.assertEqual(response.status_code, 200, action)
+                self.assertEqual(unlocked.await_count, 3)
+            finally:
+                utils.unlock_file(other_worker)
+
+    async def test_lock_held_by_another_process_rejects_request(self):
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys\n"
+                "from emhass.utils import try_lock_file\n"
+                "f = open(sys.argv[1], 'a+')\n"
+                "assert try_lock_file(f)\n"
+                "print('locked', flush=True)\n"
+                "sys.stdin.readline()",
+                str(web_server._live_optim_slot()),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(Path(web_server.__file__).parents[1])},
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "locked")
+            with patch.object(
+                web_server, "_load_params_and_runtime", new_callable=AsyncMock
+            ) as setup:
+                response = await self.client.post("/action/perfect-optim", json={})
+                self.assertEqual(response.status_code, 429)
+                setup.assert_not_awaited()
+            holder.stdin.write("go\n")
+            holder.stdin.flush()
+            holder.wait(timeout=10)
+            with patch.object(
+                web_server, "_load_params_and_runtime", AsyncMock(return_value=(None, "", ""))
+            ):
+                response = await self.client.post("/action/perfect-optim", json={})
+            self.assertNotEqual(response.status_code, 429)  # released when the holder exited
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+            holder.stdin.close()
+            holder.stdout.close()
