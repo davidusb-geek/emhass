@@ -113,7 +113,10 @@ if (!valid_time || !Number.isFinite(end_step)) {   // an invalid departure_hhmm 
     node.warn("Invalid departure time; the EV is not planned");
     end_step = 0;
 }
-end_step = Math.max(0, end_step);
+// EMHASS reads the clock after this node: in the last 60 s before a step boundary its first step may be the next one,
+// so count one step fewer (the EV can then only stop earlier, never run in the deadline step).
+const margin = (now / 1000) % step_s > step_s - 60 ? 1 : 0;
+end_step = Math.max(0, end_step - margin);
 
 // Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 steps.
 const connected = flow.get("ev_connected") === true;
@@ -133,7 +136,7 @@ if (connected && soc_fresh) {
 }
 if (ev_steps === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
 
-const charging = flow.get("ev_charging") === true;
+const charging = flow.get("ev_charging") === true && ev_steps > 0;   // a pin on an EV with no requirement makes the solve fall back to Optimal (Relaxed)
 const charge_w = Number(flow.get("ev_charge_power_w")) || 0;
 const soc_raw = flow.get("battery_soc_percent");
 const soc_batt = typeof soc_raw === "number" ? soc_raw : NaN;   // null or "" must not become 0 %

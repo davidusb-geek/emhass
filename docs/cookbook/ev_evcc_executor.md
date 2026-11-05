@@ -79,11 +79,13 @@ script:
           # First step with method_ts_round "first": the latest step boundary not after now, on the local clock.
           utc_offset_s: "{{ now().utcoffset().total_seconds() }}"
           first_step: "{{ ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s }}"
+          # EMHASS reads the clock after this script. Within the last 60 s before a step boundary its first step may be the next one, which would put every index one step too late and let the EV run in the deadline step, so count one step fewer.
+          margin: "{{ 1 if (as_timestamp(now()) + utc_offset_s) % step_s > step_s - 60 else 0 }}"
           # Next departure as an instant; elapsed seconds, not wall-clock arithmetic.
           deadline_ts: >
             {{ as_timestamp(today_at(deadline_time) if now() < today_at(deadline_time)
                else today_at(deadline_time) + timedelta(days=1)) }}
-          end_step: "{{ [((deadline_ts - first_step) // step_s) | int, horizon] | min }}"
+          end_step: "{{ [([((deadline_ts - first_step) // step_s) | int, horizon] | min) - margin, 0] | max }}"
           ev_steps: "{{ [(ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int, 0] | max }}"
           ev_plan_steps: "{{ [ev_steps, end_step] | min }}"
           wh_steps: "{{ (states('sensor.wh_remaining_hours') | float(0) * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
@@ -92,6 +94,7 @@ script:
         then:
           - action: persistent_notification.create
             data:
+              notification_id: emhass_ev_deadline
               title: EV cannot reach its target by the deadline
               message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ([ev_remaining_kwh - ev_plan_steps * charger_kw * timestep_min / 60, 0] | max) | round(1) }} kWh will not be delivered."
       - action: rest_command.emhass_mpc
@@ -236,8 +239,9 @@ and the optimizer schedules around it instead of stopping it.
   night with a daylight-saving change gives 12 or 16 steps for a 22:00-05:00 night instead of 14 (checked
   in Home Assistant for Australia/Sydney, including the repeated hour). EMHASS `delta_forecast_daily`
   uses local calendar-day semantics, which is a different thing: `prediction_horizon` here is a fixed
-  step count. The epoch arithmetic assumes `method_ts_round: first` and that Home Assistant and EMHASS
-  read the clock on the same side of a step boundary; check the first timestamp of the returned plan
+  step count. The epoch arithmetic assumes `method_ts_round: first`. The script counts one step fewer
+  in the last 60 s before a step boundary, so a clock reading on the other side of the boundary can only
+  make the EV stop earlier, never later; check the first timestamp of the returned plan
   against `first_step` before acting on it (see
   [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 - **A missed deadline rolls into the next day.** Once 05:00 passes, the Step 2 template sets the
