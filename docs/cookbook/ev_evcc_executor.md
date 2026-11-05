@@ -43,7 +43,7 @@ nominal_power_of_deferrable_loads:
   - 3000          # water heater
   - 750           # pool pump
   - 11000         # EV charger nominal power (e.g. 11 kW = 3-phase 16 A)
-operating_hours_of_each_deferrable_load: [5, 8, 0]   # EV hours overridden at runtime
+operating_hours_of_each_deferrable_load: [5, 8, 0]   # placeholder; runtime timesteps override it
 start_timesteps_of_each_deferrable_load: [0, 0, 0]
 end_timesteps_of_each_deferrable_load:   [48, 48, 0] # EV end overridden at runtime
 ```
@@ -110,16 +110,16 @@ rest_command:
     payload: >
       {
         "prediction_horizon": {{ horizon }},
-        "soc_init": {{ states('sensor.battery_soc') | float(0) / 100 }},
+        "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
         "operating_timesteps_of_each_deferrable_load": [ {{ wh_steps }}, {{ pool_steps }}, {{ ev_steps }} ],
         "end_timesteps_of_each_deferrable_load": [ {{ horizon }}, {{ horizon }}, {{ ev_end }} ]
       }
 ```
 
 The `sensor.*` names here are placeholders. Replace them with the entities your own setup publishes;
-the `evcc_*` names are not guaranteed entity ids from the evcc integration. Every read uses
-`| float(0)` on purpose, so an unavailable sensor degrades to 0 rather than injecting the literal
-string `unknown` and producing invalid JSON. For the EV that means "no energy requested", so the EV is
+the `evcc_*` names are not guaranteed entity ids from the evcc integration. The energy and hours reads use
+`| float(0)` on purpose, so an unavailable sensor degrades to "nothing requested" rather than injecting the literal
+string `unknown` and producing invalid JSON. The battery SOC has no default: an unavailable sensor makes the script fail instead of planning from an invented SOC. For the EV that means "no energy requested", so the EV is
 not planned (never an invented amount). Because the deadline is strict, the example plans at most
 `end_step` steps when the energy cannot be delivered before it (the notification says the target will be
 missed) and plans no EV at all when less than one step remains; it does not move the deadline. If you
@@ -232,7 +232,7 @@ and the optimizer schedules around it instead of stopping it.
   plan.
 - **The Step 2 deadline maths is separate from EMHASS forecast-window DST handling.** The deadline is
   an instant (`as_timestamp`) and the step count is elapsed time from the first optimization step, so a
-  night with a daylight-saving change gives 16 or 20 steps for a 22:00-07:00 night instead of 18 (checked
+  night with a daylight-saving change gives 12 or 16 steps for a 22:00-05:00 night instead of 14 (checked
   in Home Assistant for Australia/Sydney, including the repeated hour). EMHASS `delta_forecast_daily`
   uses local calendar-day semantics, which is a different thing: `prediction_horizon` here is a fixed
   step count. The epoch arithmetic assumes `method_ts_round: first` and that Home Assistant and EMHASS

@@ -39,7 +39,7 @@ optimization_time_step: 30
 method_ts_round: first
 number_of_deferrable_loads: 3
 nominal_power_of_deferrable_loads: [3000, 750, 11000]   # 11 kW = 3 x 16 A
-operating_hours_of_each_deferrable_load: [4, 0, 0]       # EV hours set at runtime
+operating_hours_of_each_deferrable_load: [4, 0, 0]       # placeholder; runtime timesteps override it
 start_timesteps_of_each_deferrable_load: [0, 0, 0]
 end_timesteps_of_each_deferrable_load: [0, 0, 0]         # EV end set at runtime
 treat_deferrable_load_as_semi_cont: [true, true, true]   # EV: on at nominal or off
@@ -108,7 +108,7 @@ const dep = new Date(now); dep.setHours(hh, mm, 0, 0);
 if (dep.getTime() <= now) dep.setDate(dep.getDate() + 1);
 let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s), horizon);
 
-// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 h.
+// Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 steps.
 const connected = flow.get("ev_connected") === true;
 const soc = flow.get("ev_soc_percent");
 const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) < soc_max_age_ms;
@@ -253,7 +253,7 @@ follows the plan again after the next successful tick.
   The epoch floor for the first step assumes a UTC offset that is a whole number of steps
   (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 - **SOC staleness.** `soc_max_age_ms` in Step 3 catches a silent evcc or broken MQTT link
-  (no `vehicleSoc` message for three cycles) and plans 0 h for the EV, the safe failure. It
+  (no `vehicleSoc` message for three cycles) and plans 0 steps for the EV, the safe failure. It
   does not catch a stale vehicle answer: evcc republishes its cached SOC every cycle and
   publishes no observation time, and with the loadpoint default `soc.poll.mode: charging`
   the vehicle API is only queried while charging, so a car that sat unplugged for a day can
