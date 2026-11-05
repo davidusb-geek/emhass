@@ -13,6 +13,7 @@ import logging
 import os
 import pathlib
 import pickle
+import stat
 from unittest.mock import patch
 
 import orjson
@@ -121,12 +122,42 @@ def test_params_pkl_keeps_its_old_content_while_a_save_builds_the_new_one(web):
 
 def test_a_config_that_cannot_be_written_leaves_both_files_as_they_were(web):
     before = web.files()
+    real = getattr(web.ws, "replace_file", utils.replace_file)
+    written = []
+
+    async def replace(path, content):
+        written.append(path)
+        await real(path, content)
+
+    errors = []
+
+    class Errors(logging.Handler):
+        def emit(self, record):
+            errors.append(f"{record.getMessage()} {record.exc_info and record.exc_info[1]}")
+
+    # Listen on the app logger itself: other tests turn its level up and its
+    # propagation off.
+    app_logger, handler = web.ws.app.logger, Errors(logging.ERROR)
+    level = app_logger.level
+    app_logger.setLevel(logging.ERROR)
+    app_logger.addHandler(handler)
     # orjson cannot write an integer outside 64 bits. This used to empty config.json.
     try:
-        status, _ = web.post('{"battery_nominal_energy_capacity": 18446744073709551616}')
-    except TypeError:
-        status = 500
-    assert status != 200  # 500 here; a request-level 400 for it is a separate change
+        with patch.object(web.ws, "replace_file", replace, create=True):
+            try:
+                status, text = web.post('{"battery_nominal_energy_capacity": 18446744073709551616}')
+            except TypeError as e:  # the app may re-raise instead of answering 500
+                status, text = 500, ""
+                errors.append(str(e))
+    finally:
+        app_logger.removeHandler(handler)
+        app_logger.setLevel(level)
+    # A 500 from orjson.dumps here; a request-level 400 for the same body is a separate change.
+    if status == 500:
+        assert any("64-bit" in e for e in errors), errors
+    else:
+        assert status == 400 and "64 bits" in text
+    assert written == []
     assert web.files() == before
 
 
@@ -164,8 +195,10 @@ def test_a_config_json_mounted_on_its_own_is_written_in_place(web):
 
 def test_any_other_write_failure_is_not_retried_in_place(web):
     before = web.files()
+    attempted = []
 
     async def replace(path, content):
+        attempted.append(path)
         raise OSError(errno.ENOSPC, "No space left on device")
 
     with patch.object(web.ws, "replace_file", replace, create=True):
@@ -174,6 +207,7 @@ def test_any_other_write_failure_is_not_retried_in_place(web):
         except OSError:
             status = 500
     assert status == 500
+    assert attempted == [web.conf["config_path"]]  # failed on the first file, not retried
     assert web.files() == before
 
 
@@ -204,3 +238,56 @@ def test_replace_file_does_not_retry_a_permission_error_elsewhere(tmp_path):
     with patch.object(utils.os, "replace", refuse), pytest.raises(PermissionError):
         asyncio.run(utils.replace_file(tmp_path / "params.pkl", b"new"))
     assert len(calls) == 1
+
+
+def _can_symlink(tmp_path) -> bool:
+    try:
+        (tmp_path / "probe-link").symlink_to(tmp_path / "probe-target")
+    except OSError:  # Windows without the symlink privilege
+        return False
+    return True
+
+
+def test_replace_file_writes_through_a_symlink(tmp_path):
+    if not _can_symlink(tmp_path):
+        pytest.skip("this account cannot create symlinks")
+    target = tmp_path / "real-config.json"
+    target.write_text("old")
+    link = tmp_path / "config.json"
+    link.symlink_to(target)
+    asyncio.run(utils.replace_file(link, "new"))
+    assert link.is_symlink()
+    assert target.read_text() == "new"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_replace_file_keeps_the_permissions_of_the_file_it_replaces(tmp_path):
+    target = tmp_path / "config.json"
+    target.write_text("old")
+    target.chmod(0o640)
+    asyncio.run(utils.replace_file(target, "new"))
+    assert target.read_text() == "new"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+@pytest.mark.skipif(os.name == "nt", reason="owner and mode are not copied on Windows")
+@pytest.mark.parametrize("call", ["chown", "chmod"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        PermissionError(errno.EPERM, "Operation not permitted"),  # not root
+        OSError(errno.EINVAL, "Invalid argument"),  # an owner a user namespace cannot map
+        OSError(errno.ENOTSUP, "Operation not supported"),  # some FUSE mounts
+    ],
+    ids=["EPERM", "EINVAL", "ENOTSUP"],
+)
+def test_replace_file_still_replaces_when_owner_or_mode_cannot_be_copied(tmp_path, call, error):
+    target = tmp_path / "config.json"
+    target.write_text("old")
+
+    def refuse(*args):
+        raise error
+
+    with patch.object(utils.os, call, refuse):
+        asyncio.run(utils.replace_file(target, "new"))
+    assert target.read_text() == "new"
