@@ -26,7 +26,7 @@ def test_counts_up_to_the_limit_are_accepted(count):
     assert utils.validate_num_batteries({"number_of_batteries": count}) == int(float(count))
 
 
-@pytest.mark.parametrize("count", [MAX + 1, 10**9, 1e300, 10**400, "1e300"])
+@pytest.mark.parametrize("count", [MAX + 1, 10**9, 1e300, 10**400, "1e300", "1e309"])
 def test_counts_above_the_limit_are_refused(count):
     with pytest.raises(ValueError, match=f"number_of_batteries must be at most {MAX}"):
         utils.validate_num_batteries({"number_of_batteries": count})
@@ -36,6 +36,36 @@ def test_counts_above_the_limit_are_refused(count):
 def test_invalid_counts_keep_their_message(count):
     with pytest.raises(ValueError, match="number_of_batteries must be a positive integer"):
         utils.validate_num_batteries({"number_of_batteries": count})
+
+
+def test_a_count_too_long_to_print_is_still_the_battery_error():
+    # repr() of an int past sys.get_int_max_str_digits() raises a plain ValueError.
+    with pytest.raises(
+        ValueError, match=f"number_of_batteries must be at most {MAX}, got an integer"
+    ):
+        utils.validate_num_batteries({"number_of_batteries": 10**5000})
+
+
+def test_the_cli_path_without_runtime_params_checks_the_count_too():
+    # The CLI merges --params into plant_conf; with no --runtimeparams the runtime
+    # block that checks the count is skipped.
+    conf = {
+        "data_path": TEST_ROOT / "data/",
+        "root_path": TEST_ROOT / "src/emhass/",
+        "defaults_path": TEST_ROOT / "src/emhass/data/config_defaults.json",
+        "associations_path": TEST_ROOT / "src/emhass/data/associations.csv",
+    }
+    defaults = orjson.loads((TEST_ROOT / "src/emhass/data/config_defaults.json").read_bytes())
+    params = asyncio.run(utils.build_params(conf, {}, defaults, logger))
+    params["plant_conf"]["number_of_batteries"] = MAX + 20
+    params_json = orjson.dumps(params, default=str).decode()
+    rh_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+    with pytest.raises(ValueError, match=f"number_of_batteries must be at most {MAX}"):
+        asyncio.run(
+            utils.treat_runtimeparams(
+                None, params_json, rh_conf, optim_conf, plant_conf, "dayahead-optim", logger, conf
+            )
+        )
 
 
 def test_a_huge_count_is_refused_before_any_per_battery_list_is_built():

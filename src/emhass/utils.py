@@ -3562,6 +3562,9 @@ async def treat_runtimeparams(
     # did not already do so.
     if not inverters_checked:
         require_usable_inverter_config(plant_conf, logger)
+    # The same for the battery count: the CLI merges --params into plant_conf, and
+    # without --runtimeparams the runtime block above, which checks it, does not run.
+    require_valid_battery_count(plant_conf, logger)
 
     # Shared tanks from the configuration file get the same check as runtime
     # ones (above), so a bad entry is reported and ignored instead of failing
@@ -5304,9 +5307,13 @@ def validate_num_batteries(plant_conf: dict) -> int:
     :rtype: int
     """
     raw = plant_conf.get("number_of_batteries", 1)
-    shown = repr(raw)
-    if len(shown) > 40:
-        shown = shown[:37] + "..."
+    if isinstance(raw, int) and raw.bit_length() > 128:
+        # repr of an int past sys.get_int_max_str_digits() raises ValueError.
+        shown = f"an integer of {raw.bit_length()} bits"
+    else:
+        shown = repr(raw)
+        if len(shown) > 40:
+            shown = shown[:37] + "..."
     invalid = BatteryConfigError(f"number_of_batteries must be a positive integer, got {shown}")
     if isinstance(raw, bool) or not isinstance(raw, int | float | str):
         raise invalid
@@ -5317,7 +5324,11 @@ def validate_num_batteries(plant_conf: dict) -> int:
             value = float(raw)
         except ValueError:
             raise invalid from None
-        if not value.is_integer():  # also false for inf and nan
+        if value == math.inf:  # a count too large for a float, such as "1e309"
+            raise BatteryConfigError(
+                f"number_of_batteries must be at most {MAX_BATTERIES}, got {shown}"
+            )
+        if not value.is_integer():  # also false for -inf and nan
             raise invalid
     if value < 1:
         raise invalid
