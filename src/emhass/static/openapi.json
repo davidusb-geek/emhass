@@ -319,20 +319,34 @@
             "description": "This is the name of the photovoltaic forecast sensor in Watts from Home Assistant. For example: ‘sensor.p_pv_forecast’."
           },
           "sensor_power_battery": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": "sensor.power_battery"
-            },
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "default": "sensor.power_battery"
+                }
+              }
+            ],
             "title": "Sensor signed battery power",
             "description": "The name of the signed AC-side battery power sensor in Watts from Home Assistant, used by battery self-identification. Either sign convention works (it is auto-detected). Only retrieved when set_use_battery_identification is true. For example: ‘sensor.power_battery’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery."
           },
           "sensor_battery_state_of_charge": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": "sensor.battery_state_of_charge"
-            },
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "default": "sensor.battery_state_of_charge"
+                }
+              }
+            ],
             "title": "Sensor battery state of charge",
             "description": "The name of the measured battery state of charge sensor in percent from Home Assistant, used by battery self-identification. Only retrieved when set_use_battery_identification is true. For example: ‘sensor.battery_state_of_charge’. With number_of_batteries > 1, provide a list of exactly number_of_batteries entity ids, one per battery, index-matched to the battery config lists; a single sensor is never broadcast to more than one battery."
           },
@@ -635,35 +649,75 @@
             "type": "boolean",
             "default": false,
             "title": "Inverter is a hybrid",
-            "description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False)"
+            "description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False). Ignored when number_of_inverters is greater than 1"
           },
           "inverter_ac_output_max": {
-            "type": "integer",
-            "default": 5000,
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 5000
+                }
+              }
+            ],
             "title": "Max hybrid inverter AC output power",
             "x-unit": "W",
-            "description": "Maximum hybrid inverter output power from combined PV and battery discharge. (unit: W)"
+            "description": "Maximum hybrid inverter output power from combined PV and battery discharge, in watts. With number_of_inverters = 1 this is a single value. Above one inverter it must be a list of exactly number_of_inverters entries, one cap per inverter: a single value is refused there, because it would be the 5000 W default or a one-inverter site total rather than a per-inverter cap. (unit: W)"
           },
           "inverter_ac_input_max": {
-            "type": "integer",
-            "default": 5000,
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 5000
+                }
+              }
+            ],
             "title": "Max hybrid inverter AC input power",
             "x-unit": "W",
-            "description": "Maximum hybrid inverter input power from grid to charge battery. (unit: W)"
+            "description": "Maximum hybrid inverter input power from grid to charge battery, in watts. With number_of_inverters = 1 this is a single value. Above one inverter it must be a list of exactly number_of_inverters entries, one cap per inverter: a single value is refused there, because it would be the 5000 W default or a one-inverter site total rather than a per-inverter cap. (unit: W)"
           },
           "inverter_efficiency_dc_ac": {
-            "type": "number",
-            "default": 1.0,
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 1.0
+                }
+              }
+            ],
             "title": "Hybrid inverter efficency DC to AC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency from the DC bus to AC output. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100). With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: fraction)"
           },
           "inverter_efficiency_ac_dc": {
-            "type": "number",
-            "default": 1.0,
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 1.0
+                }
+              }
+            ],
             "title": "Hybrid inverter efficency AC to DC",
             "x-unit": "fraction",
-            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100) (unit: fraction)"
+            "description": "Hybrid inverter efficiency when charging from the AC input to DC bus. Accepts values between 0 and 1. Example: 85% -> 0.85 (percentage/100) (percentage/100). With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: fraction)"
           },
           "inverter_power_curve_dc_ac": {
             "type": "array",
@@ -676,7 +730,7 @@
             },
             "title": "Hybrid inverter DC to AC power curve",
             "x-unit": "W",
-            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+            "description": "Optional power-dependent DC-to-AC (discharge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_dc_ac when set. A list of [ac_output_power_w, efficiency] points: the AC power delivered by the inverter in watts (the side that is commanded and measured) and the DC-to-AC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC input is ac_output / efficiency. Efficiency must be above 0 and at most 1: delivering positive AC output with 0% efficiency would need infinite DC input. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. With number_of_inverters > 1, give a list of exactly number_of_inverters entries, each one curve or [] (the scalar efficiency of that inverter applies); a single curve is not broadcast, because its points are absolute AC watts for one inverter. A curve for the AC-to-DC direction on an inverter with no battery in battery_inverter_index is kept but ignored. Above one inverter, inverter_is_hybrid is not consulted. (unit: W)"
           },
           "inverter_power_curve_ac_dc": {
             "type": "array",
@@ -689,14 +743,24 @@
             },
             "title": "Hybrid inverter AC to DC power curve",
             "x-unit": "W",
-            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. (unit: W)"
+            "description": "Optional power-dependent AC-to-DC (charge) efficiency curve of the hybrid inverter, replacing the scalar inverter_efficiency_ac_dc when set. A list of [ac_input_power_w, efficiency] points: the AC power drawn from the grid in watts (the side that is commanded and measured) and the AC-to-DC efficiency at that power as a fraction (0.97 for 97%, not 97), where the DC output is ac_input * efficiency. Efficiency may be 0 at a positive power (for example [50, 0.0]: 50 W of AC input reaches the DC bus as 0 W, because fixed losses consume it), but must not exceed 1. No point at 0 W is needed (efficiency is undefined there); EMHASS adds the zero-power origin itself. AC power must be positive and strictly increasing, at most 20 points are accepted, and the converted DC-side power must not decrease. EMHASS converts each point to a power-transfer point and interpolates that transfer linearly between points (efficiency itself is not interpolated); the last point is the supported power limit (no extrapolation). Standby consumption is not part of the curve. Used only while inverter_is_hybrid is true (kept but ignored otherwise). Empty (the default) keeps the scalar efficiency; any other malformed value is rejected rather than ignored. This is the inverter conversion stage only; battery_charge_efficiency and battery_discharge_efficiency stay separate battery/SOC-stage efficiencies. An invalid curve is rejected when saved or passed at runtime; an invalid curve already in the stored configuration is cleared with an error in the log. With number_of_inverters > 1, give a list of exactly number_of_inverters entries, each one curve or [] (the scalar efficiency of that inverter applies); a single curve is not broadcast, because its points are absolute AC watts for one inverter. A curve for the AC-to-DC direction on an inverter with no battery in battery_inverter_index is kept but ignored. Above one inverter, inverter_is_hybrid is not consulted. (unit: W)"
           },
           "inverter_stress_cost": {
-            "type": "number",
-            "default": 0.0,
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Hybrid Inverter Stress Cost",
             "x-unit": "¤/kWh",
-            "description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. (unit: ¤/kWh)"
+            "description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries. (unit: ¤/kWh)"
           },
           "inverter_stress_segments": {
             "type": "integer",
@@ -706,10 +770,43 @@
             "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
           },
           "compute_curtailment": {
-            "type": "boolean",
-            "default": false,
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            ],
             "title": "Set compute curtailment (grid export limit)",
-            "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon"
+            "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon. With number_of_inverters > 1, accepts a scalar (broadcast to every inverter) or a list of exactly number_of_inverters entries."
+          },
+          "number_of_inverters": {
+            "type": "integer",
+            "default": 1,
+            "title": "Number of inverters",
+            "x-unit": "count",
+            "description": "Number of physical inverters in the plant (default 1). More than one inverter is not supported yet: a value above 1 is refused with an error. The per-inverter settings are described in docs/config.md. (unit: count)"
+          },
+          "battery_inverter_index": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Inverter of each battery",
+            "description": "Which inverter each battery is attached to: one 0-based inverter number per battery, in the order of the battery lists, so the list needs exactly number_of_batteries entries. Required when number_of_inverters is greater than 1; ignored, with a warning, when it is 1. Two batteries may share an inverter. Every inverter must appear in this list or in pv_plant_inverter_index."
+          },
+          "pv_plant_inverter_index": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Inverter of each PV plant",
+            "description": "Which inverter each PV plant is attached to: one 0-based inverter number per PV plant, in the order of pv_module_model. Required when number_of_inverters is greater than 1; ignored, with a warning, when it is 1. Several plants may share an inverter. Every inverter must appear in this list or in battery_inverter_index."
           },
           "cop_solver": {
             "type": "string",
@@ -1129,41 +1226,69 @@
             "description": "The maximum negative (for charge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration. (unit: fraction)"
           },
           "weight_battery_discharge": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Add cost weight for battery discharge",
             "x-unit": "¤/kWh",
             "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules. (unit: ¤/kWh)"
           },
           "weight_battery_charge": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Add cost weight for battery charge",
             "x-unit": "¤/kWh",
             "description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging. With number_of_batteries > 1, accepts a scalar (broadcast) or a list of one entry per battery, each entry itself a scalar or a time series - see docs/config.md for the nesting rules. (unit: ¤/kWh)"
           },
           "battery_discharge_power_max": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "default": 1000
-            },
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 1000
+                }
+              }
+            ],
             "title": "Max battery discharge power",
             "x-unit": "W",
             "description": "The maximum discharge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: W)"
           },
           "battery_charge_power_max": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "default": 1000
-            },
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 1000
+                }
+              }
+            ],
             "title": "Max battery charge power",
             "x-unit": "W",
             "description": "The maximum charge power in Watts. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: W)"
@@ -1181,74 +1306,126 @@
             "description": "Optional table describing how the BMS steps its charge limit down as the battery fills, so the optimizer stops planning charge the battery cannot deliver. Each row is [soc_threshold, power_max], both given as percentage/100, ascending by state of charge: above soc_threshold the charge power is capped at that much of the maximum charge power. [[0.5, 0.84], [0.7, 0.42], [0.9, 0.23]] means 84% of the maximum above 50% state of charge, 42% above 70% and 23% above 90%; below the first threshold the flat maximum applies. Empty (the default) keeps the single flat maximum. With number_of_batteries > 1, accepts one shared table or a list of exactly number_of_batteries tables. An unusable value is ignored, with an error in the log."
           },
           "battery_discharge_efficiency": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.95
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.95
+                }
+              }
+            ],
             "title": "Battery discharge efficiency",
             "x-unit": "fraction",
             "description": "The discharge efficiency. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_charge_efficiency": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.95
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.95
+                }
+              }
+            ],
             "title": "Battery charge efficiency",
             "x-unit": "fraction",
             "description": "The charge efficiency. (percentage/100). With number_of_batteries > 1, Accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_nominal_energy_capacity": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "default": 5000
-            },
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 5000
+                }
+              }
+            ],
             "title": "Battery total capacity",
             "x-unit": "Wh",
             "description": "The total capacity of the battery stack in Wh. With number_of_batteries > 1, accepts a scalar between 0 and 1 (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: Wh)"
           },
           "battery_minimum_state_of_charge": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.3,
-              "maximum": 1
-            },
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.3,
+                  "maximum": 1
+                }
+              }
+            ],
             "title": "Minimum Battery charge percentage",
             "x-unit": "fraction",
             "description": "Accepts values between 0 and 1. The minimum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_maximum_state_of_charge": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.9,
-              "maximum": 1
-            },
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.9,
+                  "maximum": 1
+                }
+              }
+            ],
             "title": "Maximum Battery charge percentage",
             "x-unit": "fraction",
             "description": "Accepts values between 0 and 1. The maximum allowable battery state of charge. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: fraction)"
           },
           "battery_target_state_of_charge": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.6,
-              "maximum": 1
-            },
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.6,
+                  "maximum": 1
+                }
+              }
+            ],
             "title": "Battery desired percentage after optimization",
             "x-unit": "fraction",
             "description": "Accepts values between 0 and 1. The desired battery state of charge at the end of each optimization cycle. (percentage/100). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries; also the per-battery fallback target used by the soc_init/soc_final runtime chain. (unit: fraction)"
           },
           "battery_stress_cost": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Battery Stress Cost",
             "x-unit": "¤/kWh",
             "description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries. (unit: ¤/kWh)"
@@ -1261,40 +1438,70 @@
             "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
           },
           "battery_soc_deficit_threshold": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.4,
-              "maximum": 1
-            },
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.4,
+                  "maximum": 1
+                }
+              }
+            ],
             "title": "Battery SOC deficit threshold",
             "description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_deficit_cost": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Battery SOC deficit cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_surplus_threshold": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.9,
-              "maximum": 1
-            },
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.9,
+                  "maximum": 1
+                }
+              }
+            ],
             "title": "Battery SOC surplus threshold",
             "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge. With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
           "battery_soc_surplus_cost": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Battery SOC surplus cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled). With number_of_batteries > 1, accepts a scalar (broadcast to every battery) or a list of exactly number_of_batteries entries."
           },
@@ -1306,21 +1513,35 @@
             "description": "If nonzero, a reward for each kWh in the battery at the end of the optimization window exceeding the specified soc_final is given equal to the load_cost at the end of the window multiplied by this factor. If this parameter is left at zero, missing the final SOC is penalized equally in both directions. (unit: fraction)"
           },
           "capacity_cost_per_kw": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "default": 0.0
-            },
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "default": 0.0
+                }
+              }
+            ],
             "title": "Capacity (demand) charge cost",
             "x-unit": "¤/kW",
             "description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. A list of two or more rates prices that many independent capacity/demand components in one optimisation (see docs/cookbook/tariff_demand_charge.md, issue #540). (unit: ¤/kW)"
           },
           "capacity_charge_interval_timesteps": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "default": 1
-            },
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "default": 1
+                }
+              }
+            ],
             "title": "Capacity charge tariff measurement interval",
             "x-unit": "timesteps",
             "description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. If capacity_cost_per_kw is a list of K rates, this is a single shared value or a list of exactly K; any other length is rejected (see docs/cookbook/tariff_demand_charge.md, issue #540). (unit: timesteps)"
