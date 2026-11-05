@@ -26,6 +26,8 @@ optim_conf:
   end_timesteps_of_each_deferrable_load: [0, 0]      # overridden per MPC call
 ```
 
+The default `maximum_power_from_grid` (9000 W) is a hard limit. Below an 11 kW EV charger it makes a night charge without PV or battery infeasible for every load, so set it to your connection limit.
+
 Reference table of the runtime params accepted by `treat_runtimeparams` that this recipe sends per call:
 
 <!-- source: src/emhass/utils.py:933-1015 (treat_runtimeparams) -->

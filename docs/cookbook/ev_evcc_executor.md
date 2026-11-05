@@ -84,7 +84,7 @@ script:
             {{ as_timestamp(today_at(deadline_time) if now() < today_at(deadline_time)
                else today_at(deadline_time) + timedelta(days=1)) }}
           end_step: "{{ [((deadline_ts - first_step) // step_s) | int, horizon] | min }}"
-          ev_steps: "{{ (ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int }}"
+          ev_steps: "{{ [(ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int, 0] | max }}"
           ev_plan_steps: "{{ [ev_steps, end_step] | min }}"
           wh_steps: "{{ (states('sensor.wh_remaining_hours') | float(0) * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
           pool_steps: "{{ (states('sensor.pool_remaining_hours') | float(0) * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
@@ -124,7 +124,7 @@ string `unknown` and producing invalid JSON. The battery SOC has no default: an 
 not planned (never an invented amount). Because the deadline is strict, the example plans at most
 `end_step` steps when the energy cannot be delivered before it (the notification says the target will be
 missed) and plans no EV at all when less than one step remains; it does not move the deadline. If you
-prefer a best-effort charge after the deadline in that case, make that decision explicitly in the template.
+prefer a best-effort charge after the deadline in that case, make that decision explicitly in the template. The default `maximum_power_from_grid` (9000 W) is a hard limit below an 11 kW charger, so a night charge without PV or battery is infeasible for every load until you raise it to your connection limit.
 
 Expected: the MPC response's `P_deferrable2` (the EV) is non-zero only inside the charging window.
 
