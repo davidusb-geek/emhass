@@ -99,11 +99,16 @@ rest_command:
     headers:
       content-type: application/json
     payload: >
-      {% macro time_to_timestep(time) -%}
-        {{ (((today_at(time) - now()) / timedelta(minutes=30)) | round(0, 'ceiling')) % 48 }}
-      {%- endmacro %}
+      {#- The comfort window is decided per step from the local clock time of that step, so it
+          stays correct across a daylight saving change and cannot end before it starts.
+          Step i is the instant first_step + i * 1800 s, the first step being the one that
+          contains now (method_ts_round "first", optimization_time_step 30). -#}
+      {%- set step_s = 1800 -%}
+      {%- set utc_offset_s = now().utcoffset().total_seconds() -%}
+      {%- set first_step = ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
       {%- set horizon = 24 -%}
-      {%- set comfort_intervals = [[time_to_timestep("06:30")|int, time_to_timestep("23:00")|int]] -%}
+      {%- set comfort_start = "06:30" -%}
+      {%- set comfort_end = "23:00" -%}
       {%- set pv_power_forecast = namespace(all=[]) -%}
       {% for i in range(horizon) %}
         {%- set pv_power_forecast.all = pv_power_forecast.all + [ 0.0 ] -%}
@@ -128,13 +133,9 @@ rest_command:
             "min_temperatures": [
               {%- set comma = joiner(", ") -%}
               {%- for i in range(horizon) -%}
-                {%- set timestep = i -%}
+                {%- set clock = (first_step + i * step_s) | timestamp_custom("%H:%M", true) -%}
                 {{ comma() }}
-                {% for interval in comfort_intervals if timestep >= interval[0] and timestep <= interval[1] %}
-                21.0
-                {%- else -%}
-                18.0
-                {%- endfor %}
+                {{ 21.0 if comfort_start <= clock <= comfort_end else 18.0 }}
               {%- endfor %}
             ]}
           }

@@ -374,14 +374,18 @@ The optional runtime key `capacity_charge_window` masks the peak constraint to t
 
 EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed demand tariff over the caller-defined billing period: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
 
-As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon:
+As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon. The mask is aligned to the first optimization step (`method_ts_round` set to `first`), and the local clock time of each step is taken from its instant, so the marked hours stay correct when the horizon contains a daylight saving change (stepping a local datetime with `timedelta(minutes=30 * i)` is wall-clock arithmetic and shifts the mask by an hour after the change):
 
 ```yaml
-      {% set nf = now().replace(minute=(now().minute // 30) * 30, second=0, microsecond=0) %}
+      {%- set step_s = 1800 -%}
+      {%- set utc_offset_s = now().utcoffset().total_seconds() -%}
+      {%- set first_step = ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
       {% set ns = namespace(mask=[]) %}
       {% for i in range(48) %}
-        {% set dt = nf + timedelta(minutes=30 * i) %}
-        {% set ns.mask = ns.mask + [1 if (dt.weekday() < 5 and 16 <= dt.hour < 20) else 0] %}
+        {% set t = first_step + step_s * i %}
+        {% set weekday = t | timestamp_custom("%w", true) | int %}
+        {% set hour = t | timestamp_custom("%H", true) | int %}
+        {% set ns.mask = ns.mask + [1 if (1 <= weekday <= 5 and 16 <= hour < 20) else 0] %}
       {% endfor %}
       "capacity_charge_window": {{ ns.mask | tojson }}
 ```
@@ -437,7 +441,7 @@ At `N = 1` (default), the original per-timestep capacity-charge behavior applies
 
 `capacity_charge_current_interval_history` is `naive-mpc-optim` runtime state. It is a list of the **average positive grid-import power in Watts for each native timestep already elapsed in the currently open tariff interval**, oldest to newest.
 
-For a 5-minute optimizer and a clocked 30-minute tariff interval, a solve starting at 17:20 has four elapsed native intervals (17:00-05, 05-10, 10-15 and 15-20). Example:
+For a 5-minute optimizer and a clocked 30-minute tariff interval, a solve whose first optimization step is 17:20 (the step `method_ts_round` selects, not the time the request arrives) has four elapsed native intervals (17:00-05, 05-10, 10-15 and 15-20). Example:
 
 ```json
 {
@@ -454,7 +458,7 @@ The history length (`0` to `N - 1`) encodes the horizon's phase inside the open 
 average_W = elapsed_energy_Wh / (optimization_time_step_minutes / 60)
 ```
 
-If that 17:20 solve plans 3000 W for 17:20-25 and 1000 W for 17:25-30, the completed 17:00-17:30 interval is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`. In decision-index terms, with history length `m` and interval size `N = capacity_charge_interval_timesteps`, that first completed interval ends at decision index `e0 = N - 1 - m` (here `6 - 1 - 4 = 1`, the second of the two still-planned timesteps above); every subsequent completed interval ends `N` decision timesteps after that.
+If that solve plans 3000 W for 17:20-25 and 1000 W for 17:25-30, the completed 17:00-17:30 interval is `(2000 + 4000 + 0 + 6000 + 3000 + 1000) / 6 = 2666.7 W`. In decision-index terms, with history length `m` and interval size `N = capacity_charge_interval_timesteps`, that first completed interval ends at decision index `e0 = N - 1 - m` (here `6 - 1 - 4 = 1`, the second of the two still-planned timesteps above); every subsequent completed interval ends `N` decision timesteps after that.
 
 When `N > 1`, `current_period_peak` must use the **same tariff metric**: the highest eligible **completed clocked tariff-interval average** already incurred in the current billing period. Do not add the currently open interval to `current_period_peak` until that interval completes.
 
