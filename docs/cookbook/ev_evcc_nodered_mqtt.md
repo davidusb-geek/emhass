@@ -37,6 +37,7 @@ the step that contains the request, which the flow's step maths assumes (see
 ```yaml
 optimization_time_step: 30
 method_ts_round: first
+maximum_power_from_grid: 15000                           # the default 9000 W is a hard limit below the 11 kW charger; use your connection limit
 number_of_deferrable_loads: 3
 nominal_power_of_deferrable_loads: [3000, 750, 11000]   # 11 kW = 3 x 16 A
 operating_hours_of_each_deferrable_load: [4, 0, 0]       # placeholder; runtime timesteps override it
@@ -105,9 +106,10 @@ const first_step = Math.floor(now / 1000 / step_s) * step_s;
 // Next local departure, as an instant. Date handles the local clock, including DST.
 const [hh, mm] = departure_hhmm.split(":").map(Number);
 const dep = new Date(now); dep.setHours(hh, mm, 0, 0);
+const valid_time = Number.isInteger(hh) && Number.isInteger(mm) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60;   // "25:00" would roll over
 if (dep.getTime() <= now) dep.setDate(dep.getDate() + 1);
 let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s), horizon);
-if (!Number.isFinite(end_step)) {                  // an unparsable departure_hhmm must never become "no limit"
+if (!valid_time || !Number.isFinite(end_step)) {   // an invalid departure_hhmm must never become "no limit"
     node.warn("Invalid departure time; the EV is not planned");
     end_step = 0;
 }

@@ -88,7 +88,7 @@ script:
             {{ as_timestamp(today_at(deadline_time) if now() < today_at(deadline_time)
                else today_at(deadline_time) + timedelta(days=1)) }}
           end_step: "{{ [((deadline_ts - first_step) // step_s) | int, horizon] | min }}"
-          ev_steps: "{{ (ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int }}"
+          ev_steps: "{{ [(ev_remaining_kwh / (charger_kw * timestep_min / 60)) | round(6) | round(0, 'ceil') | int, 0] | max }}"
           ev_plan_steps: "{{ [ev_steps, end_step] | min }}"
           # The other loads, in steps too (see the note below on mixing hours and timesteps).
           wh_steps: "{{ (states('sensor.water_heater_remaining_hours') | float * 60 / timestep_min) | round(6) | round(0, 'ceil') | int }}"
