@@ -65,7 +65,7 @@ const map = { connected: "ev_connected", charging: "ev_charging",
 const key = map[msg.topic.split("/").pop()];
 if (!key) return null;
 const raw = String(msg.payload);
-flow.set(key, raw === "true" ? true : raw === "false" ? false : Number(raw));
+flow.set(key, raw === "true" ? true : raw === "false" ? false : (raw.trim() === "" ? NaN : Number(raw)));   // an empty payload is not 0
 if (key === "ev_soc_percent") flow.set("ev_soc_ts", Date.now());
 return null;
 ```
@@ -107,6 +107,11 @@ const [hh, mm] = departure_hhmm.split(":").map(Number);
 const dep = new Date(now); dep.setHours(hh, mm, 0, 0);
 if (dep.getTime() <= now) dep.setDate(dep.getDate() + 1);
 let end_step = Math.min(Math.floor((dep.getTime() / 1000 - first_step) / step_s), horizon);
+if (!Number.isFinite(end_step)) {                  // an unparsable departure_hhmm must never become "no limit"
+    node.warn("Invalid departure time; the EV is not planned");
+    end_step = 0;
+}
+end_step = Math.max(0, end_step);
 
 // Remaining EV energy from evcc's live SOC. Fail closed: no SOC, evcc silent or unplugged -> 0 steps.
 const connected = flow.get("ev_connected") === true;
@@ -128,7 +133,8 @@ if (ev_steps === 0) end_step = horizon;            // 0 would mean "no end limit
 
 const charging = flow.get("ev_charging") === true;
 const charge_w = Number(flow.get("ev_charge_power_w")) || 0;
-const soc_batt = Number(flow.get("battery_soc_percent"));
+const soc_raw = flow.get("battery_soc_percent");
+const soc_batt = typeof soc_raw === "number" ? soc_raw : NaN;   // null or "" must not become 0 %
 const load_cost = flow.get("load_cost_per_step"), prod_price = flow.get("prod_price_per_step");
 const ok = (a) => Array.isArray(a) && a.length >= horizon && a.every((v) => Number.isFinite(v));
 if (!ok(load_cost) || !ok(prod_price) || !Number.isFinite(soc_batt)) {

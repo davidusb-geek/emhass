@@ -31,6 +31,7 @@ The EV slot goes into `nominal_power_of_deferrable_loads`, with corresponding en
 Example (assuming the EV is the third deferrable, after two existing loads):
 
 ```yaml
+method_ts_round: first   # the step indices below count from the first optimization step
 nominal_power_of_deferrable_loads:
   - 3000        # water heater
   - 750         # pool pump
@@ -60,7 +61,7 @@ Two values you compute fresh per MPC call, both counted on the EMHASS time grid 
 
 Three rules keep the deadline strict:
 
-- **Count elapsed time from the first step, not the clock reading.** Subtracting two local datetimes (`deadline - now()`) is wall-clock arithmetic: across a daylight saving change it is an hour off, and it counts from `now()` while the step indices count from the first step. Use `as_timestamp()` and the first step of the grid (set `method_ts_round` to `first`).
+- **Count elapsed time from the first step, not the clock reading.** Subtracting two local datetimes (`deadline - now()`) is wall-clock arithmetic: across a daylight saving change it is an hour off, and it counts from `now()` while the step indices count from the first step. Use `as_timestamp()` and the first step of the grid (set `method_ts_round` to `first`; with the default `nearest`, a call in the second half of a step starts one step later than `first_step` and the EV could run one step after the deadline). Check the first timestamp of the returned plan against `first_step` before acting on it.
 - **`end_timesteps_of_each_deferrable_load = 0` means no limit, not "stop now".** A deadline that is less than one full step after the first step gives `0`, and EMHASS then plans the charge at the cheapest slot of the whole horizon, after the deadline. The script below does not send an EV window in that case, and it does not turn an invalid deadline time into no limit: `today_at()` fails on an invalid time and the script stops.
 - **If the energy does not fit before the deadline, do not stretch the deadline.** `ev_steps > end_step` makes the problem infeasible (EMHASS returns `Infeasible` and publishes no plan, which also stops every other load). The script plans at most `end_step` steps, which charges in every step before the deadline, and raises a notification that the target will be missed. When less than one full step remains (`end_step = 0`) the EV is not planned. The charge is never silently planned after the deadline.
 
@@ -97,7 +98,7 @@ script:
           - action: persistent_notification.create
             data:
               title: EV cannot reach its target by the deadline
-              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ((ev_steps - ev_plan_steps) * charger_kw * timestep_min / 60) | round(1) }} kWh will not be delivered."
+              message: "{{ ev_steps }} steps needed, {{ end_step }} available before the deadline. The EV is planned for {{ ev_plan_steps }} steps; about {{ ([ev_remaining_kwh - ev_plan_steps * charger_kw * timestep_min / 60, 0] | max) | round(1) }} kWh will not be delivered."
       - action: rest_command.emhass_mpc
         data:
           horizon: "{{ horizon }}"
@@ -172,7 +173,7 @@ Read these before designing around the pattern above.
 
 ## Infeasibility
 
-If `(end_step - start_step) × charger_kw × step_hours < required_kwh`, the optimization is infeasible. EMHASS returns `optim_status: "Infeasible"` and publishes nothing, for every load, not only the EV. The Runtime payload script checks this before the call. Remember that `end_timesteps_of_each_deferrable_load = 0` never makes a load infeasible: it removes the limit. See [Good Practices — infeasibility triage](good_practices.md).
+If `(end_step - start_step) × charger_kw × step_hours < required_kwh`, the optimization is infeasible. EMHASS returns `optim_status: "Infeasible"` and publishes nothing, for every load, not only the EV. The Runtime payload script checks the window before the call; it does not check `maximum_power_from_grid` (default 9000 W, below an 11 kW charger), which can also make a night charge without PV or battery infeasible. Remember that `end_timesteps_of_each_deferrable_load = 0` never makes a load infeasible: it removes the limit. See [Good Practices — infeasibility triage](good_practices.md).
 
 ## See also
 
