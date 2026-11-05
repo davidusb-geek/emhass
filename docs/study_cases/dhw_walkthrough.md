@@ -49,7 +49,7 @@ The `thermal_config` for DHW comes from the runtime payload, not the static conf
 
 The cleanest way to assemble the `desired_temperatures` array is to compute it outside Home Assistant (Node-RED Function node, AppDaemon, a small Python script) and inject the finished list into the EMHASS payload. The contract EMHASS sees is just a list of length `prediction_horizon` floats.
 
-Reference Python sketch for the deadline profile (30-minute timesteps, 24 h horizon). Index `k` of the list is the instant `first_step + k x timestep`, in **elapsed time**, where `first_step` is the first optimization step of the request (with `method_ts_round` set to `first`, the step that contains the request time). Both the clock reading and the deadline are therefore converted to UTC instants before they are subtracted: subtracting two local datetimes is a wall-clock difference, which is an hour off across a daylight saving change.
+Reference Python sketch for the deadline profile (30-minute timesteps, 24 h horizon). Index `k` of the list is the instant `first_step + k x timestep`, in **elapsed time**, where `first_step` is the first optimization step of the request (with `method_ts_round: first` in the EMHASS configuration, which is not a runtime key, the step that contains the request time). Both the clock reading and the deadline are therefore converted to UTC instants before they are subtracted: subtracting two local datetimes is a wall-clock difference, which is an hour off across a daylight saving change.
 
 ```python
 from datetime import datetime, timedelta, timezone

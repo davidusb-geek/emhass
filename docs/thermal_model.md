@@ -103,10 +103,13 @@ rest_command:
           stays correct across a daylight saving change. The window must not cross midnight
           (comfort_start earlier than comfort_end on the same day).
           Step i is the instant first_step + i * 1800 s, the first step being the one that
-          contains now (method_ts_round "first", optimization_time_step 30). -#}
+          contains now (optimization_time_step 30). This needs method_ts_round: first in the EMHASS
+          configuration (it is not a runtime key) and a request that reaches EMHASS within the same
+          step as this render; check the first timestamp of the returned plan against first_step. -#}
+      {%- set t_now = now() -%}
       {%- set step_s = 1800 -%}
-      {%- set utc_offset_s = now().utcoffset().total_seconds() -%}
-      {%- set first_step = ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
+      {%- set utc_offset_s = t_now.utcoffset().total_seconds() -%}
+      {%- set first_step = ((as_timestamp(t_now) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
       {%- set horizon = 24 -%}
       {%- set comfort_start = "06:30" -%}
       {%- set comfort_end = "23:00" -%}

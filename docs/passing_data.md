@@ -374,12 +374,13 @@ The optional runtime key `capacity_charge_window` masks the peak constraint to t
 
 EMHASS stays tariff-agnostic: the **caller owns the calendar** (business days, public holidays, seasons) and simply sends the right mask each cycle. Combined with `current_period_peak` this models a windowed demand tariff over the caller-defined billing period: the window mask says *where* a peak can be set, the floor says *how high* the bar already is.
 
-As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon. The mask is aligned to the first optimization step (`method_ts_round` set to `first`), and the local clock time of each step is taken from its instant, so the marked hours stay correct when the horizon contains a daylight saving change (stepping a local datetime with `timedelta(minutes=30 * i)` is wall-clock arithmetic and shifts the mask by an hour after the change):
+As an HA `rest_command` template fragment, marking 16:00-20:00 on weekdays for a 48-step / 30-minute horizon. The mask is aligned to the first optimization step (this needs `method_ts_round: first` in the EMHASS configuration, which is not a runtime key, and a request that reaches EMHASS within the same step as the render; check the first timestamp of the returned plan against `first_step` before relying on a positional mask), and the local clock time of each step is taken from its instant, so the marked hours stay correct when the horizon contains a daylight saving change (stepping a local datetime with `timedelta(minutes=30 * i)` is wall-clock arithmetic and shifts the mask by an hour after the change):
 
 ```yaml
+      {%- set t_now = now() -%}
       {%- set step_s = 1800 -%}
-      {%- set utc_offset_s = now().utcoffset().total_seconds() -%}
-      {%- set first_step = ((as_timestamp(now()) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
+      {%- set utc_offset_s = t_now.utcoffset().total_seconds() -%}
+      {%- set first_step = ((as_timestamp(t_now) + utc_offset_s) // step_s) * step_s - utc_offset_s -%}
       {% set ns = namespace(mask=[]) %}
       {% for i in range(48) %}
         {% set t = first_step + step_s * i %}
