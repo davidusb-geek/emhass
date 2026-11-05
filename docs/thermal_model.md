@@ -124,7 +124,7 @@ rest_command:
             "thermal_inertia": 1.0,
             "start_temperature": {{ states('sensor.my_room_temperature') }},
             "sense": "heat",
-            "max_temperatures": [24.0] * {{ horizon }}, 
+            "max_temperatures": {{ ([24.0] * horizon) | tojson }}, 
             "min_temperatures": [
               {%- set comma = joiner(", ") -%}
               {%- for i in range(horizon) -%}
