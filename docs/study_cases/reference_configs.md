@@ -161,7 +161,7 @@ end_timesteps_of_each_deferrable_load:
   - 0           # runtime override (per EV departure)
 ```
 
-Pass per-EV `def_total_hours[1]`, `def_total_hours[2]`, `end_timesteps[1]`, `end_timesteps[2]` from each EV's source at runtime. See [EV walkthrough](ev.md) for the template pattern; replicate per EV.
+Pass per-EV `operating_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load` entries (all loads in timesteps, not mixed with hours) from each EV's source at runtime. See [EV walkthrough](ev.md) for the template pattern; replicate per EV.
 
 ## See also
 
