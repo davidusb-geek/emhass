@@ -829,7 +829,7 @@ async def _retrieve_and_fit_pv_model(
     # here (no history, entity missing) falls back to unfiltered training.
     curtailment_series = None
     plant_conf = getattr(fcst, "plant_conf", None) or {}
-    if plant_conf.get("compute_curtailment", False) and not get_data_from_file:
+    if utils.any_inverter_curtails(plant_conf) and not get_data_from_file:
         params = getattr(fcst, "params", None) or {}
         curtailment_entity = (
             params.get("passed_data", {})
@@ -3950,6 +3950,16 @@ def _get_closest_index(retrieve_hass_conf: dict, index: pd.DatetimeIndex) -> int
     return idx_closest
 
 
+def _plan_column_present(ctx: PublishContext, opt_res_latest: pd.DataFrame, column: str) -> bool:
+    """Whether the saved plan has the column, with a warning when it does not (#1150)."""
+    if column in opt_res_latest.columns:
+        return True
+    ctx.logger.warning(
+        f"{column} is not in the saved plan, so it is not published; run a new optimization"
+    )
+    return False
+
+
 async def _publish_standard_forecasts(
     ctx: PublishContext, opt_res_latest: pd.DataFrame
 ) -> list[str]:
@@ -3982,8 +3992,24 @@ async def _publish_standard_forecasts(
             **ctx.common_kwargs,
         )
         cols.append("P_PV")
+    try:
+        num_inverters = utils.validate_num_inverters(ctx.plant_conf)
+    except utils.InverterConfigError:
+        # The count was validated when the configuration was loaded; an action never
+        # gets here with a bad one. Fall back to the one-inverter path.
+        num_inverters = 1
+    if num_inverters > 1:
+        # Site totals only (#1150); per-inverter sensors come later. inverter_is_hybrid
+        # is not read above one inverter. A column missing from a stale plan is skipped.
+        publish_curtailment = utils.any_inverter_curtails(ctx.plant_conf) and _plan_column_present(
+            ctx, opt_res_latest, "P_PV_curtailment"
+        )
+        publish_hybrid = _plan_column_present(ctx, opt_res_latest, "P_hybrid_inverter")
+    else:
+        publish_curtailment = ctx.plant_conf["compute_curtailment"]
+        publish_hybrid = ctx.plant_conf["inverter_is_hybrid"]
     # Curtailment
-    if ctx.plant_conf["compute_curtailment"]:
+    if publish_curtailment:
         custom_curt = ctx.params["passed_data"]["custom_pv_curtailment_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_PV_curtailment"],
@@ -3997,7 +4023,7 @@ async def _publish_standard_forecasts(
         )
         cols.append("P_PV_curtailment")
     # Hybrid Inverter
-    if ctx.plant_conf["inverter_is_hybrid"]:
+    if publish_hybrid:
         custom_inv = ctx.params["passed_data"]["custom_hybrid_inverter_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_hybrid_inverter"],
