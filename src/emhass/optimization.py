@@ -6986,8 +6986,14 @@ class Optimization:
         debug,
         q_inputs=None,
         transfer_vars=None,
+        p_pv_plants=None,
     ):
-        """Build the final results DataFrame (Vectorized extraction)."""
+        """Build the final results DataFrame (Vectorized extraction).
+
+        ``p_pv_plants`` is the optional per-plant split of ``p_pv`` (#1150): a frame with
+        one ``P_PV_plant{j}`` column per plant, row for row like ``p_pv``. The columns are
+        diagnostic output only, written next to ``P_PV``; the optimization never reads them.
+        """
         opt_tp = pd.DataFrame(index=data_opt.index)
         solver_zero_tol = 1e-9
 
@@ -7004,6 +7010,10 @@ class Optimization:
 
         # Main Power Variables
         opt_tp["P_PV"] = p_pv
+        if p_pv_plants is not None:
+            # Positional, exactly like P_PV above (an array), so the index never matters.
+            for plant_col in p_pv_plants.columns:
+                opt_tp[plant_col] = p_pv_plants[plant_col].to_numpy(dtype=float)
         opt_tp["P_Load"] = p_load
 
         if self.plant_conf["compute_curtailment"]:
@@ -7330,6 +7340,7 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
@@ -7364,6 +7375,12 @@ class Optimization:
         deferrable load (see _apply_def_availability): it scales the load's
         power ceiling, and ``0`` keeps the load off in that step whatever else
         would force it on.
+
+        ``p_pv_plants`` is the optional per-plant split of ``p_pv`` (a frame of
+        ``P_PV_plant{j}`` columns, row for row like ``p_pv``; see
+        ``Forecast.get_pv_plant_split``). It is only copied into the results next to
+        ``P_PV``; it does not touch any variable, constraint or the objective. ``None``
+        (the default) gives exactly the results without it.
         """
         with self._solve_lock:
             return self._perform_optimization_locked(
@@ -7391,6 +7408,7 @@ class Optimization:
                 battery_availability=battery_availability,
                 battery_discharge_energy_max=battery_discharge_energy_max,
                 def_availability=def_availability,
+                p_pv_plants=p_pv_plants,
             )
 
     def _perform_optimization_locked(
@@ -7419,6 +7437,7 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
@@ -8863,6 +8882,7 @@ class Optimization:
             debug,
             q_inputs=q_inputs,
             transfer_vars=solved_transfer_vars,
+            p_pv_plants=p_pv_plants,
         )
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -8952,6 +8972,7 @@ class Optimization:
         soc_final: float | list | None = None,
         stage_times: dict[str, float] | None = None,
         current_period_peak: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a day-ahead optimization task using real forecast data. \
@@ -8993,6 +9014,10 @@ class Optimization:
             With several capacity components (a list ``capacity_cost_per_kw``), \
             one value per component.
         :type current_period_peak: float | list, optional
+        :param p_pv_plants: Optional per-plant split of ``p_pv`` (``P_PV_plant{j}`` \
+            columns, same length as ``p_pv``), written to the results next to ``P_PV``. \
+            Diagnostic only; ``None`` (the default) leaves the results unchanged.
+        :type p_pv_plants: pandas.DataFrame, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -9017,6 +9042,7 @@ class Optimization:
             soc_final=soc_final,
             current_period_peak=current_period_peak,
             stage_times=stage_times,
+            p_pv_plants=p_pv_plants,
         )
         return self.opt_res
 
@@ -9042,6 +9068,7 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -9183,6 +9210,11 @@ class Optimization:
             fraction in [0, 1] per timestep that scales the load's power ceiling \
             (0 = the load must not run). See ``_apply_def_availability``.
         :type def_availability: float | list, optional
+        :param p_pv_plants: Optional per-plant split of ``p_pv`` (``P_PV_plant{j}`` \
+            columns, same length as ``p_pv``). It is sliced to ``prediction_horizon`` \
+            like ``p_pv`` and written to the results next to ``P_PV``. Diagnostic only; \
+            ``None`` (the default) leaves the results unchanged.
+        :type p_pv_plants: pandas.DataFrame, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -9209,6 +9241,9 @@ class Optimization:
         # Extract inputs as arrays
         # Note: We must ensure p_pv and p_load are sliced exactly like df_input_data
         p_pv_slice = p_pv.iloc[:prediction_horizon].values.ravel()
+        p_pv_plants_slice = (
+            p_pv_plants.iloc[:prediction_horizon] if p_pv_plants is not None else None
+        )
         p_load_slice = p_load.iloc[:prediction_horizon].values.ravel()
         unit_load_cost = subset_data[self.var_load_cost].values
         unit_prod_price = subset_data[self.var_prod_price].values
@@ -9236,6 +9271,7 @@ class Optimization:
             battery_availability=battery_availability,
             battery_discharge_energy_max=battery_discharge_energy_max,
             def_availability=def_availability,
+            p_pv_plants=p_pv_plants_slice,
         )
         return self.opt_res
 
