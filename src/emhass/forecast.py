@@ -2483,6 +2483,36 @@ class Forecast:
             return None
         return Forecast.split_pv_plants(p_pv_forecast, self.pv_plant_raw)
 
+    def get_pv_plant_inverters(self) -> list[int] | None:
+        """The inverter of each column of the last per-plant PV series (#1150).
+
+        The optimizer sums the columns of each inverter to get that inverter's PV. The
+        mapping depends on the method: ``csv`` and ``list`` have one column per
+        PV-carrying inverter (ascending), every other method has one column per plant, on the
+        inverter that ``pv_plant_inverter_index`` gives it. Returns None with one inverter,
+        without per-plant series, with an unusable index, or when the number of columns
+        does not match the mapping (logged), so a caller never gets a wrong map.
+        """
+        if self.pv_plant_raw is None:
+            return None
+        # None at one inverter; an unusable index is logged there and comes back empty.
+        inverters = self._pv_inverters_above_one()
+        if not inverters:
+            return None
+        # weather_forecast_method is only set by get_weather_forecast (see
+        # _expected_pv_plant_count), so keep the default for a caller that never ran it.
+        if getattr(self, "weather_forecast_method", None) not in ("csv", "list"):
+            inverters = [int(v) for v in self.plant_conf["pv_plant_inverter_index"]]
+        if len(inverters) != self.pv_plant_raw.shape[1]:
+            self.logger.warning(
+                "The PV forecast has %d plant series but the inverter mapping has %d entries; "
+                "a site with two or more PV inverters cannot be planned without it.",
+                self.pv_plant_raw.shape[1],
+                len(inverters),
+            )
+            return None
+        return inverters
+
     @staticmethod
     def compute_solar_angles(df: pd.DataFrame, latitude: float, longitude: float) -> pd.DataFrame:
         """
