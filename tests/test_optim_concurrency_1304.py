@@ -110,24 +110,6 @@ class TestAtomicResults(unittest.TestCase):
             self.assertEqual(len(names), 3)
             self.assertEqual(len(set(names)), 3)
 
-    def test_newer_in_memory_snapshot_survives_a_failed_write_over_an_older_file(self):
-        with TemporaryDirectory() as directory:
-            data = Path(directory)
-            last_run._cache = None
-            plan_store._cache = None
-            last_run.record(data, last_run.ACTION_DAYAHEAD_OPTIM, {}, "Optimal", False, 1.0, "1")
-            plan_store.record(data, [{"P_grid": 1}], "2026-01-01T00:00:00Z", "1")
-            with (
-                patch("emhass.last_run.atomic_write", side_effect=OSError("disk full")),
-                patch("emhass.plan_store.atomic_write", side_effect=OSError("disk full")),
-            ):
-                last_run.record(
-                    data, last_run.ACTION_NAIVE_MPC_OPTIM, {}, "Optimal", False, 1.0, "1"
-                )
-                plan_store.record(data, [{"P_grid": 2}], "9999-01-01T00:00:00Z", "1")
-            self.assertEqual(last_run.read(data)["action"], last_run.ACTION_NAIVE_MPC_OPTIM)
-            self.assertEqual(plan_store.read(data)["plan"][0]["P_grid"], 2)
-
     @unittest.skipUnless(sys.platform == "win32", "Windows refuses to replace an open file")
     def test_replace_waits_for_a_reader_that_briefly_holds_the_file_open(self):
         with TemporaryDirectory() as directory:
@@ -185,6 +167,125 @@ class TestAtomicResults(unittest.TestCase):
             finally:
                 last_run._cache = None
                 plan_store._cache = None
+                last_run._unpersisted = plan_store._unpersisted = False
+
+
+class TestSnapshotOrdering(unittest.TestCase):
+    """last_run / plan_store: the shared file wins unless a failed write is pending."""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.data = Path(self.tmp.name)
+        self._reset()
+        self.addCleanup(self._reset)
+        self.addCleanup(self.tmp.cleanup)
+
+    @staticmethod
+    def _reset():
+        for module in (last_run, plan_store):
+            module._cache = None
+            module._unpersisted = False
+
+    def _write(self, name, payload):
+        (self.data / name).write_text(json.dumps(payload))
+
+    def _record_run(self, action):
+        last_run.record(self.data, action, {}, "Optimal", False, 1.0, "1")
+
+    @staticmethod
+    def _fail_writes():
+        return (
+            patch("emhass.last_run.atomic_write", side_effect=OSError("disk full")),
+            patch("emhass.plan_store.atomic_write", side_effect=OSError("disk full")),
+        )
+
+    def test_failed_write_over_an_older_file_keeps_the_newer_snapshot(self):
+        self._record_run(last_run.ACTION_DAYAHEAD_OPTIM)
+        plan_store.record(self.data, [{"P_grid": 1}], "2026-01-01T00:00:00Z", "1")
+        first, second = self._fail_writes()
+        with first, second:
+            self._record_run(last_run.ACTION_NAIVE_MPC_OPTIM)
+            plan_store.record(self.data, [{"P_grid": 2}], "9999-01-01T00:00:00Z", "1")
+        self.assertEqual(last_run.read(self.data)["action"], last_run.ACTION_NAIVE_MPC_OPTIM)
+        self.assertEqual(plan_store.read(self.data)["plan"][0]["P_grid"], 2)
+        # still the answer on the next read: the cache was not replaced by the old file
+        self.assertEqual(last_run.read(self.data)["action"], last_run.ACTION_NAIVE_MPC_OPTIM)
+
+    def test_same_second_file_from_another_worker_is_not_hidden_by_a_persisted_cache(self):
+        self._record_run(last_run.ACTION_DAYAHEAD_OPTIM)
+        cached = last_run.read(self.data)
+        # another worker replaces the file within the same second
+        self._write("last_run.json", {**cached, "action": "naive-mpc-optim"})
+        self.assertEqual(last_run.read(self.data)["action"], "naive-mpc-optim")
+        stamp = "2026-11-06T10:00:00Z"
+        plan_store.record(self.data, [{"P_grid": 1}], stamp, "1")
+        self._write("plan_latest.json", {"generated_at": stamp, "plan": [{"P_grid": 9}]})
+        self.assertEqual(plan_store.read(self.data)["plan"][0]["P_grid"], 9)
+
+    def test_equal_timestamp_with_a_pending_write_prefers_the_valid_file(self):
+        stamp = "2026-11-06T10:00:00Z"
+        last_run._cache = {"timestamp": stamp, "action": "cache"}
+        last_run._unpersisted = True
+        self._write("last_run.json", {"timestamp": stamp, "action": "disk"})
+        self.assertEqual(last_run.read(self.data)["action"], "disk")
+        self.assertFalse(last_run._unpersisted)
+
+    def test_pending_cache_older_than_the_file_loses(self):
+        last_run._cache = {"timestamp": "2026-11-06T09:00:00Z", "action": "cache"}
+        last_run._unpersisted = True
+        self._write("last_run.json", {"timestamp": "2026-11-06T10:00:00Z", "action": "disk"})
+        self.assertEqual(last_run.read(self.data)["action"], "disk")
+
+    def test_a_later_successful_write_clears_the_pending_state(self):
+        first, second = self._fail_writes()
+        with first, second:
+            self._record_run(last_run.ACTION_NAIVE_MPC_OPTIM)
+            plan_store.record(self.data, [{"P_grid": 1}], "2026-11-06T10:00:00Z", "1")
+        self.assertTrue(last_run._unpersisted and plan_store._unpersisted)
+        self._record_run(last_run.ACTION_DAYAHEAD_OPTIM)
+        plan_store.record(self.data, [{"P_grid": 2}], "2026-11-06T10:00:01Z", "1")
+        self.assertFalse(last_run._unpersisted or plan_store._unpersisted)
+
+    def test_mixed_naive_and_aware_timestamps_are_compared_as_utc(self):
+        last_run._unpersisted = True
+        last_run._cache = {"timestamp": "2026-11-06T10:00:01+00:00", "action": "cache"}
+        self._write("last_run.json", {"timestamp": "2026-11-06T10:00:00", "action": "disk"})
+        self.assertEqual(last_run.read(self.data)["action"], "cache")  # naive means UTC
+        last_run._cache = {"timestamp": "2026-11-06T11:00:00+01:00", "action": "cache"}
+        last_run._unpersisted = True
+        self._write("last_run.json", {"timestamp": "2026-11-06T10:00:00", "action": "disk"})
+        self.assertEqual(last_run.read(self.data)["action"], "disk")  # equal instants
+
+    def test_invalid_timestamps_never_hide_a_valid_file_and_never_raise(self):
+        for bad in ("stale", "", None, 7, "2026-13-45T00:00:00Z"):
+            last_run._persisted = None
+            last_run._cache = {"timestamp": bad, "action": "cache"}
+            last_run._unpersisted = True
+            self._write("last_run.json", {"timestamp": "2026-11-06T10:00:00Z", "action": "disk"})
+            self.assertEqual(last_run.read(self.data)["action"], "disk", bad)
+        # a pending valid snapshot beats a file whose timestamp is junk
+        last_run._persisted = None
+        last_run._cache = {"timestamp": "2026-11-06T10:00:00Z", "action": "cache"}
+        last_run._unpersisted = True
+        self._write("last_run.json", {"timestamp": "junk", "action": "disk"})
+        self.assertEqual(last_run.read(self.data)["action"], "cache")
+
+    def test_unreadable_file_serves_a_pending_snapshot_but_not_a_persisted_one(self):
+        (self.data / "last_run.json").write_text("{not json")
+        last_run._cache = {"timestamp": "2026-11-06T10:00:00Z", "action": "cache"}
+        last_run._unpersisted = True
+        self.assertEqual(last_run.read(self.data)["action"], "cache")
+        last_run._unpersisted = False
+        self.assertIsNone(last_run.read(self.data))
+
+    def test_missing_file_still_falls_back_to_the_in_memory_snapshot(self):
+        last_run._cache = {"timestamp": "2026-11-06T10:00:00Z", "action": "cache"}
+        plan_store._cache = {"generated_at": "2026-11-06T10:00:00Z", "plan": []}
+        self.assertEqual(last_run.read(self.data)["action"], "cache")
+        self.assertEqual(plan_store.read(self.data)["plan"], [])
+        self._reset()
+        self.assertIsNone(last_run.read(self.data))
+        self.assertIsNone(plan_store.read(self.data))
 
 
 class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
@@ -279,7 +380,28 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
             finally:
                 utils.unlock_file(other_worker)
 
-    async def test_unusable_lock_file_fails_open_instead_of_500(self):
+    async def test_unusable_lock_file_fails_closed_with_503_and_dispatches_nothing(self):
+        with (
+            patch.object(
+                web_server, "_live_optim_slot", side_effect=lambda: Path("/nonexistent/x/y.lock")
+            ),
+            patch.object(web_server, "_action_call_unlocked", new_callable=AsyncMock) as unlocked,
+            patch.object(web_server, "_load_params_and_runtime", new_callable=AsyncMock) as setup,
+            patch.object(web_server, "_handle_action_dispatch", new_callable=AsyncMock) as run,
+            self.assertLogs(web_server.app.logger, level="WARNING") as logs,
+        ):
+            for action in ("naive-mpc-optim", "dayahead-optim", "perfect-optim"):
+                response = await self.client.post(f"/action/{action}", json={})
+                self.assertEqual(response.status_code, 503, action)
+                self.assertEqual(response.headers["Retry-After"], "2")
+                self.assertIn("not run", await response.get_data(as_text=True))
+        unlocked.assert_not_awaited()
+        setup.assert_not_awaited()
+        run.assert_not_awaited()
+        self.assertTrue(any("lock unavailable" in line for line in logs.output))
+        self.assertFalse((self.data_path / "opt_res_latest.csv").exists())
+
+    async def test_unusable_lock_file_does_not_block_unguarded_actions(self):
         with (
             patch.object(
                 web_server, "_live_optim_slot", side_effect=lambda: Path("/nonexistent/x/y.lock")
@@ -288,7 +410,7 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
                 web_server, "_action_call_unlocked", AsyncMock(return_value="ok")
             ) as unlocked,
         ):
-            response = await self.client.post("/action/naive-mpc-optim", json={})
+            response = await self.client.post("/action/publish-data", json={})
         self.assertEqual(response.status_code, 200)
         unlocked.assert_awaited_once()
 

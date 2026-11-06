@@ -1065,9 +1065,18 @@ async def action_call(action_name: str):
     try:
         slot = open(_live_optim_slot(), "a+")
     except OSError as exc:
-        # Keep the zero-config default working where the temp dir is unusable.
-        app.logger.warning("Live optimization lock unavailable (%s); running unguarded", exc)
-        return await _action_call_unlocked(action_name)
+        # Fail closed: without the lock an overlapping run could not be told apart,
+        # so nothing is loaded, solved or written. The caller may retry.
+        app.logger.warning(
+            "Live optimization lock unavailable (%s); %s rejected (503)", exc, action_name
+        )
+        response = await make_response(
+            "EMHASS >> The live optimization lock is unavailable. "
+            "Retry shortly; this request was not run.\n",
+            503,
+        )
+        response.headers["Retry-After"] = "2"
+        return response
 
     with slot:
         if not try_lock_file(slot):

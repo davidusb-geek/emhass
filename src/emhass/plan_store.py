@@ -15,11 +15,15 @@ from pathlib import Path
 import pandas as pd
 
 from emhass.atomic_file import atomic_write
-from emhass.last_run import not_older
+from emhass.last_run import pending_wins
 
 _PLAN_FILENAME = "plan_latest.json"
 _lock = threading.Lock()
 _cache: dict | None = None
+# True while _cache holds a plan whose write failed (see last_run._unpersisted).
+_unpersisted = False
+# The plan this process last wrote successfully (see last_run._persisted).
+_persisted: dict | None = None
 _logger = logging.getLogger(__name__)
 
 
@@ -41,7 +45,7 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
     Best-effort file write: an OSError is logged-and-swallowed so a disk error
     never breaks the optimization wrapper's return path.
     """
-    global _cache
+    global _cache, _unpersisted, _persisted
     snap = {
         "emhass_schema_version": schema_version,
         "generated_at": generated_at,
@@ -51,17 +55,21 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
         _cache = snap
         try:
             atomic_write(_path(data_path), lambda stream: json.dump(snap, stream))
+            _unpersisted = False
+            _persisted = snap
         except OSError as exc:
+            _unpersisted = True
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
 
 
 def read(data_path: Path) -> dict | None:
     """Return the latest plan snapshot, or None if no run yet.
 
-    The shared file wins across workers unless the in-memory snapshot is newer
-    (a failed write) or the file is missing.
+    The shared file wins across workers. The in-memory plan is returned instead
+    when the file is missing, or when its write failed and the file is either the
+    plan this process wrote earlier or strictly older (or is unreadable).
     """
-    global _cache
+    global _cache, _unpersisted, _persisted
     with _lock:
         # Other workers can commit a newer plan; the process-local cache is
         # not authoritative in a multi-worker server.
@@ -71,9 +79,10 @@ def read(data_path: Path) -> dict | None:
             return dict(_cache) if _cache is not None else None
         except (OSError, json.JSONDecodeError) as exc:
             _logger.warning("plan_store: corrupt or unreadable snapshot file", exc_info=exc)
-            return None
-        # The cache is newer only when this process's write failed.
-        if _cache is not None and not_older(_cache.get("generated_at"), data.get("generated_at")):
+            return dict(_cache) if _unpersisted and _cache is not None else None
+        if _unpersisted and (data == _persisted or pending_wins(_cache, data, "generated_at")):
             return dict(_cache)
         _cache = data
+        _persisted = data
+        _unpersisted = False
         return dict(data)
