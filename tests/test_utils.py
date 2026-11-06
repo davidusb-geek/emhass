@@ -6743,11 +6743,11 @@ class TestRuntimeBanner(unittest.TestCase):
 
 class TestValidateNumBatteriesOverflow(unittest.TestCase):
     def test_an_int_too_large_for_a_float_is_a_value_error(self):
-        # float(10**400) raises OverflowError, which must not escape the documented
-        # ValueError contract (callers catch ValueError).
+        # A count far too large for a float must still raise the documented
+        # ValueError (callers catch ValueError), and name the limit.
         with self.assertRaises(ValueError) as ctx:
             utils.validate_num_batteries({"number_of_batteries": 10**400})
-        self.assertIn("number_of_batteries must be a positive integer", str(ctx.exception))
+        self.assertIn("number_of_batteries must be at most 100", str(ctx.exception))
 
 
 if __name__ == "__main__":
