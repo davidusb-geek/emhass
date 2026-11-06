@@ -65,6 +65,8 @@ def _input_to_schema(input_str: str, param: dict, scalar_default: bool = False) 
     dv = param.get("default_value", None)
     if dv is not None:
         leaf["default"] = dv
+    if param.get("minimum") is not None:
+        leaf["minimum"] = param["minimum"]
     if param.get("maximum") is not None:
         leaf["maximum"] = param["maximum"]
     schema = leaf
