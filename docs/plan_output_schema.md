@@ -1,7 +1,8 @@
 # Plan / Optimization Output Schema
 
-This page documents the columns of the optimization-result DataFrame returned by
-`publish_data` (see [API Reference](emhass.md)).
+This page documents the columns of the optimization result: the DataFrame returned by
+`publish_data` (see [API Reference](emhass.md)) and, where marked below, the diagnostic
+columns that only the CSV file and the plan carry.
 Downstream consumers — Home Assistant cards, Node-RED flows, EVCC adapters, third-party
 automations — can rely on this schema as a versioned contract.
 
@@ -12,7 +13,7 @@ Every result DataFrame carries the schema version as a pandas attribute:
 ```python
 result = await publish_data(...)
 result.attrs["emhass_schema_version"]
-# "1.0"
+# "1.1"
 ```
 
 The version string is also exposed as a module-level constant:
@@ -39,7 +40,7 @@ if major != 1:
 
 ## Column table
 
-11 fixed columns plus four variable groups: `P_deferrable{k}`,
+11 fixed columns plus the variable groups: `P_deferrable{k}`,
 `predicted_temp_heater{k}`, `heating_demand_heater{k}` (for each configured
 deferrable / thermal load), and `cost_fun_<name>` (one column per cost-function
 component the chosen `costfun` decomposes into). A `heat_topology` with
@@ -49,6 +50,26 @@ no load of its own: its temperature is in `predicted_temp_heater{n + i}`, where
 `n` is the number of deferrable loads and `i` the storage's position in the
 tank list (its position in `storage`, after any manual `shared_thermal_tanks` in
 extend mode). Adding a source flow changes `n`, and so this index. Neither is published to Home Assistant.
+
+With two or more PV plants, the optimization result also has one `P_PV_plant{j}` column per plant
+(W, never negative, `j` counting from 0 in plant order), written next to `P_PV`. The plant
+columns add up to `P_PV` at every timestep, up to float rounding; where `P_PV` is not a
+finite number, neither are the plant columns. They split `P_PV` as forecast:
+`P_PV_curtailment` is not split per plant. They are diagnostic output. They are in
+`opt_res_latest.csv` and in the plan returned by `/api/v1/plan`, not in the frame that
+`publish_data` returns (it keeps only the published columns), and they are not published
+to Home Assistant. They are absent with a single plant, and absent when the cached weather
+forecast in use was saved before this version and has no per-plant data (see
+[Forecasts](forecasts.md) for how to refresh it); in both cases the result has the same
+columns as before. See [Forecasts](forecasts.md) for what a plant is for each forecast method.
+
+With more than one battery, the result has `P_batt_{k}` (W, same sign convention as
+`P_batt`) and `SOC_opt_{k}` (fraction 0 to 1, the same scaling as `SOC_opt`) for each
+battery `k` counting from 0, and no bare `SOC_opt`. `P_batt` is then the total of all
+batteries. These columns are published to Home Assistant as the per-battery sensors
+`sensor.p_batt_forecast_battery{k}` and `sensor.soc_batt_forecast_battery{k}`. The other
+per-battery diagnostic columns that only the CSV file and the plan carry (such as
+`batt_stress_cost_{k}`) are not listed on this page.
 
 | Column | Source helper | Unit | Sign convention | Conditional | HA scaling | `type_var` | Notes |
 |--------|---------------|------|-----------------|-------------|------------|------------|-------|
@@ -122,7 +143,7 @@ Per-column source helpers in `src/emhass/command_line.py`:
 | `_publish_standard_forecasts` | 2152-2214 | `P_Load`, `P_PV`, `P_PV_curtailment`, `P_hybrid_inverter` |
 | `_publish_deferrable_loads` | 2215-2259 | `P_deferrable{k}` for `k ∈ [0, N)` |
 | `_publish_thermal_loads` | 2260-2304 | `predicted_temp_heater{k}`, `heating_demand_heater{k}` |
-| `_publish_battery_data` | 2305-2341 | `P_batt`, `SOC_opt` |
+| `_publish_battery_data` | 2305-2341 | `P_batt`, `SOC_opt`, and with more than one battery `P_batt_{k}`, `SOC_opt_{k}` |
 | `_publish_grid_and_costs` | 2342-2405 | `P_grid`, `cost_fun_<name>`, `optim_status`, `unit_load_cost`, `unit_prod_price` |
 
 The aggregator `publish_data` (~line 2408) calls these in order and subsets the result
@@ -133,3 +154,4 @@ DataFrame to the published columns before returning.
 | Version | Date | Change |
 |---------|------|--------|
 | 1.0 | 2026-05-10 | Initial published schema. Sign conventions derived from `src/emhass/optimization.py` with inline citations. |
+| 1.1 | 2026-11-06 | Added the optional `P_PV_plant{j}` columns (only with two or more PV plants). Documented the `P_batt_{k}` and `SOC_opt_{k}` columns that appear with more than one battery. No existing column changed. |

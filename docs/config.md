@@ -66,7 +66,7 @@ The **secrets** parameters are:
 - `alt`: The altitude in meters. For example: 100.0
 - `solcast_api_key`: The Solcast API key (weather_forecast_method=solcast)
 - `solcast_rooftop_id`: The Solcast rooftop ID (weather_forecast_method=solcast)
-- `solar_forecast_kwp`: The PV peak installed power in kW used for the 'solar.forecast' API call (weather_forecast_method=solar.forecast)
+- `solar_forecast_kwp`: The peak power in kW of one PV plane (one entry of `pv_module_model`), used for the 'solar.forecast' API call (weather_forecast_method=solar.forecast). With one plane that is the peak power of your installation. With several planes (several entries in `pv_module_model`) a single number is used for each plane, so give a list with one number per plane in the order of `pv_module_model`, or a single number if all the planes have the same size. A list can be set in the secrets file or passed at runtime. The add-on options page only takes a single number for now. See [the forecast documentation](forecasts.md#solarforecast) for the rules and checks.
 - `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
 - `influxdb_password`: Password for authenticating with InfluxDB. Leave empty if no authentication is required.
 - `victoriametrics_username`: Username for HTTP Basic authentication with VictoriaMetrics. Leave empty if no authentication is required.
