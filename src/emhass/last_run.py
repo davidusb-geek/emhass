@@ -5,7 +5,8 @@ Backs the GET /api/v1/last-run endpoint and the future GET /healthz endpoint
 
 State model: in-memory cache (_cache) + write-through to
 <data_path>/last_run.json. Thread-safe via _lock to handle multi-worker
-Quart deployments.
+Quart deployments. The file is the shared source of truth across workers; the
+cache only wins when it is newer than the file (a failed write).
 """
 
 import json
@@ -154,11 +155,24 @@ def snapshot(
     return snap
 
 
+def not_older(candidate: object, reference: object) -> bool:
+    """True iff ``candidate`` is a valid ISO timestamp not older than ``reference``.
+
+    Unparsable values count as older, so a corrupt cache never beats the file.
+    """
+    try:
+        return datetime.fromisoformat(str(candidate)) >= datetime.fromisoformat(str(reference))
+    except ValueError:
+        return False
+
+
 def read(data_path: Path) -> dict | None:
     """Return the most recent snapshot, or None if no run yet.
 
     Read the shared on-disk file each time: a cached value from another worker
-    may have been superseded. A corrupt JSON file logs a warning and returns None.
+    may have been superseded. The cache is returned instead when it is newer than
+    the file (this process recorded a run whose write failed) or the file is
+    missing. A corrupt JSON file logs a warning and returns None.
     """
     global _cache
     with _lock:
@@ -166,12 +180,12 @@ def read(data_path: Path) -> dict | None:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            # Preserve the former in-memory fallback when the file was never
-            # created (or a write failed). When it exists, disk wins across workers.
             return dict(_cache) if _cache is not None else None
         except (OSError, json.JSONDecodeError) as exc:
             _logger.warning("last_run: corrupt or unreadable snapshot file", exc_info=exc)
             return None
+        if _cache is not None and not_older(_cache.get("timestamp"), data.get("timestamp")):
+            return dict(_cache)
         _cache = data
         return dict(data)
 
