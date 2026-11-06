@@ -943,7 +943,7 @@ def test_validate_num_inverters_rejects_an_int_too_large_for_a_float():
 
 def test_huge_battery_count_is_an_inverter_error_not_an_overflow():
     conf = _two(number_of_batteries=10**400)
-    with pytest.raises(_error_class(), match="number_of_batteries must be a positive integer"):
+    with pytest.raises(_error_class(), match="number_of_batteries must be at most 100"):
         _get_func("check_inverter_params")(conf, logger)
 
 
