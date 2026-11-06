@@ -43,7 +43,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
-EMHASS_SCHEMA_VERSION = "1.0"
+EMHASS_SCHEMA_VERSION = "1.1"
 
 
 def is_dry_run(input_data_dict: dict) -> bool:
@@ -2026,20 +2026,24 @@ async def _prepare_perfect_optim(ctx: SetupContext):
 
 
 async def _get_dayahead_pv_forecast(ctx: SetupContext):
-    """Helper to retrieve and optionally adjust PV forecast."""
+    """Helper to retrieve and optionally adjust PV forecast.
+
+    Returns ``(p_pv_forecast, df_weather, p_pv_plants)``; ``p_pv_plants`` is the per-plant
+    split of the final aggregate, or None (see ``Forecast.get_pv_plant_split``).
+    """
     # Check if we should calculate PV forecast
     if not (
         ctx.optim_conf["set_use_pv"]
         or ctx.optim_conf.get("weather_forecast_method", None) == "list"
     ):
-        return pd.Series(0, index=ctx.fcst.forecast_dates), None
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None, None
     # Get weather forecast
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
     # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
     if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
-        return None, None
+        return None, None, None
     p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
     if ctx.optim_conf["set_use_adjusted_pv"]:
@@ -2054,7 +2058,9 @@ async def _get_dayahead_pv_forecast(ctx: SetupContext):
             ctx.emhass_conf,
             test_df_literal,
         )
-    return p_pv_forecast, df_weather
+    # After the adjustment (also when it failed and returned the raw series, or was off), so the
+    # plants add up to the aggregate the optimization uses.
+    return p_pv_forecast, df_weather, ctx.fcst.get_pv_plant_split(p_pv_forecast)
 
 
 def _apply_df_freq_horizon(
@@ -2087,7 +2093,7 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
         stage_times = {}
     # Get PV Forecast
     with stage_timer(stage_times, "pv_forecast", ctx.logger):
-        p_pv_forecast, df_weather = await _get_dayahead_pv_forecast(ctx)
+        p_pv_forecast, df_weather, p_pv_plants = await _get_dayahead_pv_forecast(ctx)
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
@@ -2115,6 +2121,7 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
         "df_input_data_dayahead": df_input_data_dayahead,
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
+        "p_pv_plants": p_pv_plants,
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2143,19 +2150,23 @@ async def _get_naive_mpc_history(ctx: SetupContext):
 
 
 async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_input_data):
-    """Helper to generate PV forecast for Naive MPC."""
+    """Helper to generate PV forecast for Naive MPC.
+
+    Returns ``(p_pv_forecast, df_weather, p_pv_plants)``; ``p_pv_plants`` is the per-plant
+    split of the final aggregate, or None (see ``Forecast.get_pv_plant_split``).
+    """
     # If PV is disabled and no weather list, return zero series
     if not (
         ctx.optim_conf["set_use_pv"] or ctx.optim_conf.get("weather_forecast_method") == "list"
     ):
-        return pd.Series(0, index=ctx.fcst.forecast_dates), None
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None, None
     # Get weather forecast
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
     # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
     if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
-        return None, None
+        return None, None, None
     # Calculate PV power
     p_pv_forecast = ctx.fcst.get_power_from_weather(
         df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
@@ -2173,7 +2184,9 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
             ctx.emhass_conf,
             test_df_literal,
         )
-    return p_pv_forecast, df_weather
+    # After the adjustment (also when it failed and returned the raw series, or was off), so the
+    # plants add up to the aggregate the optimization uses.
+    return p_pv_forecast, df_weather, ctx.fcst.get_pv_plant_split(p_pv_forecast)
 
 
 async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None = None):
@@ -2190,7 +2203,7 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
         return None
     # Get PV Forecast
     with stage_timer(stage_times, "pv_forecast", ctx.logger):
-        p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
+        p_pv_forecast, df_weather, p_pv_plants = await _get_naive_mpc_pv_forecast(
             ctx, set_mix_forecast, df_input_data
         )
     if p_pv_forecast is None:
@@ -2219,6 +2232,7 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
         "df_input_data_dayahead": df_input_data_dayahead,
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
+        "p_pv_plants": p_pv_plants,
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2593,6 +2607,7 @@ async def _set_input_data_dict(
         "df_input_data_dayahead": None,
         "df_weather": None,
         "p_pv_forecast": None,
+        "p_pv_plants": None,
         "p_load_forecast": None,
         "days_list": None,
     }
@@ -3024,6 +3039,7 @@ async def dayahead_forecast_optim(
                     soc_final=soc_final,
                     current_period_peak=current_period_peak,
                     stage_times=input_data_dict["stage_times"],
+                    p_pv_plants=input_data_dict.get("p_pv_plants"),
                 )
         else:
             opt_res_dayahead = opt.perform_dayahead_forecast_optim(
@@ -3034,6 +3050,7 @@ async def dayahead_forecast_optim(
                 soc_final=soc_final,
                 current_period_peak=current_period_peak,
                 stage_times=input_data_dict["stage_times"],
+                p_pv_plants=input_data_dict.get("p_pv_plants"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:
@@ -3158,6 +3175,7 @@ async def naive_mpc_optim(
                     def_start_timestep=def_start_timestep,
                     def_end_timestep=def_end_timestep,
                     stage_times=input_data_dict["stage_times"],
+                    p_pv_plants=input_data_dict.get("p_pv_plants"),
                 )
         else:
             opt_res_naive_mpc = opt.perform_naive_mpc_optim(
@@ -3181,6 +3199,7 @@ async def naive_mpc_optim(
                 def_start_timestep=def_start_timestep,
                 def_end_timestep=def_end_timestep,
                 stage_times=input_data_dict["stage_times"],
+                p_pv_plants=input_data_dict.get("p_pv_plants"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:

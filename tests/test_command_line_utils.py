@@ -2777,7 +2777,7 @@ class TestSchemaVersion(unittest.IsolatedAsyncioTestCase):
     def test_constant_value(self):
         from emhass.command_line import EMHASS_SCHEMA_VERSION
 
-        self.assertEqual(EMHASS_SCHEMA_VERSION, "1.0")
+        self.assertEqual(EMHASS_SCHEMA_VERSION, "1.1")
 
     async def test_publish_data_attaches_schema_version_on_saved_entities_path(self):
         from emhass.command_line import EMHASS_SCHEMA_VERSION
