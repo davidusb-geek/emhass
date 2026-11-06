@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from emhass.atomic_file import atomic_write
+from emhass.last_run import not_older
 
 _PLAN_FILENAME = "plan_latest.json"
 _lock = threading.Lock()
@@ -55,7 +56,11 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
 
 
 def read(data_path: Path) -> dict | None:
-    """Return the latest plan snapshot, or None if no run yet."""
+    """Return the latest plan snapshot, or None if no run yet.
+
+    The shared file wins across workers unless the in-memory snapshot is newer
+    (a failed write) or the file is missing.
+    """
     global _cache
     with _lock:
         # Other workers can commit a newer plan; the process-local cache is
@@ -63,11 +68,12 @@ def read(data_path: Path) -> dict | None:
         try:
             data = json.loads(_path(data_path).read_text(encoding="utf-8"))
         except FileNotFoundError:
-            # Preserve the former in-memory fallback when the file was never
-            # created (or a write failed). When it exists, disk wins across workers.
             return dict(_cache) if _cache is not None else None
         except (OSError, json.JSONDecodeError) as exc:
             _logger.warning("plan_store: corrupt or unreadable snapshot file", exc_info=exc)
             return None
+        # The cache is newer only when this process's write failed.
+        if _cache is not None and not_older(_cache.get("generated_at"), data.get("generated_at")):
+            return dict(_cache)
         _cache = data
         return dict(data)

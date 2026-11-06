@@ -2,10 +2,24 @@
 
 import os
 import stat
+import sys
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
+
+
+def _replace(source: Path, destination: Path) -> None:
+    """``os.replace``; on Windows retry briefly while a reader holds the destination open."""
+    for attempt in range(10):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 9:
+                raise
+            time.sleep(0.05)
 
 
 def atomic_write(path: Path, write: Callable[[TextIO], None]) -> None:
@@ -29,6 +43,6 @@ def atomic_write(path: Path, write: Callable[[TextIO], None]) -> None:
             os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
         except FileNotFoundError:
             pass  # new file: keep the umask-derived default
-        os.replace(temporary, path)
+        _replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

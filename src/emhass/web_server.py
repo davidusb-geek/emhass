@@ -1062,10 +1062,20 @@ async def action_call(action_name: str):
     if action_name not in {"naive-mpc-optim", "dayahead-optim", "perfect-optim"}:
         return await _action_call_unlocked(action_name)
 
-    with open(_live_optim_slot(), "a+") as slot:
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        # Keep the zero-config default working where the temp dir is unusable.
+        app.logger.warning("Live optimization lock unavailable (%s); running unguarded", exc)
+        return await _action_call_unlocked(action_name)
+
+    with slot:
         if not try_lock_file(slot):
-            # Do not log to the shared action log: its ERROR lines can make
-            # the in-flight request incorrectly report a failure.
+            # Warning only, and no " >> ": an ERROR line in the shared action log
+            # would make the in-flight request incorrectly report a failure.
+            app.logger.warning(
+                "Another live optimization is running; %s rejected (429)", action_name
+            )
             response = await make_response(
                 "EMHASS >> Another live optimization is running. "
                 "Retry shortly; this request was not run.\n",

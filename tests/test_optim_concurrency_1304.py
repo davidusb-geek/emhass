@@ -110,6 +110,34 @@ class TestAtomicResults(unittest.TestCase):
             self.assertEqual(len(names), 3)
             self.assertEqual(len(set(names)), 3)
 
+    def test_newer_in_memory_snapshot_survives_a_failed_write_over_an_older_file(self):
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            last_run._cache = None
+            plan_store._cache = None
+            last_run.record(data, last_run.ACTION_DAYAHEAD_OPTIM, {}, "Optimal", False, 1.0, "1")
+            plan_store.record(data, [{"P_grid": 1}], "2026-01-01T00:00:00Z", "1")
+            with (
+                patch("emhass.last_run.atomic_write", side_effect=OSError("disk full")),
+                patch("emhass.plan_store.atomic_write", side_effect=OSError("disk full")),
+            ):
+                last_run.record(
+                    data, last_run.ACTION_NAIVE_MPC_OPTIM, {}, "Optimal", False, 1.0, "1"
+                )
+                plan_store.record(data, [{"P_grid": 2}], "9999-01-01T00:00:00Z", "1")
+            self.assertEqual(last_run.read(data)["action"], last_run.ACTION_NAIVE_MPC_OPTIM)
+            self.assertEqual(plan_store.read(data)["plan"][0]["P_grid"], 2)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows refuses to replace an open file")
+    def test_replace_waits_for_a_reader_that_briefly_holds_the_file_open(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "opt_res_latest.csv"
+            target.write_text("old")
+            reader = open(target)
+            threading.Timer(0.2, reader.close).start()
+            atomic_write(target, lambda stream: stream.write("new"))
+            self.assertEqual(target.read_text(), "new")
+
     def test_command_line_results_use_atomic_replace(self):
         with TemporaryDirectory() as directory:
             target = Path(directory) / "opt_res_latest.csv"
@@ -250,6 +278,19 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
                 setup.assert_not_awaited()
             finally:
                 utils.unlock_file(other_worker)
+
+    async def test_unusable_lock_file_fails_open_instead_of_500(self):
+        with (
+            patch.object(
+                web_server, "_live_optim_slot", side_effect=lambda: Path("/nonexistent/x/y.lock")
+            ),
+            patch.object(
+                web_server, "_action_call_unlocked", AsyncMock(return_value="ok")
+            ) as unlocked,
+        ):
+            response = await self.client.post("/action/naive-mpc-optim", json={})
+        self.assertEqual(response.status_code, 200)
+        unlocked.assert_awaited_once()
 
     async def test_slot_is_released_after_a_failed_request(self):
         with (

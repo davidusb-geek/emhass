@@ -11,7 +11,8 @@ Only one live optimization request is accepted at a time by `/action/*` (`naive-
 `Retry-After: 2` and **is not run**: the request that arrived first keeps running and the
 newer one is rejected, so a 429 is not an updated plan. Callers should skip a tick while a
 request is outstanding, then send a fresh optimization with current inputs rather than
-queueing an old body. Other actions (for example `publish-data`) and dry runs are not
+queueing an old body. A once-a-day `dayahead-optim` or `perfect-optim` call that receives 429
+should be retried after a few seconds, because it will not be sent again by itself. Other actions (for example `publish-data`) and dry runs are not
 affected.
 
 Limits of this guard:
