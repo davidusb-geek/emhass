@@ -205,6 +205,7 @@ def build_spec(routes: set | None = None) -> dict:
                 "responses": {
                     "200": {"description": "Saved"},
                     "400": {"description": "Empty/invalid config"},
+                    "409": {"description": "Another save is running; nothing was saved, retry"},
                     "500": {"description": "Save failure"},
                 },
             }

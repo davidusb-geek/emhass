@@ -123,11 +123,14 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/get-json", data=b": - invalid")
         self.assertEqual(response.status_code, 500)
 
+    @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.aiofiles.open")
     @patch("os.path.exists")
     @patch("emhass.web_server.build_params")
     @patch("emhass.web_server.param_to_config")
-    async def test_parameter_set(self, mock_p2c, mock_build_params, mock_exists, mock_file):
+    async def test_parameter_set(
+        self, mock_p2c, mock_build_params, mock_exists, mock_file, mock_replace
+    ):
         mock_exists.return_value = True
         f_defaults = AsyncMock()
         f_defaults.read.return_value = orjson.dumps({"default": 1})
@@ -137,7 +140,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_p2c.return_value = {"new": "config"}
         response = await self.client.post("/set-config", json={"some": "data"})
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(f_write.write.called)
+        self.assertEqual(mock_replace.call_count, 2)  # config.json, then params.pkl
 
     @patch("emhass.web_server.aiofiles.open")
     @patch("os.path.exists")
@@ -166,12 +169,13 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_params.assert_not_called()
         mock_p2c.assert_not_called()
 
+    @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.aiofiles.open")
     @patch("os.path.exists")
     @patch("emhass.web_server.build_params")
     @patch("emhass.web_server.param_to_config")
     async def test_parameter_set_accepts_an_empty_heat_topology(
-        self, mock_p2c, mock_build_params, mock_exists, mock_file
+        self, mock_p2c, mock_build_params, mock_exists, mock_file, mock_replace
     ):
         """An empty text box means "no topology": null, "", "null" and {} all
         save, so the stricter type check does not lock out zero-config users."""
@@ -187,12 +191,13 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.post("/set-config", json={"heat_topology": empty})
                 self.assertEqual(response.status_code, 200)
 
+    @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.aiofiles.open")
     @patch("os.path.exists")
     @patch("emhass.web_server.build_params")
     @patch("emhass.web_server.param_to_config")
     async def test_parameter_set_accepts_valid_heat_topology(
-        self, mock_p2c, mock_build_params, mock_exists, mock_file
+        self, mock_p2c, mock_build_params, mock_exists, mock_file, mock_replace
     ):
         """A valid heat_topology compiles cleanly and the save proceeds."""
         mock_exists.return_value = True
@@ -217,7 +222,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post("/set-config", json={"heat_topology": good_topology})
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(f_write.write.called)
+        self.assertEqual(mock_replace.call_count, 2)  # config.json, then params.pkl
 
     @patch("emhass.web_server.set_input_data_dict")
     @patch("emhass.web_server.perfect_forecast_optim")
@@ -754,20 +759,18 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, mock_data)
 
     @patch("os.path.exists")
-    @patch("emhass.web_server.aiofiles.open")
+    @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.build_params", new_callable=AsyncMock)
-    async def test_build_and_save_params(self, mock_build_params, mock_aio_open, mock_os_exists):
+    async def test_build_and_save_params(self, mock_build_params, mock_replace, mock_os_exists):
         config = {"some": "config"}
         c_path = pathlib.Path("/config.json")
         # Test 1: Success Path
         mock_build_params.return_value = {"optim_conf": {}}
         mock_os_exists.return_value = True
-        mock_file = AsyncMock()
-        mock_aio_open.return_value.__aenter__.return_value = mock_file
         params = await web_server._build_and_save_params(config, "cost", "INFO", c_path)
         self.assertEqual(params["optim_conf"]["costfun"], "cost")
         self.assertEqual(params["optim_conf"]["logging_level"], "INFO")
-        mock_file.write.assert_called_once()
+        mock_replace.assert_called_once()
         # Test 2: build_params fails
         mock_build_params.return_value = False
         with self.assertRaises(Exception) as context:
