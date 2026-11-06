@@ -88,6 +88,11 @@ templates = jinja2.Environment(
 action_log_str = "action_logs.txt"
 injection_dict_file = "injection_dict.pkl"
 params_file = "params.pkl"
+# What orjson cannot write back, for the 400 a request body that hits it gets.
+ORJSON_LIMITS = (
+    "Whole numbers must fit in 64 bits, objects and lists can be nested at most "
+    "254 levels deep, and text must be valid UTF-8"
+)
 error_msg_associations_file = "Unable to obtain associations file"
 
 # The (level, message) records of the dry run being served, or None outside
@@ -501,12 +506,27 @@ async def parameter_set():
             "Unable to obtain default config. only parameters passed from request will be saved to config.json"
         )
 
-    # Retrieve sent config json
-    request_data = await request.get_json(force=True)
+    # Retrieve sent config json. get_json does not turn two failures into a 400:
+    # nesting past Python's recursion limit (RecursionError in the json module) and a
+    # body that is not UTF-8 (UnicodeDecodeError, raised before it parses).
+    try:
+        request_data = await request.get_json(force=True)
+    except (RecursionError, UnicodeDecodeError) as e:
+        app.logger.warning("Rejected config save: the body cannot be read: %s", type(e).__name__)
+        return await make_response([f"config is invalid: {ORJSON_LIMITS}"], 400)
 
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # The body was parsed by the standard json module, but config.json is written with
+    # orjson, which refuses more (ORJSON_LIMITS). Find that out now, but answer it after
+    # the checks below that name a setting, and before anything is built or written.
+    try:
+        orjson.dumps(request_data)
+        unwritable = None
+    except orjson.JSONEncodeError as e:
+        unwritable = e
 
     # Validate heat_topology at save time instead of at the next optimization
     # run: the compiler's ValueError names the offending field, so surface it
@@ -554,15 +574,28 @@ async def parameter_set():
     # here would leave the user believing the curve is active. The per-inverter settings
     # (#1150) are checked in the same pass, so one answer lists every fault: the curves
     # first, then the inverter settings, then the refusal of more than one inverter.
-    inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
-        request_data
-    )
-    # A bad battery count would otherwise escape build_params as a 500. The inverter
-    # check above already names it when it reads the battery list, so add it once.
-    inverter_faults += [f for f in battery_count_faults(request_data) if f not in inverter_faults]
+    try:
+        inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
+            request_data
+        )
+        # A bad battery count would otherwise escape build_params as a 500. The inverter
+        # check above already names it when it reads the battery list, so add it once.
+        inverter_faults += [
+            f for f in battery_count_faults(request_data) if f not in inverter_faults
+        ]
+    except RecursionError:
+        # inverter_config_faults copies the whole body, which a body nested several
+        # hundred levels deep cannot survive. orjson has already refused such a body.
+        if unwritable is None:
+            raise
+        inverter_faults = []
     if inverter_faults:
         app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
+
+    if unwritable is not None:
+        app.logger.warning("Rejected config save: %s", unwritable)
+        return await make_response([f"config is invalid: {unwritable}. {ORJSON_LIMITS}"], 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
@@ -620,7 +653,14 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
         logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
 
-    runtimeparams = orjson.dumps(runtimeparams).decode()
+    # The body was parsed by the standard json module, which takes more than orjson can
+    # write back (ORJSON_LIMITS; orjson.JSONEncodeError is TypeError), so say so here as
+    # a bad request rather than letting it escape as a 500.
+    try:
+        runtimeparams = orjson.dumps(runtimeparams).decode()
+    except orjson.JSONEncodeError as e:
+        logger.error(f"Unable to read the runtime parameters: {e}. {ORJSON_LIMITS}")
+        return None, None, None
 
     return params, costfun, runtimeparams
 
@@ -981,6 +1021,13 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         if key in runtime:
             runtime[key] = read_flag(runtime[key], key)
 
+    # orjson reads nesting up to 1024 levels deep but writes only 254 (ORJSON_LIMITS).
+    try:
+        runtime_json = orjson.dumps(runtime).decode()
+    except orjson.JSONEncodeError as exc:
+        app.logger.error(f"The body cannot be used ({exc}). {ORJSON_LIMITS}. Nothing was run")
+        return not_run, 400
+
     if runtime:
         app.logger.info(f"Passed runtime parameters: {runtime}")
     params, costfun = await _load_params(emhass_conf, app.logger)
@@ -991,7 +1038,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         emhass_conf,
         costfun,
         params,
-        orjson.dumps(runtime).decode(),
+        runtime_json,
         action_name,
         app.logger,
         dry_run=True,
