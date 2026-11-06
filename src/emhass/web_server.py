@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import contextvars
+import errno
 import hashlib
 import logging
 import os
@@ -10,6 +11,7 @@ import pickle
 import platform
 import re
 import tempfile
+import time
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -68,6 +70,7 @@ from emhass.utils import (
     inverter_power_curve_faults,
     param_to_config,
     read_flag,
+    replace_file,
     try_lock_file,
     unlock_file,
 )
@@ -135,6 +138,43 @@ def _dry_run_slot() -> Path:
     each have their own."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
     return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
+
+
+# How long a configuration save waits for another one to finish writing. Writing the
+# two files takes milliseconds, so this only runs out if a save is stuck.
+CONFIG_SAVE_LOCK_WAIT_S = 5.0
+
+
+def _config_save_slot() -> Path:
+    """The lock file that lets one configuration save at a time write config.json and
+    params.pkl, across all Gunicorn workers. Placed and named like the dry run's."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-config-save-{key[:16]}.lock"
+
+
+async def _write_config_json(path: Path, content: str) -> None:
+    """Replace config.json whole, or write it in place where it cannot be replaced: a
+    config.json bind-mounted on its own (docker run -v ./config.json:...) is a mount
+    point, and renaming over it fails with EBUSY. The content is built before this runs,
+    so only the write itself is left to fail there."""
+    try:
+        await replace_file(path, content)
+    except OSError as e:
+        if e.errno not in (errno.EBUSY, errno.EXDEV):
+            raise
+        async with aiofiles.open(str(path), "w") as f:
+            await f.write(content)
+
+
+async def _wait_for_lock(slot, timeout_s: float) -> bool:
+    """Take the lock on the open file ``slot``, retrying until ``timeout_s`` runs out.
+    True if it was taken."""
+    deadline = time.monotonic() + timeout_s
+    while not try_lock_file(slot):
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
+    return True
 
 
 # Add custom filter for trusted HTML content
@@ -600,25 +640,36 @@ async def parameter_set():
     # Overwrite existing default parameters in config
     config.update(param_to_config(params, app.logger))
 
-    # Save config to config.json
-    if os.path.exists(emhass_conf["config_path"].parent):
-        async with aiofiles.open(str(emhass_conf["config_path"]), "w") as f:
-            await f.write(orjson.dumps(config, option=orjson.OPT_INDENT_2).decode())
-    else:
+    if not os.path.exists(emhass_conf["config_path"].parent):
         return await make_response(["Unable to save config file"], 500)
-
-    # Save params with updated config
-    if os.path.exists(emhass_conf["data_path"]):
-        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps(
-                (
-                    emhass_conf["config_path"],
-                    await build_params(emhass_conf, params_secrets, config, app.logger),
-                )
-            )
-            await fid.write(content)
-    else:
+    if not os.path.exists(emhass_conf["data_path"]):
         return await make_response(["Unable to save params file, missing data_path"], 500)
+
+    # Build both files' contents before writing either, so a failure here leaves the
+    # saved pair as it was instead of a new config.json next to an empty params.pkl.
+    saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    if type(saved_params) is bool and not saved_params:
+        return await make_response([error_msg_associations_file], 500)
+    config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
+    params_content = pickle.dumps((emhass_conf["config_path"], saved_params))
+
+    # Each file is replaced whole, so an action reading params.pkl meanwhile sees the
+    # old file or the new one. The lock keeps two saves, on this worker or another,
+    # from leaving config.json from one next to params.pkl from the other.
+    with open(_config_save_slot(), "a+") as slot:
+        if not await _wait_for_lock(slot, CONFIG_SAVE_LOCK_WAIT_S):
+            app.logger.error("Another configuration save is running. Nothing was saved")
+            response = await make_response(
+                ["Another configuration save is running. Nothing was saved, retry shortly"],
+                409,
+            )
+            response.headers["Retry-After"] = "1"
+            return response
+        try:
+            await _write_config_json(emhass_conf["config_path"], config_content)
+            await replace_file(emhass_conf["data_path"] / params_file, params_content)
+        finally:
+            unlock_file(slot)
 
     app.logger.info("Saved parameters from webserver")
     return await make_response({}, 200)
@@ -1317,10 +1368,13 @@ async def _build_and_save_params(
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
     # Save params to file for later reference (use emhass_conf["config_path"] which may have been updated by build_secrets)
+    # Replaced whole: every Gunicorn worker writes this file as it starts, while the
+    # others may already be reading it.
     if os.path.exists(str(emhass_conf["data_path"])):
-        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps((emhass_conf["config_path"], params))
-            await fid.write(content)
+        await replace_file(
+            emhass_conf["data_path"] / params_file,
+            pickle.dumps((emhass_conf["config_path"], params)),
+        )
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
     return params
