@@ -768,9 +768,11 @@
     },
     "number_of_batteries": {
       "friendly_name": "Number of batteries",
-      "Description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics.",
+      "Description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. At most 100.",
       "input": "int",
       "default_value": 1,
+      "minimum": 1,
+      "maximum": 100,
       "unit": "count"
     },
     "set_nocharge_from_grid": {
