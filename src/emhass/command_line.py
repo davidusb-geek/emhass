@@ -240,6 +240,8 @@ class OptimizationCacheKey:
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
     costfun: str
+    optimization_backend: str  # cvxpy, or a coordinator over separate participants
+    site: str  # stable JSON of the site list (devices, solvers, wiring)
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
@@ -488,6 +490,8 @@ class OptimizationCache:
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
+            optimization_backend=str(optim_conf.get("optimization_backend") or "cvxpy"),
+            site=orjson.dumps(optim_conf.get("site") or [], option=orjson.OPT_SORT_KEYS).decode(),
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
@@ -2552,6 +2556,36 @@ async def _set_input_data_dict(
                         opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
                     )
             else:
+                # Cache hit - update references that may have changed
+                # (logger, var names from forecast, and runtime-configurable optim_conf values)
+                opt.logger = logger
+                opt.var_load_cost = fcst.var_load_cost
+                opt.var_prod_price = fcst.var_prod_price
+                # Update internal config dictionaries to prevent stale lookups
+                # for runtime parameters (like battery_target_state_of_charge)
+                opt.plant_conf = plant_conf
+                opt.optim_conf = optim_conf
+                # Update CVXPY Parameters for thermal start temperatures
+                # This is critical: updating optim_conf alone doesn't change baked-in constraint values
+                opt.update_thermal_start_temps(optim_conf)
+                # Same idea for battery power limits — they participate in
+                # constraints via cp.Parameter and need the runtime value
+                # propagated even on a cache hit.
+                opt.update_battery_power_limits(plant_conf)
+            # Update runtime-configurable solver options from optim_conf
+            # These don't affect problem structure, so they're safe to update on cached object
+            runtime_solver_opts = [
+                "lp_solver_timeout",
+                "lp_solver_mip_rel_gap",
+                "num_threads",
+            ]
+            for key in runtime_solver_opts:
+                if key in optim_conf:
+                    opt.optim_conf[key] = optim_conf[key]
+        if opt is not None:
+            # A coordinator backend asks remote solvers to run their part of a
+            # live plan only: a dry run has no effect anywhere
+            opt.fed_dry_run = bool((params.get("passed_data") or {}).get("dry_run", False))
                 # Cache hit - serialize updates under _solve_lock to prevent mutating
                 # shared instance while a concurrent optimization solve is running.
                 lock = getattr(opt, "_solve_lock", None)
