@@ -55,6 +55,7 @@ class TestExternalPvP10(unittest.TestCase):
     @staticmethod
     def _forecast(p50, p10, bias):
         fcst = Forecast.__new__(Forecast)
+        fcst.plant_conf = {}
         fcst.params = {
             "passed_data": {
                 "pv_power_forecast": p50,
@@ -158,6 +159,7 @@ class TestExternalPvP10Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(aligned_p10, p10[: len(aligned_p10)])
 
         fcst = Forecast.__new__(Forecast)
+        fcst.plant_conf = {}
         fcst.params = params
         fcst.optim_conf = optim_conf
         fcst.forecast_dates_tz = list(
