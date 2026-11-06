@@ -766,14 +766,14 @@ class TestSolarForecastKwp(PerPlantBase):
                 _, urls = await self.fetch_solar_forecast([self.watts["a"], self.watts["b"]])
                 self.assertEqual(self.kwp_segments(urls), [text, text])
 
-    async def conf_from_secrets(self, secrets_text):
-        """retrieve_hass_conf built from a secrets file with the solar.forecast method."""
-        secrets_file = self.data_dir / "secrets_emhass.yaml"
-        secrets_file.write_text(secrets_text)
+    async def conf_from_yaml_file(self, yaml_text):
+        """retrieve_hass_conf built from a secrets-style yaml file with the solar.forecast method."""
+        yaml_file = self.data_dir / "kwp_test.yaml"
+        yaml_file.write_text(yaml_text)
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         config["weather_forecast_method"] = "solar.forecast"
         _, secrets = await utils.build_secrets(
-            emhass_conf, logger, secrets_path=str(secrets_file), no_response=True
+            emhass_conf, logger, secrets_path=str(yaml_file), no_response=True
         )
         params = await utils.build_params(emhass_conf, secrets, config, logger)
         retrieve_hass_conf, _, _ = utils.get_yaml_parse(
@@ -810,7 +810,7 @@ class TestSolarForecastKwp(PerPlantBase):
             ("quoted list", "solar_forecast_kwp: '[3, 4]'"),
         ):
             with self.subTest(label):
-                self.fcst.retrieve_hass_conf = await self.conf_from_secrets(line + "\n")
+                self.fcst.retrieve_hass_conf = await self.conf_from_yaml_file(line + "\n")
                 _, urls = await self.fetch_solar_forecast([self.watts["a"], self.watts["b"]])
                 self.assertEqual(self.kwp_segments(urls), ["3", "4"])
 
