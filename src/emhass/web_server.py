@@ -49,8 +49,10 @@ from emhass.utils import (
     DRY_RUN_ACTIONS,
     DRY_RUN_FLAGS,
     HEAT_TOPOLOGY_KEYS,
+    BatteryConfigError,
     InverterConfigError,
     SocFractionError,
+    battery_count_faults,
     build_config,
     build_legacy_config_params,
     build_params,
@@ -570,6 +572,9 @@ async def parameter_set():
         inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
             request_data
         )
+        # A bad battery count would otherwise escape build_params as a 500. The inverter
+        # check above already names it when it reads the battery list, so add it once.
+        inverter_faults += [f for f in battery_count_faults(request_data) if f not in inverter_faults]
     except RecursionError:
         # inverter_config_faults copies the whole body, which a body nested several
         # hundred levels deep cannot survive. orjson has already refused such a body.
@@ -577,7 +582,7 @@ async def parameter_set():
             raise
         inverter_faults = []
     if inverter_faults:
-        app.logger.warning("Rejected config save: inverter settings invalid: %s", inverter_faults)
+        app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
 
     if unwritable is not None:
@@ -706,7 +711,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except (SocFractionError, InverterConfigError) as exc:
+        except (SocFractionError, InverterConfigError, BatteryConfigError) as exc:
             # The message names only this request's own value, unlike the shared log's tail.
             return f"EMHASS >> ERROR: {exc}\n", 400
         if not success:
@@ -720,7 +725,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
-        except (SocFractionError, InverterConfigError):
+        except (SocFractionError, InverterConfigError, BatteryConfigError):
             return await grab_log(action_str), 400
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 200

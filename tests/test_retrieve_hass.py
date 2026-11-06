@@ -10,6 +10,7 @@ import pickle
 import re
 import tempfile
 import unittest
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiofiles
@@ -1167,7 +1168,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         """Host/port/ssl/auth settings map onto the HTTP client arguments."""
         rh = self._make_vm_rh()
         self.assertEqual(rh._vm_base_url(), "http://fake-vm:8428")
-        self.assertEqual(rh._vm_auth().login, "fake-user")
+        self.assertEqual(
+            rh._vm_auth_headers(), {"Authorization": "Basic ZmFrZS11c2VyOmZha2UtcGFzcw=="}
+        )
         self.assertIsNone(rh._vm_ssl())
         rh = self._make_vm_rh(
             victoriametrics_username="",
@@ -1175,8 +1178,131 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             victoriametrics_verify_ssl=False,
         )
         self.assertEqual(rh._vm_base_url(), "https://fake-vm:8428")
-        self.assertIsNone(rh._vm_auth())
+        self.assertEqual(rh._vm_auth_headers(), {})
         self.assertIs(rh._vm_ssl(), False)
+
+    @staticmethod
+    def _vm_mock_session(
+        status=200, body=b'{"status": "success", "data": {"result": []}}', exc=None
+    ):
+        """Mock aiohttp session whose ``get`` records its call and yields a canned response."""
+        response = MagicMock()
+        response.status = status
+        response.read = AsyncMock(return_value=body)
+        context = MagicMock()
+        if exc is None:
+            context.__aenter__ = AsyncMock(return_value=response)
+        else:
+            context.__aenter__ = AsyncMock(side_effect=exc)
+        context.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.get = MagicMock(return_value=context)
+        return session
+
+    async def _vm_request(self, rh, session):
+        return await rh._vm_query_range(session, "up", 0, 60, 60)
+
+    async def test_vm_query_range_authorization_header(self):
+        """Credentials are sent as an explicit Authorization header (latin-1, as BasicAuth did)."""
+        cases = [
+            ({}, "Basic ZmFrZS11c2VyOmZha2UtcGFzcw=="),
+            (
+                {"victoriametrics_username": "usér", "victoriametrics_password": "pässwörd"},
+                "Basic dXPpcjpw5HNzd/ZyZA==",
+            ),
+            ({"victoriametrics_password": ""}, "Basic ZmFrZS11c2VyOg=="),
+            ({"victoriametrics_password": None}, "Basic ZmFrZS11c2VyOg=="),
+            (
+                {"victoriametrics_username": "u", "victoriametrics_password": "p:w"},
+                "Basic dTpwOnc=",
+            ),
+        ]
+        for overrides, expected in cases:
+            with self.subTest(overrides=overrides):
+                rh = self._make_vm_rh(**overrides)
+                session = self._vm_mock_session()
+                self.assertEqual(await self._vm_request(rh, session), [])
+                session.get.assert_called_once()
+                kwargs = session.get.call_args.kwargs
+                self.assertEqual(kwargs["headers"], {"Authorization": expected})
+                self.assertNotIn("auth", kwargs)
+                self.assertEqual(
+                    kwargs["params"], {"query": "up", "start": 0, "end": 60, "step": 60}
+                )
+                self.assertEqual(
+                    session.get.call_args.args, ("http://fake-vm:8428/api/v1/query_range",)
+                )
+                self.assertIsNone(kwargs["ssl"])
+
+    async def test_vm_query_range_no_username_sends_no_authorization(self):
+        """Without a username no Authorization header is sent, even if a password is set."""
+        for username in ("", None):
+            with self.subTest(username=username):
+                rh = self._make_vm_rh(victoriametrics_username=username)
+                session = self._vm_mock_session()
+                self.assertEqual(await self._vm_request(rh, session), [])
+                kwargs = session.get.call_args.kwargs
+                self.assertEqual(kwargs["headers"], {})
+                self.assertNotIn("auth", kwargs)
+
+    async def test_vm_query_range_no_deprecation_warning(self):
+        """Neither authenticated nor unauthenticated requests warn (warnings as errors)."""
+        for overrides in ({}, {"victoriametrics_username": ""}):
+            with self.subTest(overrides=overrides):
+                rh = self._make_vm_rh(**overrides)
+                session = self._vm_mock_session()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error")
+                    self.assertEqual(await self._vm_request(rh, session), [])
+
+    async def test_vm_query_range_errors_are_non_fatal_and_logged(self):
+        """401, HTTP errors, network failures and invalid JSON return None and are logged."""
+        cases = [
+            ({"status": 401}, "401 Unauthorized"),
+            ({"status": 500, "body": b"boom"}, "query_range error 500"),
+            ({"exc": aiohttp.ClientConnectionError("down")}, "Network error connecting"),
+            ({"body": b"not json"}, "Invalid JSON from VictoriaMetrics"),
+        ]
+        for kwargs, expected in cases:
+            with self.subTest(expected=expected):
+                rh = self._make_vm_rh()
+                session = self._vm_mock_session(**kwargs)
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    self.assertIsNone(await self._vm_request(rh, session))
+                self.assertEqual(len(logs.output), 1)
+                self.assertIn(expected, logs.output[0])
+                self.assertEqual(
+                    session.get.call_args.kwargs["headers"],
+                    {"Authorization": "Basic ZmFrZS11c2VyOmZha2UtcGFzcw=="},
+                )
+                self.assertNotIn("ZmFrZS11c2VyOmZha2UtcGFzcw", logs.output[0])
+                self.assertNotIn("fake-pass", logs.output[0])
+
+    async def test_vm_query_range_invalid_credentials_are_non_fatal_and_not_leaked(self):
+        """A colon in the username or an unencodable character fails softly, without leaks."""
+        secret_user = "sec:retuser"  # pragma: allowlist secret
+        cases = [
+            {"victoriametrics_username": secret_user, "victoriametrics_password": "hunter2"},
+            {"victoriametrics_username": "sec€user", "victoriametrics_password": "hunter2"},
+            {"victoriametrics_username": "secuser", "victoriametrics_password": "hunt€r2"},
+        ]
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                rh = self._make_vm_rh(**overrides)
+                session = self._vm_mock_session()
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    self.assertIsNone(await self._vm_request(rh, session))
+                session.get.assert_not_called()
+                self.assertEqual(len(logs.output), 1)
+                self.assertIn("Invalid VictoriaMetrics credentials", logs.output[0])
+                with self.assertRaises(ValueError) as ctx:
+                    rh._vm_auth_headers()
+                self.assertTrue(
+                    ctx.exception.__context__ is None or ctx.exception.__suppress_context__
+                )
+                for text in (logs.output[0], str(ctx.exception)):
+                    for leaked in ("sec", "hunt", "retuser", "u20ac", "€"):
+                        self.assertNotIn(leaked, text)
 
     async def test_get_data_victoriametrics_mock(self):
         """get_data routes to VictoriaMetrics and yields the InfluxDB-shaped frame."""
