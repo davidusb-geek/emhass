@@ -574,7 +574,9 @@ async def parameter_set():
         )
         # A bad battery count would otherwise escape build_params as a 500. The inverter
         # check above already names it when it reads the battery list, so add it once.
-        inverter_faults += [f for f in battery_count_faults(request_data) if f not in inverter_faults]
+        inverter_faults += [
+            f for f in battery_count_faults(request_data) if f not in inverter_faults
+        ]
     except RecursionError:
         # inverter_config_faults copies the whole body, which a body nested several
         # hundred levels deep cannot survive. orjson has already refused such a body.
