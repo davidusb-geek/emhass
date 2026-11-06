@@ -60,6 +60,83 @@ class TestAtomicResults(unittest.TestCase):
             self.assertEqual(target.read_text(), after)
             self.assertFalse(list(Path(directory).glob("*.tmp")))
 
+    def test_separate_reader_process_never_sees_an_incomplete_csv(self):
+        reader_code = (
+            "import json, sys\n"
+            "print('ready', flush=True)\n"
+            "for line in sys.stdin:\n"
+            "    with open(sys.argv[1], newline='', encoding='utf-8') as f:\n"
+            "        print(json.dumps(f.read()), flush=True)\n"
+        )
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "opt_res_latest.csv"
+            before = "timestamp,P_grid\n2026-01-01T00:00:00Z,1\n2026-01-01T00:05:00Z,2\n"
+            after = "timestamp,P_grid\n2026-01-01T00:00:00Z,3\n2026-01-01T00:05:00Z,4\n"
+            target.write_text(before, newline="")
+            staged = threading.Event()
+            proceed = threading.Event()
+            exceptions = []
+
+            def write(stream):
+                stream.write("timestamp,P_grid\n2026-01-01T00:00:00Z,3\n")
+                stream.flush()
+                staged.set()
+                if not proceed.wait(timeout=10):
+                    raise TimeoutError("test writer was not released")
+                stream.write("2026-01-01T00:05:00Z,4\n")
+
+            def writer():
+                try:
+                    atomic_write(target, write)
+                except Exception as exc:
+                    exceptions.append(exc)
+
+            reader = subprocess.Popen(
+                [sys.executable, "-c", reader_code, str(target)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            # Bound every blocking pipe read: killing the reader makes readline() return "".
+            watchdog = threading.Timer(30, reader.kill)
+            watchdog.start()
+            worker = threading.Thread(target=writer, daemon=True)
+
+            def read_in_reader_process():
+                reader.stdin.write("read\n")
+                reader.stdin.flush()
+                return json.loads(reader.stdout.readline())
+
+            try:
+                self.assertEqual(reader.stdout.readline().strip(), "ready")
+                worker.start()
+                self.assertTrue(staged.wait(timeout=10))
+                # A staged, incomplete replacement exists next to the target ...
+                staging = list(Path(directory).glob(".opt_res_latest.csv.*.tmp"))
+                self.assertEqual(len(staging), 1)
+                self.assertNotEqual(staging[0].read_text(), after)
+                # ... but the other process still reads the complete previous CSV.
+                self.assertEqual(read_in_reader_process(), before)
+                proceed.set()
+                worker.join(timeout=10)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(exceptions, [])
+                self.assertEqual(read_in_reader_process(), after)
+                self.assertFalse(list(Path(directory).glob("*.tmp")))
+            finally:
+                proceed.set()
+                if worker.is_alive():
+                    worker.join(timeout=10)
+                watchdog.cancel()
+                reader.stdin.close()
+                try:
+                    reader.wait(timeout=10)
+                finally:
+                    if reader.poll() is None:
+                        reader.kill()
+                        reader.wait(timeout=5)
+                    reader.stdout.close()
+
     def test_failed_staging_leaves_previous_csv_and_cleans_up(self):
         with TemporaryDirectory() as directory:
             target = Path(directory) / "opt_res_latest.csv"

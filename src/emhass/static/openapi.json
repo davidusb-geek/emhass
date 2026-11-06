@@ -137,6 +137,28 @@
           },
           "400": {
             "description": "Action failure"
+          },
+          "429": {
+            "description": "Only for the live optimization actions naive-mpc-optim, dayahead-optim and perfect-optim: another live optimization is already running. This request was rejected and not run (it is not queued and does not replace the running one); retry after the delay in Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Only for the live optimization actions naive-mpc-optim, dayahead-optim and perfect-optim: the live optimization lock could not be opened. The request failed closed and was not run; retry after the delay in Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       }

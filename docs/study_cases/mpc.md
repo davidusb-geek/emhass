@@ -27,7 +27,10 @@ Limits of this guard:
 - `opt_res_latest.csv`, `last_run.json` and `plan_latest.json` are each replaced atomically, so
   a reader never sees a partial file. They are three files, so a reader can briefly see
   one from the new run and another from the previous run, and `entity_save` files written
-  for `continual_publish` are likewise per entity.
+  for `continual_publish` are likewise per entity. Replacement gives atomic visibility, not
+  durability: the files are not `fsync`ed, so after a power loss or operating system crash a
+  file may be the previous version, empty or truncated (depending on the file system), or
+  absent if it had never been written. A killed process can leave a `.tmp` file behind.
 - If writing `last_run.json` or `plan_latest.json` fails (for example a full disk), the
   worker that ran the optimization keeps serving its newer in-memory result until a later
   write succeeds or a newer file appears; other workers only see the older file.
