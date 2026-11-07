@@ -177,6 +177,12 @@ async def _wait_for_lock(slot, timeout_s: float) -> bool:
     return True
 
 
+def _live_optim_slot() -> Path:
+    """One live optimization at a time across workers sharing a data folder."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+
+
 # Add custom filter for trusted HTML content
 def mark_safe(value):
     """Mark pre-rendered HTML plots as safe (use only for trusted content)"""
@@ -1151,9 +1157,52 @@ async def healthz():
 
 @app.route("/action/<action_name>", methods=["POST"])
 async def action_call(action_name: str):
+    """Reject concurrent live optimizations before loading inputs or writing results.
+
+    The non-blocking file lock also protects against another Gunicorn worker.
+    publish-data and dry runs are not locked; atomic result files remain readable.
     """
-    Receive Post action, run action according to passed slug(action_name)
-    """
+    if action_name not in {"naive-mpc-optim", "dayahead-optim", "perfect-optim"}:
+        return await _action_call_unlocked(action_name)
+
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        # Fail closed: without the lock an overlapping run could not be told apart,
+        # so nothing is loaded, solved or written. The caller may retry.
+        app.logger.warning(
+            "Live optimization lock unavailable (%s); %s rejected (503)", exc, action_name
+        )
+        response = await make_response(
+            "EMHASS >> The live optimization lock is unavailable. "
+            "Retry shortly; this request was not run.\n",
+            503,
+        )
+        response.headers["Retry-After"] = "2"
+        return response
+
+    with slot:
+        if not try_lock_file(slot):
+            # Warning only, and no " >> ": an ERROR line in the shared action log
+            # would make the in-flight request incorrectly report a failure.
+            app.logger.warning(
+                "Another live optimization is running; %s rejected (429)", action_name
+            )
+            response = await make_response(
+                "EMHASS >> Another live optimization is running. "
+                "Retry shortly; this request was not run.\n",
+                429,
+            )
+            response.headers["Retry-After"] = "2"
+            return response
+        try:
+            return await _action_call_unlocked(action_name)
+        finally:
+            unlock_file(slot)
+
+
+async def _action_call_unlocked(action_name: str):
+    """Existing action dispatch, called with the live-optimization slot if needed."""
     global continual_publish_thread
     global injection_dict
 
