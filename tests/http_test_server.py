@@ -13,8 +13,9 @@ throwaway ``trustme`` CA, so the client verifies them as in production.
 Only GET is served. Isolation: only the modules passed to :meth:`HttpTestServer.intercept`
 are touched, and only inside that block; the real ``aiohttp`` package is never patched.
 Within a patched module only the declared host names are reachable: any other host (an IP
-literal too), a session with its own connector or ``aiohttp.request`` raises
-:class:`NetworkBlocked`, and so does leaving the ``async with`` block afterwards. A request
+literal too), a request whose scheme differs from the host's declaration, a session with its
+own connector or ``aiohttp.request`` raises :class:`NetworkBlocked`, and so does leaving the
+``async with`` block afterwards. A module can be intercepted by one block at a time. A request
 no declared response matches (any non-GET too) is answered by dropping the connection and
 fails the block on exit. Code that imports ``ClientSession`` directly is not intercepted.
 
@@ -27,6 +28,7 @@ import ipaddress
 import re
 import socket
 import ssl
+import threading
 from dataclasses import dataclass
 from typing import NamedTuple
 from unittest import mock
@@ -38,6 +40,17 @@ from aiohttp.abc import AbstractResolver
 from aiohttp.test_utils import TestServer
 
 __all__ = ["HttpTestServer", "NetworkBlocked"]
+
+
+# Modules (by id) with an active ``intercept``: a second one on the same module would restore
+# stale state when the two blocks end out of nesting order, so it is refused instead.
+_intercepted: set[int] = set()
+_intercepted_lock = threading.Lock()
+
+
+def _normalize(host: str) -> str:
+    """DNS names are case-insensitive; aiohttp (yarl) lowercases the host it requests."""
+    return host.lower()
 
 
 class NetworkBlocked(AssertionError):
@@ -74,6 +87,7 @@ class HttpTestServer:
 
         ``trusted=False`` makes the client reject the server certificate.
         """
+        http, https = tuple(map(_normalize, http)), tuple(map(_normalize, https))
         if overlap := set(http) & set(https):
             raise ValueError(f"served both in clear and over TLS: {sorted(overlap)}")
         for host in (*http, *https):
@@ -156,6 +170,7 @@ class HttpTestServer:
 
         class Resolver(AbstractResolver):
             async def resolve(self, host, port=0, family=socket.AF_INET):
+                host = _normalize(host)
                 listener = server._listeners[server._tls[host]]
                 return [
                     {
@@ -177,23 +192,22 @@ class HttpTestServer:
                 super().__init__(*args, **kwargs)
 
             async def connect(self, req, traces, timeout):
-                # Covers what the resolver cannot: IP literals skip name resolution.
-                if req.url.host not in server._tls:
+                # Covers what the resolver cannot: IP literals skip name resolution, and the
+                # resolver never sees the scheme.
+                tls = server._tls.get(_normalize(req.url.host or ""))
+                if tls is None or tls != req.is_ssl():
                     server.blocked.append(f"{req.method} {req.url}")
                     raise NetworkBlocked(f"{req.url} is not served by the test server")
                 return await super().connect(req, traces, timeout)
 
         def client_session(*args, connector=None, **kwargs):
-            if connector is None:
-                connector = Connector()
-            elif not isinstance(connector, Connector):
+            if connector is not None:  # even a subclass of ours could override connect()
                 server.blocked.append("session with its own connector")
                 raise NetworkBlocked("a session with its own connector bypasses the test server")
-            return aiohttp.ClientSession(*args, connector=connector, **kwargs)
+            return aiohttp.ClientSession(*args, connector=Connector(), **kwargs)
 
         class StandIn:
             ClientSession = staticmethod(client_session)
-            TCPConnector = Connector
 
             @staticmethod
             def request(*args, **kwargs):
@@ -203,7 +217,13 @@ class HttpTestServer:
             def __getattr__(self, name):
                 return getattr(aiohttp, name)
 
+        ids = [id(module) for module in modules]
         with contextlib.ExitStack() as stack:
+            with _intercepted_lock:  # check and register together; nothing is patched on refusal
+                if len(set(ids)) != len(ids) or _intercepted.intersection(ids):
+                    raise RuntimeError("a module can only be intercepted once at a time")
+                _intercepted.update(ids)
+            stack.callback(_intercepted.difference_update, ids)
             for module in modules:
                 stack.enter_context(mock.patch.object(module, "aiohttp", StandIn()))
             yield self
