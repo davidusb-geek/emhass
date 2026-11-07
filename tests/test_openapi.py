@@ -184,6 +184,35 @@ class TestBuildSpec(unittest.TestCase):
         self.assertIn("plan_output_schema.md", action["externalDocs"]["url"])
         self.assertNotIn("externalDocs", action["responses"]["200"])
 
+    def test_action_documents_live_optimization_rejections(self):
+        responses = gen.build_spec()["paths"]["/action/{action_name}"]["post"]["responses"]
+        for code, phrase in (("429", "not run"), ("503", "failed closed")):
+            self.assertIn(code, responses)
+            description = responses[code]["description"]
+            for action in ("naive-mpc-optim", "dayahead-optim", "perfect-optim"):
+                self.assertIn(action, description)
+            self.assertIn(phrase, description)
+            header = responses[code]["headers"]["Retry-After"]
+            self.assertEqual(header["schema"], {"type": "integer"})
+        self.assertIn("not queued", responses["429"]["description"])
+        for code in ("200", "400"):
+            self.assertIn(code, responses)
+
+    def test_committed_artifact_documents_live_optimization_rejections(self):
+        committed = json.loads(
+            (REPO_ROOT / "src" / "emhass" / "static" / "openapi.json").read_text(encoding="utf-8")
+        )
+        responses = committed["paths"]["/action/{action_name}"]["post"]["responses"]
+        self.assertEqual(
+            {c: responses[c] for c in ("429", "503")},
+            {
+                c: gen.build_spec()["paths"]["/action/{action_name}"]["post"]["responses"][c]
+                for c in ("429", "503")
+            },
+        )
+        self.assertIn("Retry-After", responses["429"]["headers"])
+        self.assertIn("Retry-After", responses["503"]["headers"])
+
     def test_action_request_is_open_object(self):
         spec = gen.build_spec()
         body = spec["paths"]["/action/{action_name}"]["post"]["requestBody"]
