@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import _pickle as cPickle
-import asyncio
 import bz2
 import copy
 import glob
@@ -33,6 +32,7 @@ from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
 from tests.aioresponses_compat import aioresponses
 from tests.fixture_clock import fixture_clock
+from tests.http_test_server import HttpTestServer
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -1220,18 +1220,20 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
-                    with aioresponses() as mocked:
-                        mocked.get(url_pattern, status=400)
-                        mocked.get(url_pattern, status=400)
-                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
-                        total_calls = sum(len(v) for v in mocked.requests.values())
+                    async with HttpTestServer(https=("api.open-meteo.com",)) as server:
+                        # A JSON body, so only the status tells this apart from a good reply.
+                        server.get(url_pattern, status=400, payload={"reason": "bad request"})
+                        server.get(url_pattern, status=400, payload={"reason": "bad request"})
+                        with server.intercept(forecast_module):
+                            result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                    total_calls = len(server.requests)
             self.assertIsNone(result)
             self.assertEqual(total_calls, 1)
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
 
-    async def test_covariate_asyncio_timeout_is_retried(self):
-        """Python 3.10 raises asyncio.TimeoutError, which is not the builtin TimeoutError."""
+    async def test_covariate_timeout_is_retried(self):
+        """A request that times out (a real, tightened timeout) is retried, then succeeds."""
         from unittest.mock import patch
 
         payload = {"latitude": self.fcst.lat, "longitude": self.fcst.lon, "minutely_15": {}}
@@ -1241,14 +1243,16 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
-                    with aioresponses() as mocked:
-                        # asyncio.TimeoutError, not the builtin: they differ on Python 3.10.
-                        mocked.get(url_pattern, exception=asyncio.TimeoutError())  # noqa: UP041
-                        mocked.get(url_pattern, payload=payload)
-                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
-                        total_calls = sum(len(v) for v in mocked.requests.values())
+                    async with HttpTestServer(https=("api.open-meteo.com",)) as server:
+                        server.get(url_pattern, delay=30)  # never answers within the timeout
+                        server.get(url_pattern, payload=payload)
+                        with (
+                            server.intercept(forecast_module),
+                            patch.object(forecast_module, "open_meteo_request_timeout", 1.5),
+                        ):
+                            result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
             self.assertEqual(result, payload)
-            self.assertEqual(total_calls, 2)
+            self.assertEqual(len(server.requests), 2)
         finally:
             forecast_module.open_meteo_backoff_seconds = original_backoff
 
@@ -1276,11 +1280,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 with patch.dict(self.fcst.emhass_conf, {"data_path": pathlib.Path(tmp_dir)}):
                     cache_path = pathlib.Path(tmp_dir) / "cached-open-meteo-covariates.json"
                     cache_path.write_bytes(orjson.dumps(payload))
-                    with aioresponses() as mocked:
-                        # A second attempt would exhaust this mock and fail the test.
-                        mocked.get(url_pattern, status=504)
-                        result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
-                        total_calls = sum(len(v) for v in mocked.requests.values())
+                    async with HttpTestServer(https=("api.open-meteo.com",)) as server:
+                        # A second attempt would find no response and fail the test.
+                        server.get(url_pattern, status=504)
+                        with server.intercept(forecast_module):
+                            result = await self.fcst._fetch_open_meteo_covariates_json(1, 1)
+                    total_calls = len(server.requests)
             self.assertEqual(result, payload)
             self.assertEqual(total_calls, 1)
         finally:
