@@ -6,6 +6,35 @@ The `dayahead-optim` action normally computes one local calendar-day schedule on
 
 EMHASS implements this with the `naive-mpc-optim` action. This page walks through wiring it up.
 
+Only one live optimization request is accepted at a time by `/action/*` (`naive-mpc-optim`,
+`dayahead-optim` and `perfect-optim`). An overlapping request receives HTTP 429 with
+`Retry-After: 2` and **is not run**: the request that arrived first keeps running and the
+newer one is rejected, so a 429 is not an updated plan. Callers should skip a tick while a
+request is outstanding, then send a fresh optimization with current inputs rather than
+queueing an old body. A once-a-day `dayahead-optim` or `perfect-optim` call that receives 429
+should be retried after a few seconds, because it will not be sent again by itself. If the
+lock file itself cannot be opened (for example a read-only temporary directory), the request
+is also not run and receives HTTP 503 with `Retry-After: 2`: without the lock an overlapping
+run could not be excluded. Other actions (for example `publish-data`) and dry runs are not
+affected.
+
+Limits of this guard:
+
+- The lock is a file in the host's temporary directory, keyed by the data folder. It covers
+  all web server workers (`WEB_CONCURRENCY`) of one container or host. Containers that share a
+  data folder but not a temporary directory, direct Python calls and the command line are
+  not covered.
+- `opt_res_latest.csv`, `last_run.json` and `plan_latest.json` are each replaced atomically, so
+  a reader never sees a partial file. They are three files, so a reader can briefly see
+  one from the new run and another from the previous run, and `entity_save` files written
+  for `continual_publish` are likewise per entity. Replacement gives atomic visibility, not
+  durability: the files are not `fsync`ed, so after a power loss or operating system crash a
+  file may be the previous version, empty or truncated (depending on the file system), or
+  absent if it had never been written. A killed process can leave a `.tmp` file behind.
+- If writing `last_run.json` or `plan_latest.json` fails (for example a full disk), the
+  worker that ran the optimization keeps serving its newer in-memory result until a later
+  write succeeds or a newer file appears; other workers only see the older file.
+
 ## Scenario
 
 | Component | Value |
