@@ -420,12 +420,29 @@ def check_pin(name, status, objective, res):
         np.testing.assert_allclose(
             res[col].to_numpy(), expected, atol=tol, rtol=0, err_msg=f"{name}: {col}"
         )
-    # One inverter keeps its legacy column set: the optional columns exist exactly where
-    # they are pinned and no per-inverter suffixed column appears.
-    for col in ("P_hybrid_inverter", "P_PV_curtailment", "inv_stress_cost"):
-        assert (col in res.columns) == (col in pin["columns"]), f"{name}: column {col}"
-        assert f"{col}_0" not in res.columns, f"{name}: unexpected {col}_0"
-    assert "P_PV_0" not in res.columns and "P_PV_spill_0" not in res.columns
+    # One inverter keeps its legacy column set exactly, so no per-inverter column (P_PV_0,
+    # P_hybrid_inverter_0, ...) can appear next to the pinned ones.
+    assert set(res.columns) == expected_columns(name), f"{name}: result columns"
+
+
+# The result columns on 60555f73. The optional ones exist exactly where they are pinned.
+BASE_COLUMNS = {
+    "P_Load", "P_PV", "P_batt", "P_grid", "P_grid_neg", "P_grid_pos", "cost_fun_profit",
+    "cost_profit", "maximum_power_from_grid", "maximum_power_to_grid", "optim_status",
+    "unit_load_cost", "unit_prod_price",
+}  # fmt: skip
+OPTIONAL_COLUMNS = ("P_hybrid_inverter", "P_PV_curtailment", "inv_stress_cost")
+PER_BATTERY_COLUMNS = ("SOC_opt", "soc_deficit_cost", "soc_surplus_cost")
+
+
+def expected_columns(name):
+    n_batt = CASES[name].get("plant", {}).get("number_of_batteries", 1)
+    if n_batt == 1:
+        battery = set(PER_BATTERY_COLUMNS)
+    else:
+        battery = {f"{c}_{k}" for c in ("P_batt", *PER_BATTERY_COLUMNS) for k in range(n_batt)}
+    optional = {c for c in OPTIONAL_COLUMNS if c in PINS[name]["columns"]}
+    return BASE_COLUMNS | battery | optional
 
 
 RUNS = [(name, path) for name, case in CASES.items() for path in case.get("paths", ("dayahead",))]
@@ -441,8 +458,10 @@ def _col(name, column):
 
 
 # The tests below guard against a pin going vacuous: each scenario really engages its
-# feature. They read the pinned numbers only (no extra solves), so they also document what
-# each scenario is for. If one fails, the scenario inputs no longer reach the path they pin.
+# feature. Most read the pinned numbers, to document what each scenario reaches. The live
+# check is test_switching_the_feature_off_changes_the_result further down: it re-solves
+# each scenario with its feature off, so a feature that stops changing the result fails
+# there even while the pinned numbers still match.
 
 
 def test_scalar_scenario_binds_both_caps():
@@ -486,10 +505,17 @@ def test_nodischarge_rule_removes_battery_export():
 
 
 def test_acoupled_export_ceiling_binds():
+    # Live solves, rule on and off: with the rule the export stays within the PV surplus
+    # (the #936 ceiling) at every step. Without it the battery exports above the surplus
+    # in the evening, so the ceiling is what removes that export.
+    name = "acoupled_nodischarge_curtailment"
     ceiling = np.maximum(0, np.asarray(PV, dtype=float) - np.asarray(LOAD, dtype=float))
-    export = -_col("acoupled_nodischarge_curtailment", "P_grid_neg")
-    assert ((ceiling > 0) & (np.abs(export - ceiling) < 1e-6)).any()
-    assert _col("acoupled_nodischarge_curtailment", "P_PV_curtailment").max() > 0
+    _, _, on = solve(CASES[name], "dayahead")
+    _, _, off = solve(_feature_off(name, optim={"set_nodischarge_to_grid": False}), "dayahead")
+    assert (-on["P_grid_neg"].to_numpy() <= ceiling + POWER_TOL).all()
+    export_off = -off["P_grid_neg"].to_numpy()
+    assert ((export_off > ceiling + 100) & (off["P_batt"].to_numpy() > 100)).any()
+    assert on["P_PV_curtailment"].max() > 0
 
 
 def test_stress_segments_are_active():
@@ -503,3 +529,42 @@ def test_nocharge_rule_removes_night_grid_charge():
 
     assert night_grid_charge("hybrid_scalar_caps").any()
     assert not night_grid_charge("hybrid_nocharge_from_grid").any()
+
+
+def _feature_off(name, optim=None, plant=None, drop=()):
+    """CASES[name] with ``optim``/``plant`` overrides applied and ``drop`` keys removed."""
+    case = CASES[name]
+    merged_plant = {**case.get("plant", {}), **(plant or {})}
+    return {
+        **case,
+        "optim": {**case.get("optim", {}), **(optim or {})},
+        "plant": {k: v for k, v in merged_plant.items() if k not in drop},
+    }
+
+
+# Each scenario with the feature it pins switched off. The AC-coupled export ceiling has its
+# own rule-on/rule-off test above, and the relaxed rescue is checked live through the
+# pinned "Optimal (Relaxed)" status.
+FEATURE_OFF = {
+    "output_cap": ("hybrid_scalar_caps", {"plant": {"inverter_ac_output_max": 9000}}),
+    "input_cap": ("hybrid_scalar_caps", {"plant": {"inverter_ac_input_max": 9000}}),
+    "dc_ac_curve": ("hybrid_dc_ac_curve", {"drop": ("inverter_power_curve_dc_ac",)}),
+    "ac_dc_curve": ("hybrid_ac_dc_curve", {"drop": ("inverter_power_curve_ac_dc",)}),
+    "both_curves": ("hybrid_both_curves_two_batteries", {"drop": tuple(BOTH_CURVES)}),
+    "curtailment": ("hybrid_curtailment", {"plant": {"compute_curtailment": False}}),
+    "nodischarge": ("hybrid_nodischarge_to_grid", {"optim": {"set_nodischarge_to_grid": False}}),
+    "stress": ("hybrid_inverter_stress", {"plant": {"inverter_stress_cost": 0.0}}),
+    "nocharge": ("hybrid_nocharge_from_grid", {"optim": {"set_nocharge_from_grid": False}}),
+}
+
+
+@pytest.mark.parametrize("feature", FEATURE_OFF)
+def test_switching_the_feature_off_changes_the_result(feature):
+    # Both solves are live, so this fails if the model stops applying the feature, whatever
+    # the pins say. Without curtailment the PV above the cap has nowhere to go, so that
+    # counterfactual is infeasible rather than cheaper.
+    name, off = FEATURE_OFF[feature]
+    on_status, on_objective, _ = solve(CASES[name], "dayahead")
+    off_status, off_objective, _ = solve(_feature_off(name, **off), "dayahead")
+    assert on_status == "Optimal"
+    assert off_status != "Optimal" or abs(off_objective - on_objective) > 1e-3
