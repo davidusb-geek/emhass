@@ -33,8 +33,11 @@ def atomic_write(path: Path, write: Callable[[TextIO], None]) -> None:
     owner-only ``0o600`` of ``tempfile``: other containers or users that read
     the shared data folder keep working. When the destination already exists its
     permission bits are carried over, as an in-place rewrite would have kept them.
+    A symlinked destination stays a symlink: its target is the file replaced.
     """
-    path = Path(path)
+    # Replace what a symlink points to, not the link: an in-place rewrite followed it,
+    # and utils.replace_file does the same.
+    path = Path(os.path.realpath(path))
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with open(temporary, "x", encoding="utf-8", newline="") as stream:
