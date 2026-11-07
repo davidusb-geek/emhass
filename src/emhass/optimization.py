@@ -13,6 +13,10 @@ import pandas as pd
 
 from emhass import utils
 
+# Most segments accepted for battery_stress_segments / inverter_stress_segments
+# (see Optimization._get_stress_segments for why this bound is generous).
+STRESS_SEGMENTS_MAX = 100
+
 # Keys the thermal model actually reads from a load's thermal_config (issue #943).
 # Any other key is silently ignored, so a typo such as the singular
 # `min_temperature` (the model reads the list key `min_temperatures`) yields a
@@ -432,6 +436,8 @@ class Optimization:
         # unconditionally whenever the build block runs.
         self._batt_stress_conf = None
         self._inv_stress_conf = None
+        # (key, repr(value)) pairs already warned about by _get_stress_segments.
+        self._stress_segments_warned: set[tuple[str, str]] = set()
 
     def _init_soc_recovery_params(self) -> None:
         """Initialize CVXPY parameters used for out-of-band SOC recovery.
@@ -1701,7 +1707,7 @@ class Optimization:
             "vars": stress_cost_var,
             "unit_cost": stress_unit_cost,
             "max_power": max_power,
-            "segments": self.plant_conf.get("battery_stress_segments", 10),
+            "segments": self._get_stress_segments("battery_stress_segments") if active else 10,
         }
 
     def update_battery_power_limits(self, plant_conf: dict) -> None:
@@ -2042,9 +2048,42 @@ class Optimization:
             "vars": stress_cost_var,
             "unit_cost": stress_unit_cost,
             "max_power": max_power,
-            # Defaults to 10 segments if not provided in config
-            "segments": self.plant_conf.get(segments_conf_key, 10),
+            "segments": self._get_stress_segments(segments_conf_key) if active else 10,
         }
+
+    def _get_stress_segments(self, conf_key):
+        """Return the number of stress-curve segments for ``conf_key``.
+
+        ``battery_stress_segments`` and ``inverter_stress_segments`` are read the
+        same way. Default 10. A value that is not a whole number from 1 to
+        ``STRESS_SEGMENTS_MAX`` warns and falls back to 10. The bound is well past
+        any useful accuracy: with n equal segments the curve overestimates the
+        quadratic cost by at most 1/(4 n^2) of its full-load value, so 0.25% at 10
+        segments and 0.0025% at 100, while each segment adds two constraints.
+        Runtime params are copied verbatim, so a numeric string such as "10" is
+        accepted. The warning is logged once per key and value, since the battery
+        setup reads the shared key once per battery.
+        """
+        raw = self.plant_conf.get(conf_key, 10)
+        try:
+            # A JSON true/false is not a count, even though float(True) is 1.0.
+            value = None if isinstance(raw, bool) else float(raw)
+        except (TypeError, ValueError, OverflowError):
+            value = None
+        if (
+            value is not None
+            and isfinite(value)
+            and value == int(value)
+            and 1 <= value <= STRESS_SEGMENTS_MAX
+        ):
+            return int(value)
+        if (conf_key, repr(raw)) not in self._stress_segments_warned:
+            self._stress_segments_warned.add((conf_key, repr(raw)))
+            self.logger.warning(
+                f"{conf_key} must be a whole number from 1 to {STRESS_SEGMENTS_MAX}, "
+                f"got {raw!r}; falling back to 10 segments."
+            )
+        return 10
 
     def _build_stress_segments(self, max_power, stress_unit_cost, segments):
         """
