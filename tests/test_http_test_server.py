@@ -107,6 +107,15 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
             module.aiohttp.ClientSession(connector=connector)
 
     @staticmethod
+    async def session_with_overridden_connect(module):
+        class Unguarded(module.aiohttp.TCPConnector):  # whatever the module sees
+            async def connect(self, req, traces, timeout):
+                raise AssertionError("an unguarded connector must never be used")
+
+        async with Unguarded() as connector:
+            module.aiohttp.ClientSession(connector=connector)
+
+    @staticmethod
     async def call_aiohttp_request(module):
         await module.aiohttp.request("GET", "http://plain.test/")
 
@@ -116,16 +125,22 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
             "undeclared host": lambda: fetch(module, "http://elsewhere.invalid/"),
             "IP literal": lambda: fetch(module, "http://127.0.0.1:9/"),
             "own connector": lambda: self.session_with_own_connector(module),
+            "subclassed connector": lambda: self.session_with_overridden_connect(module),
+            "https to an http host": lambda: fetch(module, "https://plain.test/"),
+            "http to an https host": lambda: fetch(module, "http://secure.test/"),
             "aiohttp.request": lambda: self.call_aiohttp_request(module),
         }
         for label, attempt in attempts.items():
             with self.subTest(label):
                 with self.assertRaises(NetworkBlocked):
-                    async with HttpTestServer(http=("plain.test",)) as server:
+                    async with HttpTestServer(
+                        http=("plain.test",), https=("secure.test",)
+                    ) as server:
                         with server.intercept(module):
                             with self.assertRaises(NetworkBlocked):
                                 await attempt()
                 self.assertEqual(server.requests, [])
+                self.assertEqual(len(server.blocked), 1, "the refusal is recorded")
 
     async def test_a_block_that_swallows_the_refusal_still_fails(self):
         module = consumer()
@@ -148,6 +163,82 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((aiohttp.ClientSession, aiohttp.TCPConnector), original)
                     raise RuntimeError("boom")
             self.assertIs(inside.aiohttp, aiohttp, "restored even after a failure")
+
+    async def test_a_module_cannot_be_intercepted_twice_at_once(self):
+        module, other = consumer(), consumer()
+        async with HttpTestServer(http=("a.test",)) as one, HttpTestServer(http=("b.test",)) as two:
+            with one.intercept(module):
+                stand_in = module.aiohttp
+                for label, attempt in {
+                    "another server": lambda: two.intercept(module),
+                    "the same server": lambda: one.intercept(module),
+                    "free module first": lambda: two.intercept(other, module),
+                }.items():
+                    with self.subTest(label), self.assertRaises(RuntimeError):
+                        with attempt():
+                            pass
+                    self.assertIs(module.aiohttp, stand_in, "the active patch is untouched")
+                    self.assertIs(other.aiohttp, aiohttp, "nothing else got patched")
+            self.assertIs(module.aiohttp, aiohttp)
+            with self.assertRaises(RuntimeError):  # one module named twice in one call
+                with two.intercept(module, module):
+                    pass
+            self.assertIs(module.aiohttp, aiohttp)
+            with two.intercept(module):  # released: both after a refusal and after a failure
+                self.assertIsNot(module.aiohttp, aiohttp)
+
+    async def test_overlapping_tasks_on_one_module_are_refused_not_interleaved(self):
+        module = consumer()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async with HttpTestServer(http=("a.test",)) as one, HttpTestServer(http=("b.test",)) as two:
+
+            async def holder():
+                with one.intercept(module):
+                    entered.set()
+                    await release.wait()
+
+            task = asyncio.create_task(holder())
+            await entered.wait()
+            with self.assertRaises(RuntimeError):
+                with two.intercept(module):
+                    pass
+            release.set()
+            await task
+            self.assertIs(module.aiohttp, aiohttp, "the refused block left no stale patch")
+
+    async def test_independent_modules_may_overlap_and_end_in_any_order(self):
+        first, second = consumer(), consumer()
+        first_done = asyncio.Event()
+        async with HttpTestServer(http=("a.test",)) as one, HttpTestServer(http=("b.test",)) as two:
+
+            async def run(server, module, wait_for, set_after):
+                with server.intercept(module):
+                    set_after.set()
+                    await wait_for.wait()
+                    self.assertIsNot(module.aiohttp, aiohttp)
+
+            second_started = asyncio.Event()
+            await asyncio.gather(
+                run(one, first, second_started, first_done),
+                run(two, second, first_done, second_started),
+            )
+        self.assertIs(first.aiohttp, aiohttp)
+        self.assertIs(second.aiohttp, aiohttp)
+
+
+class TestHostNames(unittest.IsolatedAsyncioTestCase):
+    async def test_host_names_are_case_insensitive(self):
+        module = consumer()
+        async with HttpTestServer(http=("Plain.Test",), https=("SECURE.test",)) as server:
+            server.get("http://plain.test/", payload="p")
+            server.get("https://secure.test/", payload="s")
+            with server.intercept(module):
+                self.assertEqual(await fetch(module, "http://PLAIN.test/"), (200, '"p"'))
+                self.assertEqual(await fetch(module, "https://Secure.TEST/"), (200, '"s"'))
+
+    def test_the_same_name_in_both_schemes_is_refused_whatever_its_case(self):
+        with self.assertRaises(ValueError):
+            HttpTestServer(http=("A.test",), https=("a.TEST",))
 
 
 class TestCleanupConcurrencyAndLeakage(unittest.IsolatedAsyncioTestCase):
