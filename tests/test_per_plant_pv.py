@@ -18,8 +18,8 @@ from emhass import forecast as forecast_module
 from emhass import utils
 from emhass.forecast import Forecast
 from tests import test_forecast as test_forecast_module
-from tests.aioresponses_compat import aioresponses
 from tests.fixture_clock import fixture_clock
+from tests.http_test_server import HttpTestServer
 
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
@@ -105,6 +105,11 @@ class PerPlantBase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.cache_path = self.data_dir / "weather_forecast_data.pkl"
+        # The real HTTPS hosts the fetchers call, served from the loopback interface.
+        self.server = await self.enterAsyncContext(
+            HttpTestServer(https=("api.solcast.com.au", "api.forecast.solar"))
+        )
+        self.enterContext(self.server.intercept(forecast_module))
         # Never touch the real Solcast daily quota counter.
         self.fcst._solcast_rate_limit_ok = lambda *a, **kw: True
         # A retried transport error must not sleep.
@@ -177,11 +182,10 @@ class PerPlantBase(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "k"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = ",".join(payload_by_roof)
         hours = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
-        with aioresponses() as mocked:
-            for roof_id, payload in payload_by_roof.items():
-                url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={hours}"
-                mocked.get(url, payload=payload)
-            return await self.fcst.get_weather_forecast(method="solcast")
+        for roof_id, payload in payload_by_roof.items():
+            url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={hours}"
+            self.server.get(url, payload=payload)
+        return await self.fcst.get_weather_forecast(method="solcast")
 
     def configure_planes(self, n_planes, kwp=5):
         self.plant_conf["pv_module_model"] = ["module"] * n_planes
@@ -194,12 +198,11 @@ class PerPlantBase(unittest.IsolatedAsyncioTestCase):
 
         Returns the frame and the URLs that were requested, in request order.
         """
-        with aioresponses() as mocked:
-            for watts in watts_per_plane:
-                mocked.get(SOLAR_FORECAST_URL, payload={"result": {"watts": watts}})
-            frame = await self.fcst.get_weather_forecast(method="solar.forecast")
-            urls = [str(key[1]) for key, calls in mocked.requests.items() for _ in calls]
-        return frame, urls
+        first_request = len(self.server.requests)
+        for watts in watts_per_plane:
+            self.server.get(SOLAR_FORECAST_URL, payload={"result": {"watts": watts}})
+        frame = await self.fcst.get_weather_forecast(method="solar.forecast")
+        return frame, [request.url for request in self.server.requests[first_request:]]
 
 
 class TestSplitHelper(unittest.TestCase):
@@ -586,6 +589,19 @@ class TestSolarForecastPlants(PerPlantBase):
         frame, _ = await self.fetch_solar_forecast([SOLAR_FORECAST_WATTS["a"]])
         self.assertEqual(list(frame.columns), ["yhat"])
 
+    async def test_an_error_status_ends_the_fetch_without_a_retry(self):
+        self.configure_planes(1)
+        for status in (429, 503):
+            with self.subTest(status=status):
+                first_request = len(self.server.requests)
+                # A JSON body, so only the status tells this apart from a good reply.
+                self.server.get(SOLAR_FORECAST_URL, status=status, payload={"message": "refused"})
+                with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
+                    result = await self.fcst.get_weather_forecast(method="solar.forecast")
+                self.assertIs(result, False)
+                self.assertEqual(len(self.server.requests) - first_request, 1)
+                self.assertTrue(any(f"HTTP {status}" in line for line in logs.output))
+
     async def test_the_plants_are_written_to_the_cache_next_to_yhat(self):
         self.fcst.params["passed_data"]["weather_forecast_cache"] = True
         await self.fetch_solar_forecast([SOLAR_FORECAST_WATTS["a"], SOLAR_FORECAST_WATTS["b"]])
@@ -606,11 +622,10 @@ class TestCacheReader(PerPlantBase):
 
     async def read_cache(self, method):
         """Serve the cache through the real path; no request may leave."""
-        with aioresponses() as mocked:
-            with self.assertLogs(self.fcst.logger, level="INFO") as logs:
-                frame = await self.fcst.get_weather_forecast(method=method)
-                p_pv = self.fcst.get_power_from_weather(frame)
-            self.assertEqual(mocked.requests, {}, "a cache read must not fetch")
+        with self.assertLogs(self.fcst.logger, level="INFO") as logs:
+            frame = await self.fcst.get_weather_forecast(method=method)
+            p_pv = self.fcst.get_power_from_weather(frame)
+        self.assertEqual(self.server.requests, [], "a cache read must not fetch")
         self.assertTrue(self.cache_path.exists(), "a cache read must not drop the cache")
         notices = [line for line in logs.output if "without the P_PV_plant columns" in line]
         return frame, p_pv, notices
@@ -751,10 +766,9 @@ class TestSolarForecastKwp(PerPlantBase):
         for text in ("[3,", "[3, 4", "[3] + [4]", "[__import__('os')]", "[[3], 4]", "[]", "[3]"):
             with self.subTest(text=text):
                 self.retrieve_hass_conf["solar_forecast_kwp"] = text
-                with aioresponses() as mocked:
-                    with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
-                        result = await self.fcst.get_weather_forecast(method="solar.forecast")
-                    self.assertEqual(mocked.requests, {}, "no request may be made")
+                with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
+                    result = await self.fcst.get_weather_forecast(method="solar.forecast")
+                self.assertEqual(self.server.requests, [], "no request may be made")
                 self.assertIs(result, False)
                 self.assertTrue(any("solar_forecast_kwp" in line for line in logs.output))
                 self.assertTrue(all(len(line) < MAX_LOG_LINE for line in logs.output), logs.output)
@@ -851,10 +865,9 @@ class TestSolarForecastKwp(PerPlantBase):
         for label, bad in bad_lists.items():
             with self.subTest(label):
                 self.retrieve_hass_conf["solar_forecast_kwp"] = bad
-                with aioresponses() as mocked:
-                    with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
-                        result = await self.fcst.get_weather_forecast(method="solar.forecast")
-                    self.assertEqual(mocked.requests, {}, "no request may be made")
+                with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
+                    result = await self.fcst.get_weather_forecast(method="solar.forecast")
+                self.assertEqual(self.server.requests, [], "no request may be made")
                 self.assertIs(result, False)
                 self.assertTrue(any("solar_forecast_kwp" in line for line in logs.output))
 
@@ -878,10 +891,9 @@ class TestSolarForecastKwp(PerPlantBase):
         for label, bad in {"wrong length": [3.5], "zero entry": [3.5, 0], "text": "[3"}.items():
             with self.subTest(label):
                 self.retrieve_hass_conf["solar_forecast_kwp"] = bad
-                with aioresponses() as mocked:
-                    with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
-                        result = await self.fcst.get_weather_forecast(method="solar.forecast")
-                    self.assertEqual(mocked.requests, {}, "no request may be made")
+                with self.assertLogs(self.fcst.logger, level="ERROR") as logs:
+                    result = await self.fcst.get_weather_forecast(method="solar.forecast")
+                self.assertEqual(self.server.requests, [], "no request may be made")
                 self.assertIs(result, False)
                 self.assertTrue(any("solar_forecast_kwp" in line for line in logs.output))
                 self.assertEqual(self.cache_path.read_bytes(), cache_before)
@@ -889,9 +901,8 @@ class TestSolarForecastKwp(PerPlantBase):
     async def test_a_good_list_is_served_from_the_cache(self):
         self.write_cache(self.cache_frame({"yhat": 30.0, "yhat_plant0": 10.0, "yhat_plant1": 20.0}))
         self.retrieve_hass_conf["solar_forecast_kwp"] = [3.5, 4]
-        with aioresponses() as mocked:
-            frame = await self.fcst.get_weather_forecast(method="solar.forecast")
-            self.assertEqual(mocked.requests, {}, "a cache read must not fetch")
+        frame = await self.fcst.get_weather_forecast(method="solar.forecast")
+        self.assertEqual(self.server.requests, [], "a cache read must not fetch")
         self.assertIsInstance(frame, pd.DataFrame)
         np.testing.assert_allclose(frame["yhat"], 30.0)
 
