@@ -7,7 +7,9 @@ while the problem was built. Now a value that is not a whole number from 1 to
 STRESS_SEGMENTS_MAX warns and falls back to 10, the same for both keys.
 """
 
+import json
 import logging
+import pathlib
 from unittest import mock
 
 import pandas as pd
@@ -165,3 +167,19 @@ def test_bad_value_is_ignored_quietly_when_stress_cost_is_off(caplog):
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         assert segment_counts(plant) == []
     assert warnings_for(caplog, "stress_segments") == []
+
+
+def test_published_metadata_matches_the_accepted_range():
+    # The web-config definitions and the generated OpenAPI spec advertise the same
+    # 1..STRESS_SEGMENTS_MAX range that _get_stress_segments enforces.
+    static = pathlib.Path(__file__).resolve().parents[1] / "src" / "emhass" / "static"
+    definitions = json.loads(
+        (static / "data" / "param_definitions.json").read_text(encoding="utf-8")
+    )
+    spec = json.loads((static / "openapi.json").read_text(encoding="utf-8"))
+    props = spec["components"]["schemas"]["Config"]["properties"]
+    for key in ("battery_stress_segments", "inverter_stress_segments"):
+        found = [d[key] for d in definitions.values() if isinstance(d, dict) and key in d]
+        assert len(found) == 1
+        assert (found[0]["minimum"], found[0]["maximum"]) == (1, STRESS_SEGMENTS_MAX)
+        assert (props[key]["minimum"], props[key]["maximum"]) == (1, STRESS_SEGMENTS_MAX)

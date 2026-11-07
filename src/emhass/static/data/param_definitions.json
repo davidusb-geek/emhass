@@ -400,9 +400,11 @@
     },
     "inverter_stress_segments": {
       "friendly_name": "Hybrid Inverter Stress Segments",
-      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. A whole number from 1 to 100.",
       "input": "int",
       "default_value": 10,
+      "minimum": 1,
+      "maximum": 100,
       "unit": "count"
     },
     "compute_curtailment": {
@@ -911,9 +913,11 @@
     },
     "battery_stress_segments": {
       "friendly_name": "Battery Stress Segments",
-      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. A whole number from 1 to 100.",
       "input": "int",
       "default_value": 10,
+      "minimum": 1,
+      "maximum": 100,
       "unit": "count"
     },
     "battery_soc_deficit_threshold": {
