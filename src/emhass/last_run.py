@@ -208,9 +208,11 @@ def read(data_path: Path) -> dict | None:
         path = _path(data_path)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("snapshot root is not a JSON object")
         except FileNotFoundError:
             return dict(_cache) if _cache is not None else None
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
             _logger.warning("last_run: corrupt or unreadable snapshot file", exc_info=exc)
             return dict(_cache) if _unpersisted and _cache is not None else None
         if _unpersisted and (data == _persisted or pending_wins(_cache, data, "timestamp")):

@@ -247,6 +247,26 @@ class TestAtomicResults(unittest.TestCase):
                 last_run._unpersisted = plan_store._unpersisted = False
 
 
+class TestAtomicSymlinkDestination(unittest.TestCase):
+    def test_a_symlinked_destination_keeps_pointing_at_the_rewritten_target(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "real.csv"
+            link = root / "opt_res_latest.csv"
+            target.write_text("old")
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest("this account cannot create symlinks")
+            atomic_write(link, lambda stream: stream.write("new"))
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(target.read_text(), "new")
+            self.assertEqual(link.read_text(), "new")
+            self.assertEqual(
+                sorted(p.name for p in root.iterdir()), ["opt_res_latest.csv", "real.csv"]
+            )
+
+
 class TestSnapshotOrdering(unittest.TestCase):
     """last_run / plan_store: the shared file wins unless a failed write is pending."""
 
@@ -322,6 +342,23 @@ class TestSnapshotOrdering(unittest.TestCase):
         self._record_run(last_run.ACTION_DAYAHEAD_OPTIM)
         plan_store.record(self.data, [{"P_grid": 2}], "2026-11-06T10:00:01Z", "1")
         self.assertFalse(last_run._unpersisted or plan_store._unpersisted)
+
+    def test_non_object_json_is_corrupt_for_pending_and_non_pending_reads(self):
+        for root in ([], [1], "x", 7, None):
+            for module, name in ((last_run, "last_run.json"), (plan_store, "plan_latest.json")):
+                key = "timestamp" if module is last_run else "generated_at"
+                cache = {key: "2026-11-06T10:00:00Z", "marker": "cache"}
+                with self.subTest(module=module.__name__, root=root, pending=True):
+                    self._reset()
+                    module._cache, module._unpersisted = dict(cache), True
+                    self._write(name, root)
+                    self.assertEqual(module.read(self.data), cache)
+                    self.assertTrue(module._unpersisted)
+                with self.subTest(module=module.__name__, root=root, pending=False):
+                    self._reset()
+                    module._cache = dict(cache)
+                    self._write(name, root)
+                    self.assertIsNone(module.read(self.data))
 
     def test_mixed_naive_and_aware_timestamps_are_compared_as_utc(self):
         last_run._unpersisted = True
@@ -492,18 +529,35 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
         unlocked.assert_awaited_once()
 
     async def test_slot_is_released_after_a_failed_request(self):
-        with (
-            patch.object(
-                web_server, "_load_params_and_runtime", AsyncMock(side_effect=RuntimeError("boom"))
-            ),
+        slot_path = web_server._live_optim_slot()
+        with patch.object(
+            web_server, "_load_params_and_runtime", AsyncMock(side_effect=RuntimeError("boom"))
         ):
             first = await self.client.post("/action/naive-mpc-optim", json={})
             self.assertEqual(first.status_code, 500)
-        with patch.object(
-            web_server, "_load_params_and_runtime", AsyncMock(return_value=(None, "", ""))
-        ):
+        # The failed request released its lock: another holder can take it now ...
+        with open(slot_path, "a+") as probe:
+            self.assertTrue(utils.try_lock_file(probe))
+            utils.unlock_file(probe)
+        # ... and the next request genuinely reaches the loader instead of being rejected.
+        loader = AsyncMock(side_effect=RuntimeError("reached"))
+        with patch.object(web_server, "_load_params_and_runtime", loader):
             again = await self.client.post("/action/naive-mpc-optim", json={})
-        self.assertNotEqual(again.status_code, 429)
+        self.assertEqual(again.status_code, 500)
+        loader.assert_awaited_once()
+        # While another holder owns the slot, the same request is rejected before the loader.
+        loader.reset_mock()
+        with (
+            open(slot_path, "a+") as other_worker,
+            patch.object(web_server, "_load_params_and_runtime", loader),
+        ):
+            self.assertTrue(utils.try_lock_file(other_worker))
+            try:
+                blocked = await self.client.post("/action/naive-mpc-optim", json={})
+            finally:
+                utils.unlock_file(other_worker)
+        self.assertEqual(blocked.status_code, 429)
+        loader.assert_not_awaited()
 
     async def test_unrelated_actions_are_not_blocked_by_a_running_optimization(self):
         with (
