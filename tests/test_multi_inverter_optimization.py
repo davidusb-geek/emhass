@@ -24,7 +24,7 @@ import pytest
 from emhass import command_line
 from emhass.command_line import OptimizationCache
 from emhass.forecast import Forecast
-from emhass.optimization import Optimization
+from emhass.optimization import BATTERY_TIEBREAK_EPS, Optimization
 
 TEST_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHARGE_MAX = 5000
@@ -836,9 +836,17 @@ def test_curtailment_time_weights_do_not_recruit_battery_round_trips():
 
 def test_stress_cost_is_per_inverter_and_only_on_the_inverters_that_have_it():
     kw = {"battery_inverter_index": (0, 1), "pv_plant_inverter_index": (0,)}
+    # Export pays more in steps 2-3 and 6-7. Without stress, battery 0 shifts PV into those
+    # steps and inverter 0 peaks at its 5 kW cap. With stress, a flat 4 kW costs less.
+    # Battery 1 is slightly lossy so the shift has to go through battery 0: with two
+    # lossless batteries routing it through battery 1 instead is an equal optimum, and
+    # only the 1e-9 battery tie-break would pick between them.
+    prod = [0.05, 0.05, 0.12, 0.12, 0.05, 0.05, 0.12, 0.12]
+    lossy_battery_1 = {"battery_discharge_efficiency": [1.0, 0.99]}
 
     def run(stress):
-        return solve(build_multi(stress=stress, **kw), pv=(4000.0,), load=0.0, soc=0.05, final=0.05)
+        opt = build_multi(stress=stress, plant_overrides=lossy_battery_1, **kw)
+        return solve(opt, pv=(4000.0,), load=0.0, prod=prod, soc=0.05, final=0.05)
 
     plain, stressed = run([0.0, 0.0]), run([0.3, 0.0])
     assert "inv_stress_cost_0" in stressed.columns and "inv_stress_cost_1" not in stressed.columns
@@ -895,6 +903,18 @@ def test_no_curtailment_flags_means_no_curtailment_columns_and_no_hybrid_flag_is
     pd.testing.assert_frame_equal(solve(flagged), res)
 
 
+def economic_objective(opt):
+    """The solved objective without the #610 battery tie-break term.
+
+    HiGHS does not always drive that 1e-9 per W term to zero: with some random seeds it
+    returns a plan that cycles the second battery at no economic cost, and the objective
+    then sits a few 1e-6 below the tie-broken one (macOS CI hit 6.2e-6).
+    """
+    pairs = zip(opt.vars["p_sto_pos"], opt.vars["p_sto_neg"], strict=True)
+    tilt = sum(k * np.sum(pos.value - neg.value) for k, (pos, neg) in enumerate(pairs))
+    return opt.prob.value + BATTERY_TIEBREAK_EPS * tilt
+
+
 def test_two_lossless_hybrids_match_one_aggregate_hybrid_on_objective_and_grid_energy():
     # At efficiency 1.0 the flow between the two inverters is a real tie, so only the
     # objective and the site grid totals are compared, not the split.
@@ -916,7 +936,7 @@ def test_two_lossless_hybrids_match_one_aggregate_hybrid_on_objective_and_grid_e
         },
     )
     ref = solve(agg, pv=(4000.0,), load=900.0, cost=cost, soc=0.3)
-    assert multi.prob.value == pytest.approx(agg.prob.value, abs=1e-6)
+    assert economic_objective(multi) == pytest.approx(economic_objective(agg), abs=1e-6)
     assert col(res, "P_grid").sum() == pytest.approx(col(ref, "P_grid").sum(), abs=1e-3)
     assert col(res, "P_hybrid_inverter").sum() == pytest.approx(
         col(ref, "P_hybrid_inverter").sum(), abs=1e-3
