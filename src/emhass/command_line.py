@@ -3978,6 +3978,40 @@ def _plan_column_present(ctx: PublishContext, opt_res_latest: pd.DataFrame, colu
     return False
 
 
+# Per-inverter sensors above one inverter (#1150). Like the per-battery sensors these are
+# fixed templates, not configurable: (plan column prefix, entity id, friendly name).
+_INVERTER_PV_SENSOR = (
+    "P_PV",
+    "sensor.p_pv_forecast_inverter{i}",
+    "PV Power Forecast Inverter {i}",
+)
+_INVERTER_CURTAILMENT_SENSOR = (
+    "P_PV_curtailment",
+    "sensor.p_pv_curtailment_inverter{i}",
+    "PV Power Curtailment Inverter {i}",
+)
+_INVERTER_SPILL_SENSOR = (
+    "P_PV_spill",
+    "sensor.p_pv_spill_inverter{i}",
+    "PV Power Spill Inverter {i}",
+)
+_INVERTER_HYBRID_SENSOR = (
+    "P_hybrid_inverter",
+    "sensor.p_hybrid_inverter_inverter{i}",
+    "PV Hybrid Inverter Inverter {i}",
+)
+
+
+def _publish_num_inverters(ctx: PublishContext) -> int:
+    """The configured inverter count; one when it cannot be read (#1150)."""
+    try:
+        return utils.validate_num_inverters(ctx.plant_conf)
+    except utils.InverterConfigError:
+        # The count was validated when the configuration was loaded; an action never
+        # gets here with a bad one. Fall back to the one-inverter path.
+        return 1
+
+
 def _publish_pv_inverters(ctx: PublishContext) -> set[int]:
     """The inverters that carry a PV plant; none when the index cannot be read (#1150)."""
     try:
@@ -3998,6 +4032,51 @@ def _curtailing_inverters(ctx: PublishContext, pv_inverters: set[int]) -> set[in
     if len(flags) == 1:
         return pv_inverters if flags[0] else set()
     return {i for i in pv_inverters if i < len(flags) and flags[i]}
+
+
+async def _publish_per_inverter_sensors(
+    ctx: PublishContext,
+    opt_res_latest: pd.DataFrame,
+    num_inverters: int,
+    pv_inverters: set[int],
+    curtailing: set[int],
+) -> list[str]:
+    """Publish one sensor per inverter for the per-inverter plan columns (#1150).
+
+    Only inverters 0 to num_inverters - 1 are read, so columns of a stale plan from a
+    larger fleet are ignored. A column the topology expects but the plan lacks is
+    skipped with a warning; the spill column is optional and never warns. Curtailment
+    is published only for an inverter in ``curtailing``.
+    """
+    cols: list[str] = []
+    for i in range(num_inverters):
+        # (sensor, whether the topology expects the column for this inverter)
+        sensors = [(_INVERTER_PV_SENSOR, i in pv_inverters)]
+        if i in curtailing:
+            sensors.append((_INVERTER_CURTAILMENT_SENSOR, True))
+        sensors += [(_INVERTER_SPILL_SENSOR, False), (_INVERTER_HYBRID_SENSOR, True)]
+        for (prefix, entity_template, name_template), expected in sensors:
+            column = f"{prefix}_{i}"
+            # An expected column that is missing warns; an optional one is just skipped.
+            present = (
+                _plan_column_present(ctx, opt_res_latest, column)
+                if expected
+                else column in opt_res_latest.columns
+            )
+            if not present:
+                continue
+            await ctx.rh.post_data(
+                opt_res_latest[column],
+                ctx.idx,
+                entity_template.format(i=i),
+                "power",
+                "W",
+                name_template.format(i=i),
+                type_var="power",
+                **ctx.common_kwargs,
+            )
+            cols.append(column)
+    return cols
 
 
 async def _publish_standard_forecasts(
@@ -4032,17 +4111,15 @@ async def _publish_standard_forecasts(
             **ctx.common_kwargs,
         )
         cols.append("P_PV")
-    try:
-        num_inverters = utils.validate_num_inverters(ctx.plant_conf)
-    except utils.InverterConfigError:
-        # The count was validated when the configuration was loaded; an action never
-        # gets here with a bad one. Fall back to the one-inverter path.
-        num_inverters = 1
+    num_inverters = _publish_num_inverters(ctx)
+    pv_inverters: set[int] = set()
+    curtailing: set[int] = set()
     if num_inverters > 1:
-        # Site totals only (#1150); per-inverter sensors come later. inverter_is_hybrid
+        # Site totals first (#1150), the per-inverter sensors after them. inverter_is_hybrid
         # is not read above one inverter. A column missing from a stale plan is skipped.
         # The curtailment total exists only when an inverter that carries PV curtails.
-        curtailing = _curtailing_inverters(ctx, _publish_pv_inverters(ctx))
+        pv_inverters = _publish_pv_inverters(ctx)
+        curtailing = _curtailing_inverters(ctx, pv_inverters)
         publish_curtailment = bool(curtailing) and _plan_column_present(
             ctx, opt_res_latest, "P_PV_curtailment"
         )
@@ -4078,6 +4155,12 @@ async def _publish_standard_forecasts(
             **ctx.common_kwargs,
         )
         cols.append("P_hybrid_inverter")
+    if num_inverters > 1:
+        cols.extend(
+            await _publish_per_inverter_sensors(
+                ctx, opt_res_latest, num_inverters, pv_inverters, curtailing
+            )
+        )
     return cols
 
 
@@ -4273,6 +4356,26 @@ _BATTERY_SOC_ENTITY_TEMPLATE = "sensor.soc_batt_forecast_battery{k}"
 _DEFAULT_SOC_ENTITY_ID = "sensor.soc_batt_forecast"
 
 
+def _battery_inverter_numbers(ctx: PublishContext) -> list[int] | None:
+    """The inverter of each battery above one inverter, else None (#1150)."""
+    if _publish_num_inverters(ctx) <= 1:
+        return None
+    index = ctx.plant_conf.get("battery_inverter_index")
+    if not isinstance(index, list):
+        return None
+    try:
+        return [int(value) for value in index]
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _inverter_attribute(inverters: list[int] | None, k: int) -> dict:
+    """post_data keyword for the ``inverter`` attribute of battery k; empty at one inverter."""
+    if inverters is None or k >= len(inverters):
+        return {}
+    return {"extra_attributes": {"inverter": inverters[k]}}
+
+
 async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish Battery Power (fleet total; per-battery at N>1) and SOC
     (bare at N=1, per-battery only at N>1)."""
@@ -4282,6 +4385,10 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
     if "P_batt" not in opt_res_latest.columns:
         ctx.logger.error("P_batt was not found in results DataFrame.")
         return cols
+    n_batt = utils.validate_num_batteries(ctx.plant_conf)
+    # Above one inverter the bare sensors of a single battery name that battery's inverter.
+    battery_inverters = _battery_inverter_numbers(ctx)
+    bare_attributes = _inverter_attribute(battery_inverters, 0) if n_batt == 1 else {}
     # Power - fleet total. custom_batt_forecast_id overrides this one entity at
     # any N: unchanged code path, so this stays a true no-op at N=1.
     custom_batt = ctx.params["passed_data"]["custom_batt_forecast_id"]
@@ -4294,10 +4401,10 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
         custom_batt["friendly_name"],
         type_var="batt",
         **ctx.common_kwargs,
+        **bare_attributes,
     )
     cols.append("P_batt")
 
-    n_batt = utils.validate_num_batteries(ctx.plant_conf)
     if n_batt == 1:
         # N=1: exactly today's entity set, zero new entities. Still
         # overridable via custom_batt_soc_forecast_id.
@@ -4318,6 +4425,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
             custom_soc["friendly_name"],
             type_var="SOC",
             **ctx.common_kwargs,
+            **bare_attributes,
         )
         cols.append("SOC_opt")
         return cols
@@ -4352,6 +4460,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
                 f"Battery Power Forecast Battery {k}",
                 type_var="batt",
                 **ctx.common_kwargs,
+                **_inverter_attribute(battery_inverters, k),
             )
             cols.append(p_col)
         else:
@@ -4368,6 +4477,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
                 f"Battery SOC Forecast Battery {k}",
                 type_var="SOC",
                 **ctx.common_kwargs,
+                **_inverter_attribute(battery_inverters, k),
             )
             cols.append(soc_col)
         else:
@@ -4600,6 +4710,23 @@ async def _publish_and_update_freq(input_data_dict, entity_path, logger, current
     return current_freq
 
 
+def _saved_attributes(entity_metadata: dict, entity_id: str, logger: logging.Logger) -> dict | None:
+    """The extra attributes saved for an entity (#1150), or None.
+
+    metadata.json is a plain file, so a value that is not a dict is ignored with a warning
+    rather than stopping the publish of every saved entity.
+    """
+    attributes = entity_metadata.get("attributes")
+    if attributes is None or isinstance(attributes, dict):
+        return attributes
+    logger.warning(
+        "Ignoring the saved attributes of %s: expected an object in metadata.json, got %s",
+        entity_id,
+        type(attributes).__name__,
+    )
+    return None
+
+
 async def publish_json(
     entity: dict,
     input_data_dict: dict,
@@ -4673,6 +4800,7 @@ async def publish_json(
         type_var=metadata[entity_id].get("type_var", ""),
         save_entities=False,
         logger_levels=logger_levels,
+        extra_attributes=_saved_attributes(metadata[entity_id], entity_id, logger),
     )
     return entity_data[metadata[entity_id]["name"]]
 

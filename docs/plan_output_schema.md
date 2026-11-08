@@ -81,9 +81,28 @@ AC, negative = AC to DC; an inverter with no PV and no battery is 0, and a PV-on
 never negative), and `P_hybrid_inverter` is the sum over inverters. `inv_stress_cost_{i}` appears
 for each inverter with `inverter_stress_cost` above 0 and a cap above 0 that has a PV plant or a
 battery on it. The site totals `P_PV`, `P_PV_curtailment` and `P_hybrid_inverter` are in the plan
-as at one inverter, but `P_hybrid_inverter` is always present here. The per-inverter columns are
-diagnostic output like `P_PV_plant{j}`: they are in `opt_res_latest.csv` and in the plan, not in
-the frame that `publish_data` returns, and they are not published to Home Assistant.
+as at one inverter, but `P_hybrid_inverter` is always present here. Above one inverter the
+per-inverter power columns are published to Home Assistant next to the site totals, which are posted
+exactly as before, and they are in the frame that `publish_data` returns. The sensors have fixed
+entity ids with the inverter number `i` on the end: `sensor.p_pv_forecast_inverter{i}`,
+`sensor.p_pv_curtailment_inverter{i}`, `sensor.p_pv_spill_inverter{i}` and
+`sensor.p_hybrid_inverter_inverter{i}` (the last one repeats "inverter" because the site total is
+called `sensor.p_hybrid_inverter` by default). Their friendly names are the default site-total
+name with `Inverter {i}` on the end (`PV Power Spill Inverter {i}` for spill, which has no site
+total), the unit is W, and the entity ids and names cannot be customized. Only
+inverters `0` to `number_of_inverters - 1` are published, so columns left over from a plan made
+for more inverters are ignored. A column that the topology calls for but the saved plan lacks is
+skipped with a warning (run a new optimization); `P_PV_spill_{i}` is optional and is published
+only when the plan has it. `inv_stress_cost_{i}` is not published.
+
+With more than one inverter, the battery power and SOC sensors also carry an `inverter` attribute
+with the number of the inverter that battery is on, taken from `battery_inverter_index`. With
+more than one battery that is every `sensor.p_batt_forecast_battery{k}` and
+`sensor.soc_batt_forecast_battery{k}`; with one battery it is the bare `sensor.p_batt_forecast`
+and `sensor.soc_batt_forecast`. The fleet-total `sensor.p_batt_forecast` has no `inverter`
+attribute when there is more than one battery, since it spans inverters. The attribute is kept in
+the saved entity metadata, so continual publish posts it again. With one inverter nothing is
+added: the entities, attributes and metadata are the same as before.
 
 With more than one battery, the result has `P_batt_{k}` (W, same sign convention as
 `P_batt`) and `SOC_opt_{k}` (fraction 0 to 1, the same scaling as `SOC_opt`) for each
@@ -99,6 +118,7 @@ per-battery diagnostic columns that only the CSV file and the plan carry (such a
 | `P_PV` | `_publish_standard_forecasts` | W | positive = production (PV → DC bus) | when `"P_PV"` is in DataFrame | 1:1 | `power` | `custom_pv_forecast_id`. Assigned from `p_pv` forecast input at `optimization.py:2291`. |
 | `P_PV_curtailment` | `_publish_standard_forecasts` | W | positive = curtailed delta (subtracts from gross PV in DC balance) | `plant_conf.compute_curtailment = true` (one inverter); above one inverter, when any inverter that carries PV has it on | 1:1 | `power` | `custom_pv_curtailment_id`. CVXPY `nonneg=True` at `optimization.py:876`; appears as `(p_pv - p_pv_curtailment)` in DC-balance constraint at line 1131; bounded by `<= param_pv_forecast` at line 2761. |
 | `P_hybrid_inverter` | `_publish_standard_forecasts` | W | AC-side power; positive = DC → AC delivery, negative = AC → DC (charging-from-grid via DC bus) | `plant_conf.inverter_is_hybrid = true` (one inverter); always above one inverter | 1:1 | `power` | `custom_hybrid_inverter_id`. Defined in `_add_hybrid_inverter_constraints` as `p_hybrid_inverter == ac_out - ac_in`. By default (scalar efficiencies) `ac_out = p_dc_ac * eff_dc_ac` and `ac_in = p_ac_dc / eff_ac_dc`; when `inverter_power_curve_dc_ac` / `inverter_power_curve_ac_dc` is configured, that direction's DC-bus flow is instead the exact piecewise-linear function of the AC power, converted from the configured `[ac_power_w, efficiency]` points. `P_hybrid_inverter` is the AC side and `P_batt` the DC-bus (battery) side. Unit and sign are unchanged. |
+| `P_PV_{i}`, `P_PV_curtailment_{i}`, `P_PV_spill_{i}`, `P_hybrid_inverter_{i}` | `_publish_per_inverter_sensors` | W | as the site total of the same name | only above one inverter, for `i` in `[0, number_of_inverters)`; row skipped (warning) if a column the topology expects is missing, `P_PV_spill_{i}` only when present | 1:1 | `power` | Fixed entity ids `sensor.p_pv_forecast_inverter{i}`, `sensor.p_pv_curtailment_inverter{i}`, `sensor.p_pv_spill_inverter{i}`, `sensor.p_hybrid_inverter_inverter{i}`; not customizable. `P_PV_curtailment_{i}` only for an inverter that carries PV and has its own `compute_curtailment` on. |
 | `P_deferrable{k}` | `_publish_deferrable_loads` | W | positive = consumption | `k ∈ [0, number_of_deferrable_loads)`; row skipped (error log) if column missing | 1:1 | `deferrable` | `custom_deferrable_forecast_id[k]` |
 | `predicted_temp_heater{k}` | `_publish_thermal_loads` | °C | n/a (state) | per `k` where `def_load_config[k]` has `thermal_config`, `thermal_battery` or `thermal_source` (a heat topology or shared-tank member, which reports its storage's temperature) | 1:1 | `temperature` | `custom_predicted_temperature_id[k]`. Semantics depend on heater type: **room (air) temperature** for `thermal_config` loads (kept within `min_temps`/`max_temps` band toward `desired_temps`); **thermal-storage/tank temperature** for `thermal_battery` loads. |
 | `heating_demand_heater{k}` | `_publish_thermal_loads` | **kWh** | **thermal energy** the building exchanges with its surroundings, not electrical input. For a heating load (`sense: "heat"`) this is positive (heat the building loses and the source must replace). For a cooling load (`sense: "cool"`) it is zero or **negative**, representing the heat the building gains and the source must remove. | set for `thermal_battery` loads and for `thermal_source` loads (a heat topology or shared-tank member), not for bare `thermal_config`. Every load that feeds a shared storage reports that storage's whole demand, so do not add them up; a storage without a demand model reports 0 | 1:1 | `energy` | `custom_heating_demand_id[k]`. The thermal-battery model carries a separate `heatpump_cops` parameter (`optimization.py:310`); electrical input = thermal / COP, so the two are decoupled. Unit `"kWh"` confirmed at `utils.py` (`heating_demand_friendly_name`). |
@@ -176,4 +196,4 @@ DataFrame to the published columns before returning.
 | Version | Date | Change |
 |---------|------|--------|
 | 1.0 | 2026-05-10 | Initial published schema. Sign conventions derived from `src/emhass/optimization.py` with inline citations. |
-| 1.1 | 2026-11-06 | Added the optional `P_PV_plant{j}` columns (only with two or more PV plants). Documented the `P_batt_{k}` and `SOC_opt_{k}` columns that appear with more than one battery. Added the per-inverter columns `P_PV_{i}`, `P_PV_curtailment_{i}`, `P_hybrid_inverter_{i}` and `inv_stress_cost_{i}` (only with more than one inverter). Added `P_PV_spill_{i}` (only for a hybrid inverter with curtailment off, above one inverter). Above one inverter, a PV-only inverter with curtailment off has its `P_PV_{i}` (and so `P_PV`) clipped, and the `P_PV_plant{j}` columns then no longer always add up to `P_PV`. No existing column changed. |
+| 1.1 | 2026-11-06 | Added the optional `P_PV_plant{j}` columns (only with two or more PV plants). Documented the `P_batt_{k}` and `SOC_opt_{k}` columns that appear with more than one battery. Added the per-inverter columns `P_PV_{i}`, `P_PV_curtailment_{i}`, `P_hybrid_inverter_{i}` and `inv_stress_cost_{i}` (only with more than one inverter). Added `P_PV_spill_{i}` (only for a hybrid inverter with curtailment off, above one inverter). Above one inverter, a PV-only inverter with curtailment off has its `P_PV_{i}` (and so `P_PV`) clipped, and the `P_PV_plant{j}` columns then no longer always add up to `P_PV`. Added the per-inverter Home Assistant sensors for these columns (`sensor.p_pv_forecast_inverter{i}` and the others listed above). With more than one inverter the battery power and SOC sensors have an `inverter` attribute. No existing column changed. |
