@@ -7638,7 +7638,7 @@ class Optimization:
         opt_tp["P_Load"] = p_load
 
         if self.n_inv > 1:
-            # Per inverter: the PV the model used, and its curtailment (#1150)
+            # Per inverter: the PV forecast the model was given, its curtailment and its spill (#1150)
             curt_vars = self.vars["p_pv_curtailment_inv"]
             for i, pv_param in enumerate(self.param_pv_inv):
                 if pv_param is not None:
