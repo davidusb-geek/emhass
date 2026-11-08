@@ -8474,19 +8474,21 @@ class Optimization:
         self.param_prod_price.value = unit_prod_price
         if self.n_inv > 1:
             # Spill only competes with a negative price, so in each step the base is the
-            # size of that step's more negative price (see SPILL_PRICE_FACTOR). Under
-            # self-consumption the import price is scaled by the big-M, and so is the
-            # base. The inverter stress rate is a plain cost and is added unscaled.
+            # size of that step's more negative price (see SPILL_PRICE_FACTOR), each taken
+            # as the objective weighs it: under self-consumption import (and the floor) is
+            # scaled by the big-M and export is not, and the cost objective has no export
+            # term, so a negative export price does not count there. The inverter stress
+            # rate is a plain cost and is added unscaled.
+            n_steps = len(unit_load_cost)
+            import_neg = -np.asarray(unit_load_cost, dtype=float) * penalty_scale
+            if self.costfun == "cost":
+                export_neg = np.zeros(n_steps)
+            else:
+                export_neg = -np.asarray(unit_prod_price, dtype=float)
             negative = np.maximum.reduce(
-                [
-                    -np.asarray(unit_load_cost, dtype=float),
-                    -np.asarray(unit_prod_price, dtype=float),
-                    np.full(len(unit_load_cost), SPILL_PRICE_FLOOR),
-                ]
+                [import_neg, export_neg, np.full(n_steps, SPILL_PRICE_FLOOR * penalty_scale)]
             )
-            self.param_spill_price.value = (
-                SPILL_PRICE_FACTOR * negative * penalty_scale + self._spill_stress_rate()
-            )
+            self.param_spill_price.value = SPILL_PRICE_FACTOR * negative + self._spill_stress_rate()
 
         # Per-load cost forecast overrides. Default each load's per-timestep cost
         # to the shared electricity tariff (no-op adjustment in the objective). If
