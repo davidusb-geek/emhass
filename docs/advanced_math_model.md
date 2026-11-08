@@ -240,7 +240,7 @@ $$\text{Total Cost} = \text{Energy Cost} + \text{Stress Penalty}(P_{inverter})$$
 To enable this, add the following parameters to your `config.json` (or `optim_conf` in `config_emhass.yaml`):
 
 - `inverter_stress_cost` (float): The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20).
-- `inverter_stress_segments` (Integer): The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10).
+- `inverter_stress_segments` (Integer): The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10). It must be a whole number from 1 to 100. When the stress cost is set, any other value logs a warning and 10 segments are used. The same check applies to `battery_stress_segments`.
 
 Example usage using `runtimeparams`:
 ```bash
