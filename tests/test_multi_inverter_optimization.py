@@ -3,10 +3,10 @@
 
 Topology and PV path: the topology each inverter resolves to, the per-inverter PV path
 (Parameters, assembly, the column-to-inverter map), the variables a multi-inverter
-``Optimization`` creates, and the structural cache key. PR 1's refusal of ``number_of_inverters`` above 1
-stays in utils, so an ``Optimization`` is built directly here with hand-normalised
-per-inverter lists. ``inverter_is_hybrid`` is left OUT of the plant_conf and
-``compute_curtailment`` is a list, so any bare read of either key fails loudly.
+``Optimization`` creates, and the structural cache key. An ``Optimization`` is built
+directly here with hand-normalised per-inverter lists, the form utils hands it.
+``inverter_is_hybrid`` is left OUT of the plant_conf and ``compute_curtailment`` is a
+list, so any bare read of either key fails loudly.
 
 ``build_multi`` is the shared builder; the per-inverter model tests further down reuse it.
 """
@@ -25,6 +25,7 @@ from emhass import command_line
 from emhass.command_line import OptimizationCache
 from emhass.forecast import Forecast
 from emhass.optimization import BATTERY_TIEBREAK_EPS, Optimization
+from emhass.utils import InverterConfigError
 
 TEST_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHARGE_MAX = 5000
@@ -366,10 +367,10 @@ def test_a_non_finite_pv_value_names_the_inverter():
     opt = build_multi(n_inv=2, battery_inverter_index=(0,), pv_plant_inverter_index=(0, 1))
     bad = np.ones(HORIZON)
     bad[3] = np.nan
-    with pytest.raises(ValueError, match="inverter 1 has non-finite"):
+    with pytest.raises(InverterConfigError, match="inverter 1 has non-finite"):
         opt._assemble_inverter_pv(np.ones(HORIZON), _plants(np.ones(HORIZON), bad), [0, 1])
     single = build_multi(n_inv=2, battery_inverter_index=(0,), pv_plant_inverter_index=(1,))
-    with pytest.raises(ValueError, match="inverter 1 has non-finite"):
+    with pytest.raises(InverterConfigError, match="inverter 1 has non-finite"):
         single._assemble_inverter_pv(bad, None, None)
 
 
@@ -581,11 +582,16 @@ def test_caps_bind_per_inverter_even_when_the_sum_would_allow_more():
         eff_dc_ac=[0.95] * 2,
         eff_ac_dc=[0.95] * 2,
     )
-    res = solve(opt, pv=(5000.0, 0.0), soc=0.1)
+    surplus = 5000 - 3000 / 0.95
+    # battery 0's target takes exactly the overflow (8 steps of 0.5 h), so nothing is spilled
+    final = [0.1 + surplus * 4 / CAP, 0.1]
+    res = solve(opt, pv=(5000.0, 0.0), soc=[0.1, 0.1], final=final)
     assert col(res, "P_hybrid_inverter_0").max() == pytest.approx(3000, abs=1e-3)
     assert col(res, "P_hybrid_inverter_1").max() <= 3000 + 1e-3
     # what the cap cannot pass goes into battery 0 through the DC side of the inverter
-    assert col(res, "P_batt_0") == pytest.approx(-(5000 - 3000 / 0.95), abs=1e-2)
+    assert col(res, "P_batt_0") == pytest.approx(-surplus, abs=1e-2)
+    assert col(res, "P_PV_spill_0") == pytest.approx(0, abs=1e-3)
+    assert col(res, "P_batt_1") == pytest.approx(0, abs=1e-3)
     # counterfactual: one aggregate 6 kW hybrid on the same site passes more than 3 kW
     agg = build_multi(
         n_inv=1,

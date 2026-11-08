@@ -416,7 +416,7 @@
     },
     "number_of_inverters": {
       "friendly_name": "Number of inverters",
-      "Description": "Number of physical inverters in the plant (default 1). More than one inverter is not supported yet: a value above 1 is refused with an error. The per-inverter settings are described in docs/config.md.",
+      "Description": "Number of physical inverters in the plant (default 1). With more than one inverter, the per-inverter settings and how the optimizer models them are described in docs/config.md.",
       "input": "int",
       "default_value": 1,
       "unit": "count"

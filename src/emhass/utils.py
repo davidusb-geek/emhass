@@ -2314,7 +2314,7 @@ def describe_nested_pv_payload_at_one_inverter(forecast_key: str, forecast_input
     return (
         f"{forecast_key}: send one flat list of numbers (or one timestamped mapping). It holds "
         "lists or mappings, one per inverter, but number_of_inverters is 1. A list per "
-        "inverter is only accepted with more than one inverter, which is not supported yet."
+        "inverter is only accepted when number_of_inverters is above 1."
     )
 
 
@@ -2876,8 +2876,8 @@ async def treat_runtimeparams(
             num_batteries, params["plant_conf"], "battery_charge_power_derating", logger
         )
         # Per-inverter parameters (#1150): the same re-normalisation after the runtime
-        # merge, then the refusal of more than one inverter once every specific fault
-        # has been reported. Before the curve check, which reads the normalised caps.
+        # merge, then every specific fault is reported together. Before the curve
+        # check, which reads the normalised caps.
         try:
             runtime_num_inverters = validate_num_inverters(params["plant_conf"])
         except InverterConfigError:
@@ -5236,8 +5236,7 @@ async def build_params(
     )
     # Per-inverter parameters (#1150). Never raises here: an unusable value is logged and
     # left for treat_runtimeparams to refuse, so /get-config and startup stay up and the
-    # configuration can be corrected. Every fault comes before the refusal of more
-    # than one inverter.
+    # configuration can be corrected.
     inverter_problems = _inverter_config_problems(params["plant_conf"], logger)
     for inverter_problem in inverter_problems:
         logger.error("%s", inverter_problem)
@@ -5964,7 +5963,10 @@ class BatteryConfigError(ValueError):
 
 
 class InverterConfigError(ValueError):
-    """An inverter setting is unusable, or asks for more than one inverter before that is supported (#1150).
+    """An inverter setting is unusable: the count or a per-inverter parameter is invalid (#1150).
+
+    The optimizer also raises it above one inverter for a plan the settings rule out
+    (perfect-optim, or a PV forecast without the per-inverter split they need).
 
     ``problems`` lists every fault behind the error: just the error itself for a single
     fault, the individual faults for one that joins several (see _join_inverter_faults).
@@ -6168,23 +6170,6 @@ def validate_num_inverters(conf: dict) -> int:
     return int(value)
 
 
-def reject_multiple_inverters(conf: dict) -> None:
-    """Raise InverterConfigError when number_of_inverters is above 1 (#1150).
-
-    The per-inverter optimizer does not exist yet, so a second inverter would be
-    silently modelled as the first one's twin. The count and every per-inverter
-    setting are validated before this runs, so every fault is reported ahead
-    of this refusal.
-    """
-    num_inverters = validate_num_inverters(conf)
-    if num_inverters > 1:
-        raise InverterConfigError(
-            f"number_of_inverters={num_inverters}: more than one inverter is not supported "
-            "in this version yet. Set number_of_inverters to 1 (the per-inverter optimizer "
-            "is still to come)."
-        )
-
-
 def _inverter_label(name: str, index: int | None) -> str:
     return name if index is None else f"{name}[{index}]"
 
@@ -6329,7 +6314,7 @@ def check_inverter_params(conf: dict, logger: logging.Logger) -> None:
     once (its first bad element), and when there are several they come in one
     InverterConfigError whose message joins them with ". " and whose ``problems``
     attribute lists them. A configuration with any fault is left exactly as it was.
-    Nothing is refused for being above one inverter here; see reject_multiple_inverters.
+    Nothing is refused for being above one inverter: a count above 1 is validated like any other.
 
     One inverter (the default, and a missing ``number_of_inverters``) is a true
     no-op for every existing configuration: a scalar is left exactly as written. The
@@ -6607,17 +6592,16 @@ def _normalise_multiple_inverters(
 # configuration page and startup stay up; treat_runtimeparams raises through
 # require_usable_inverter_config, which logs first; /set-config collects the messages on
 # a copy with inverter_config_faults. All three share _inverter_config_problems, which
-# runs validate_num_inverters, check_inverter_params and reject_multiple_inverters.
+# runs validate_num_inverters and check_inverter_params.
 def _inverter_config_problems(conf: dict, logger: logging.Logger) -> list[InverterConfigError]:
     """Everything wrong with the inverter settings of a configuration (#1150), in order.
 
     An unusable count is the only problem reported for it. Otherwise every fault from
-    check_inverter_params comes first, one per unusable parameter, and above one
-    inverter the refusal from reject_multiple_inverters follows them, so the user learns
-    that more than one inverter is not supported yet without first fixing every fault.
+    check_inverter_params is reported, one per unusable parameter. A count above 1 is
+    not a fault in itself.
     """
     try:
-        num_inverters = validate_num_inverters(conf)
+        validate_num_inverters(conf)
     except InverterConfigError as err:
         return [err]
     problems: list[InverterConfigError] = []
@@ -6625,27 +6609,21 @@ def _inverter_config_problems(conf: dict, logger: logging.Logger) -> list[Invert
         check_inverter_params(conf, logger)
     except InverterConfigError as err:
         problems.extend(err.problems)
-    if num_inverters > 1:
-        try:
-            reject_multiple_inverters(conf)
-        except InverterConfigError as err:
-            problems.append(err)
     return problems
 
 
 def require_usable_inverter_config(conf: dict, logger: logging.Logger) -> None:
-    """Validate the inverter parameters and refuse more than one inverter (#1150).
+    """Validate the inverter parameters, raising when one is unusable (#1150).
 
-    Every problem is logged at error level here before the error is raised, the specific
-    faults first and then the refusal of more than one inverter, which is what lets the
-    web server return the action log with its 400, as for SocFractionError. When there
-    are several, the raised error carries all of them, joined with ". ".
+    Every problem is logged at error level here before the error is raised, which is what
+    lets the web server return the action log with its 400, as for SocFractionError. When
+    there are several, the raised error carries all of them, joined with ". ".
 
     :param conf: the plant_conf dict
     :type conf: dict
     :param logger: The logger object
     :type logger: logging.Logger
-    :raises InverterConfigError: when a setting is unusable or number_of_inverters is above 1
+    :raises InverterConfigError: when the count or a per-inverter setting is unusable
     """
     problems = _inverter_config_problems(conf, logger)
     for problem in problems:
@@ -6672,8 +6650,7 @@ def inverter_config_faults(config: dict) -> list[str]:
     Used by ``/set-config`` before anything is written. Runs the same checks as
     require_usable_inverter_config on a copy, so the request is left alone and logs
     nothing. The list holds every fault, one per unusable parameter (its first bad
-    entry), in check order. Above one inverter the refusal comes last, so the user
-    learns that more than one inverter is not supported yet from the first answer.
+    entry), in check order. A count above 1 is accepted when the settings are usable.
 
     :param config: the submitted flat configuration
     :type config: dict

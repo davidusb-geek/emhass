@@ -613,7 +613,7 @@ async def parameter_set():
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
     # here would leave the user believing the curve is active. The per-inverter settings
     # (#1150) are checked in the same pass, so one answer lists every fault: the curves
-    # first, then the inverter settings, then the refusal of more than one inverter.
+    # first, then the other inverter settings.
     try:
         inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
             request_data
@@ -807,7 +807,13 @@ async def _handle_action_dispatch(
     if action_name in optim_actions:
         action_str = f" >> Performing {action_name}..."
         logger.info(action_str)
-        opt_res = await optim_actions[action_name](input_data_dict, logger)
+        try:
+            opt_res = await optim_actions[action_name](input_data_dict, logger)
+        except InverterConfigError as exc:
+            # Above one inverter the optimizer refuses a plan it cannot build (perfect-optim,
+            # or a PV forecast with no per-inverter split): a bad request, not a crash.
+            logger.error("%s", exc)
+            return await grab_log(action_str), 400
         # False: the action stopped before the solver, e.g. on a rejected
         # runtime forecast (#1135); there is no plan to render.
         if isinstance(opt_res, bool) and not opt_res:
@@ -1099,6 +1105,10 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
     try:
         opt_res = await wrappers[action_name](input_data_dict, app.logger)
+    except InverterConfigError as exc:
+        # Same as /action: a plan the inverter settings rule out is a bad request.
+        _explain(str(exc))
+        return not_run, 400
     finally:
         if "rh" in input_data_dict:
             await input_data_dict["rh"].close()

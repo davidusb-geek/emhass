@@ -817,7 +817,7 @@
             "default": 1,
             "title": "Number of inverters",
             "x-unit": "count",
-            "description": "Number of physical inverters in the plant (default 1). More than one inverter is not supported yet: a value above 1 is refused with an error. The per-inverter settings are described in docs/config.md. (unit: count)"
+            "description": "Number of physical inverters in the plant (default 1). With more than one inverter, the per-inverter settings and how the optimizer models them are described in docs/config.md. (unit: count)"
           },
           "battery_inverter_index": {
             "type": "array",
