@@ -240,6 +240,52 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         mock_optim.assert_called_once()
 
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server.set_input_data_dict")
+    @patch("emhass.web_server.perfect_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime")
+    async def test_action_optim_inverter_refusal_is_400(
+        self, mock_load, mock_optim, mock_set_input, mock_grab
+    ):
+        """An optimizer refusal above one inverter (#1150) is a bad request, not a 500."""
+        from emhass.utils import InverterConfigError
+
+        mock_load.return_value = ({"optim_conf": {}}, "profit", "{}")
+        mock_set_input.return_value = {"retrieve_hass_conf": {"continual_publish": False}}
+        mock_optim.side_effect = InverterConfigError(
+            "number_of_inverters=2: perfect-optim has no PV history per inverter"
+        )
+        mock_grab.return_value = ["ERROR perfect-optim has no PV history per inverter"]
+        response = await self.client.post("/action/perfect-optim", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no PV history per inverter", await response.get_data(as_text=True))
+        # counterfactual: any other error is still not turned into a 400
+        mock_optim.side_effect = RuntimeError("solver crashed")
+        response = await self.client.post("/action/perfect-optim", json={})
+        self.assertEqual(response.status_code, 500)
+
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.perfect_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params", new_callable=AsyncMock)
+    async def test_dry_run_inverter_refusal_is_400(self, mock_params, mock_optim, mock_set_input):
+        """A dry run answers an optimizer refusal above one inverter (#1150) with a 400."""
+        from emhass.utils import InverterConfigError
+
+        mock_params.return_value = ("{}", "profit")
+        mock_set_input.return_value = {"retrieve_hass_conf": {}}
+        mock_optim.side_effect = InverterConfigError(
+            "number_of_inverters=2: perfect-optim has no PV history per inverter"
+        )
+        response = await self.client.post("/api/v1/dry-run/perfect-optim", json={})
+        self.assertEqual(response.status_code, 400)
+        body = await response.get_json()
+        self.assertEqual(body["status"], "not-run")
+        self.assertIsNone(body["plan"])
+        # counterfactual: any other error is still a 500
+        mock_optim.side_effect = RuntimeError("solver crashed")
+        response = await self.client.post("/api/v1/dry-run/perfect-optim", json={})
+        self.assertEqual(response.status_code, 500)
+
     @patch("emhass.web_server.export_influxdb_to_csv")
     @patch("emhass.web_server._load_params_and_runtime")
     async def test_action_export_csv(self, mock_load, mock_export):

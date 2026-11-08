@@ -53,7 +53,8 @@ extend mode). Adding a source flow changes `n`, and so this index. Neither is pu
 
 With two or more PV plants, the optimization result also has one `P_PV_plant{j}` column per plant
 (W, never negative, `j` counting from 0 in plant order), written next to `P_PV`. The plant
-columns add up to `P_PV` at every timestep, up to float rounding; where `P_PV` is not a
+columns add up to `P_PV` at every timestep, up to float rounding (above one inverter, not after a
+PV-only clip: see below); where `P_PV` is not a
 finite number, neither are the plant columns. They split `P_PV` as forecast:
 `P_PV_curtailment` is not split per plant. They are diagnostic output. They are in
 `opt_res_latest.csv` and in the plan returned by `/api/v1/plan`, not in the frame that
@@ -64,11 +65,17 @@ forecast in use was saved before this version and has no per-plant data (see
 columns as before. See [Forecasts](forecasts.md) for what a plant is for each forecast method.
 
 Above one inverter (`number_of_inverters` above 1), the result also has per-inverter columns,
-`i` counting from 0 in inverter order. This is not reachable from a configuration yet: more than
-one inverter is refused until a later release. `P_PV_{i}` is the PV the model used for each
-inverter that carries PV (W; `P_PV` is their sum). `P_PV_curtailment_{i}` is the curtailment of
+`i` counting from 0 in inverter order. `P_PV_{i}` is the PV forecast the model was given for
+each inverter that carries PV (W; `P_PV` is their sum). The PV that inverter actually uses is
+`P_PV_{i}` minus its `P_PV_curtailment_{i}` or `P_PV_spill_{i}`, whichever it has, just as
+`P_PV_curtailment` comes off `P_PV`. For a PV-only inverter with
+`compute_curtailment` off, the forecast is clipped to what the inverter can convert, so
+`P_PV` and `P_PV_{i}` are clipped too, while the `P_PV_plant{j}` columns keep the forecast as it
+came in and no longer always add up to `P_PV`. `P_PV_curtailment_{i}` is the curtailment of
 each inverter that carries PV and has `compute_curtailment` on (W, never negative), and
-`P_PV_curtailment` is then the sum over those inverters. `P_hybrid_inverter_{i}` is the AC-side
+`P_PV_curtailment` is then the sum over those inverters. `P_PV_spill_{i}` is the PV a hybrid
+inverter with `compute_curtailment` off cannot use in a step (W, never negative); it appears
+only for those inverters. `P_hybrid_inverter_{i}` is the AC-side
 power of every inverter, with the same sign convention as `P_hybrid_inverter` (positive = DC to
 AC, negative = AC to DC; an inverter with no PV and no battery is 0, and a PV-only inverter is
 never negative), and `P_hybrid_inverter` is the sum over inverters. `inv_stress_cost_{i}` appears
@@ -169,4 +176,4 @@ DataFrame to the published columns before returning.
 | Version | Date | Change |
 |---------|------|--------|
 | 1.0 | 2026-05-10 | Initial published schema. Sign conventions derived from `src/emhass/optimization.py` with inline citations. |
-| 1.1 | 2026-11-06 | Added the optional `P_PV_plant{j}` columns (only with two or more PV plants). Documented the `P_batt_{k}` and `SOC_opt_{k}` columns that appear with more than one battery. Added the per-inverter columns `P_PV_{i}`, `P_PV_curtailment_{i}`, `P_hybrid_inverter_{i}` and `inv_stress_cost_{i}` (only with more than one inverter). No existing column changed. |
+| 1.1 | 2026-11-06 | Added the optional `P_PV_plant{j}` columns (only with two or more PV plants). Documented the `P_batt_{k}` and `SOC_opt_{k}` columns that appear with more than one battery. Added the per-inverter columns `P_PV_{i}`, `P_PV_curtailment_{i}`, `P_hybrid_inverter_{i}` and `inv_stress_cost_{i}` (only with more than one inverter). Added `P_PV_spill_{i}` (only for a hybrid inverter with curtailment off, above one inverter). Above one inverter, a PV-only inverter with curtailment off has its `P_PV_{i}` (and so `P_PV`) clipped, and the `P_PV_plant{j}` columns then no longer always add up to `P_PV`. No existing column changed. |
