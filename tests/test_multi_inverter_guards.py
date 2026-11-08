@@ -88,12 +88,11 @@ def _masking_warnings(caplog) -> list[str]:
 # --------------------- runtime scalar masks a per-inverter list ---------------------
 
 
-def test_runtime_scalar_over_distinct_list_warns_then_still_refuses(caplog):
+def test_runtime_scalar_over_distinct_list_warns_and_proceeds(caplog):
     base = _build_params(_two(inverter_efficiency_dc_ac=[0.95, 0.97]))
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError, match="not supported"):
-            _treat_runtime({"inverter_efficiency_dc_ac": 0.96}, base)
+        _treat_runtime({"inverter_efficiency_dc_ac": 0.96}, base)
     warnings = _masking_warnings(caplog)
     assert len(warnings) == 1, caplog.messages
     assert "inverter_efficiency_dc_ac" in warnings[0]
@@ -117,8 +116,7 @@ def test_runtime_scalar_warns_for_each_broadcast_key(caplog):
     }
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError):
-            _treat_runtime(runtime, base)
+        _treat_runtime(runtime, base)
     text = " ".join(_masking_warnings(caplog))
     for key in runtime:
         assert key in text, caplog.messages
@@ -136,8 +134,7 @@ def test_runtime_scalar_warning_is_silent_when_nothing_is_masked(configured, run
     base = _build_params(_two(inverter_efficiency_dc_ac=configured))
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError, match="not supported"):
-            _treat_runtime(runtime, base)
+        _treat_runtime(runtime, base)
     assert _masking_warnings(caplog) == []
 
 

@@ -792,28 +792,28 @@ def test_set_config_rejects_a_wrong_length_list_at_one_inverter(web):
     assert _web_state(web) == before
 
 
-def test_set_config_refuses_more_than_one_inverter_and_writes_nothing(web):
+def test_set_config_accepts_more_than_one_inverter_and_saves_it(web):
     assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
-    before = _web_state(web)
     status, body = web.post(_two_inverter_conf())
-    assert status == 400
-    assert "number_of_inverters=2" in " ".join(body) and "not supported" in " ".join(body)
-    assert _web_state(web) == before
+    assert status == 200, body
+    saved = json.loads(web.conf["config_path"].read_text())
+    assert saved["number_of_inverters"] == 2
+    assert saved["inverter_ac_output_max"] == [5000, 6000]
 
 
-def test_set_config_reports_every_inverter_fault_before_the_refusal(web):
+def test_set_config_reports_every_inverter_fault_at_more_than_one_inverter(web):
     assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
     before = _web_state(web)
     status, body = web.post({"number_of_inverters": 2})
     assert status == 400
-    # All come back at once: both caps and both index lists, then the refusal.
-    assert len(body) == 5
+    # All come back at once: both caps and both index lists, and nothing else.
+    assert len(body) == 4
     assert "inverter_ac_output_max" in body[0]
-    assert "not supported" in body[-1]
+    assert not any("not supported" in m for m in body)
     assert _web_state(web) == before
 
 
-def test_set_config_lists_every_inverter_fault_and_the_refusal(web):
+def test_set_config_lists_every_inverter_fault_and_nothing_else(web):
     assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
     before = _web_state(web)
     status, body = web.post(
@@ -825,36 +825,33 @@ def test_set_config_lists_every_inverter_fault_and_the_refusal(web):
         )
     )
     assert status == 400
-    assert len(body) == 5, body
+    assert len(body) == 4, body
     expected = (
         "inverter_efficiency_dc_ac",
         "inverter_stress_cost",
         "inverter_ac_output_max",
         "pv_plant_inverter_index",
-        "not supported",
     )
     for message, name in zip(body, expected, strict=True):
         assert name in message
     assert _web_state(web) == before
 
 
-def test_set_config_lists_a_curve_fault_and_the_refusal_together(web):
+def test_set_config_lists_a_curve_fault_and_the_other_faults_together(web):
     assert web.post({"inverter_efficiency_dc_ac": 0.97})[0] == 200
     before = _web_state(web)
     status, body = web.post(_two_inverter_conf(**{DC_AC: [DISCHARGE_CURVE, INVALID_CURVE]}))
     assert status == 400
-    assert len(body) == 2
+    assert len(body) == 1
     assert f"{DC_AC}[1]" in body[0] and "efficiency" in body[0]
-    assert "not supported" in body[1]
-    # A fault in the other inverter settings comes between the two.
+    # A fault in the other inverter settings comes after the curve fault.
     status, body = web.post(
         _two_inverter_conf(inverter_ac_output_max=5000, **{DC_AC: [INVALID_CURVE, []]})
     )
     assert status == 400
-    assert len(body) == 3
+    assert len(body) == 2
     assert f"{DC_AC}[0]" in body[0]
     assert "inverter_ac_output_max" in body[1]
-    assert "not supported" in body[2]
     assert _web_state(web) == before
 
 
@@ -914,10 +911,26 @@ class _AppLogCapture(logging.Handler):
         self.app_logger.setLevel(self.previous_level)
 
 
-def test_action_is_a_400_not_a_500_with_more_than_one_inverter_saved(web):
+def test_action_is_not_refused_for_more_than_one_inverter_saved(web, monkeypatch):
+    """A usable two-inverter configuration gets through treat_runtimeparams on the action path.
+
+    The run is stopped right after that step so the test needs no Home Assistant.
+    """
     config = json.loads(EMHASS_CONF["defaults_path"].read_text(encoding="utf-8"))
     config.update(_two_inverter_conf())
     asyncio.run(web.ws._build_and_save_params(config, "profit", "INFO", web.conf["config_path"]))
+
+    class _Reached(Exception):
+        pass
+
+    real = utils.treat_runtimeparams
+    treated = []
+
+    async def treat_then_stop(*args, **kwargs):
+        treated.append(await real(*args, **kwargs))
+        raise _Reached
+
+    monkeypatch.setattr(utils, "treat_runtimeparams", treat_then_stop)
 
     async def go():
         client = web.ws.app.test_client()
@@ -925,8 +938,10 @@ def test_action_is_a_400_not_a_500_with_more_than_one_inverter_saved(web):
         return response.status_code
 
     with _AppLogCapture(web.ws.app.logger) as captured:
-        assert asyncio.run(go()) == 400
-    assert any("more than one inverter is not supported" in m for m in captured.messages)
+        asyncio.run(go())
+    assert len(treated) == 1
+    assert treated[0][-1]["number_of_inverters"] == 2
+    assert not any("not supported" in m for m in captured.messages), captured.messages
 
 
 @pytest.mark.parametrize("bad_count", ["abc", 0, -1, 1.5, True])

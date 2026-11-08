@@ -3,12 +3,12 @@ Multi-inverter config plumbing tests (#1150, PR 1 of the per-inverter phasing).
 
 Covers only the config layer: number_of_inverters, the per-inverter broadcast and cap
 parameters (check_inverter_params), the battery_inverter_index / pv_plant_inverter_index
-lists, and the refusal of more than one inverter until the optimizer supports it
-(reject_multiple_inverters). The optimizer is out of scope and unchanged. Curve-list
-tests live in test_inverter_power_curves.py, the PV plant length check in
-test_forecast.py, and the /set-config, /get-config and /action behaviour in the
-"Web: per-inverter configuration" section of test_inverter_power_curves.py, which
-holds the ``web`` fixture (there is no shared conftest).
+lists. More than one inverter is accepted once every specific fault is cleared. The
+optimizer is out of scope here. Curve-list tests live in test_inverter_power_curves.py,
+the PV plant length check in test_forecast.py, and the /set-config, /get-config and
+/action behaviour in the "Web: per-inverter configuration" section of
+test_inverter_power_curves.py, which holds the ``web`` fixture (there is no shared
+conftest).
 
 Base-safety: the new functions do not exist on master, so every test that exercises
 them resolves the callable via getattr() and asserts it is present before calling it
@@ -638,22 +638,20 @@ def test_check_inverter_params_is_idempotent(conf):
     assert twice == once
 
 
-# ───────────────── refusal of more than one inverter ──────────────────────────
+# --------------- more than one inverter is accepted --------------------------
 
 
-def test_reject_multiple_inverters_is_silent_at_one():
-    reject = _get_func("reject_multiple_inverters")
-    reject({})
-    reject({"number_of_inverters": 1})
+def test_reject_multiple_inverters_no_longer_exists():
+    assert getattr(utils, "reject_multiple_inverters", None) is None
 
 
-def test_reject_multiple_inverters_says_what_to_do():
-    with pytest.raises(_error_class()) as excinfo:
-        _get_func("reject_multiple_inverters")({"number_of_inverters": 3})
-    message = str(excinfo.value)
-    assert "number_of_inverters=3" in message
-    assert "not supported" in message
-    assert "Set number_of_inverters to 1" in message
+def test_a_usable_count_above_one_is_not_a_fault():
+    faults = _get_func("inverter_config_faults")
+    assert faults(copy.deepcopy(TWO_INVERTERS)) == []
+    # a count of 3 alone is faulted only for its missing per-inverter settings
+    found = faults({"number_of_inverters": 3})
+    assert any("inverter_ac_output_max" in fault for fault in found)
+    assert not any("not supported" in fault for fault in found)
 
 
 def test_inverter_config_faults_returns_messages_and_leaves_the_input_alone():
@@ -665,13 +663,12 @@ def test_inverter_config_faults_returns_messages_and_leaves_the_input_alone():
     messages = faults(config)
     assert config == snapshot
     # Above one inverter: every specific fault (here both caps and both index lists),
-    # then the refusal last.
-    assert len(messages) == 5
+    # and nothing else is appended.
+    assert len(messages) == 4
     assert "inverter_ac_output_max" in messages[0]
-    assert "not supported" in messages[-1] and "number_of_inverters=2" in messages[-1]
-    refusal = faults(_two())
-    assert len(refusal) == 1 and "not supported" in refusal[0]
-    # One inverter: only the specific fault, no refusal.
+    assert not any("not supported" in m for m in messages)
+    assert faults(_two()) == []
+    # One inverter: only the specific fault.
     one = faults({"inverter_efficiency_dc_ac": [0.9, 0.9]})
     assert len(one) == 1 and "inverter_efficiency_dc_ac" in one[0]
     assert faults({"number_of_inverters": "abc"}) == [
@@ -695,7 +692,7 @@ def test_inverter_config_faults_adds_no_handler_per_call():
     assert quiet.propagate is False
 
 
-def test_faults_come_before_the_refusal_in_every_entry_point():
+def test_faults_are_reported_in_every_entry_point_at_more_than_one_inverter():
     """A config with both a specific fault and number_of_inverters > 1 reports the fault."""
     config = _two(inverter_efficiency_dc_ac=[0.9, 0.9, 0.9])
     assert "inverter_efficiency_dc_ac" in _get_func("inverter_config_faults")(config)[0]
@@ -704,17 +701,16 @@ def test_faults_come_before_the_refusal_in_every_entry_point():
         treat_runtime(copy.deepcopy(config), base)
 
 
-def test_treat_runtimeparams_refuses_more_than_one_inverter_after_validating():
+def test_treat_runtimeparams_accepts_more_than_one_inverter():
     base = build_params()
-    with pytest.raises(_error_class(), match="not supported"):
-        treat_runtime(copy.deepcopy(TWO_INVERTERS), base)
+    _, _, plant_conf = treat_runtime(copy.deepcopy(TWO_INVERTERS), base)
+    assert plant_conf["number_of_inverters"] == 2
 
 
-def test_treat_runtimeparams_refuses_saved_more_than_one_inverter_without_runtime_params():
-    """The CLI passes no runtime parameters: the saved configuration is still refused."""
+def test_treat_runtimeparams_accepts_saved_more_than_one_inverter_without_runtime_params():
+    """The CLI passes no runtime parameters: a saved usable configuration goes through."""
     base = build_params(copy.deepcopy(TWO_INVERTERS))
-    with pytest.raises(_error_class(), match="not supported"):
-        treat_no_runtime(base)
+    treat_no_runtime(base)
     saved_fault = build_params(_two(inverter_ac_output_max=5000))
     with pytest.raises(_error_class(), match="inverter_ac_output_max"):
         treat_no_runtime(saved_fault)
@@ -743,29 +739,27 @@ def test_treat_runtimeparams_logs_a_bad_saved_count_without_runtime_params(bad, 
     assert any("number_of_inverters must be a positive integer" in m for m in errors), errors
 
 
-def test_require_usable_inverter_config_logs_every_fault_then_the_refusal(caplog):
+def test_require_usable_inverter_config_logs_every_fault_and_nothing_else(caplog):
     require = _get_func("require_usable_inverter_config")
     conf = {"number_of_inverters": 2}
     with caplog.at_level(logging.ERROR):
         with pytest.raises(_error_class()) as excinfo:
             require(conf, logger)
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    # Both caps, both index lists, then the refusal: each logged on its own.
-    assert len(errors) == 5
+    # Both caps and both index lists: each logged on its own, nothing after them.
+    assert len(errors) == 4
     assert "inverter_ac_output_max" in errors[0]
-    assert "not supported" in errors[-1]
+    assert not any("not supported" in m for m in errors)
     # The raised error carries all of them, so a body built from it says so too.
     message = str(excinfo.value)
-    assert "inverter_ac_output_max" in message and "not supported" in message
-    assert message.index("inverter_ac_output_max") < message.index("not supported")
+    assert "inverter_ac_output_max" in message and "not supported" not in message
     assert ".." not in message
 
 
-def test_require_usable_inverter_config_with_only_the_refusal_logs_once(caplog):
+def test_require_usable_inverter_config_accepts_a_usable_more_than_one_inverter_config(caplog):
     with caplog.at_level(logging.ERROR):
-        with pytest.raises(_error_class(), match="not supported"):
-            _get_func("require_usable_inverter_config")(_two(), logger)
-    assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 1
+        _get_func("require_usable_inverter_config")(_two(), logger)
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
 
 
 def test_require_usable_inverter_config_is_silent_for_a_usable_one_inverter_config(caplog):
@@ -783,9 +777,9 @@ def test_one_inverter_wording_is_singular_and_has_no_double_periods():
     assert "1 entries" not in message
     with pytest.raises(_error_class(), match="exactly 2 entries"):
         check(_two(inverter_efficiency_dc_ac=[0.9]), logger)
-    with pytest.raises(_error_class()) as refused:
-        _get_func("reject_multiple_inverters")({"number_of_inverters": 2})
-    assert ".." not in str(refused.value)
+    with pytest.raises(_error_class()) as two_faults:
+        check({"number_of_inverters": 2}, logger)
+    assert ".." not in str(two_faults.value)
 
 
 # ───────────────── build_params never raises on an inverter fault ─────────────
@@ -795,7 +789,6 @@ def test_one_inverter_wording_is_singular_and_has_no_double_periods():
     "overrides,needle",
     [
         ({"number_of_inverters": 2}, "inverter_ac_output_max"),
-        (copy.deepcopy(TWO_INVERTERS), "not supported"),
         ({"number_of_inverters": 0}, "number_of_inverters must be a positive integer"),
         ({"number_of_inverters": "two"}, "number_of_inverters must be a positive integer"),
         ({"inverter_efficiency_dc_ac": [0.9, 0.9]}, "inverter_efficiency_dc_ac"),
@@ -817,7 +810,7 @@ def test_build_params_never_raises_on_an_inverter_fault(overrides, needle, caplo
     assert any(needle in m for m in errors), errors
 
 
-def test_build_params_n_gt_1_valid_config_is_normalised_then_refused(caplog):
+def test_build_params_n_gt_1_valid_config_is_normalised_and_accepted(caplog):
     with caplog.at_level(logging.ERROR):
         params = build_params(copy.deepcopy(TWO_INVERTERS))
     plant_conf = params["plant_conf"]
@@ -825,16 +818,15 @@ def test_build_params_n_gt_1_valid_config_is_normalised_then_refused(caplog):
     assert plant_conf["compute_curtailment"] == [False, False]
     assert plant_conf["battery_inverter_index"] == [0]
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert any("number_of_inverters=2" in m and "not supported" in m for m in errors)
+    assert not any("number_of_inverters" in m for m in errors), errors
 
 
-def test_build_params_n_gt_1_logs_the_specific_fault_then_the_refusal(caplog):
+def test_build_params_n_gt_1_logs_the_specific_faults_and_nothing_else(caplog):
     with caplog.at_level(logging.ERROR):
         build_params({"number_of_inverters": 2})
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    fault = next(i for i, m in enumerate(errors) if "inverter_ac_output_max" in m)
-    refusal = next(i for i, m in enumerate(errors) if "not supported" in m)
-    assert fault < refusal
+    assert any("inverter_ac_output_max" in m for m in errors)
+    assert not any("not supported" in m for m in errors)
     assert not any(".." in m for m in errors)
 
 
@@ -971,10 +963,10 @@ def test_check_inverter_params_reports_every_fault_in_check_order():
     assert conf == snapshot  # nothing applied when anything is wrong
 
 
-def test_inverter_config_faults_lists_every_fault_then_the_refusal():
+def test_inverter_config_faults_lists_every_fault_and_nothing_else():
     messages = _get_func("inverter_config_faults")(_two(**_FOUR_FAULTS))
-    assert len(messages) == 5
-    for message, name in zip(messages, [*_FOUR_FAULTS, "not supported"], strict=True):
+    assert len(messages) == 4
+    for message, name in zip(messages, _FOUR_FAULTS, strict=True):
         assert name in message
 
 
@@ -1041,9 +1033,9 @@ def test_require_usable_inverter_config_logs_and_raises_every_problem(caplog):
         with pytest.raises(_error_class()) as excinfo:
             _get_func("require_usable_inverter_config")(conf, logger)
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-    assert len(errors) == 5
+    assert len(errors) == 4
     message = str(excinfo.value)
     for name in _FOUR_FAULTS:
         assert name in message
-    assert "not supported" in message
+    assert "not supported" not in message
     assert ".." not in message
