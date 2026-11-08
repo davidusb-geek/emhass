@@ -567,4 +567,8 @@ def test_switching_the_feature_off_changes_the_result(feature):
     on_status, on_objective, _ = solve(CASES[name], "dayahead")
     off_status, off_objective, _ = solve(_feature_off(name, **off), "dayahead")
     assert on_status == "Optimal"
-    assert off_status != "Optimal" or abs(off_objective - on_objective) > 1e-3
+    if feature == "curtailment":
+        assert off_status == "Infeasible"
+    else:
+        assert off_status == "Optimal"
+        assert abs(off_objective - on_objective) > 1e-3
