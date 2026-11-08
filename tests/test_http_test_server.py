@@ -104,6 +104,19 @@ class TestResponses(unittest.IsolatedAsyncioTestCase):
                         await session.get("http://elsewhere.invalid/")
             server.blocked.clear()  # the expected refusal must not fail the block
 
+    async def test_connector_options_cannot_route_around_the_test_server(self):
+        module = consumer()
+        async with HttpTestServer(http=("plain.test",)) as server:
+            server.get("http://plain.test/", payload="ok")
+            with server.intercept(module):
+                connector = module.aiohttp.TCPConnector(
+                    resolver=aiohttp.ThreadedResolver(), ssl=False
+                )
+                async with module.aiohttp.ClientSession(connector=connector) as session:
+                    async with session.get("http://plain.test/") as response:
+                        self.assertEqual(await response.text(), '"ok"')
+        self.assertEqual([r.url for r in server.requests], ["http://plain.test/"])
+
     def test_a_host_that_cannot_be_isolated_is_refused(self):
         for label, kwargs in {
             "IP literal": {"http": ("127.0.0.1",)},
@@ -139,7 +152,7 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
             "IP literal": lambda: fetch(module, "http://127.0.0.1:9/"),
             "own connector": lambda: self.session_with_own_connector(module),
             "subclassed connector": lambda: self.session_with_overridden_connect(module),
-            "proxy": lambda: fetch(module, "http://plain.test/", proxy="http://192.0.2.1:3128"),
+            "proxy": lambda: fetch(module, "http://plain.test/", proxy="http://plain.test:3128"),
             "https to an http host": lambda: fetch(module, "https://plain.test/"),
             "http to an https host": lambda: fetch(module, "http://secure.test/"),
             "aiohttp.request": lambda: self.call_aiohttp_request(module),
@@ -249,6 +262,9 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
                     await first_done.wait()
                     self.assertIsNot(second.aiohttp, aiohttp, "unaffected by the first's exit")
                     self.assertIs(first.aiohttp, aiohttp)
+                    with self.assertRaises(RuntimeError):  # still registered, first's release
+                        with one.intercept(second):  # did not free it
+                            pass
 
             await asyncio.gather(run_first(), run_second())
         self.assertIs(first.aiohttp, aiohttp)
