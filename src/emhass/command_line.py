@@ -234,7 +234,7 @@ class OptimizationCacheKey:
     is_electric_load: tuple  # per-load electric-bus membership flag
     sequence_load_running_state: tuple  # (index, current state, completed steps) per sequence load
     inverter_is_hybrid: bool
-    compute_curtailment: bool
+    compute_curtailment: bool | tuple
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
@@ -432,6 +432,18 @@ class OptimizationCache:
             if isinstance(power, list)
         )
 
+        # Above one inverter the optimizer does not read the plant-wide hybrid flag (it is
+        # fixed here and left out of the plant hash) and curtailment is a per-inverter
+        # list, kept hashable as a tuple (#1150).
+        n_inv = utils.validate_num_inverters(plant_conf)
+        inverter_is_hybrid = False if n_inv > 1 else plant_conf.get("inverter_is_hybrid", False)
+        compute_curtailment = plant_conf.get("compute_curtailment", False)
+        if isinstance(compute_curtailment, list):
+            compute_curtailment = tuple(compute_curtailment)
+        plant_hash_skips = (
+            (plant_runtime_keys | {"inverter_is_hybrid"}) if n_inv > 1 else plant_runtime_keys
+        )
+
         return OptimizationCacheKey(
             number_of_deferrable_loads=optim_conf.get("number_of_deferrable_loads", 0),
             set_use_battery=optim_conf.get("set_use_battery", False),
@@ -481,13 +493,13 @@ class OptimizationCache:
             # power balance shape, hence structural.
             is_electric_load=to_tuple(optim_conf.get("is_electric_load", [])),
             sequence_load_running_state=sequence_load_running_state,
-            inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
-            compute_curtailment=plant_conf.get("compute_curtailment", False),
+            inverter_is_hybrid=inverter_is_hybrid,
+            compute_curtailment=compute_curtailment,
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
-            plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
+            plant_conf_hash=config_hash(plant_conf, plant_hash_skips),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
 
@@ -2122,6 +2134,7 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
         "p_pv_plants": p_pv_plants,
+        "pv_plant_inverters": ctx.fcst.get_pv_plant_inverters(),
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2233,6 +2246,7 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
         "p_pv_plants": p_pv_plants,
+        "pv_plant_inverters": ctx.fcst.get_pv_plant_inverters(),
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2608,6 +2622,7 @@ async def _set_input_data_dict(
         "df_weather": None,
         "p_pv_forecast": None,
         "p_pv_plants": None,
+        "pv_plant_inverters": None,
         "p_load_forecast": None,
         "days_list": None,
     }
@@ -3040,6 +3055,7 @@ async def dayahead_forecast_optim(
                     current_period_peak=current_period_peak,
                     stage_times=input_data_dict["stage_times"],
                     p_pv_plants=input_data_dict.get("p_pv_plants"),
+                    pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
                 )
         else:
             opt_res_dayahead = opt.perform_dayahead_forecast_optim(
@@ -3051,6 +3067,7 @@ async def dayahead_forecast_optim(
                 current_period_peak=current_period_peak,
                 stage_times=input_data_dict["stage_times"],
                 p_pv_plants=input_data_dict.get("p_pv_plants"),
+                pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:
@@ -3176,6 +3193,7 @@ async def naive_mpc_optim(
                     def_end_timestep=def_end_timestep,
                     stage_times=input_data_dict["stage_times"],
                     p_pv_plants=input_data_dict.get("p_pv_plants"),
+                    pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
                 )
         else:
             opt_res_naive_mpc = opt.perform_naive_mpc_optim(
@@ -3200,6 +3218,7 @@ async def naive_mpc_optim(
                 def_end_timestep=def_end_timestep,
                 stage_times=input_data_dict["stage_times"],
                 p_pv_plants=input_data_dict.get("p_pv_plants"),
+                pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:
