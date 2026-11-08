@@ -64,6 +64,29 @@ const DEFERRABLE_ARRAY_PARAMS = [
   "end_timesteps_of_each_deferrable_load",
 ];
 
+//#1150: the per-inverter list params in the "System" section whose length is
+//driven by number_of_inverters (mirrors BATTERY_ARRAY_PARAMS/number_of_batteries
+//above). They are the same lists as INVERTER_CAP_PARAMS and
+//INVERTER_BROADCAST_PARAMS in utils.py.
+//The two power curves are left out because each is one JSON field holding the
+//whole list of curves, and the two index lists because battery_inverter_index
+//has one entry per battery and pv_plant_inverter_index one per PV plant.
+const INVERTER_CAP_PARAMS = ["inverter_ac_output_max", "inverter_ac_input_max"];
+const INVERTER_BROADCAST_PARAMS = [
+  "inverter_efficiency_dc_ac",
+  "inverter_efficiency_ac_dc",
+  "inverter_stress_cost",
+  "compute_curtailment",
+];
+const INVERTER_ARRAY_PARAMS = [...INVERTER_CAP_PARAMS, ...INVERTER_BROADCAST_PARAMS];
+//the inverter lists follow number_of_inverters only up to this count, so a typo
+//such as 1000000 cannot add millions of inputs and hang the page. The backend
+//has no upper bound on number_of_inverters; 100 matches MAX_BATTERIES in utils.py
+const INVERTER_SYNC_LIMIT = 100;
+//the two power curves, editable above one inverter whatever inverter_is_hybrid
+//says (see updateInverterCurveAccess)
+const INVERTER_CURVE_PARAMS = ["inverter_power_curve_dc_ac", "inverter_power_curve_ac_dc"];
+
 //a request still pending after this long fails with an error instead of leaving the page waiting
 //(browsers without AbortSignal.timeout keep waiting, as before)
 const REQUEST_TIMEOUT_MS = 30000;
@@ -215,6 +238,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   //list parameters used in the section headers
   //#610: number_of_batteries added to auto-sync the 15 per-battery array params
   //(mirrors number_of_deferrable_loads), see the "number_of_batteries" case in headerElement
+  //(number_of_inverters is not a header input: its lists follow it through setupInverterSync)
   let header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads", "number_of_batteries"];
 
   //get the main container and append list template html
@@ -258,6 +282,9 @@ function loadConfigurationListView(param_definitions, config, list_html) {
       }
     }
   }
+
+  //#1150: size the per-inverter lists to number_of_inverters
+  setupInverterSync(param_definitions, config);
 
   // Dynamic hiding for InfluxDB options
   const use_influx_param = "use_influxdb";
@@ -379,15 +406,17 @@ function buildParamContainers(
     }
 
     //if parameter type == array.*, append plus and minus buttons in param div so
-    //the user can grow/shrink the list. Two groups of array.* params are excluded
+    //the user can grow/shrink the list. Three groups of array.* params are excluded
     //because their length is managed elsewhere: the DEFERRABLE_ARRAY_PARAMS in
-    //the "Deferrable Loads" section (by number_of_deferrable_loads) and the 15
-    //BATTERY_ARRAY_PARAMS in the "Battery" section (by number_of_batteries) - a
-    //free +/- button on those would desync their length and crash
-    //check_batt_params/check_def_loads on save. Any other array.* param in
-    //either section (e.g. the #540 Part B capacity_cost_per_kw /
+    //the "Deferrable Loads" section (by number_of_deferrable_loads), the 15
+    //BATTERY_ARRAY_PARAMS in the "Battery" section (by number_of_batteries) and
+    //the INVERTER_ARRAY_PARAMS in the "System" section (by number_of_inverters,
+    //see setupInverterSync) - a free +/- button on those would desync their
+    //length and crash check_batt_params/check_def_loads (or be refused by
+    //check_inverter_params) on save. Any other array.* param in
+    //those sections (e.g. the #540 Part B capacity_cost_per_kw /
     //capacity_charge_interval_timesteps in Battery, which are NOT per-battery)
-    //still gets the normal generic +/- controls - the two allow-lists, not the
+    //still gets the normal generic +/- controls - the allow-lists, not the
     //section name, own cardinality.
     let array_buttons = "";
     if (
@@ -397,7 +426,8 @@ function buildParamContainers(
         Array.isArray(parameter_definition_object["default_value"])
       ) &&
       !(section == "Deferrable Loads" && DEFERRABLE_ARRAY_PARAMS.includes(parameter_definition_name)) &&
-      !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name))
+      !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name)) &&
+      !(section == "System" && INVERTER_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
       array_buttons = `
                   <button type="button" class="input-plus ${parameter_definition_name}">+</button>
@@ -940,6 +970,159 @@ function headerElement(element, param_definitions, config) {
         }
       }
       break;
+  }
+}
+
+//#1150: number_of_inverters as a whole number of at least 1, else null (an
+//emptied, fractional or partly typed count)
+//(Number() reads "", " " and null as 0, which the check below refuses)
+function parseInverterCount(raw) {
+  const count = Number(raw);
+  return Number.isInteger(count) && count >= 1 ? count : null;
+}
+
+//#1150: the first input of a param row, or undefined when the row is missing
+function paramInputOf(param_id) {
+  return document.getElementById(param_id)?.getElementsByClassName("param_input")[0];
+}
+
+//#1150: keep the INVERTER_ARRAY_PARAMS at number_of_inverters entries, the way
+//the "number_of_batteries" header case keeps the battery lists at
+//number_of_batteries. number_of_inverters stays a normal row with its label and
+//help in the System section, with the lists it sizes, so this listens on that
+//row's input rather than on a section header input.
+function setupInverterSync(param_definitions, config) {
+  const count_input = paramInputOf("number_of_inverters");
+  if (count_input == null) {
+    return;
+  }
+  //first render: shape the lists from the stored configuration
+  syncInverterLists(count_input.value, param_definitions, config);
+  updateInverterCurveAccess(count_input.value, param_definitions);
+  //"change" rather than "input": typing 12 would otherwise pass through 1 on the
+  //way and drop what was typed in the rows from the second inverter on
+  count_input.addEventListener("change", () => {
+    syncInverterLists(count_input.value, param_definitions, null);
+    updateInverterCurveAccess(count_input.value, param_definitions);
+  });
+  //buildParamContainers attached the generic "requires" listener to this input
+  //before this runs, and listeners fire in the order they were added, so this
+  //one has the last word on the curves
+  const hybrid_input = paramInputOf("inverter_is_hybrid");
+  if (hybrid_input != null) {
+    hybrid_input.addEventListener("input", () =>
+      updateInverterCurveAccess(count_input.value, param_definitions)
+    );
+  }
+}
+
+//#1150: the alert box text of the last alert syncInverterLists raised, so a
+//later sync that works can take it down again (and never anyone else's alert)
+let inverter_sync_alert = null;
+
+//#1150: grow or shrink each INVERTER_ARRAY_PARAMS list to the count. Each list
+//is counted on its own, so lists of different lengths all end at the count.
+//`config` is the stored configuration on the first render and null after a
+//change of the count. The first render must not change what a stored
+//configuration means, so it only grows a list from a single row (a scalar, a
+//one-entry list or a missing key), the way the backend reads a single value.
+//Any other list whose length differs from the count stays as stored, an alert
+//names it, and the save refuses it by name as it does without this sync.
+function syncInverterLists(raw_count, param_definitions, config) {
+  const count = parseInverterCount(raw_count);
+  if (count === null) {
+    //leave the lists alone: the save reports a count that is not usable
+    return;
+  }
+  if (count > INVERTER_SYNC_LIMIT) {
+    showInverterSyncAlert(
+      `number_of_inverters is ${String(raw_count).trim()}: the per-inverter lists follow it only up to ${INVERTER_SYNC_LIMIT} inverters, so they were left as they are.`
+    );
+    return;
+  }
+  const first_render = config != null;
+  const mismatched = [];
+  for (const name of INVERTER_ARRAY_PARAMS) {
+    const param_element = document.getElementById(name);
+    if (param_element == null) {
+      continue;
+    }
+    let rows = param_element.getElementsByClassName("param_input").length;
+    if (first_render && rows !== count && rows !== 1) {
+      mismatched.push(`${name} (${rows} entries)`);
+      continue;
+    }
+    const fill = inverterNewRowFill(name, first_render ? config : null);
+    for (; rows < count; rows++) {
+      plusElements(name, param_definitions, "System", fill);
+    }
+    for (; rows > count; rows--) {
+      minusElements(name);
+    }
+  }
+  if (mismatched.length > 0) {
+    showInverterSyncAlert(
+      `number_of_inverters is ${count} but the stored configuration has ${mismatched.join(", ")}. They are shown as stored and the save will refuse them until each has ${count}. To resize them, change number_of_inverters to another value and back.`
+    );
+  } else {
+    clearInverterSyncAlert();
+  }
+}
+
+//#1150: what a new row holds, as the `config` argument of plusElements. A cap
+//row starts empty: above one inverter the backend refuses a cap that is just
+//the 5000 W default or a copy of a one-inverter site total, so the save asks
+//for each inverter's cap instead of storing one of those. A broadcast row takes
+//the definition default after a change of the count, as new battery rows do. On
+//the first render (`config` set) a broadcast param stored as one value repeats
+//it, since that value means every inverter to the backend; a key missing from
+//the stored configuration keeps the definition default, which the backend
+//broadcasts too.
+function inverterNewRowFill(name, config) {
+  if (INVERTER_CAP_PARAMS.includes(name)) {
+    return { [name]: null };
+  }
+  if (config == null || !(name in config)) {
+    return {};
+  }
+  const stored = config[name];
+  return { [name]: Array.isArray(stored) ? stored[0] : stored };
+}
+
+function showInverterSyncAlert(text) {
+  errorAlert(text);
+  inverter_sync_alert = document.getElementById("alert-text")?.textContent ?? null;
+}
+
+function clearInverterSyncAlert() {
+  //an alert box showing any other text belongs to someone else and stays
+  if (
+    inverter_sync_alert !== null &&
+    document.getElementById("alert-text")?.textContent === inverter_sync_alert
+  ) {
+    document.getElementById("alert").style.display = "none";
+  }
+  inverter_sync_alert = null;
+}
+
+//#1150: above one inverter the power curves are used whatever inverter_is_hybrid
+//says (the backend does not read it there), so they stay editable; at one
+//inverter, or with a count that is not usable, they keep the "requires" rule
+//from the definitions file
+function updateInverterCurveAccess(raw_count, param_definitions) {
+  const count = parseInverterCount(raw_count);
+  for (const name of INVERTER_CURVE_PARAMS) {
+    const param_element = document.getElementById(name);
+    const requires = param_definitions?.["System"]?.[name]?.["requires"];
+    if (param_element == null || requires == null) {
+      continue;
+    }
+    const requirement_input = paramInputOf(Object.keys(requires)[0]);
+    if (count !== null && count > 1) {
+      param_element.classList.remove("requirement-disable");
+    } else if (requirement_input != null) {
+      checkRequirements(requirement_input, param_element, Object.values(requires)[0]);
+    }
   }
 }
 
