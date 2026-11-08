@@ -91,6 +91,19 @@ class TestResponses(unittest.IsolatedAsyncioTestCase):
                             await session.post("http://plain.test/")
         self.assertEqual(server.requests[0], ("POST", "http://plain.test/"))
 
+    async def test_the_modules_own_connector_class_stays_usable_and_guarded(self):
+        module = consumer()  # the way retrieve_hass builds its session
+        async with HttpTestServer(http=("plain.test",)) as server:
+            server.get("http://plain.test/", payload="ok")
+            with server.intercept(module):
+                connector = module.aiohttp.TCPConnector(force_close=True)
+                async with module.aiohttp.ClientSession(connector=connector) as session:
+                    async with session.get("http://plain.test/") as response:
+                        self.assertEqual(await response.text(), '"ok"')
+                    with self.assertRaises(NetworkBlocked):
+                        await session.get("http://elsewhere.invalid/")
+            server.blocked.clear()  # the expected refusal must not fail the block
+
     def test_a_host_that_cannot_be_isolated_is_refused(self):
         for label, kwargs in {
             "IP literal": {"http": ("127.0.0.1",)},
@@ -126,6 +139,7 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
             "IP literal": lambda: fetch(module, "http://127.0.0.1:9/"),
             "own connector": lambda: self.session_with_own_connector(module),
             "subclassed connector": lambda: self.session_with_overridden_connect(module),
+            "proxy": lambda: fetch(module, "http://plain.test/", proxy="http://192.0.2.1:3128"),
             "https to an http host": lambda: fetch(module, "https://plain.test/"),
             "http to an https host": lambda: fetch(module, "http://secure.test/"),
             "aiohttp.request": lambda: self.call_aiohttp_request(module),
@@ -163,6 +177,18 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((aiohttp.ClientSession, aiohttp.TCPConnector), original)
                     raise RuntimeError("boom")
             self.assertIs(inside.aiohttp, aiohttp, "restored even after a failure")
+            with server.intercept(inside):  # and released again
+                self.assertIsNot(inside.aiohttp, aiohttp)
+
+    async def test_a_failed_patch_leaves_nothing_patched_or_registered(self):
+        good, bad = consumer(), types.SimpleNamespace()  # bad has no ``aiohttp`` to patch
+        async with HttpTestServer(http=("plain.test",)) as server:
+            with self.assertRaises(AttributeError):
+                with server.intercept(good, bad):
+                    pass
+            self.assertIs(good.aiohttp, aiohttp)
+            with server.intercept(good):
+                self.assertIsNot(good.aiohttp, aiohttp)
 
     async def test_a_module_cannot_be_intercepted_twice_at_once(self):
         module, other = consumer(), consumer()
@@ -208,20 +234,23 @@ class TestIsolation(unittest.IsolatedAsyncioTestCase):
 
     async def test_independent_modules_may_overlap_and_end_in_any_order(self):
         first, second = consumer(), consumer()
-        first_done = asyncio.Event()
+        first_done = asyncio.Event()  # set once the first block has ended: the second ends after
         async with HttpTestServer(http=("a.test",)) as one, HttpTestServer(http=("b.test",)) as two:
-
-            async def run(server, module, wait_for, set_after):
-                with server.intercept(module):
-                    set_after.set()
-                    await wait_for.wait()
-                    self.assertIsNot(module.aiohttp, aiohttp)
-
             second_started = asyncio.Event()
-            await asyncio.gather(
-                run(one, first, second_started, first_done),
-                run(two, second, first_done, second_started),
-            )
+
+            async def run_first():
+                with one.intercept(first):
+                    await second_started.wait()
+                first_done.set()  # exits before the second one, which entered later
+
+            async def run_second():
+                with two.intercept(second):
+                    second_started.set()
+                    await first_done.wait()
+                    self.assertIsNot(second.aiohttp, aiohttp, "unaffected by the first's exit")
+                    self.assertIs(first.aiohttp, aiohttp)
+
+            await asyncio.gather(run_first(), run_second())
         self.assertIs(first.aiohttp, aiohttp)
         self.assertIs(second.aiohttp, aiohttp)
 

@@ -13,8 +13,8 @@ throwaway ``trustme`` CA, so the client verifies them as in production.
 Only GET is served. Isolation: only the modules passed to :meth:`HttpTestServer.intercept`
 are touched, and only inside that block; the real ``aiohttp`` package is never patched.
 Within a patched module only the declared host names are reachable: any other host (an IP
-literal too), a request whose scheme differs from the host's declaration, a session with its
-own connector or ``aiohttp.request`` raises :class:`NetworkBlocked`, and so does leaving the
+literal too), a request whose scheme differs from the host's declaration or that uses a proxy, a
+session whose connector is not the module's own ``aiohttp.TCPConnector`` or ``aiohttp.request`` raises :class:`NetworkBlocked`, and so does leaving the
 ``async with`` block afterwards. A module can be intercepted by one block at a time. A request
 no declared response matches (any non-GET too) is answered by dropping the connection and
 fails the block on exit. Code that imports ``ClientSession`` directly is not intercepted.
@@ -170,7 +170,6 @@ class HttpTestServer:
 
         class Resolver(AbstractResolver):
             async def resolve(self, host, port=0, family=socket.AF_INET):
-                host = _normalize(host)
                 listener = server._listeners[server._tls[host]]
                 return [
                     {
@@ -194,20 +193,23 @@ class HttpTestServer:
             async def connect(self, req, traces, timeout):
                 # Covers what the resolver cannot: IP literals skip name resolution, and the
                 # resolver never sees the scheme.
-                tls = server._tls.get(_normalize(req.url.host or ""))
-                if tls is None or tls != req.is_ssl():
+                tls = server._tls.get(req.url.host or "")  # yarl already lowercased it
+                if req.proxy is not None or tls is None or tls != req.is_ssl():
                     server.blocked.append(f"{req.method} {req.url}")
                     raise NetworkBlocked(f"{req.url} is not served by the test server")
                 return await super().connect(req, traces, timeout)
 
         def client_session(*args, connector=None, **kwargs):
-            if connector is not None:  # even a subclass of ours could override connect()
+            if connector is None:
+                connector = Connector()
+            elif type(connector) is not Connector:  # a subclass could override connect()
                 server.blocked.append("session with its own connector")
                 raise NetworkBlocked("a session with its own connector bypasses the test server")
-            return aiohttp.ClientSession(*args, connector=Connector(), **kwargs)
+            return aiohttp.ClientSession(*args, connector=connector, **kwargs)
 
         class StandIn:
             ClientSession = staticmethod(client_session)
+            TCPConnector = Connector
 
             @staticmethod
             def request(*args, **kwargs):
