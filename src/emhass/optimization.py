@@ -8475,10 +8475,12 @@ class Optimization:
         if self.n_inv > 1:
             # Spill only competes with a negative price, so in each step the base is the
             # size of that step's more negative price (see SPILL_PRICE_FACTOR), each taken
-            # as the objective weighs it: under self-consumption import (and the floor) is
-            # scaled by the big-M and export is not, and the cost objective has no export
-            # term, so a negative export price does not count there. The inverter stress
-            # rate is a plain cost and is added unscaled.
+            # as the objective weighs it: under self-consumption import is scaled by the
+            # big-M and export is not, and the cost objective has no export term, so a
+            # negative export price does not count there. The floor is a tie-break and is
+            # not scaled: scaled, it would price spill far above the battery weights on
+            # every self-consumption clipping day. The inverter stress rate is a plain cost
+            # and is added unscaled.
             n_steps = len(unit_load_cost)
             import_neg = -np.asarray(unit_load_cost, dtype=float) * penalty_scale
             if self.costfun == "cost":
@@ -8486,7 +8488,7 @@ class Optimization:
             else:
                 export_neg = -np.asarray(unit_prod_price, dtype=float)
             negative = np.maximum.reduce(
-                [import_neg, export_neg, np.full(n_steps, SPILL_PRICE_FLOOR * penalty_scale)]
+                [import_neg, export_neg, np.full(n_steps, SPILL_PRICE_FLOOR)]
             )
             self.param_spill_price.value = SPILL_PRICE_FACTOR * negative + self._spill_stress_rate()
 

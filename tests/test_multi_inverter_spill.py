@@ -227,11 +227,12 @@ def test_spill_stays_zero_when_the_pv_fits():
         ("profit", 0.2, -0.5, 1.0),  # a negative export price counts by its size, doubled
         ("profit", -0.7, 0.05, 1.4),  # so does a negative import price
         ("profit", -0.7, -0.9, 1.8),  # the more negative of the two
-        ("self-consumption", 0.2, 0.05, 2.0),  # the floor, times SELF_CONSUMPTION_BIGM
+        # the floor is a tie-break and is not scaled by SELF_CONSUMPTION_BIGM
+        ("self-consumption", 0.2, 0.05, 0.002),
         ("self-consumption", -0.7, 0.05, 1400.0),
         # self-consumption weighs export at its plain price, so a negative export price
         # counts unscaled (not times the big-M)
-        ("self-consumption", 0.2, -0.5, 2.0),
+        ("self-consumption", 0.2, -0.5, 1.0),
         ("self-consumption", 0.2, -5.0, 10.0),
         # the cost objective has no export term, so a negative export price does not count
         ("cost", 0.3, -0.5, 0.002),
@@ -443,7 +444,7 @@ def _real_cost(res, weight):
     return float((grid + weights).sum())
 
 
-def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05):
+def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05, costfun=None):
     """Bell-shaped PV peaking at 9 kW over a day of half hours on a 5 kW hybrid."""
     t = np.arange(n)
     pv = np.clip(9000 * np.exp(-(((t - 12) / 5.0) ** 2)), 0, None)
@@ -456,9 +457,24 @@ def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05):
         plant_overrides=BELL_BATTERY,
         optim_overrides={"weight_battery_charge": weight, "weight_battery_discharge": weight},
     )
+    if costfun is not None:
+        opt.costfun = costfun
     load = 800 + 600 * (t % 4 == 0)
     res = solve(opt, pv=(pv,), load=load, cost=cost, prod=prod, soc=0.9, final=0.9, n=n)
     return opt, res
+
+
+@pytest.mark.parametrize("weight", [0.0, 0.05])
+def test_a_self_consumption_clipping_day_plans_the_battery_like_the_curtailing_twin(weight):
+    # Under self-consumption only import gets the big-M, so the floor stays a tie-break and
+    # the battery plan is the curtailing twin's. A floor scaled by the big-M (2.0 per kWh)
+    # paid the battery to make room for PV: 7829 Wh out against the twin's 3438 at 0.05.
+    opt, spill_res = _bell_day(curtail=False, weight=weight, costfun="self-consumption")
+    _, twin_res = _bell_day(curtail=True, weight=weight, costfun="self-consumption")
+    assert _discharged_wh(spill_res) == pytest.approx(_discharged_wh(twin_res), abs=1)
+    assert _throughput_wh(spill_res) == pytest.approx(_throughput_wh(twin_res), abs=1)
+    assert _real_cost(spill_res, weight) == pytest.approx(_real_cost(twin_res, weight), abs=1e-3)
+    np.testing.assert_allclose(opt.param_spill_price.value, 0.002)
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.05])
