@@ -85,7 +85,7 @@ def _masking_warnings(caplog) -> list[str]:
     ]
 
 
-# ───────────────────── runtime scalar masks a per-inverter list ─────────────────────
+# --------------------- runtime scalar masks a per-inverter list ---------------------
 
 
 def test_runtime_scalar_over_distinct_list_warns_then_still_refuses(caplog):
@@ -163,7 +163,7 @@ def test_runtime_scalar_warning_truncates_a_long_configured_list():
     assert "490 more entries" in messages[0]
 
 
-# ───────────────────────── efficiency range above one inverter ─────────────────────────
+# ------------------------- efficiency range above one inverter -------------------------
 
 
 @pytest.mark.parametrize(
@@ -207,7 +207,7 @@ def test_efficiency_fault_is_reported_with_the_other_inverter_faults():
     assert any("inverter_stress_cost" in f for f in faults), faults
 
 
-# ───────────────────────────── curtailment helpers ─────────────────────────────
+# ----------------------------- curtailment helpers -----------------------------
 
 
 @pytest.mark.parametrize(
@@ -232,7 +232,7 @@ def test_curtailment_helpers(conf, flags, any_curtails):
     assert any_func(conf) is any_curtails
 
 
-# ─────────────────────── curtailment filter of the PV adjustment ───────────────────────
+# ----------------------- curtailment filter of the PV adjustment -----------------------
 
 
 def _fit_pv_model_fetches(monkeypatch, compute_curtailment) -> int:
@@ -272,7 +272,7 @@ def test_pv_adjustment_scalar_true_still_fetches_the_curtailment_history(monkeyp
     assert _fit_pv_model_fetches(monkeypatch, True) == 1
 
 
-# ─────────────────────────── publish_data above one inverter ───────────────────────────
+# --------------------------- publish_data above one inverter ---------------------------
 
 
 def _publish(plant_overrides: dict, columns: list[str]):
