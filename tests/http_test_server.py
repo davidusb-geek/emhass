@@ -13,8 +13,9 @@ throwaway ``trustme`` CA, so the client verifies them as in production.
 Only GET is served. Isolation: only the modules passed to :meth:`HttpTestServer.intercept`
 are touched, and only inside that block; the real ``aiohttp`` package is never patched.
 Within a patched module only the declared host names are reachable: any other host (an IP
-literal too), a request whose scheme differs from the host's declaration or that uses a proxy, a
-session whose connector is not the module's own ``aiohttp.TCPConnector`` or ``aiohttp.request`` raises :class:`NetworkBlocked`, and so does leaving the
+literal too), a request whose scheme differs from the host's declaration or that uses a
+proxy, a session whose connector is not the module's own ``aiohttp.TCPConnector`` or
+``aiohttp.request`` raises :class:`NetworkBlocked`, and so does leaving the
 ``async with`` block afterwards. A module can be intercepted by one block at a time. A request
 no declared response matches (any non-GET too) is answered by dropping the connection and
 fails the block on exit. Code that imports ``ClientSession`` directly is not intercepted.
