@@ -3,6 +3,7 @@
 import asyncio
 import re
 import socket
+import ssl
 import time
 import types
 import unittest
@@ -106,16 +107,18 @@ class TestResponses(unittest.IsolatedAsyncioTestCase):
 
     async def test_connector_options_cannot_route_around_the_test_server(self):
         module = consumer()
-        async with HttpTestServer(http=("plain.test",)) as server:
-            server.get("http://plain.test/", payload="ok")
+        async with HttpTestServer(https=("secure.test",)) as server:
+            server.get("https://secure.test/", payload="ok")
             with server.intercept(module):
+                # The system resolver cannot find the name and the system trust store does not
+                # know the test CA: the request only succeeds if both options are overridden.
                 connector = module.aiohttp.TCPConnector(
-                    resolver=aiohttp.ThreadedResolver(), ssl=False
+                    resolver=aiohttp.ThreadedResolver(), ssl=ssl.create_default_context()
                 )
                 async with module.aiohttp.ClientSession(connector=connector) as session:
-                    async with session.get("http://plain.test/") as response:
+                    async with session.get("https://secure.test/") as response:
                         self.assertEqual(await response.text(), '"ok"')
-        self.assertEqual([r.url for r in server.requests], ["http://plain.test/"])
+        self.assertEqual([r.url for r in server.requests], ["https://secure.test/"])
 
     def test_a_host_that_cannot_be_isolated_is_refused(self):
         for label, kwargs in {
