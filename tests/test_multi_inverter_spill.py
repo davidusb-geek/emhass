@@ -229,6 +229,13 @@ def test_spill_stays_zero_when_the_pv_fits():
         ("profit", -0.7, -0.9, 1.8),  # the more negative of the two
         ("self-consumption", 0.2, 0.05, 2.0),  # the floor, times SELF_CONSUMPTION_BIGM
         ("self-consumption", -0.7, 0.05, 1400.0),
+        # self-consumption weighs export at its plain price, so a negative export price
+        # counts unscaled (not times the big-M)
+        ("self-consumption", 0.2, -0.5, 2.0),
+        ("self-consumption", 0.2, -5.0, 10.0),
+        # the cost objective has no export term, so a negative export price does not count
+        ("cost", 0.3, -0.5, 0.002),
+        ("cost", -0.7, -0.9, 1.4),
         ("profit", 0.0, 0.0, 0.002),
     ],
 )
