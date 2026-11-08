@@ -88,12 +88,11 @@ def _masking_warnings(caplog) -> list[str]:
 # --------------------- runtime scalar masks a per-inverter list ---------------------
 
 
-def test_runtime_scalar_over_distinct_list_warns_then_still_refuses(caplog):
+def test_runtime_scalar_over_distinct_list_warns_and_proceeds(caplog):
     base = _build_params(_two(inverter_efficiency_dc_ac=[0.95, 0.97]))
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError, match="not supported"):
-            _treat_runtime({"inverter_efficiency_dc_ac": 0.96}, base)
+        _treat_runtime({"inverter_efficiency_dc_ac": 0.96}, base)
     warnings = _masking_warnings(caplog)
     assert len(warnings) == 1, caplog.messages
     assert "inverter_efficiency_dc_ac" in warnings[0]
@@ -117,8 +116,7 @@ def test_runtime_scalar_warns_for_each_broadcast_key(caplog):
     }
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError):
-            _treat_runtime(runtime, base)
+        _treat_runtime(runtime, base)
     text = " ".join(_masking_warnings(caplog))
     for key in runtime:
         assert key in text, caplog.messages
@@ -136,8 +134,7 @@ def test_runtime_scalar_warning_is_silent_when_nothing_is_masked(configured, run
     base = _build_params(_two(inverter_efficiency_dc_ac=configured))
     with caplog.at_level(logging.WARNING):
         caplog.clear()
-        with pytest.raises(utils.InverterConfigError, match="not supported"):
-            _treat_runtime(runtime, base)
+        _treat_runtime(runtime, base)
     assert _masking_warnings(caplog) == []
 
 
@@ -325,7 +322,7 @@ def test_publish_n2_posts_hybrid_total_and_no_curtailment_when_none_curtails():
     assert _CURT not in posted, posted
 
 
-def test_publish_n2_posts_curtailment_total_when_any_inverter_curtails():
+def test_publish_n2_posts_curtailment_total_when_a_pv_inverter_curtails():
     posted, _ = _publish({**_N2, "compute_curtailment": [False, True]}, _BOTH)
     assert _HYB in posted, posted
     assert _CURT in posted, posted
@@ -337,6 +334,36 @@ def test_publish_n2_skips_a_missing_column_with_a_warning():
     assert _CURT in posted, posted
     warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
     assert "P_hybrid_inverter" in warnings
+
+
+def test_publish_n2_curtailment_on_an_inverter_without_pv_expects_no_total():
+    # Inverter 0 has the flag but no PV (its PV plant is on inverter 1), so the optimizer
+    # makes no curtailment column and the saved plan has none: nothing posts, nothing warns.
+    posted, log = _publish({**_N2, "compute_curtailment": [True, False]}, ["P_hybrid_inverter"])
+    assert _HYB in posted, posted
+    assert _CURT not in posted, posted
+    warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+    assert "P_PV_curtailment" not in warnings, warnings
+
+
+def test_publish_n2_curtailment_flag_on_the_other_inverter_without_pv_expects_no_total():
+    # The mirror case: PV on inverter 0, the flag on inverter 1 only.
+    conf = {**_N2, "pv_plant_inverter_index": [0], "compute_curtailment": [False, True]}
+    posted, log = _publish(conf, ["P_hybrid_inverter"])
+    assert _CURT not in posted, posted
+    warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+    assert "P_PV_curtailment" not in warnings, warnings
+
+
+def test_publish_n2_posts_curtailment_when_one_of_two_pv_inverters_curtails():
+    conf = {**_N2, "pv_plant_inverter_index": [0, 1], "compute_curtailment": [False, True]}
+    posted, _ = _publish(conf, _BOTH)
+    assert _CURT in posted, posted
+
+
+def test_publish_n2_single_curtailment_flag_applies_to_the_pv_inverter():
+    posted, _ = _publish({**_N2, "compute_curtailment": True}, _BOTH)
+    assert _CURT in posted, posted
 
 
 def test_publish_n1_is_unchanged():
