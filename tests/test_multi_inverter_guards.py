@@ -325,7 +325,7 @@ def test_publish_n2_posts_hybrid_total_and_no_curtailment_when_none_curtails():
     assert _CURT not in posted, posted
 
 
-def test_publish_n2_posts_curtailment_total_when_any_inverter_curtails():
+def test_publish_n2_posts_curtailment_total_when_a_pv_inverter_curtails():
     posted, _ = _publish({**_N2, "compute_curtailment": [False, True]}, _BOTH)
     assert _HYB in posted, posted
     assert _CURT in posted, posted
@@ -337,6 +337,36 @@ def test_publish_n2_skips_a_missing_column_with_a_warning():
     assert _CURT in posted, posted
     warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
     assert "P_hybrid_inverter" in warnings
+
+
+def test_publish_n2_curtailment_on_an_inverter_without_pv_expects_no_total():
+    # Inverter 0 has the flag but no PV (its PV plant is on inverter 1), so the optimizer
+    # makes no curtailment column and the saved plan has none: nothing posts, nothing warns.
+    posted, log = _publish({**_N2, "compute_curtailment": [True, False]}, ["P_hybrid_inverter"])
+    assert _HYB in posted, posted
+    assert _CURT not in posted, posted
+    warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+    assert "P_PV_curtailment" not in warnings, warnings
+
+
+def test_publish_n2_curtailment_flag_on_the_other_inverter_without_pv_expects_no_total():
+    # The mirror case: PV on inverter 0, the flag on inverter 1 only.
+    conf = {**_N2, "pv_plant_inverter_index": [0], "compute_curtailment": [False, True]}
+    posted, log = _publish(conf, ["P_hybrid_inverter"])
+    assert _CURT not in posted, posted
+    warnings = " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+    assert "P_PV_curtailment" not in warnings, warnings
+
+
+def test_publish_n2_posts_curtailment_when_one_of_two_pv_inverters_curtails():
+    conf = {**_N2, "pv_plant_inverter_index": [0, 1], "compute_curtailment": [False, True]}
+    posted, _ = _publish(conf, _BOTH)
+    assert _CURT in posted, posted
+
+
+def test_publish_n2_single_curtailment_flag_applies_to_the_pv_inverter():
+    posted, _ = _publish({**_N2, "compute_curtailment": True}, _BOTH)
+    assert _CURT in posted, posted
 
 
 def test_publish_n1_is_unchanged():
