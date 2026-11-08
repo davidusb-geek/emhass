@@ -3978,6 +3978,28 @@ def _plan_column_present(ctx: PublishContext, opt_res_latest: pd.DataFrame, colu
     return False
 
 
+def _publish_pv_inverters(ctx: PublishContext) -> set[int]:
+    """The inverters that carry a PV plant; none when the index cannot be read (#1150)."""
+    try:
+        return set(utils.pv_carrying_inverters(ctx.plant_conf))
+    except utils.InverterConfigError:
+        # Validated when the configuration was loaded, like the inverter count.
+        return set()
+
+
+def _curtailing_inverters(ctx: PublishContext, pv_inverters: set[int]) -> set[int]:
+    """The PV inverters with their own curtailment on (#1150).
+
+    These are the inverters the per-inverter optimizer (#1314) gives a ``P_PV_curtailment_{i}`` column, and
+    the site total ``P_PV_curtailment`` exists when there is at least one. A single flag
+    (a configuration not yet normalised to one flag per inverter) applies to every inverter.
+    """
+    flags = utils.inverter_curtailment_flags(ctx.plant_conf)
+    if len(flags) == 1:
+        return pv_inverters if flags[0] else set()
+    return {i for i in pv_inverters if i < len(flags) and flags[i]}
+
+
 async def _publish_standard_forecasts(
     ctx: PublishContext, opt_res_latest: pd.DataFrame
 ) -> list[str]:
@@ -4019,7 +4041,9 @@ async def _publish_standard_forecasts(
     if num_inverters > 1:
         # Site totals only (#1150); per-inverter sensors come later. inverter_is_hybrid
         # is not read above one inverter. A column missing from a stale plan is skipped.
-        publish_curtailment = utils.any_inverter_curtails(ctx.plant_conf) and _plan_column_present(
+        # The curtailment total exists only when an inverter that carries PV curtails.
+        curtailing = _curtailing_inverters(ctx, _publish_pv_inverters(ctx))
+        publish_curtailment = bool(curtailing) and _plan_column_present(
             ctx, opt_res_latest, "P_PV_curtailment"
         )
         publish_hybrid = _plan_column_present(ctx, opt_res_latest, "P_hybrid_inverter")
