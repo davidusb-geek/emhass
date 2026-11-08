@@ -444,7 +444,7 @@ def _real_cost(res, weight):
     return float((grid + weights).sum())
 
 
-def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05, costfun=None):
+def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05, costfun=None, total_pv_sell=False):
     """Bell-shaped PV peaking at 9 kW over a day of half hours on a 5 kW hybrid."""
     t = np.arange(n)
     pv = np.clip(9000 * np.exp(-(((t - 12) / 5.0) ** 2)), 0, None)
@@ -459,9 +459,43 @@ def _bell_day(curtail, weight, cost=0.30, n=24, prod=0.05, costfun=None):
     )
     if costfun is not None:
         opt.costfun = costfun
+    if total_pv_sell:
+        opt.optim_conf["set_total_pv_sell"] = True
     load = 800 + 600 * (t % 4 == 0)
     res = solve(opt, pv=(pv,), load=load, cost=cost, prod=prod, soc=0.9, final=0.9, n=n)
     return opt, res
+
+
+@pytest.mark.parametrize(
+    "costfun,cost,prod,expected",
+    [
+        ("profit", -0.7, 0.05, 0.002),  # grid import is not priced, so it does not count
+        ("profit", -0.7, -0.9, 1.8),  # a negative export price still does
+        ("cost", -0.7, 0.05, 0.002),
+        ("self-consumption", -0.7, 0.05, 1400.0),  # self-consumption still prices import
+    ],
+)
+def test_with_total_pv_sell_a_negative_import_price_does_not_raise_the_spill_price(
+    costfun, cost, prod, expected
+):
+    opt = _spill_site()
+    opt.costfun = costfun
+    opt.optim_conf["set_total_pv_sell"] = True
+    solve(opt, pv=(7000.0,), load=1000.0, cost=cost, prod=prod, soc=0.95)
+    np.testing.assert_allclose(opt.param_spill_price.value, expected)
+
+
+def test_with_total_pv_sell_a_negative_import_day_plans_the_battery_like_the_curtailing_twin():
+    # Grid import is not priced with set_total_pv_sell, so a negative tariff all day gives
+    # spill nothing to compete with and the battery plan is the curtailing twin's. Counting
+    # the import price there cycled 7829 Wh against the twin's 0 at weight 0.05.
+    def day(curtail):
+        return _bell_day(curtail=curtail, weight=0.05, cost=-0.2, total_pv_sell=True)
+
+    _, spill_res = day(False)
+    _, twin_res = day(True)
+    assert _discharged_wh(spill_res) == pytest.approx(_discharged_wh(twin_res), abs=1)
+    assert _throughput_wh(spill_res) == pytest.approx(_throughput_wh(twin_res), abs=1)
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.05])

@@ -8479,10 +8479,15 @@ class Optimization:
             # big-M and export is not, and the cost objective has no export term, so a
             # negative export price does not count there. The floor is a tie-break and is
             # not scaled: scaled, it would price spill far above the battery weights on
-            # every self-consumption clipping day. The inverter stress rate is a plain cost
+            # every self-consumption clipping day. With set_total_pv_sell, profit and cost
+            # charge the load at the tariff and never price grid import, so a negative
+            # import price does not count either. The inverter stress rate is a plain cost
             # and is added unscaled.
             n_steps = len(unit_load_cost)
-            import_neg = -np.asarray(unit_load_cost, dtype=float) * penalty_scale
+            if self.costfun in ("profit", "cost") and self.optim_conf["set_total_pv_sell"]:
+                import_neg = np.zeros(n_steps)
+            else:
+                import_neg = -np.asarray(unit_load_cost, dtype=float) * penalty_scale
             if self.costfun == "cost":
                 export_neg = np.zeros(n_steps)
             else:
