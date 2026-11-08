@@ -65,9 +65,11 @@ forecast in use was saved before this version and has no per-plant data (see
 columns as before. See [Forecasts](forecasts.md) for what a plant is for each forecast method.
 
 Above one inverter (`number_of_inverters` above 1), the result also has per-inverter columns,
-`i` counting from 0 in inverter order. `P_PV_{i}` is the PV the model used for each
-inverter that carries PV (W; `P_PV` is their sum). For a PV-only inverter with
-`compute_curtailment` off, that is the forecast clipped to what the inverter can convert, so
+`i` counting from 0 in inverter order. `P_PV_{i}` is the PV forecast the model was given for
+each inverter that carries PV (W; `P_PV` is their sum). The PV that inverter actually uses is
+`P_PV_{i}` minus its `P_PV_curtailment_{i}` or `P_PV_spill_{i}`, whichever it has, just as
+`P_PV_curtailment` comes off `P_PV`. For a PV-only inverter with
+`compute_curtailment` off, the forecast is clipped to what the inverter can convert, so
 `P_PV` and `P_PV_{i}` are clipped too, while the `P_PV_plant{j}` columns keep the forecast as it
 came in and no longer always add up to `P_PV`. `P_PV_curtailment_{i}` is the curtailment of
 each inverter that carries PV and has `compute_curtailment` on (W, never negative), and
