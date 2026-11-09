@@ -389,7 +389,7 @@ Rules, each naming the parameter, the point and the value when violated:
 - the AC-side power is strictly positive and strictly increasing. Do not enter a point at `0` W: efficiency at zero power is undefined, so EMHASS adds the transfer origin (0 W AC, 0 W DC) itself. This keeps the existing assumption that the inverter has no standby consumption in the model; keep accounting for standby where it is accounted for today (for example in the load forecast);
 - efficiency is a fraction between `0` and `1` (no energy gain). For `inverter_power_curve_ac_dc` (charging) it may be `0`: fixed losses can consume all of a small AC input, so a measured `[50, 0.0]` (50 W of AC input reaches the DC bus as 0 W) is valid and creates a flat zero-output segment (a dead zone). For `inverter_power_curve_dc_ac` (discharging) it must be above `0`: delivering positive AC output always takes DC power, and 0 % would need infinite DC input;
 - the converted DC-side power must not decrease as the AC-side power rises. It may stay flat (a dead zone, or an efficiency that falls exactly in proportion to power) but not fall;
-- `inverter_is_hybrid` must be true for the curve to be used.
+- with one inverter, `inverter_is_hybrid` must be true for the curve to be used. With `number_of_inverters` above 1 the flag is not consulted (see below).
 
 A parameter that is absent, or the explicit empty list `[]`, keeps the scalar efficiency. Any other value (`null`, `false`, `0`, an empty string, ...) is treated as a supplied curve and rejected as malformed: a curve is a physical model, so EMHASS never silently falls back to the scalar.
 
@@ -400,9 +400,9 @@ EMHASS converts each point once to a power-transfer breakpoint: `dc_input_w = ac
 How a violation is handled depends on where the curve comes from:
 
 - **Saving in the web configuration page** (`/set-config`) rejects an invalid curve with HTTP 400 and the reason shown in the page; nothing is written, so the previous configuration stays in place.
-- **Runtime parameters** passed to an optimization action are strict: an invalid curve, or a curve while `inverter_is_hybrid` is false, is refused with HTTP 400 and the action does not run. The reason is in the action log (for `weather-forecast-cache`, in the response body).
+- **Runtime parameters** passed to an optimization action are strict: an invalid curve, or (with one inverter) a curve while `inverter_is_hybrid` is false, is refused with HTTP 400 and the action does not run. The reason is in the action log (for `weather-forecast-cache`, in the response body).
 - **An already-saved configuration** (for example an edited `config.json`) never prevents EMHASS or the configuration page from starting: an unusable curve is cleared, an error naming it is logged, and the scalar efficiency of that direction applies until you correct it. Check the log, because that is the only sign that the curve is not in use.
-- **`inverter_is_hybrid` false with a valid curve** keeps the curve stored and ignores it (a warning is logged), so you can switch hybrid off in the page without clearing the curves.
+- **One inverter, `inverter_is_hybrid` false with a valid curve** keeps the curve stored and ignores it (a warning is logged), so you can switch hybrid off in the page without clearing the curves.
 
 Between points the converted power transfer is linear. The last point is the supported power domain and there is no extrapolation: the optimizer never plans more AC power through that direction than the last point's `ac_power_w`, and a warning is logged when the last point is below `inverter_ac_output_max` / `inverter_ac_input_max`. `inverter_ac_output_max` and `inverter_ac_input_max` still limit the AC side of a curved direction, so the effective limit is whichever is lower. A curve is a *total* transfer relation measured at the inverter boundary (it already contains its own conversion losses), not an increment on top of the scalar efficiency. While a direction has a curve, its scalar `inverter_efficiency_*` is not used at all. The curve acts on the whole DC bus, so for `dc_ac` the DC power is PV plus battery discharge.
 

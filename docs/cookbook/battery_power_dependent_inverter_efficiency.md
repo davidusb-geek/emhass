@@ -7,7 +7,7 @@ Make EMHASS plan with the fact that a hybrid or AC-coupled battery inverter wast
 ## Prerequisites
 
 - EMHASS version: a release that includes the `inverter_power_curve_*` parameters (issue #746).
-- For the legacy one-inverter model: `inverter_is_hybrid: true` and a battery (`set_use_battery: true`). For separate PV and battery inverters: `number_of_inverters` above 1, `battery_inverter_index` pointing to the battery-only inverter, and `pv_plant_inverter_index` pointing to the separate PV inverter. The one-inverter `inverter_is_hybrid: false` model does not use these inverter curves.
+- For the legacy one-inverter model: `inverter_is_hybrid: true` and a battery (`set_use_battery: true`). For separate PV and battery inverters: `set_use_battery: true` (an optimization setting, not a `plant_conf` one; without it the battery-only inverter is inert and planned at 0 W), `number_of_inverters` above 1, `battery_inverter_index` pointing to the battery-only inverter, and `pv_plant_inverter_index` pointing to the separate PV inverter. The one-inverter `inverter_is_hybrid: false` model does not use these inverter curves.
 - Your own measurements or datasheet points. No curve is shipped: there are no vendor or site defaults.
 - Configuration only: there is no transport or orchestration step, so nothing here depends on Node-RED, Home Assistant or another stack.
 
@@ -88,7 +88,7 @@ A curve is validated whenever it is saved or passed at runtime, and an invalid o
 | `infinite DC input` | an `inverter_power_curve_dc_ac` point has efficiency `0` at a positive AC output |
 | `non-decreasing` | the converted DC-side power falls as AC power rises (a flat segment is allowed) |
 | `non-finite` / `too close together` | an efficiency or point spacing so small that a converted power or slope overflows |
-| `requires inverter_is_hybrid` | a runtime request passed a curve while `inverter_is_hybrid` is false; a stored curve is kept but ignored in that case |
+| `requires inverter_is_hybrid` | one-inverter model only: a runtime request passed a curve while `inverter_is_hybrid` is false; a stored curve is kept but ignored in that case. With `number_of_inverters` above 1 the flag is not consulted |
 
 Expected: EMHASS starts with no error. A warning that the curve ends below `inverter_ac_output_max` or `inverter_ac_input_max` means the last point is a lower power limit than your inverter rating (see the caveat on range below).
 
@@ -105,7 +105,7 @@ Expected: the published values lie on the transfer your points define. With the 
 - **Negative prices.** The curve is an equality, not an inequality, so negative import prices cannot be exploited to draw AC power that is not accounted for. A dead zone you declare yourself is different: with `[50, 0.0]` in the charge curve and a sufficiently negative import price, EMHASS may draw those 50 W and lose them as inverter heat, because under your curve that is physically what happens and it is paid for. EMHASS does not hide this with a minimum-power rule.
 - **Minimum operating power.** EMHASS has no setting for a minimum battery charge or discharge power, so "never operate below N W" cannot be expressed here; a charge dead zone only describes the losses, it does not forbid operating in it.
 - **Charge-power derating.** `battery_charge_power_derating` keeps limiting charge power by state of charge on top of the curve; a curve does not replace it.
-- **Several batteries.** There is one hybrid inverter and one shared DC bus: one curve per direction acts on the combined battery and PV power, not per battery.
+- **Several batteries.** In the one-inverter model there is one hybrid inverter and one shared DC bus: one curve per direction acts on the combined battery and PV power, not per battery. With `number_of_inverters` above 1 each inverter has its own DC bus and its own curves, so check each inverter's `P_hybrid_inverter_<i>` against the DC flow of the batteries on that inverter, not against the aggregate; batteries on the same inverter share its curve.
 - **Direction independence.** You may set one curve and keep the other direction scalar.
 - **Solver time.** Curved directions add binaries; with several segments over a long horizon, solve time rises. Watch `lp_solver_timeout` and keep curves compact.
 
@@ -116,6 +116,8 @@ An AC-coupled battery inverter and a separate PV inverter are represented as **t
 For example, with PV inverter 0 and a 2400 W AC-coupled battery inverter 1, the following **illustrative excerpt** shows the curve *shape* (not measured/validated vendor efficiency data). The remaining PV-plant, battery and forecast settings are required as usual:
 
 ```yaml
+optim_conf:
+  set_use_battery: true
 plant_conf:
   number_of_inverters: 2
   number_of_batteries: 1
