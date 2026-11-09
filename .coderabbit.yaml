@@ -1,8 +1,9 @@
 language: "en"
 reviews:
-  profile: "chill" # Options: chill, assertive. 'chill' reduces noise.
-  request_changes_workflow: false
-  high_level_summary: true
-  poem: false # Turn off playful poems
+  profile: "assertive" # Keeps noise down by only commenting on significant issues
+  request_changes_workflow: false # Prevents CodeRabbit from hard-blocking the PR
+  high_level_summary: true # Generates a summary of the PR changes
+  high_level_summary_in_walkthrough: true # Forces the summary to be posted as a new PR comment
+  poem: false # Disables the playful poems for a strictly technical tone
   auto_review:
-    enabled: false # Disables automatic reviews on new PRs/commits
+    enabled: true # Automatically reviews all new PRs and pushed commits
