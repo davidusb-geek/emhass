@@ -1067,6 +1067,9 @@ def test_ac_coupled_battery_only_discharge_curve_accounts_for_storage_losses():
     # The time step is 30 minutes and capacity is CAP Wh.
     expected_soc = 0.85 - np.cumsum(dc_discharge / storage_efficiency * 0.5 / CAP)
     np.testing.assert_allclose(col(res, "SOC_opt"), expected_soc, atol=1e-6)
+    # The optimizer's own final-SoC constraint must use the same storage stage: the
+    # target is reached only if the plan was built with the storage efficiency.
+    assert col(res, "SOC_opt")[-1] == pytest.approx(0.55, abs=1e-6)
 
 
 def test_ac_coupled_battery_only_charge_curve_accounts_for_storage_losses():
@@ -1110,3 +1113,6 @@ def test_ac_coupled_battery_only_charge_curve_accounts_for_storage_losses():
         / CAP
     )
     np.testing.assert_allclose(col(res, "SOC_opt"), expected_soc, atol=1e-6)
+    # The optimizer's own final-SoC constraint must use the same storage stage: the
+    # target is reached only if the plan was built with the storage efficiency.
+    assert col(res, "SOC_opt")[-1] == pytest.approx(0.55, abs=1e-6)
