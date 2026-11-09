@@ -2,12 +2,12 @@
 
 ## Goal
 
-Make EMHASS plan with the fact that a hybrid inverter wastes a larger share of low power than of high power, in both directions (DC bus to AC when discharging or exporting PV, AC to DC bus when charging from the grid), indexed on the AC side where the inverter is commanded and measured. After this recipe, `inverter_power_curve_dc_ac` and `inverter_power_curve_ac_dc` hold validated efficiency curves built from your own datasheet or measurements, and you can check that the plan obeys them.
+Make EMHASS plan with the fact that a hybrid or AC-coupled battery inverter wastes a larger share of low power than of high power, in both directions (DC bus to AC when discharging or exporting PV, AC to DC bus when charging from the grid), indexed on the AC side where the inverter is commanded and measured. After this recipe, `inverter_power_curve_dc_ac` and `inverter_power_curve_ac_dc` hold validated efficiency curves built from your own datasheet or measurements, and you can check that the plan obeys them.
 
 ## Prerequisites
 
 - EMHASS version: a release that includes the `inverter_power_curve_*` parameters (issue #746).
-- `inverter_is_hybrid: true` and a battery (`set_use_battery: true`).
+- For the legacy one-inverter model: `inverter_is_hybrid: true` and a battery (`set_use_battery: true`). For separate PV and battery inverters: `number_of_inverters` above 1, `battery_inverter_index` pointing to the battery-only inverter, and `pv_plant_inverter_index` pointing to the separate PV inverter. The one-inverter `inverter_is_hybrid: false` model does not use these inverter curves.
 - Your own measurements or datasheet points. No curve is shipped: there are no vendor or site defaults.
 - Configuration only: there is no transport or orchestration step, so nothing here depends on Node-RED, Home Assistant or another stack.
 
@@ -108,6 +108,32 @@ Expected: the published values lie on the transfer your points define. With the 
 - **Several batteries.** There is one hybrid inverter and one shared DC bus: one curve per direction acts on the combined battery and PV power, not per battery.
 - **Direction independence.** You may set one curve and keep the other direction scalar.
 - **Solver time.** Curved directions add binaries; with several segments over a long horizon, solve time rises. Watch `lp_solver_timeout` and keep curves compact.
+
+## AC-coupled batteries with separate PV inverters (#1271)
+
+An AC-coupled battery inverter and a separate PV inverter are represented as **two inverters**, not as one inverter with `inverter_is_hybrid: false`. For `number_of_inverters > 1`, the index lists determine the hardware topology and `inverter_is_hybrid` is ignored. The same power-transfer curves work on a battery-only inverter, with separate curves for each inverter. See [Per-inverter settings](../config.md#per-inverter-settings-and-the-one-inverter-default) for the required per-inverter and PV-plant configuration.
+
+For example, with PV inverter 0 and a 2400 W AC-coupled battery inverter 1, the following **illustrative excerpt** shows the curve *shape* (not measured/validated vendor efficiency data). The remaining PV-plant, battery and forecast settings are required as usual:
+
+```yaml
+plant_conf:
+  number_of_inverters: 2
+  number_of_batteries: 1
+  battery_inverter_index: [1]
+  pv_plant_inverter_index: [0]
+  inverter_ac_output_max: [5000, 2400]
+  inverter_ac_input_max: [0, 2400]
+  inverter_efficiency_dc_ac: [0.97, 1.0]
+  inverter_efficiency_ac_dc: [1.0, 1.0]
+  inverter_power_curve_dc_ac: [[], [[500, 0.74], [2400, 0.91]]]
+  inverter_power_curve_ac_dc: [[], [[500, 0.80], [2400, 0.93]]]
+```
+
+With zero PV, `P_hybrid_inverter_1` is the battery inverter's AC terminal flow (positive discharging, negative charging), while `P_batt` is the *DC-bus* battery flow. The inverter discharge curve converts positive AC output into required DC-bus power; the separate `battery_discharge_efficiency` then determines the decline in `SOC_opt`. For charging, the inverter charge curve converts AC draw into DC-bus charging power, then `battery_charge_efficiency` determines stored energy. Both battery efficiencies remain active; do not set an inverter curve equal to a measured *end-to-end* AC-to-SoC efficiency **and** leave the same storage losses in the battery parameters.
+
+An efficiency estimate obtained only from AC power and SoC movement is usually an **end-to-end** estimate: SoC reporting resolution, usable capacity, inverter idle draw, measurement timebase, and battery storage losses all affect it. Prefer simultaneous AC and DC inverter telemetry when available. Otherwise collect repeatable, constant-power charge/discharge intervals and calibrate the two model stages consistently, documenting the assumptions instead of treating the end-to-end number as an inverter-only curve. Standby consumption is **not** included in the curves: the internal origin is (0 W, 0 W). The model does not impose a minimum non-zero operating power; that is a separate control requirement.
+
+A curve is optional, not a reason to increase complexity without measured benefit. Check `lp_solver_timeout` and the solve time after enabling curves on a 15-minute or 5-minute horizon: each extra point adds ordering binaries per timestep.
 
 ## Credits
 
