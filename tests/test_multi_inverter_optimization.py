@@ -1028,6 +1028,7 @@ def test_the_horizon_can_change_between_runs():
     assert len(short) == HORIZON and len(longer) == HORIZON + 4
     assert all(len(v.value) == HORIZON + 4 for v in opt.vars["p_inverter"])
 
+
 # --------------------------------------------------------------------------- #
 # AC-coupled battery-only power-transfer regression (#1271)
 # --------------------------------------------------------------------------- #
@@ -1105,6 +1106,7 @@ def test_ac_coupled_battery_only_charge_curve_accounts_for_storage_losses():
 
     expected_soc = 0.25 - np.cumsum(
         (dc_discharge / storage_discharge_efficiency - dc_charge * storage_charge_efficiency)
-        * 0.5 / CAP
+        * 0.5
+        / CAP
     )
     np.testing.assert_allclose(col(res, "SOC_opt"), expected_soc, atol=1e-6)
