@@ -25,6 +25,7 @@ N = 48
 
 class TestTwoInvertersOptimizeThenPublish(MultiInverterActionBase):
     async def input_dict(self, action, params, runtime):
+        """Build the input data dict for an action from the given params and runtime data."""
         params = copy.deepcopy(params)
         params["passed_data"] = runtime
         return await command_line.set_input_data_dict(
@@ -39,10 +40,12 @@ class TestTwoInvertersOptimizeThenPublish(MultiInverterActionBase):
 
     @staticmethod
     def capture(input_data_dict):
+        """Wrap rh.post_data to record each POST body by entity_id; return that dict."""
         posts: dict[str, dict] = {}
         real = input_data_dict["rh"].post_data
 
         async def post_data(*args, **kwargs):
+            """Call the real post_data and record the body it built."""
             result = await real(*args, **kwargs)
             posts[kwargs.get("entity_id", args[2] if len(args) > 2 else None)] = result[1]
             return result
@@ -52,6 +55,11 @@ class TestTwoInvertersOptimizeThenPublish(MultiInverterActionBase):
 
     @fixture_clock()
     async def test_optimize_publish_and_replay(self):
+        """Optimize two inverters for real, publish the plan, then replay every saved entity.
+
+        Checks the per-inverter sensors, the battery's inverter attribute in the posts and the
+        metadata, and that a continual publish posts the same attribute keys again.
+        """
         params = await self.params(
             plant={
                 "compute_curtailment": [False, True],

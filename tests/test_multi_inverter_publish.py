@@ -42,6 +42,7 @@ def _params() -> dict:
     if not _PARAMS:
 
         async def go():
+            """Build and treat the default params the way dayahead-optim does."""
             config = json.loads(emhass_conf["defaults_path"].read_text(encoding="utf-8"))
             _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
@@ -84,6 +85,7 @@ TWO = {
 
 
 def _frame(columns: list[str]) -> pd.DataFrame:
+    """Return a six-hour plan frame with the site columns, prices, status and the given columns."""
     index = pd.date_range(pd.Timestamp.now(tz="UTC").floor("h"), periods=6, freq="h")
     frame = pd.DataFrame(1.0, index=index, columns=["P_Load", "P_PV", "P_grid", *columns])
     frame["unit_load_cost"] = 0.3
@@ -107,6 +109,7 @@ def _run_publish(plant_conf: dict, columns: list[str], optim_conf: dict | None =
     async def post_data(
         data, idx, entity_id, device_class, unit, friendly_name, type_var=None, **kwargs
     ):
+        """Stand-in for RetrieveHass.post_data that records each call by entity_id."""
         posts[entity_id] = {
             "device_class": device_class,
             "unit": unit,
@@ -132,10 +135,12 @@ def _run_publish(plant_conf: dict, columns: list[str], optim_conf: dict | None =
 
 
 def _per_inverter(posts: dict) -> set[str]:
+    """Return the posted entity ids that end in an inverter number."""
     return {entity for entity in posts if re.search(r"inverter\d+$", entity)}
 
 
 def _warnings(log) -> str:
+    """Join every logged warning message into one string."""
     return " ".join(str(call.args[0]) for call in log.warning.call_args_list)
 
 
@@ -156,6 +161,7 @@ THREE_COLUMNS = [
 
 
 def test_n3_mixed_topology_posts_one_sensor_per_inverter_column():
+    """Three mixed inverters post one sensor per per-inverter column and keep the site totals."""
     # inverter 0 battery-only (no PV), 1 hybrid (PV and battery), 2 PV-only
     posts, log, _ = _run_publish(THREE, THREE_COLUMNS)
     assert _per_inverter(posts) == {
@@ -177,6 +183,7 @@ def test_n3_mixed_topology_posts_one_sensor_per_inverter_column():
 
 
 def test_per_inverter_sensor_names_and_units_follow_the_site_totals_style():
+    """Per-inverter sensors use the site total's name style, unit and device class."""
     posts, _, _ = _run_publish(THREE, THREE_COLUMNS)
     expected = {
         "sensor.p_pv_forecast_inverter2": ("PV Power Forecast Inverter 2"),
@@ -194,6 +201,7 @@ def test_per_inverter_sensor_names_and_units_follow_the_site_totals_style():
 
 
 def test_n2_posts_the_per_inverter_sensors():
+    """Two inverters post the per-inverter sensors for the columns the plan carries."""
     columns = [
         "P_PV_curtailment",
         "P_hybrid_inverter",
@@ -212,6 +220,7 @@ def test_n2_posts_the_per_inverter_sensors():
 
 
 def test_missing_expected_column_warns_and_skips():
+    """A missing per-inverter column is skipped with a warning and the rest still publish."""
     columns = [c for c in THREE_COLUMNS if c not in ("P_hybrid_inverter_2", "P_PV_2")]
     posts, log, _ = _run_publish(THREE, columns)
     assert "sensor.p_hybrid_inverter_inverter2" not in posts
@@ -225,6 +234,7 @@ def test_missing_expected_column_warns_and_skips():
 
 
 def test_missing_curtailment_column_on_a_curtailing_inverter_warns():
+    """A curtailing inverter with no curtailment column warns and posts no sensor for it."""
     columns = [c for c in THREE_COLUMNS if c != "P_PV_curtailment_2"]
     posts, log, _ = _run_publish(THREE, columns)
     assert "sensor.p_pv_curtailment_inverter2" not in posts
@@ -233,6 +243,7 @@ def test_missing_curtailment_column_on_a_curtailing_inverter_warns():
 
 
 def test_stale_frame_columns_beyond_the_inverter_count_are_not_published():
+    """Columns for an inverter the config no longer has are not posted or returned."""
     # An N=3 plan replayed under an N=2 config: inverter 2 does not exist any more.
     columns = [
         "P_PV_curtailment",
@@ -257,6 +268,7 @@ def test_stale_frame_columns_beyond_the_inverter_count_are_not_published():
 
 
 def test_spill_is_published_only_when_present_and_never_warns():
+    """The spill sensor is posted only when the frame has a spill column, and never warns."""
     posts, log, _ = _run_publish(THREE, THREE_COLUMNS)
     assert not [e for e in posts if "spill" in e]
     assert "spill" not in _warnings(log)
@@ -271,6 +283,7 @@ def test_spill_is_published_only_when_present_and_never_warns():
 
 
 def test_curtailment_follows_each_inverters_own_flag():
+    """Curtailment sensors and warnings follow each inverter's own curtailment flag."""
     conf = {**TWO, "pv_plant_inverter_index": [0, 1], "compute_curtailment": [True, False]}
     columns = [
         "P_PV_curtailment",
@@ -293,6 +306,7 @@ def test_curtailment_follows_each_inverters_own_flag():
 
 
 def test_curtailment_flag_on_an_inverter_without_pv_posts_and_warns_nothing():
+    """A curtailment flag on an inverter with no PV posts nothing and warns nothing."""
     # Inverter 0 has the flag on but no PV, so the optimizer makes no curtailment
     # column for it and no site total either: nothing is posted and nothing warns.
     conf = {**TWO, "compute_curtailment": [True, False]}
@@ -304,6 +318,7 @@ def test_curtailment_flag_on_an_inverter_without_pv_posts_and_warns_nothing():
 
 
 def test_returned_frame_has_the_published_per_inverter_columns():
+    """The returned frame keeps the per-inverter columns next to the site columns."""
     _, _, frame = _run_publish(THREE, [*THREE_COLUMNS, "P_PV_spill_2"])
     for column in [c for c in THREE_COLUMNS if c.endswith(("_0", "_1", "_2"))] + ["P_PV_spill_2"]:
         assert column in frame.columns, column
@@ -315,6 +330,7 @@ def test_returned_frame_has_the_published_per_inverter_columns():
 
 
 def test_n1_full_frame_saves_metadata_with_no_attributes():
+    """One inverter saves no per-inverter entities or attributes key, even from a stale frame."""
     # The real post_data with entity save, through the whole publish_data, on a stale
     # frame that still has per-inverter and per-battery columns.
     columns = [*THREE_COLUMNS, "P_PV_spill_1", "P_batt", "SOC_opt", "P_batt_0", "SOC_opt_0"]
@@ -349,6 +365,7 @@ def test_n1_full_frame_saves_metadata_with_no_attributes():
 
 
 def test_n1_full_frame_posts_exactly_todays_entities_with_no_attributes():
+    """A stale frame at one inverter posts exactly today's entities and no extra attributes."""
     columns = [
         *THREE_COLUMNS,
         "P_PV_spill_1",
@@ -384,6 +401,7 @@ def test_n1_full_frame_posts_exactly_todays_entities_with_no_attributes():
 
 
 def _real_rh(tmp: str) -> RetrieveHass:
+    """Return a real RetrieveHass that reads from file and saves entities under tmp."""
     return RetrieveHass(
         hass_url="http://x",
         long_lived_token="tok",
@@ -397,6 +415,7 @@ def _real_rh(tmp: str) -> RetrieveHass:
 
 
 def _batt_ctx(rh, plant_conf: dict, save: bool = False) -> PublishContext:
+    """Return a PublishContext for the battery publish with the default battery entity ids."""
     passed_data = {
         "custom_batt_forecast_id": {
             "entity_id": "sensor.p_batt_forecast",
@@ -423,6 +442,7 @@ def _batt_ctx(rh, plant_conf: dict, save: bool = False) -> PublishContext:
 
 
 def _batt_frame(n_batt: int) -> pd.DataFrame:
+    """Return a three-step battery frame, with per-battery columns when n_batt is above one."""
     index = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
     columns = {"P_batt": [1.0, 2.0, 3.0], "SOC_opt": [0.5, 0.6, 0.7]}
     if n_batt > 1:
@@ -434,9 +454,11 @@ def _batt_frame(n_batt: int) -> pd.DataFrame:
 
 
 def _batt_posts(plant_conf: dict) -> dict[str, dict]:
+    """Run _publish_battery_data with a recording post_data; return the kwargs per entity_id."""
     posts: dict[str, dict] = {}
 
     async def post_data(data, idx, entity_id, *args, **kwargs):
+        """Record the keyword arguments of each post by entity_id."""
         posts[entity_id] = kwargs
 
     rh = MagicMock()
@@ -452,6 +474,7 @@ def _batt_posts(plant_conf: dict) -> dict[str, dict]:
 
 
 def test_inverter_attribute_on_per_battery_sensors_with_several_batteries():
+    """Each per-battery sensor names its inverter and the fleet total names none."""
     plant = {"number_of_inverters": 3, "number_of_batteries": 2, "battery_inverter_index": [2, 0]}
     posts = _batt_posts(plant)
     assert posts["sensor.p_batt_forecast_battery0"].get("extra_attributes") == {"inverter": 2}
@@ -464,6 +487,7 @@ def test_inverter_attribute_on_per_battery_sensors_with_several_batteries():
 
 
 def test_inverter_attribute_on_the_bare_sensors_with_one_battery():
+    """One battery on a multi-inverter site puts the attribute on the bare battery sensors."""
     plant = {"number_of_inverters": 2, "number_of_batteries": 1, "battery_inverter_index": [1]}
     posts = _batt_posts(plant)
     assert sorted(posts) == ["sensor.p_batt_forecast", "sensor.soc_batt_forecast"]
@@ -472,6 +496,7 @@ def test_inverter_attribute_on_the_bare_sensors_with_one_battery():
 
 
 def test_no_inverter_attribute_with_one_inverter():
+    """One inverter never adds the attribute, even with a battery index left in the config."""
     for n_batt in (1, 2):
         plant = {"number_of_batteries": n_batt}
         posts = _batt_posts(plant)
@@ -492,6 +517,7 @@ def test_no_inverter_attribute_with_one_inverter():
 
 
 def _post(rh, entity_id="sensor.p_batt_forecast_battery0", **kwargs):
+    """Post a short battery series through rh.post_data and return its result."""
     series = pd.Series(
         [1.0, 2.0, 3.0],
         index=pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC"),
@@ -503,6 +529,7 @@ def _post(rh, entity_id="sensor.p_batt_forecast_battery0", **kwargs):
 
 
 def test_post_data_extra_attributes_reach_the_post_body():
+    """extra_attributes land in the POST body next to the usual attributes."""
     with tempfile.TemporaryDirectory() as tmp:
         rh = _real_rh(tmp)
         _, data = _post(rh, extra_attributes={"inverter": 1})
@@ -514,6 +541,7 @@ def test_post_data_extra_attributes_reach_the_post_body():
 
 
 def test_post_data_without_extra_attributes_is_unchanged():
+    """Leaving out extra_attributes, or passing None or {}, gives the same body as before."""
     with tempfile.TemporaryDirectory() as tmp:
         rh = _real_rh(tmp)
         _, plain = _post(rh)
@@ -524,6 +552,7 @@ def test_post_data_without_extra_attributes_is_unchanged():
 
 
 def test_extra_attributes_are_saved_in_the_metadata_only_when_given():
+    """The saved metadata gets an attributes key only when extra_attributes is not empty."""
     with tempfile.TemporaryDirectory() as tmp:
         rh = _real_rh(tmp)
         _post(rh, "sensor.with_attr", save_entities=True, extra_attributes={"inverter": 1})
@@ -550,6 +579,7 @@ def _publish_json_capture(tmp: str, entity_file: str):
     real_post = reader.post_data
 
     async def wrapper(*args, **kwargs):
+        """Call the real post_data and keep the body it built."""
         result = await real_post(*args, **kwargs)
         captured.append(result[1])
         return result
@@ -567,6 +597,7 @@ def _publish_json_capture(tmp: str, entity_file: str):
 
 
 def test_continual_publish_round_trip_keeps_the_inverter_attribute():
+    """A continual publish replays the saved inverter attribute on each per-battery sensor."""
     with tempfile.TemporaryDirectory() as tmp:
         plant = {
             "number_of_inverters": 2,
@@ -589,6 +620,7 @@ def test_continual_publish_round_trip_keeps_the_inverter_attribute():
 
 
 def test_continual_publish_round_trip_keeps_the_attribute_of_a_single_battery():
+    """A continual publish replays the attribute on the bare sensors of a single battery."""
     with tempfile.TemporaryDirectory() as tmp:
         plant = {"number_of_inverters": 2, "number_of_batteries": 1, "battery_inverter_index": [1]}
         ctx = _batt_ctx(_real_rh(tmp), plant, save=True)
@@ -600,6 +632,7 @@ def test_continual_publish_round_trip_keeps_the_attribute_of_a_single_battery():
 
 @pytest.mark.parametrize("bad", ["abc", 5, True, [1, 2]])
 def test_publish_json_ignores_saved_attributes_that_are_not_an_object(bad):
+    """publish_json skips saved attributes that are not a JSON object and still posts."""
     with tempfile.TemporaryDirectory() as tmp:
         plant = {
             "number_of_inverters": 2,
@@ -618,6 +651,7 @@ def test_publish_json_ignores_saved_attributes_that_are_not_an_object(bad):
 
 
 def test_continual_publish_reads_old_metadata_without_attributes():
+    """Metadata with no attributes key, as older versions saved it, still replays cleanly."""
     with tempfile.TemporaryDirectory() as tmp:
         ctx = _batt_ctx(_real_rh(tmp), {"number_of_batteries": 2}, save=True)
         asyncio.run(command_line._publish_battery_data(ctx, _batt_frame(2)))
@@ -628,6 +662,7 @@ def test_continual_publish_reads_old_metadata_without_attributes():
 
 
 def test_publish_json_passes_none_when_the_metadata_has_no_attributes():
+    """publish_json passes extra_attributes=None when the saved metadata has none."""
     with tempfile.TemporaryDirectory() as tmp:
         ctx = _batt_ctx(_real_rh(tmp), {"number_of_batteries": 2}, save=True)
         asyncio.run(command_line._publish_battery_data(ctx, _batt_frame(2)))
@@ -644,6 +679,7 @@ def test_publish_json_passes_none_when_the_metadata_has_no_attributes():
 
 
 def test_n1_metadata_has_no_attributes_key():
+    """At one inverter the saved metadata has no attributes or inverter key at all."""
     with tempfile.TemporaryDirectory() as tmp:
         for n_batt in (1, 2):
             ctx = _batt_ctx(_real_rh(tmp), {"number_of_batteries": n_batt}, save=True)
@@ -657,6 +693,7 @@ def test_n1_metadata_has_no_attributes_key():
 
 
 def test_plan_serialize_carries_the_per_inverter_columns():
+    """The plan API serializer keeps the per-inverter and spill columns."""
     frame = _frame([*THREE_COLUMNS, "P_PV_spill_1"])
     first = plan_store.serialize(frame)[0]
     for column in [*THREE_COLUMNS, "P_PV_spill_1"]:
@@ -664,6 +701,7 @@ def test_plan_serialize_carries_the_per_inverter_columns():
 
 
 def test_chart_figure_0_plots_the_per_inverter_columns():
+    """The first web UI chart plots the per-inverter and spill columns."""
     frame = _frame([*THREE_COLUMNS, "P_PV_spill_1"])
     html = utils.get_injection_dict(frame)["figure_0"]
     for column in ("P_PV_1", "P_PV_curtailment_2", "P_hybrid_inverter_0", "P_PV_spill_1"):
@@ -672,6 +710,7 @@ def test_chart_figure_0_plots_the_per_inverter_columns():
 
 @pytest.mark.parametrize("flags", [True, [True, True]])
 def test_a_scalar_curtailment_flag_applies_to_every_inverter(flags):
+    """A scalar True flag works like one per inverter, so every inverter posts curtailment."""
     conf = {**TWO, "pv_plant_inverter_index": [0, 1], "compute_curtailment": flags}
     columns = [
         "P_PV_curtailment",
