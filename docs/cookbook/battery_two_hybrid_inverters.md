@@ -20,6 +20,8 @@ The numbers in this recipe are illustrative, not from a real site. The plan exce
 Inverter 0 is a 5 kW hybrid with a 10 kWh battery and more PV than it can convert, and it cannot curtail. Inverter 1 is a 3.6 kW hybrid with a 5 kWh battery, and it can curtail. Above one inverter the two AC caps and the two index lists are required lists. The efficiencies, stress cost and curtailment flag take one value for every inverter or one entry per inverter, and `inverter_is_hybrid` is not read: an inverter with a battery and a PV plant on it is a hybrid.
 
 ```yaml
+optimization_time_step: 30
+method_ts_round: first                      # the first plan step and the published row are the step that contains now
 set_use_pv: true
 set_use_battery: true
 number_of_batteries: 2
@@ -53,6 +55,8 @@ modules_per_string: [11, 7]
 strings_per_inverter: [2, 2]
 ```
 
+`method_ts_round: first` matters for Steps 2 and 4. With the default `nearest`, a run in the second half of a step starts one step later, so a PV list that begins with the current step is shifted by one, and a publish late in a step posts the next step's setpoint before that step starts.
+
 Keep the efficiencies below 1.0. With a lossless DC-to-AC side on one inverter and a lossless AC-to-DC side on the other, energy can go round between the two for free, and EMHASS logs a warning saying so. The full rules (broadcast, lengths, what is refused) are in [Per-inverter settings](../config.md#per-inverter-settings-and-the-one-inverter-default), and what each inverter's shape means for the plan is in [How the optimizer models more than one inverter](../config.md#how-the-optimizer-models-more-than-one-inverter).
 
 Expected: the configuration saves with no error, and the log has no warning about lossless conversion.
@@ -75,6 +79,7 @@ script:
           horizon: 48                       # = prediction_horizon; each PV list needs at least this many values
           # One plain list of W per step (not a timestamp mapping) for each inverter,
           # from your PV forecast (placeholder entities and attribute; adapt them).
+          # The first value must be the 30-minute step that contains now.
           pv_a: "{{ state_attr('sensor.pv_forecast_inverter_a', 'watts') }}"
           pv_b: "{{ state_attr('sensor.pv_forecast_inverter_b', 'watts') }}"
       - if: >
@@ -117,9 +122,18 @@ rest_command:
     timeout: 60
     headers: {content-type: application/json}
     payload: "{}"
+
+automation:
+  - alias: EMHASS MPC two inverters
+    triggers:
+      - trigger: time_pattern
+        minutes: "/30"                      # = optimization_time_step
+        seconds: 20                         # a little after the step boundary
+    actions:
+      - action: script.emhass_mpc_two_inverters
 ```
 
-The script stops rather than send a forecast that is short or holds anything but finite numbers (see the [Forecast input contract](../passing_data.md#forecast-input-contract)). It stops again if EMHASS refuses the run with HTTP 400 (a wrong shape, a bad index list), because a Home Assistant `rest_command` only logs a failed status, and the publish would otherwise post the previous plan again. `sensor.battery_a_soc` and `sensor.battery_b_soc` are placeholders reporting percent; drop the `/ 100` if yours report a fraction. They have no default, so an unavailable sensor fails the call instead of planning from an invented SOC. `naive-mpc-optim` does not post sensors by itself, so the script calls `publish-data` next, and only then routes the setpoints. Keep `continual_publish` off with this recipe, so that sensors are only posted by this sequence. EMHASS does not clip a hybrid's PV forecast to its AC cap before the solve, whatever the source, so inverter 0's list can sit above its 5 kW cap at midday; that is the case Step 5 handles. The full rules for this list, and its timestamped form, are in [Passing data](../passing_data.md#forecast-data-at-runtime).
+The script stops rather than send a forecast that is short or holds anything but finite numbers (see the [Forecast input contract](../passing_data.md#forecast-input-contract)). It stops again if EMHASS refuses the run with HTTP 400 (a wrong shape, a bad index list), because a Home Assistant `rest_command` only logs a failed status, and the publish would otherwise post the previous plan again. `sensor.battery_a_soc` and `sensor.battery_b_soc` are placeholders reporting percent; drop the `/ 100` if yours report a fraction. They have no default, so an unavailable sensor fails the call instead of planning from an invented SOC. `naive-mpc-optim` does not post sensors by itself, so the script calls `publish-data` next, and only then routes the setpoints. Keep `continual_publish` off with this recipe, so that sensors are only posted by this sequence, and run no other optimization (a `dayahead-optim`, another MPC) at other times: `publish-data` posts the latest result, whichever run wrote it. A Home Assistant script runs one at a time by default, so the sequence itself does not overlap. The automation starts it once per step, just after the step begins, so the run and its publish fall in the same step; run the script by hand once to test it. EMHASS does not clip a hybrid's PV forecast to its AC cap before the solve, whatever the source, so inverter 0's list can sit above its 5 kW cap at midday; that is the case Step 5 handles. The full rules for this list, and its timestamped form, are in [Passing data](../passing_data.md#forecast-data-at-runtime).
 
 Expected: the plan has `P_PV_0` and `P_PV_1`, `P_PV` is their sum, and the sensors in Step 3 exist after the publish.
 
@@ -185,14 +199,21 @@ script:
           for_each: "{{ inverters }}"
           sequence:
             - variables:
-                batt_states: >
+                # every battery sensor on this inverter, fresh or not
+                group: >
                   {{ states.sensor
                      | selectattr('entity_id', 'match', 'sensor[.]p_batt_forecast_battery[0-9]+$')
                      | selectattr('attributes.inverter', 'defined')
                      | selectattr('attributes.inverter', 'eq', repeat.item.inverter)
+                     | map(attribute='entity_id') | list }}
+                # the ones this run posted
+                batt_states: >
+                  {{ expand(group)
                      | selectattr('last_reported', 'gt', run_started | as_datetime)
                      | map(attribute='state') | list }}
-            - if: "{{ batt_states | count > 0 and batt_states | reject('is_number') | list | count == 0 }}"
+            - if: >
+                {{ batt_states | count > 0 and batt_states | count == group | count
+                   and batt_states | reject('is_number') | list | count == 0 }}
               then:
                 - action: number.set_value
                   target: {entity_id: "{{ repeat.item.setpoint }}"}
@@ -200,7 +221,7 @@ script:
                     value: "{{ batt_states | map('float') | sum | round(0) }}"
 ```
 
-`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter whose battery sensor is unavailable, or older than this run, gets no new setpoint rather than an invented 0 W. That means its last setpoint stays in force, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:` instead. Call this script from Step 2, which passes `run_started`. If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
+`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter gets no new setpoint, rather than an invented 0 W or a partial sum, if any battery sensor on it is unavailable or older than this run. With two batteries behind one inverter, both have to be fresh. That means its last setpoint stays in force, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:` instead. Call this script from Step 2, which passes `run_started`. If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
 
 Expected: on the run's first step, inverter A (inverter 0) gets 464 W of discharge (`sensor.p_batt_forecast_battery0` at 463.92) and inverter B (inverter 1) gets 0 W.
 
@@ -226,7 +247,7 @@ Expected: the curtailment limit only applies in steps where `sensor.p_pv_curtail
 - **Churn between the units.** Two hybrids can move energy through the AC bus, one discharging while the other charges. Both inverter efficiencies make that cost something, and small non-zero battery weights remove the rest. At a negative import price the plan may still do it on purpose, because there the loss pays (see the paragraph on battery weights with more than one battery in [Configuration](../config.md)).
 - **`set_nodischarge_to_grid` changes meaning.** If it is true, one hybrid blocks battery discharge while exporting. With two inverters it becomes a single export ceiling (PV the inverters can deliver, minus the load), so a discharging battery may feed the other battery or a deferrable load while the site exports.
 - **`set_nocharge_from_grid` stays plant-wide.** It compares total PV with total charge and does not look at which inverter either is on.
-- **The sensor state is the current step.** Each per-inverter and per-battery sensor's state is the value for the step that is running now; the whole horizon is in its list attribute.
+- **The sensor state is the current step, with `method_ts_round: first`.** Each per-inverter and per-battery sensor's state is the value of the plan row `publish-data` picks, and with `first` that is the step that contains the publish time; the whole horizon is in its list attribute. With the default `nearest`, a publish in the second half of a step picks the next step's row.
 - **Other shapes.** A PV-only string inverter or an AC-coupled battery with its own inverter use the same two index lists: an inverter with only PV, or only a battery, takes that shape. See [How the optimizer models more than one inverter](../config.md#how-the-optimizer-models-more-than-one-inverter).
 - **Fail safe and security.** The Step 4 script already skips anything this run did not post. Add your own timeout on top for the case where the Step 2 script stops running at all, and keep the EMHASS `/action/*` endpoints and the inverter controls off the internet.
 
