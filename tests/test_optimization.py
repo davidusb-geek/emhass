@@ -3847,15 +3847,24 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(res["P_deferrable1"].iloc[0], 0)
 
     def test_thermal_inertia_lag_window_warning_on_cache_hit(self):
-        """A cache hit does not rebuild the constraints, so update_thermal_params
-        rechecks the fixed path against the new start and bounds."""
+        """A second solve reuses the built problem, so the fixed path is rechecked
+        against the new bounds there too, and the run still solves."""
         opt, _ = self._solve_lag_window([0.0] * 48, [30.0] * 48)
-        conf = copy.deepcopy(self.optim_conf)
-        conf["def_load_config"][1]["thermal_config"]["min_temperatures"] = [0.0, 0.0, 15.7]
+        problem = opt.prob
+        mins = [0.0] * 48
+        mins[2] = 15.7
+        opt.optim_conf["def_load_config"][1]["thermal_config"]["min_temperatures"] = mins
         with self.assertLogs(logger, level="WARNING") as logs:
-            opt.update_thermal_params(
-                conf, self.df_input_data_dayahead, self.p_load_forecast.values.ravel()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
             )
+        self.assertIs(opt.prob, problem, "the second solve must be a cache hit")
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertAlmostEqual(res["predicted_temp_heater1"].iloc[2], 15.62, delta=0.01)
         self.assertTrue(any("step 2: 15.62 C under" in line for line in logs.output), logs.output)
 
     def test_thermal_inertia(self):
