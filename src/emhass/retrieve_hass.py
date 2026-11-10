@@ -2096,6 +2096,7 @@ class RetrieveHass:
         save_entities: bool | None = False,
         logger_levels: str | None = "info",
         dont_post: bool | None = False,
+        extra_attributes: dict | None = None,
     ) -> None:
         r"""
         Post passed data to hass using REST API.
@@ -2128,6 +2129,9 @@ class RetrieveHass:
         :type logger_levels: str, optional
         :param dont_post: dont post to HA
         :type dont_post: bool, optional
+        :param extra_attributes: extra attributes merged into the sensor attributes, and kept in
+            the saved entity metadata so a continual publish posts them again
+        :type extra_attributes: dict, optional
 
         """
         # Add a possible prefix to the entity ID
@@ -2337,6 +2341,8 @@ class RetrieveHass:
                 "state": f"{state:.2f}",
                 "attributes": attributes,
             }
+        if extra_attributes:
+            data["attributes"].update(extra_attributes)
         # Actually post the data
         if self.get_data_from_file or dont_post:
             # Create mock response for file mode or dont_post mode
@@ -2440,6 +2446,8 @@ class RetrieveHass:
                         "type_var": type_var,
                         "optimization_time_step": int(self.freq.seconds / 60),
                     }
+                    if extra_attributes:
+                        metadata[entity_id]["attributes"] = extra_attributes
 
                     # Find lowest frequency to set for continual loop freq
                     if metadata.get("lowest_time_step") is None or metadata[
