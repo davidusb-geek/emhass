@@ -199,10 +199,11 @@ script:
           for_each: "{{ inverters }}"
           sequence:
             - variables:
-                # every battery sensor on this inverter, fresh or not
+                # every battery sensor on this inverter, fresh or not; the bare sensor
+                # counts only with one battery, when it carries the inverter attribute
                 group: >
                   {{ states.sensor
-                     | selectattr('entity_id', 'match', 'sensor[.]p_batt_forecast_battery[0-9]+$')
+                     | selectattr('entity_id', 'match', 'sensor[.]p_batt_forecast(_battery[0-9]+)?$')
                      | selectattr('attributes.inverter', 'defined')
                      | selectattr('attributes.inverter', 'eq', repeat.item.inverter)
                      | map(attribute='entity_id') | list }}
@@ -221,7 +222,7 @@ script:
                     value: "{{ batt_states | map('float') | sum | round(0) }}"
 ```
 
-`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter gets no new setpoint, rather than an invented 0 W or a partial sum, if any battery sensor on it is unavailable or older than this run. With two batteries behind one inverter, both have to be fresh. If you lower `number_of_batteries`, the retired battery's sensor is no longer posted but stays in Home Assistant, with its `inverter` attribute, until Home Assistant restarts, and until then it keeps its inverter from getting a setpoint. Restart Home Assistant after the config change, or remove that sensor's state. That means its last setpoint stays in force, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:` instead. Call this script from Step 2, which passes `run_started`. If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
+`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter gets no new setpoint, rather than an invented 0 W or a partial sum, if any battery sensor on it is unavailable or older than this run. With two batteries behind one inverter, both have to be fresh. If you lower `number_of_batteries`, the retired battery's sensor is no longer posted but stays in Home Assistant, with its `inverter` attribute, until Home Assistant restarts, and until then it keeps its inverter from getting a setpoint. Restart Home Assistant after the config change, or remove that sensor's state. With a single battery, EMHASS publishes it on the bare `sensor.p_batt_forecast`, which then carries the `inverter` attribute, so the script still finds it. That means its last setpoint stays in force, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:` instead. Call this script from Step 2, which passes `run_started`. If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
 
 Expected: on the run's first step, inverter A (inverter 0) gets 464 W of discharge (`sensor.p_batt_forecast_battery0` at 463.92) and inverter B (inverter 1) gets 0 W.
 
