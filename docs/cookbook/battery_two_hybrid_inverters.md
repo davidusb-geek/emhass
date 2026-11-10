@@ -15,7 +15,7 @@ The numbers in this recipe are illustrative, not from a real site. The plan exce
 
 ## Step 1: Describe the two inverters
 
-<!-- source: src/emhass/data/config_defaults.json:130-141 -->
+<!-- source: src/emhass/data/config_defaults.json:129-141 -->
 
 Inverter 0 is a 5 kW hybrid with a 10 kWh battery and more PV than it can convert, and it cannot curtail. Inverter 1 is a 3.6 kW hybrid with a 5 kWh battery, and it can curtail. Above one inverter the two AC caps and the two index lists are required lists. The efficiencies, stress cost and curtailment flag take one value for every inverter or one entry per inverter, and `inverter_is_hybrid` is not read: an inverter with a battery and a PV plant on it is a hybrid.
 
@@ -59,7 +59,7 @@ strings_per_inverter: [2, 2]
 
 Keep the efficiencies below 1.0. With a lossless DC-to-AC side on one inverter and a lossless AC-to-DC side on the other, energy can go round between the two for free, and EMHASS logs a warning saying so. The full rules (broadcast, lengths, what is refused) are in [Per-inverter settings](../config.md#per-inverter-settings-and-the-one-inverter-default), and what each inverter's shape means for the plan is in [How the optimizer models more than one inverter](../config.md#how-the-optimizer-models-more-than-one-inverter).
 
-Expected: the configuration saves with no error, and the log has no warning about lossless conversion.
+Expected: the configuration saves with no error, and the first optimization run logs no warning about lossless conversion.
 
 ## Step 2: Send the PV forecast per inverter, then publish
 
@@ -68,7 +68,7 @@ Expected: the configuration saves with no error, and the log has no warning abou
 
 Above one inverter a runtime `pv_power_forecast` is a list with one list per inverter, in inverter order, each the sum of the PV plants on that inverter: `[[0, 450, 1200, 2100], [0, 300, 900, 1500]]` for a horizon of 4. A flat list is refused. `soc_init` and `soc_final` take one value per battery, as they do for any multi-battery plant. Load and prices keep coming from your configured methods. In the Home Assistant examples, inverter A is inverter 0 and inverter B is inverter 1.
 
-The model treats each inverter's PV forecast as DC power and applies that inverter's `inverter_efficiency_dc_ac` to it. The forecast EMHASS builds itself with PVLib is already AC power (it includes the `pv_inverter_model` loss), and a forecast service's figure is often AC too, so here the plan works with 3 % and 4 % less PV than the forecast says. On a hybrid that efficiency also covers battery discharge, so rather than setting it to 1.0, divide an AC forecast by it before you send it, if the gap matters to you. The built-in PVLib forecast can't be adjusted that way.
+The model treats each inverter's PV forecast as DC power and applies that inverter's `inverter_efficiency_dc_ac` to it. The forecast EMHASS builds itself with PVLib is already AC power (it includes the `pv_inverter_model` loss), and a forecast service's figure is often AC too, so here the plan works with 3 % and 4 % less PV than the forecast says. On a hybrid that efficiency also covers battery discharge, so do not set it to 1.0 to close the gap. If the gap matters to you, divide an AC forecast by the efficiency before you send it. The built-in PVLib forecast cannot be adjusted that way.
 
 ```yaml
 script:
@@ -76,7 +76,7 @@ script:
     sequence:
       - variables:
           run_started: "{{ now().isoformat() }}"   # Step 4 only trusts sensors posted after this
-          horizon: 48                       # = prediction_horizon; each PV list needs at least this many values
+          horizon: 48                       # sent as prediction_horizon; each PV list needs at least this many values
           # One plain list of W per step (not a timestamp mapping) for each inverter,
           # from your PV forecast (placeholder entities and attribute; adapt them).
           # The first value must be the 30-minute step that contains now.
@@ -99,6 +99,11 @@ script:
           - stop: EMHASS refused the MPC run (see its log); not publishing or routing
             error: true
       - action: rest_command.emhass_publish
+        response_variable: published
+      - if: "{{ published.status >= 400 }}"
+        then:
+          - stop: EMHASS did not publish the plan (see its log); not routing
+            error: true
       - action: script.emhass_battery_setpoints   # Step 4
         data:
           run_started: "{{ run_started }}"
@@ -133,7 +138,7 @@ automation:
       - action: script.emhass_mpc_two_inverters
 ```
 
-The script stops rather than send a forecast that is short or holds anything but finite numbers (see the [Forecast input contract](../passing_data.md#forecast-input-contract)). It stops again if EMHASS refuses the run with HTTP 400 (a wrong shape, a bad index list), because a Home Assistant `rest_command` only logs a failed status, and the publish would otherwise post the previous plan again. `sensor.battery_a_soc` and `sensor.battery_b_soc` are placeholders reporting percent; drop the `/ 100` if yours report a fraction. They have no default, so an unavailable sensor fails the call instead of planning from an invented SOC. `naive-mpc-optim` does not post sensors by itself, so the script calls `publish-data` next, and only then routes the setpoints. Keep `continual_publish` off with this recipe, so that sensors are only posted by this sequence, and run no other optimization (a `dayahead-optim`, another MPC) at other times: `publish-data` posts the latest result, whichever run wrote it. A Home Assistant script runs one at a time by default, so the sequence itself does not overlap. The automation starts it once per step, just after the step begins, so the run and its publish fall in the same step; run the script by hand once to test it. EMHASS does not clip a hybrid's PV forecast to its AC cap before the solve, whatever the source, so inverter 0's list can sit above its 5 kW cap at midday; that is the case Step 5 handles. The full rules for this list, and its timestamped form, are in [Passing data](../passing_data.md#forecast-data-at-runtime).
+The script stops rather than send a forecast that is short or holds anything but finite numbers (see the [Forecast input contract](../passing_data.md#forecast-input-contract)). It stops again if EMHASS refuses the run with HTTP 400 (a wrong shape, a bad index list, a plan that did not solve) or another error status, because a Home Assistant `rest_command` only logs a failed status, and the publish would otherwise post the previous plan again. It checks the publish's status the same way before it routes. `sensor.battery_a_soc` and `sensor.battery_b_soc` are placeholders reporting percent; drop the `/ 100` if yours report a fraction. They have no default, so an unavailable SOC sensor fails the call instead of planning from an invented SOC. A sensor that is available but stale, and a PV forecast attribute that stopped updating, still pass these checks: if your integrations can freeze, add an age check on them (`last_reported`, which moves on every update even when the value stays the same) before the MPC call. `naive-mpc-optim` does not post sensors by itself, so the script calls `publish-data` next, and only then routes the setpoints. Keep `continual_publish` off with this recipe, so that sensors are only posted by this sequence, and run no other optimization (a `dayahead-optim`, another MPC) at other times: `publish-data` posts the latest result, whichever run wrote it. A Home Assistant script runs one at a time by default, so the sequence itself does not overlap. The automation starts it once per step, just after the step begins, so the run and its publish fall in the same step; run the script by hand once to test it. EMHASS does not clip a hybrid's PV forecast to its AC cap before the solve, whatever the source, so inverter 0's list can sit above its 5 kW cap at midday; that is the case Step 5 handles. The full rules for this list, and its timestamped form, are in [Passing data](../passing_data.md#forecast-data-at-runtime).
 
 Expected: the plan has `P_PV_0` and `P_PV_1`, `P_PV` is their sum, and the sensors in Step 3 exist after the publish.
 
@@ -152,7 +157,7 @@ The unsuffixed columns stay site totals. Next to them the plan has one set per i
 | `P_batt_{k}` | `sensor.p_batt_forecast_battery{k}` | battery `k`, positive = discharge |
 | `SOC_opt_{k}` | `sensor.soc_batt_forecast_battery{k}` | battery `k` state of charge; a fraction in the plan, percent on the sensor |
 
-Here are the steps from 11:00 to 14:00 of the run. The run's export price is -0.02 for the steps 11:00 to 13:00 and 0.05 from 13:30, so you will only see this pattern with a negative export price (W, SOC as a fraction, `P_grid` negative = export, prices per kWh):
+Here are the steps from 11:00 to 14:00 of the run. The run's export price is -0.02 for the steps 11:00 to 13:00 and 0.05 from 13:30, so you will only see this pattern with a negative export price (W, SOC as a fraction, `P_grid` negative = export, prices per kWh). This plan is one of several that cost exactly the same, so another solver version can split the charge between the batteries and the steps differently; expect the same pattern, not these exact numbers:
 
 ```text
        P_PV_0  P_PV_1  P_PV_spill_0  P_PV_curtailment_1  P_hybrid_inverter_0  P_hybrid_inverter_1  P_batt_0  P_batt_1  SOC_opt_0  SOC_opt_1   P_grid
@@ -184,7 +189,7 @@ Expected: `sensor.p_batt_forecast_battery0` has `inverter: 0` and `sensor.p_batt
 
 <!-- transport: Home Assistant 2026.10 (template rendered, not run on hardware) -->
 
-The executor commands inverters, not batteries. This script finds the batteries on each inverter through the `inverter` attribute and sends their sum to that inverter, so moving a battery to the other inverter, or putting a second battery behind one, only changes the EMHASS config. The one map it keeps is from an inverter number to the entity that commands that inverter, because that is the device you write to. The Step 2 script calls it once, after the publish has returned, and passes the time the run started. Only battery sensors posted after that time are summed, so a plan that did not solve (EMHASS then publishes nothing and still answers 200 to both calls) or a sensor whose post failed leaves its inverter alone, instead of getting the previous plan's value again.
+The executor commands inverters, not batteries. This script finds the batteries on each inverter through the `inverter` attribute and sends their sum to that inverter, so moving a battery to the other inverter, or putting a second battery behind one, only changes the EMHASS config. The one map it keeps is from an inverter number to the entity that commands that inverter, because that is the device you write to. The Step 2 script calls it once, after the publish has succeeded, and passes the time the run started. Only battery sensors posted after that time are summed, so if a sensor's post failed, its inverter does not get the previous plan's value again. Put it under the same `script:` key as the Step 2 script.
 
 ```yaml
 script:
@@ -217,14 +222,19 @@ script:
                    and batt_states | reject('is_number') | list | count == 0 }}
               then:
                 - action: number.set_value
+                  continue_on_error: true   # a refused value must not stop the other inverter
                   target: {entity_id: "{{ repeat.item.setpoint }}"}
                   data:
                     value: "{{ batt_states | map('float') | sum | round(0) }}"
 ```
 
-`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter gets no new setpoint, rather than an invented 0 W or a partial sum, if any battery sensor on it is unavailable or older than this run. With two batteries behind one inverter, both have to be fresh. If you lower `number_of_batteries`, give `soc_init` and `soc_final` in Step 2 one value per remaining battery, or EMHASS refuses the run. A battery sensor EMHASS no longer posts stays in Home Assistant, with its `inverter` attribute, until Home Assistant restarts, and until then it keeps its inverter from getting a setpoint. Restart Home Assistant after the config change, or remove every battery sensor EMHASS no longer posts. Going down to a single battery, that is all the numbered ones: EMHASS then publishes the one battery on the bare `sensor.p_batt_forecast`, which carries the `inverter` attribute, so the script finds it there. That means its last setpoint stays in force, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:` instead. Call this script from Step 2, which passes `run_started`. If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
+`P_batt_{k}` is positive for discharge. Many inverters take the opposite sign, or separate charge and discharge entities, so adapt the last step to your device. An inverter gets no new setpoint, rather than an invented 0 W or a partial sum, if any battery sensor on it is unavailable or older than this run. With two batteries behind one inverter, both have to be fresh. An inverter that gets no new setpoint keeps its last one, which may be a full-rate charge or discharge: if your inverter has a safe self-use mode, send that from an `else:` branch of the `if:`. That branch only runs when Step 2 got this far. A run that stops in Step 2 (no forecast, a refused or unsolved run, EMHASS unreachable) never reaches it, so also add a watchdog: an automation that sends the safe mode when the battery sensors have not been posted for more than two steps.
 
-Expected: on the run's first step, inverter A (inverter 0) gets 464 W of discharge (`sensor.p_batt_forecast_battery0` at 463.92) and inverter B (inverter 1) gets 0 W.
+If your inverter takes an AC-side power target rather than a battery power, send `sensor.p_hybrid_inverter_inverter{i}` instead, which is the AC side of that inverter with its PV included.
+
+If you lower `number_of_batteries`, give `soc_init` and `soc_final` in Step 2 one value per remaining battery, or EMHASS refuses the run. Then restart Home Assistant. A battery sensor EMHASS no longer posts stays in Home Assistant, with its `inverter` attribute, until a restart (these sensors have no registry entry, so the only other way to remove one is `DELETE /api/states/<entity_id>`), and until then it keeps its inverter from getting a setpoint. Going down to a single battery, that is all the numbered ones: EMHASS then publishes the one battery on the bare `sensor.p_batt_forecast`, which carries the `inverter` attribute, so the script finds it there. If you set `custom_batt_forecast_id`, that single battery is published under your entity id instead, so change the pattern to match it.
+
+Expected: on the run's first step (06:00, before the Step 3 excerpt), the two setpoints add up to about 464 W of discharge. In this run inverter A (inverter 0) gets all of it (`sensor.p_batt_forecast_battery0` at 463.92) and inverter B (inverter 1) gets 0 W; another solver version may give it to battery 1 instead at the same cost.
 
 ## Step 5: Curtailment and spill per inverter
 
@@ -232,7 +242,7 @@ Expected: on the run's first step, inverter A (inverter 0) gets 464 W of dischar
 
 The two flags give two different things to act on.
 
-- Inverter 1 has `compute_curtailment` on, so the plan can ask it to produce less. If it takes a PV power limit, the PV the plan uses on it is `sensor.p_pv_forecast_inverter1` minus `sensor.p_pv_curtailment_inverter1` (a DC-side figure, before the inverter's efficiency). Set that as the limit while the curtailment sensor is above 0, and lift the limit when it is back at 0.
+- Inverter 1 has `compute_curtailment` on, so the plan can ask it to produce less. If it takes a PV power limit, the PV the plan uses on it is `sensor.p_pv_forecast_inverter1` minus `sensor.p_pv_curtailment_inverter1` (a DC-side figure, before the inverter's efficiency). Set that as the limit while the curtailment sensor is above 0, and lift the limit when it is back at 0. Apply the same freshness test as Step 4 (`last_reported` after `run_started`) before you set a limit, and have the Step 4 watchdog lift the limit too, because a run that stops in Step 2 never gets here.
 - Inverter 0 has curtailment off, so there is no PV limit to send. It still gets its battery setpoint from Step 4, and `sensor.p_pv_spill_inverter0` shows where the plan expects PV to go unused. The log names each step and the power in it:
 
 ```text
@@ -250,10 +260,10 @@ Expected: the curtailment limit only applies in steps where `sensor.p_pv_curtail
 - **`set_nocharge_from_grid` stays plant-wide.** It compares total PV with total charge and does not look at which inverter either is on.
 - **The sensor state is the current step, with `method_ts_round: first`.** Each per-inverter and per-battery sensor's state is the value of the plan row `publish-data` picks, and with `first` that is the step that contains the publish time; the whole horizon is in its list attribute. With the default `nearest`, a publish in the second half of a step picks the next step's row.
 - **Other shapes.** A PV-only string inverter or an AC-coupled battery with its own inverter use the same two index lists: an inverter with only PV, or only a battery, takes that shape. See [How the optimizer models more than one inverter](../config.md#how-the-optimizer-models-more-than-one-inverter).
-- **Fail safe and security.** The Step 4 script already skips anything this run did not post. Add your own timeout on top for the case where the Step 2 script stops running at all, and keep the EMHASS `/action/*` endpoints and the inverter controls off the internet.
+- **Fail-safe and security.** The Step 4 script already skips anything this run did not post. Add the watchdog from Step 4 for runs that stop early or stop running at all, and keep the EMHASS `/action/*` endpoints and the inverter controls off the internet.
 
 ## Credits
 
 - Design and discussion: issue [#1150](https://github.com/davidusb-geek/emhass/issues/1150), from [#870](https://github.com/davidusb-geek/emhass/issues/870) and [#610](https://github.com/davidusb-geek/emhass/issues/610), with the two-hybrid site from [#1020](https://github.com/davidusb-geek/emhass/issues/1020).
 - Reference: [Configuration](../config.md#per-inverter-settings-and-the-one-inverter-default), [Passing data](../passing_data.md#forecast-data-at-runtime), [Plan output schema](../plan_output_schema.md), [Publishing data](../publish_data.md).
-- Field names verified against `src/emhass/data/config_defaults.json`, `src/emhass/utils.py`, `src/emhass/optimization.py` and `src/emhass/command_line.py` on 2026-11-08.
+- Field names verified against `src/emhass/data/config_defaults.json`, `src/emhass/utils.py`, `src/emhass/optimization.py` and `src/emhass/command_line.py` on 2026-11-10.
