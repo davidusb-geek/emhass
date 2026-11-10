@@ -3828,13 +3828,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(opt.optim_status, "Optimal")
                 temp = res["predicted_temp_heater1"].to_numpy()
                 np.testing.assert_allclose(temp[1:3], [17.5, 15.62], atol=0.01)
-                self.assertTrue(
-                    any(
-                        f"step {step}" in line and "thermal_inertia lag" in line
-                        for line in logs.output
-                    ),
-                    logs.output,
-                )
+                side_word = "minimum" if side == "min" else "maximum"
+                warnings_ = [line for line in logs.output if "thermal_inertia lag" in line]
+                self.assertEqual(len(warnings_), 1, logs.output)
+                self.assertIn(f"step {step}:", warnings_[0])
+                self.assertIn(f"the {side_word} of {value:.2f} C", warnings_[0])
 
     def test_thermal_inertia_bounds_after_the_lag_window_still_hold(self):
         """The first step a decision reaches keeps its hard bound, and a lag-window
@@ -3858,7 +3856,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             opt.update_thermal_params(
                 conf, self.df_input_data_dayahead, self.p_load_forecast.values.ravel()
             )
-        self.assertTrue(any("step 2" in line for line in logs.output), logs.output)
+        self.assertTrue(any("step 2: 15.62 C under" in line for line in logs.output), logs.output)
 
     def test_thermal_inertia(self):
         """

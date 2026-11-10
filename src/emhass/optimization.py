@@ -4656,25 +4656,25 @@ class Optimization:
             return None if v is None or np.isnan(v) else float(v)
 
         temp = float(start_temperature)
+        crossings = []
         for t in range(lag["steps"]):
             temp = temp + lag["heat"][t] - lag["cool"] * (temp - float(outdoor_temp[t]))
             step = t + 1
             low, high = bound_at(min_temps, step), bound_at(max_temps, step)
-            crossed = (("minimum", low) if low is not None and temp < low - 1e-6 else None) or (
-                ("maximum", high) if high is not None and temp > high + 1e-6 else None
+            if low is not None and temp < low - 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C under the minimum of {low:.2f} C")
+            elif high is not None and temp > high + 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C over the maximum of {high:.2f} C")
+        if crossings:
+            # One line per load and run: under rolling MPC this can recur every run.
+            self.logger.warning(
+                "Load %s: the first %d steps are set by the start temperature and the "
+                "thermal_inertia lag, no decision reaches them, so their bounds are not "
+                "enforced (%s).",
+                k,
+                lag["steps"],
+                "; ".join(crossings),
             )
-            if crossed:
-                self.logger.warning(
-                    "Load %s: the temperature at step %d (%.2f C) is set by the start "
-                    "temperature and the thermal_inertia lag and is past its %s of %.2f C; "
-                    "no decision reaches the first %d steps, so their bounds are not enforced.",
-                    k,
-                    step,
-                    temp,
-                    crossed[0],
-                    crossed[1],
-                    lag["steps"],
-                )
 
     @staticmethod
     def _tile_profile(profile, required_len):
