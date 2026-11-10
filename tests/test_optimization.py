@@ -3784,6 +3784,82 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
+    def _solve_lag_window(self, min_temps, max_temps):
+        """test_thermal_inertia's fixture (L = 2 steps, no heat in flight) with the
+        given bounds. The free path is 20.0, 17.5, 15.62, 14.22."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+        self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+        self.optim_conf["def_load_config"] = [
+            {},
+            {
+                "thermal_config": {
+                    "heating_rate": 10.0,
+                    "cooling_constant": 0.5,
+                    "start_temperature": 20.0,
+                    "thermal_inertia": 1.0,
+                    "sense": "heat",
+                    "min_temperatures": min_temps,
+                    "max_temperatures": max_temps,
+                }
+            },
+        ]
+        self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res
+
+    def test_thermal_inertia_bounds_inside_the_lag_window_are_not_enforced(self):
+        """#1136: no decision reaches steps 1..L, so a bound the fixed path crosses
+        there is logged, not enforced; it used to make the solve infeasible."""
+        for side, step, value in (("min", 2, 15.7), ("min", 1, 17.6), ("max", 1, 17.0)):
+            with self.subTest(side=side, step=step):
+                mins, maxs = [0.0] * 48, [30.0] * 48
+                (mins if side == "min" else maxs)[step] = value
+                with self.assertLogs(logger, level="WARNING") as logs:
+                    opt, res = self._solve_lag_window(mins, maxs)
+                self.assertEqual(opt.optim_status, "Optimal")
+                temp = res["predicted_temp_heater1"].to_numpy()
+                np.testing.assert_allclose(temp[1:3], [17.5, 15.62], atol=0.01)
+                self.assertTrue(
+                    any(
+                        f"step {step}" in line and "thermal_inertia lag" in line
+                        for line in logs.output
+                    ),
+                    logs.output,
+                )
+
+    def test_thermal_inertia_bounds_after_the_lag_window_still_hold(self):
+        """The first step a decision reaches keeps its hard bound, and a lag-window
+        bound the fixed path respects logs nothing."""
+        mins = [0.0] * 48
+        mins[1] = 17.4  # below the fixed 17.5: no warning
+        mins[3] = 18.0  # after the lag: the heater has to run at t=0
+        with self.assertNoLogs(logger, level="WARNING"):
+            opt, res = self._solve_lag_window(mins, [30.0] * 48)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertGreaterEqual(res["predicted_temp_heater1"].iloc[3], 18.0 - 1e-6)
+        self.assertGreater(res["P_deferrable1"].iloc[0], 0)
+
+    def test_thermal_inertia_lag_window_warning_on_cache_hit(self):
+        """A cache hit does not rebuild the constraints, so update_thermal_params
+        rechecks the fixed path against the new start and bounds."""
+        opt, _ = self._solve_lag_window([0.0] * 48, [30.0] * 48)
+        conf = copy.deepcopy(self.optim_conf)
+        conf["def_load_config"][1]["thermal_config"]["min_temperatures"] = [0.0, 0.0, 15.7]
+        with self.assertLogs(logger, level="WARNING") as logs:
+            opt.update_thermal_params(
+                conf, self.df_input_data_dayahead, self.p_load_forecast.values.ravel()
+            )
+        self.assertTrue(any("step 2" in line for line in logs.output), logs.output)
+
     def test_thermal_inertia(self):
         """
         Test that the thermal_inertia parameter correctly delays the heating effect.
