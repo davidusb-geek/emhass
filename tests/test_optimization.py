@@ -10409,6 +10409,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
             )
 
+    # Absolute currency tolerance for the grid-flow gain checks. A SOC error of
+    # 1e-6 on the 2 kWh battery is 2 mWh per step; across 4 steps at <= 0.2 per
+    # kWh that moves the gain by < 2e-6, so 1e-5 covers solver noise. Deviations
+    # the tests must catch change the plan itself: e.g. a deficit rate x0.01 makes
+    # the solver pick the full-discharge plan and moves the gain by about 0.05.
+    GRID_GAIN_TOL = 1e-5
+
     def _net_grid_gain(self, opt_res, df_input):
         """Export revenue minus import cost from the grid flows (currency)."""
         hours = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600
@@ -10534,7 +10541,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             opt_res_no_cost["SOC_opt"].to_numpy(), [0.25, 0.00, 0.25, 0.50], atol=1e-6
         )
         # Independent economics from the grid flows: sell 1 kWh at 0.2, buy 1 kWh at 0.1.
-        self.assertAlmostEqual(self._net_grid_gain(opt_res_no_cost, df_input), 0.1, places=6)
+        self.assertAlmostEqual(
+            self._net_grid_gain(opt_res_no_cost, df_input), 0.1, delta=self.GRID_GAIN_TOL
+        )
         logger.debug("soc cost\n{}".format(opt_res_with_cost["SOC_opt"]))
 
         # Verify SOC with deficit cost. The optimizer can always avoid
@@ -10547,10 +10556,96 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             opt_res_with_cost["SOC_opt"].iloc[:2].to_numpy(), [0.75, 0.50], atol=1e-6
         )
         # Buy 0.5 kWh at 0.1 in step 0, sell it at 0.2 in step 1: no deficit is incurred.
-        self.assertAlmostEqual(self._net_grid_gain(opt_res_with_cost, df_input), 0.05, places=6)
+        self.assertAlmostEqual(
+            self._net_grid_gain(opt_res_with_cost, df_input), 0.05, delta=self.GRID_GAIN_TOL
+        )
         # it may take any path here as long as it doesn't discharge below 0.5
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50 - 1e-6)
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50 - 1e-6)
+
+    def _run_forced_soc_deficit(self, deficit_cost):
+        """Hold a 2 kWh battery idle at SOC 0.25, under a 0.5 deficit threshold.
+
+        Export is unpaid, so lifting the SOC would cost the grid import and never
+        be recovered; with a small deficit rate idling is the unique optimum and
+        the deficit trajectory is fixed whatever the rate (checked by the caller).
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": 2000,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 1000,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.25,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": False,
+                "set_nodischarge_to_grid": False,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_deficit_threshold": 0.5,
+                "battery_soc_deficit_cost": deficit_cost,
+            }
+        )
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=4,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.0] * 4
+        df_input[self.fcst.var_load_cost] = [0.1] * 4
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+        res = opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[opt.var_load_cost].values,
+            df_input[opt.var_prod_price].values,
+            soc_init=0.25,
+            soc_final=0.25,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        return res
+
+    def test_battery_soc_deficit_cost_positive_penalty_scales_with_rate(self):
+        """A battery held below the threshold pays the configured deficit
+        penalty, and the penalty is proportional to the configured rate."""
+        hours = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600
+        capacity_wh, threshold, soc = 2000.0, 0.5, 0.25
+        penalties = {}
+        for rate in (0.01, 0.02):  # currency per kWh per hour
+            res = self._run_forced_soc_deficit(rate)
+            # The trajectory is fixed: idle at the initial SOC, no grid exchange.
+            np.testing.assert_allclose(res["SOC_opt"].to_numpy(), soc, atol=1e-6)
+            np.testing.assert_allclose(res["P_grid"].to_numpy(), 0.0, atol=1e-3)
+            # Independent formula: (threshold - SOC) * capacity (Wh) * rate / 1000 * hours.
+            expected = (threshold - soc) * capacity_wh * rate / 1000 * hours
+            self.assertGreater(expected, 0.0)
+            np.testing.assert_allclose(res["soc_deficit_cost"].to_numpy(), expected, atol=1e-6)
+            penalties[rate] = res["soc_deficit_cost"].to_numpy()
+        # Doubling only the configured rate doubles the penalty at every step.
+        np.testing.assert_allclose(penalties[0.02], 2 * penalties[0.01], atol=1e-6)
 
     def test_battery_soc_surplus_cost(self):
         """Test that the battery SOC surplus cost discourages the
