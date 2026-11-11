@@ -1031,6 +1031,10 @@ class Optimization:
                     # The forced run ends at the first step the load cannot run.
                     lb[blocked_forced[0] :] = 0.0
                     self.param_running_lb[k].value = lb
+                    if k < len(self.param_min_on_full_lb):
+                        self.param_min_on_full_lb[k].value = np.minimum(
+                            np.asarray(self.param_min_on_full_lb[k].value, dtype=float), lb
+                        )
                     if k < len(self.param_already_running_sc):
                         self.param_already_running_sc[k].value = 0.0
             if (
@@ -1250,6 +1254,8 @@ class Optimization:
         self.param_energy_active = []  # 1 = constraint active, 0 = inactive (relaxed via Big-M)
         self.param_required_timesteps = []  # For binary loads: number of timesteps to run
         self.param_timesteps_active = []  # 1 = timestep constraint active, 0 = inactive
+        self.param_rem_level = []  # Power (W) of the fractional remainder step (issue #1105)
+        self.param_rem_active = []  # 1 = a fractional remainder step is required, 0 = none
         for k in range(num_def_loads):
             # Target energy parameter
             energy_param = cp.Parameter(nonneg=True, name=f"target_energy_{k}")
@@ -1260,6 +1266,16 @@ class Optimization:
             energy_active = cp.Parameter(nonneg=True, name=f"energy_active_{k}")
             energy_active.value = 0.0
             self.param_energy_active.append(energy_active)
+
+            # Fractional remainder step of a semi-continuous load (issue #1105): the
+            # power (W) of the single step that carries the part of the energy target
+            # that is not a whole number of steps, and whether such a step exists.
+            rem_level = cp.Parameter(nonneg=True, name=f"semi_cont_rem_level_{k}")
+            rem_level.value = 0.0
+            self.param_rem_level.append(rem_level)
+            rem_active = cp.Parameter(nonneg=True, name=f"semi_cont_rem_active_{k}")
+            rem_active.value = 0.0
+            self.param_rem_active.append(rem_active)
 
             # Required timesteps for binary loads
             timesteps_param = cp.Parameter(nonneg=True, name=f"required_timesteps_{k}")
@@ -1287,10 +1303,16 @@ class Optimization:
         # solver doesn't try to turn the load off and back on to satisfy sum(starts)==1.
         self.param_running_lb = []
         self.param_already_running_sc = []
+        # Steps that a still-running minimum on-time forces to be FULL steps (not the
+        # fractional remainder step); only read for loads with a remainder (issue #1105).
+        self.param_min_on_full_lb = []
         for k in range(num_def_loads):
             lb = cp.Parameter(n, nonneg=True, name=f"running_lb_{k}")
             lb.value = np.zeros(n)
             self.param_running_lb.append(lb)
+            full_lb = cp.Parameter(n, nonneg=True, name=f"min_on_full_lb_{k}")
+            full_lb.value = np.zeros(n)
+            self.param_min_on_full_lb.append(full_lb)
             ar = cp.Parameter(nonneg=True, name=f"already_running_sc_{k}")
             ar.value = 0.0
             self.param_already_running_sc.append(ar)
@@ -1806,8 +1828,9 @@ class Optimization:
 
             # The power PIN additionally needs a free t=0 power variable, so semi_cont
             # is excluded from the pin (its power == nominal*bin); for an affected
-            # semi_cont load the t=0 force-on alone injects nominal, which is correct
-            # for an on/off device.
+            # semi_cont load the t=0 force-on alone injects nominal (or the remainder
+            # step's average power when under one step of energy remains), which is
+            # correct for an on/off device.
             pin_active = affected and not is_semi_cont
             if k < len(self.param_def_current_power_active):
                 self.param_def_current_power_active[k].value = 1.0 if pin_active else 0.0
@@ -6855,6 +6878,45 @@ class Optimization:
             _restore_static_solve(saved_values)
             self.logger.warning("DP COP refinement re-solve failed (%s); keeping static solve", exc)
 
+    def _add_semi_cont_remainder(self, constraints, k, on_level, bin1, bin2):
+        """Semi-continuous power with at most one fractional remainder step (#1105).
+
+        ``bin2`` is the ON state (startups, min on/off time, groups); ``bin1`` marks
+        the steps at the full ON level. ``bin2 - bin1`` is the remainder step, whose
+        power is the ``param_rem_level`` (``r * nominal`` for ``N = f + r`` steps of
+        energy), so the energy equality delivers exactly ``f`` full steps plus one
+        remainder step. ``param_rem_active`` is 0 unless the (remaining) energy is
+        not a whole number of steps, which collapses to ``bin1 == bin2`` and the
+        previous strict ON/OFF model: all other loads and cases are unchanged.
+
+        The remainder step is the last operating step of the load: no full step
+        follows it. A rolling-MPC caller counts completed *steps*
+        (``def_current_operating_timesteps``), so a remainder executed early would be
+        counted as a whole step and under-deliver energy. The price is a possibly
+        dearer plan: a free remainder would take the dearest of the chosen steps.
+
+        ``r * nominal`` is the INTERVAL AVERAGE; the model does not place the ON time
+        inside the step. An executor that can only switch ON/OFF realises it as ``r``
+        of the step at the full level. Full steps of an ordinary load need not be
+        contiguous (only single-constant, minimum on-time and startup rules shape
+        them); the remainder step merely follows all of them.
+        """
+        n = self.num_timesteps
+        remainder = bin2 - bin1
+        constraints.append(bin1 <= bin2)
+        constraints.append(cp.sum(remainder) <= self.param_rem_active[k])
+        constraints.append(
+            self.vars["p_deferrable"][k]
+            == cp.multiply(on_level, bin1) + self.param_rem_level[k] * remainder
+        )
+        # done[t] = 1 once the remainder step has happened by t; no full step after it.
+        done = cp.Variable(n, nonneg=True, name=f"semi_cont_rem_done_{k}")
+        constraints.append(done[0] == remainder[0])
+        constraints.append(done[1:] == done[:-1] + remainder[1:])
+        constraints.append(bin1[1:] + done[:-1] <= 1)
+        # A run that still owes minimum on-time (running_lb from min-on) is full steps.
+        constraints.append(bin1 >= self.param_min_on_full_lb[k])
+
     def _add_deferrable_load_constraints(
         self,
         constraints,
@@ -6883,6 +6945,8 @@ class Optimization:
         # nominal). The shared-tank builder lowers it for thermal-capped sources,
         # and the DP COP refinement re-derives it when it re-values the COP.
         self._semi_cont_on_level: dict[int, cp.Parameter] = {}
+        # Semi-continuous loads that may carry one fractional remainder step (#1105).
+        self._semi_cont_remainder: set[int] = set()
 
         # Compute shared-tank membership once. Used by the per-load loop to
         # skip loads that belong to a shared tank (handled after the loop)
@@ -7157,6 +7221,19 @@ class Optimization:
                 or has_min_power
                 or has_startup_penalty
             )
+            # A standard semi-continuous load with an energy target may need one
+            # fractional remainder step (issue #1105). Sequence and thermal loads have
+            # no operating-hours energy constraint, so they keep strict ON/OFF.
+            has_remainder = (
+                is_semi_cont
+                and not is_sequence_load
+                and not is_thermal_load
+                and not is_thermal_battery
+                and k < len(self.param_rem_active)
+                and k < len(self.param_target_energy)
+            )
+            if has_remainder:
+                self._semi_cont_remainder.add(k)
 
             if use_binary_logic:
                 # Standard Binary/Mixed-Integer Constraints
@@ -7170,8 +7247,11 @@ class Optimization:
 
                 # Minimum Power (if active)
                 if has_min_power:
+                    # The remainder step runs at the ON level for part of the step; its
+                    # step average may be below the minimum power, so only full steps count.
+                    min_power_bin = p_def_bin1[k] if has_remainder else p_def_bin2[k]
                     constraints.append(
-                        p_deferrable[k] >= min_power_of_deferrable_loads[k] * p_def_bin2[k]
+                        p_deferrable[k] >= min_power_of_deferrable_loads[k] * min_power_bin
                     )
 
                 # Status consistency: P_def <= M * Bin2
@@ -7236,10 +7316,13 @@ class Optimization:
                         # Self-protecting vs window: if a start can't fit N on-steps
                         # within its operating window, the solver simply won't start the
                         # load -> stays Optimal. (Tested by FEASIBILITY test.)
+                        # With a remainder step the run must be made of FULL steps
+                        # (bin1): a fractional step is not a whole step of on-time.
+                        min_on_bin = p_def_bin1[k] if has_remainder else p_def_bin2[k]
                         for t in range(n):
                             window_end = min(t + min_on_n, n)
                             constraints.append(
-                                cp.sum(p_def_bin2[k][t:window_end])
+                                cp.sum(min_on_bin[t:window_end])
                                 >= (window_end - t) * p_def_start[k][t]
                             )
 
@@ -7372,8 +7455,15 @@ class Optimization:
                             value=np.broadcast_to(np.asarray(nominal, dtype=float), n).copy(),
                         )
                         self._semi_cont_on_level[k] = on_level
-                        constraints.append(p_deferrable[k] == cp.multiply(on_level, p_def_bin1[k]))
-                        constraints.append(p_def_bin1[k] == p_def_bin2[k])
+                        if has_remainder:
+                            self._add_semi_cont_remainder(
+                                constraints, k, on_level, p_def_bin1[k], p_def_bin2[k]
+                            )
+                        else:
+                            constraints.append(
+                                p_deferrable[k] == cp.multiply(on_level, p_def_bin1[k])
+                            )
+                            constraints.append(p_def_bin1[k] == p_def_bin2[k])
 
             else:
                 # Pure Continuous Constraints (Faster!)
@@ -7562,7 +7652,14 @@ class Optimization:
 
             # Shared power budget: sum of group members <= max_power at each timestep
             if max_power is not None:
-                group_power_sum = sum(p_deferrable[i] for i in indices)
+                # A remainder step runs the load at its ON level for part of the step,
+                # so a shared budget is checked at that level, not at the step average.
+                group_power_sum = sum(
+                    cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
+                    if i in self._semi_cont_remainder and i in self._semi_cont_on_level
+                    else p_deferrable[i]
+                    for i in indices
+                )
                 constraints.append(group_power_sum <= max_power)
 
             # Mutual exclusion: at most one load active per timestep. This is a
@@ -8807,6 +8904,18 @@ class Optimization:
                 self.param_target_energy[k].value = 0.0
                 self.param_energy_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
+            # Fractional remainder step (issue #1105): the (remaining) energy target as
+            # steps at nominal power is f + r. Whole steps stay strict ON/OFF; the single
+            # remainder step carries r * nominal so the energy is delivered exactly.
+            self.param_rem_level[k].value = 0.0
+            self.param_rem_active[k].value = 0.0
+            if constraint_active and k not in window_empty_loads and nominal_power > 0:
+                steps_of_energy = target_energy / (nominal_power * self.time_step)
+                rem_fraction = steps_of_energy - int(steps_of_energy + 1e-6)
+                if 1e-6 < rem_fraction < 1.0 - 1e-6:
+                    self.param_rem_level[k].value = float(rem_fraction * nominal_power)
+                    self.param_rem_active[k].value = 1.0
+
             # For single-constant (binary) loads, set the required timesteps
             is_single_const = self.optim_conf["set_deferrable_load_single_constant"][k]
             if is_single_const and constraint_active and k not in window_empty_loads:
@@ -8983,7 +9092,7 @@ class Optimization:
                 # def_current_power, force bin2[k][0] = 1 so the load stays ON at
                 # t=0. Only index 0 matters here; for pinned loads the power-pin
                 # constraint already implies bin2[0]=1, so this is what keeps an affected
-                # semi_cont load ON (at nominal). Excludes single_const / sequence /
+                # semi_cont load ON (at nominal, or at the remainder step's average power). Excludes single_const / sequence /
                 # thermal via _def_current_power_affected (set in the update method).
                 # Widen window_mask[0] too so a load whose window starts after t=0 is
                 # not immediately blocked by the mask (mirrors the single-const / min-on
@@ -9006,6 +9115,8 @@ class Optimization:
                 # the stricter force wins.
                 combined_lb = np.maximum(np.maximum(single_const_lb, min_on_lb), current_power_lb)
                 self.param_running_lb[k].value = combined_lb
+                if k < len(self.param_min_on_full_lb):
+                    self.param_min_on_full_lb[k].value = min_on_lb
 
                 # --- C) Min-off-time remainder (#952 follow-on) ---
                 # Applies when: load is currently OFF, N > 0, NOT single-constant,
@@ -9409,6 +9520,7 @@ class Optimization:
             original_transfer_vars = getattr(self, "transfer_vars", {})
             original_dp_tank_entries = self._dp_tank_entries
             original_semi_cont_on_level = self._semi_cont_on_level
+            original_semi_cont_remainder = self._semi_cont_remainder
 
             # The rebuild switches the configuration to the relaxed form and
             # repoints instance state at the relaxed build; restore both even
@@ -9517,6 +9629,7 @@ class Optimization:
                 self.transfer_vars = original_transfer_vars
                 self._dp_tank_entries = original_dp_tank_entries
                 self._semi_cont_on_level = original_semi_cont_on_level
+                self._semi_cont_remainder = original_semi_cont_remainder
                 for k, params in self.param_thermal.items():
                     if k in original_q_input_vars:
                         params["q_input_var"] = original_q_input_vars[k]

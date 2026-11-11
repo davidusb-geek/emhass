@@ -71,7 +71,7 @@ const horizon_steps = 48;         // 48 × 30min = 24 elapsed hours (a fixed ste
 // Example: deferrable #2 is an EV, recompute its window each call
 const ev_remaining_kwh = Number(flow.get("ev_remaining_kwh"));   // missing or non-numeric -> no EV, never a made-up amount
 // Whole steps, rounded up (round() removes float noise). A whole number of steps is solved as a normal
-// mixed-integer problem at the nominal power; fractional hours are solved as "Optimal (Relaxed)".
+// mixed-integer problem at the nominal power; fractional hours add one last remainder step at a fractional average power.
 let ev_steps = Number.isFinite(ev_remaining_kwh)
     ? Math.max(0, Math.ceil(Math.round(ev_remaining_kwh / (charger_kw * timestep_min / 60) * 1e6) / 1e6)) : 0;
 // The deadline as an epoch instant in ms, stored by your flow when the departure is known (a stored "minutes
