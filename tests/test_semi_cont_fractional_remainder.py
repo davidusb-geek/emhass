@@ -396,8 +396,17 @@ class TestFractionalRemainder(unittest.TestCase):
         )
         res = solve(opt, [0.25, 0.25], prices=[0.01, 0.10] + [0.30] * (N - 2))
         self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
-        physical_on = (power(res, 0) > 1.0).astype(int) + (power(res, 1) > 1.0).astype(int)
-        self.assertLessEqual(physical_on.max(), 1)
+        # The relaxed LP may report fractional average power, so the budget is
+        # checked at the physical ON level (nominal whenever a load draws power),
+        # which is what the shared circuit actually carries, and also on the
+        # reported averages.
+        group_max_w = 3500.0
+        physical_w = NOMINAL * (
+            (power(res, 0) > 1.0).astype(float) + (power(res, 1) > 1.0).astype(float)
+        )
+        self.assertLessEqual(physical_w.max(), group_max_w + 1e-6, physical_w.tolist())
+        self.assertLessEqual((power(res, 0) + power(res, 1)).max(), group_max_w + 1e-6)
+        self.assertGreater(physical_w.max(), 0.0)
         for k in (0, 1):
             self.assertAlmostEqual(energy_wh(res, k), NOMINAL * 0.25, delta=1e-2)
 

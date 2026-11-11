@@ -5,7 +5,7 @@ import os
 import pickle
 import threading
 import time
-from math import ceil, floor, isfinite
+from math import ceil, isfinite
 
 import cvxpy as cp
 import numpy as np
@@ -8951,7 +8951,7 @@ class Optimization:
                 rem_fraction = (
                     0.0
                     if abs(steps_of_energy - nearest_step) <= roundoff_tol
-                    else steps_of_energy - floor(steps_of_energy)
+                    else steps_of_energy - float(np.floor(steps_of_energy))
                 )
                 if rem_fraction > 0.0:
                     self.param_rem_level[k].value = float(rem_fraction * nominal_power)
