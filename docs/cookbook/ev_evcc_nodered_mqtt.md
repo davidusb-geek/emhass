@@ -125,9 +125,9 @@ const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) <
 let ev_steps = 0;
 if (connected && soc_fresh) {
     const kwh = Math.max(0, (target_soc - soc) / 100 * capacity_kwh);
-    // Whole steps, rounded up (the round() removes float noise). A whole number of steps is solved as a
-    // normal mixed-integer problem with every step at the nominal power; a fractional hour count adds one
-    // last remainder step at a fractional average power.
+    // Round the required energy up to a whole number of full-power charging steps (round() removes
+    // floating-point noise). The payload sends integer operating timesteps, not fractional hours,
+    // so this example does not schedule a fractional remainder step.
     ev_steps = Math.ceil(Math.round(kwh / (charger_kw * step_min / 60) * 1e6) / 1e6);
     if (ev_steps > end_step) {                                 // would be Infeasible or unlimited: plan what fits and say so
         node.warn(`EV needs ${ev_steps} steps but ${end_step > 0 ? "only " + end_step : "none"} remain before departure; the target will be missed`);
