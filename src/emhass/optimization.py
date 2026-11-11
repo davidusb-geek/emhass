@@ -1374,6 +1374,10 @@ class Optimization:
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
+        # Lag window of each thermal_config load with thermal_inertia (#1136): its
+        # length and the fixed heat and cooling terms, so a cache hit can recheck the
+        # fixed temperature path against the new bounds without rebuilding.
+        self._thermal_lag_window = {}
         # Effective per-step floor of each shared tank (static list and
         # min_temperature_curve combined), keyed by tank index; filled when the
         # tank is built and published as min_temp_heater{k} for its members.
@@ -2141,6 +2145,9 @@ class Optimization:
                 # Update desired_temperatures
                 desired_temps = hc.get("desired_temperatures", [])
                 params["desired_temps"].value = self._pad_temp_array(desired_temps, n, 22.0)
+
+                # The lag window's bounds are not enforced; recheck the fixed path.
+                self._warn_lag_window_bounds(k, new_start_temp, outdoor_temp, min_temps, max_temps)
 
             elif thermal_type == "thermal_battery" and "thermal_battery" in cfg:
                 hc = cfg["thermal_battery"]
@@ -4404,15 +4411,17 @@ class Optimization:
     # avoid re-implementing the same min/max bounds, overshoot indicator and
     # comfort penalty three times). Behaviour-preserving extraction.
     # ------------------------------------------------------------------
-    def _add_temp_bound(self, constraints, predicted_temp, config_list, param, n, lower):
+    def _add_temp_bound(self, constraints, predicted_temp, config_list, param, n, lower, start=1):
         """Per-step hard temperature bound (lower=True -> min, else max), skipping
-        index 0 (pinned by start_temperature) and any None/nan entries (an
-        unbounded step). Uses a cp.Parameter when given (warm-start), else the raw
-        config values."""
+        the steps before `start` (index 0 is pinned by start_temperature) and any
+        None/nan entries (an unbounded step). Uses a cp.Parameter when given
+        (warm-start), else the raw config values."""
         if not config_list:
             return
         valid = [
-            i for i, v in enumerate(config_list) if v is not None and not np.isnan(v) and 0 < i < n
+            i
+            for i, v in enumerate(config_list)
+            if v is not None and not np.isnan(v) and max(start, 1) <= i < n
         ]
         if not valid:
             return
@@ -4554,7 +4563,23 @@ class Optimization:
                 - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
             )
 
-        # Hard min/max temperature bounds (shared helper).
+        # Hard min/max temperature bounds (shared helper). Steps 1..L are fixed by
+        # the start temperature, the in-flight heat and the cooling term: no decision
+        # reaches them, so a bound there cannot be acted on and would only make the
+        # solve infeasible when the fixed path grazes it (#1136). They are left
+        # unbounded, and a crossing is logged instead.
+        self._thermal_lag_window[k] = {
+            "steps": L,
+            "heat": np.asarray(prior_heat, dtype=float) * sense_coeff * heat_factor,
+            "cool": cool_factor,
+        }
+        self._warn_lag_window_bounds(
+            k,
+            start_temperature.value if k in self.param_thermal else start_temperature,
+            outdoor_temp.value if k in self.param_thermal else outdoor_temp,
+            hc.get("min_temperatures", []),
+            hc.get("max_temperatures", []),
+        )
         self._add_temp_bound(
             constraints,
             predicted_temp,
@@ -4562,6 +4587,7 @@ class Optimization:
             min_temps_param,
             required_len,
             lower=True,
+            start=1 + L,
         )
         self._add_temp_bound(
             constraints,
@@ -4570,6 +4596,7 @@ class Optimization:
             max_temps_param,
             required_len,
             lower=False,
+            start=1 + L,
         )
 
         # Soft comfort: shared overshoot indicator + load-specific power
@@ -4612,6 +4639,42 @@ class Optimization:
             constraints.append(p_deferrable == p_def_bin2 * nominal_power)
 
         return predicted_temp, None, total_penalty
+
+    def _warn_lag_window_bounds(self, k, start_temperature, outdoor_temp, min_temps, max_temps):
+        """Log each step of a thermal_config load's lag window where the fixed
+        temperature path crosses a configured bound (#1136). Those steps are not
+        bounded in the model, so this is the only signal that the plan starts
+        outside the comfort band."""
+        lag = self._thermal_lag_window.get(k)
+        if not lag or lag["steps"] == 0:
+            return
+
+        def bound_at(values, step):
+            if not values or step >= len(values):
+                return None
+            v = values[step]
+            return None if v is None or np.isnan(v) else float(v)
+
+        temp = float(start_temperature)
+        crossings = []
+        for t in range(lag["steps"]):
+            temp = temp + lag["heat"][t] - lag["cool"] * (temp - float(outdoor_temp[t]))
+            step = t + 1
+            low, high = bound_at(min_temps, step), bound_at(max_temps, step)
+            if low is not None and temp < low - 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C under the minimum of {low:.2f} C")
+            elif high is not None and temp > high + 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C over the maximum of {high:.2f} C")
+        if crossings:
+            # One line per load and run: under rolling MPC this can recur every run.
+            self.logger.warning(
+                "Load %s: the first %d steps are set by the start temperature and the "
+                "thermal_inertia lag, no decision reaches them, so their bounds are not "
+                "enforced (%s).",
+                k,
+                lag["steps"],
+                "; ".join(crossings),
+            )
 
     @staticmethod
     def _tile_profile(profile, required_len):
