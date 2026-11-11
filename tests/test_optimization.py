@@ -7743,48 +7743,89 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_per_load_cost_override_shifts_dispatch(self):
-        """When a load is given a per-timestep cost that's HIGHER than the global
-        tariff, the optimizer should dispatch less of that load (cheaper to run
-        the unconstrained alternative or skip)."""
-        self.df_input_data_dayahead = self.prepare_forecast_data()
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+        """A per-load price override must move a mandatory load to the intervals
+        that are cheapest under that override, at unchanged total energy.
 
-        # Two loads; override load 0 with a 10x penalty so the optimizer prefers
-        # load 1 (which still uses the global tariff).
-        penalty_cost = (np.array(unit_load_cost) * 10.0).tolist()
+        Scenario: 4 x 30 min, no PV, no battery, one mandatory 1 kWh load at
+        1 kW nominal (semi-continuous, so exactly two full intervals). The
+        shared tariff makes intervals 0-1 uniquely cheapest; the override makes
+        intervals 2-3 uniquely cheapest. An ignored override leaves the
+        schedule on intervals 0-1 and fails the assertions below.
+        """
+        tz = self.retrieve_hass_conf["time_zone"]
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        self.assertAlmostEqual(step_h, 0.5)
+        nominal_w = 1000.0
+        required_kwh = 1.0
+        shared_price = np.array([0.10, 0.10, 0.40, 0.40])
+        override_price = np.array([0.40, 0.40, 0.10, 0.10])
 
-        cheap_conf = copy.deepcopy(self.optim_conf)
-        cheap_conf["cost_forecast_per_deferrable_load"] = [None, None]
-        self.optim_conf = cheap_conf
-        opt_cheap = self.create_optimization()
-        res_cheap = opt_cheap.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
+        index = pd.date_range(
+            start=pd.Timestamp("2024-06-15 09:00:00", tz=tz),
+            periods=4,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
         )
+        df = pd.DataFrame(index=index)
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 500.0
+        df[self.fcst.var_load_cost] = shared_price
+        df[self.fcst.var_prod_price] = 0.0
 
-        expensive_conf = copy.deepcopy(self.optim_conf)
-        expensive_conf["cost_forecast_per_deferrable_load"] = [penalty_cost, None]
-        self.optim_conf = expensive_conf
-        opt_expensive = self.create_optimization()
-        res_expensive = opt_expensive.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
+        def run(override):
+            conf = copy.deepcopy(self.optim_conf)
+            conf.update(
+                {
+                    "set_use_pv": False,
+                    "set_use_battery": False,
+                    "number_of_deferrable_loads": 1,
+                    "nominal_power_of_deferrable_loads": [nominal_w],
+                    "minimum_power_of_deferrable_loads": [0.0],
+                    "operating_hours_of_each_deferrable_load": [required_kwh],
+                    "start_timesteps_of_each_deferrable_load": [0],
+                    "end_timesteps_of_each_deferrable_load": [0],
+                    "treat_deferrable_load_as_semi_cont": [True],
+                    "set_deferrable_load_single_constant": [False],
+                    "set_deferrable_startup_penalty": [0.0],
+                    "deferrable_load_max_cost": [0.0],
+                    "set_deferrable_max_startups": [0],
+                    "deferrable_load_groups": [],
+                    "cost_forecast_per_deferrable_load": [override],
+                }
+            )
+            opt = self.create_optimization(optim_conf=conf)
+            res = opt.perform_optimization(
+                df,
+                df["p_pv_forecast"].values,
+                df["p_load_forecast"].values,
+                df[opt.var_load_cost].values,
+                df[opt.var_prod_price].values,
+            )
+            self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+            return res["P_deferrable0"].to_numpy(dtype=float)
 
-        # Penalised load 0 should consume strictly less energy when its cost is
-        # 10x higher than the baseline tariff.
-        self.assertLess(
-            res_expensive["P_deferrable0"].sum(),
-            res_cheap["P_deferrable0"].sum() + 1e-3,
-            "Penalised load should not consume MORE than baseline.",
-        )
+        p_base = run(None)
+        p_over = run(override_price.tolist())
+
+        for p in (p_base, p_over):
+            self.assertTrue(np.all(p >= -1e-6) and np.all(p <= nominal_w + 1e-6))
+            # Mandatory energy is unchanged and exactly as required.
+            self.assertAlmostEqual(p.sum() * step_h / 1000.0, required_kwh, places=4)
+
+        # Baseline uses the uniquely cheapest intervals 0-1, override uses 2-3.
+        np.testing.assert_allclose(p_base, [nominal_w, nominal_w, 0.0, 0.0], atol=1e-3)
+        np.testing.assert_allclose(p_over, [0.0, 0.0, nominal_w, nominal_w], atol=1e-3)
+
+        # Independent load scheduling cost (EUR) from price x power x interval.
+        def load_cost(p, price):
+            return float(np.sum(p / 1000.0 * step_h * price))
+
+        self.assertAlmostEqual(load_cost(p_base, shared_price), 0.10, places=6)
+        self.assertAlmostEqual(load_cost(p_over, override_price), 0.10, places=6)
+        # The overridden schedule would cost 0.40 under the shared tariff, and the
+        # baseline schedule would cost 0.40 under the override: each is optimal
+        # only for its own prices.
+        self.assertAlmostEqual(load_cost(p_over, shared_price), 0.40, places=6)
+        self.assertAlmostEqual(load_cost(p_base, override_price), 0.40, places=6)
 
     def test_cost_forecast_per_load_string_null_does_not_crash(self):
         """String "null" for cost_forecast_per_deferrable_load must not crash;
