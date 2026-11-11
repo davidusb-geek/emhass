@@ -10409,6 +10409,15 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
             )
 
+    def _net_grid_gain(self, opt_res, df_input):
+        """Export revenue minus import cost from the grid flows (currency)."""
+        hours = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600
+        imported = opt_res["P_grid_pos"].to_numpy() / 1000 * hours
+        exported = -opt_res["P_grid_neg"].to_numpy() / 1000 * hours  # P_grid_neg <= 0
+        buy = df_input[self.fcst.var_load_cost].to_numpy()
+        sell = df_input[self.fcst.var_prod_price].to_numpy()
+        return float((exported * sell - imported * buy).sum())
+
     def test_battery_soc_deficit_cost(self):
         """Test that battery SOC deficit cost prevents battery
         discharge below threshold unless price difference is
@@ -10518,26 +10527,30 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Verify SOC without deficit cost. Should be a full discharge
         # followed by a full charge, for a total gain of 1kWh*0.1 =
         # 0.1.
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[0], 0.25)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[1], 0.00)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[2], 0.25)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[3], 0.50)
+        # This plan is the unique optimum, so the SOC path is pinned, but
+        # compared to a tolerance: an LP solver returns bound values only to
+        # within its feasibility tolerance, not bit-exactly.
+        np.testing.assert_allclose(
+            opt_res_no_cost["SOC_opt"].to_numpy(), [0.25, 0.00, 0.25, 0.50], atol=1e-6
+        )
+        # Independent economics from the grid flows: sell 1 kWh at 0.2, buy 1 kWh at 0.1.
+        self.assertAlmostEqual(self._net_grid_gain(opt_res_no_cost, df_input), 0.1, places=6)
         logger.debug("soc cost\n{}".format(opt_res_with_cost["SOC_opt"]))
 
         # Verify SOC with deficit cost. The optimizer can always avoid
         # a deficit penalty by first charging one timestep and then
         # discharging for one, for a gain of 0.05.  A significant
         # deficit cost will make this the preferred action.
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[0], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[1], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[2], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[3], 0.0)
+        np.testing.assert_allclose(opt_res_with_cost["soc_deficit_cost"].to_numpy(), 0.0, atol=1e-6)
 
-        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[0], 0.75)
-        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[1], 0.50)
+        np.testing.assert_allclose(
+            opt_res_with_cost["SOC_opt"].iloc[:2].to_numpy(), [0.75, 0.50], atol=1e-6
+        )
+        # Buy 0.5 kWh at 0.1 in step 0, sell it at 0.2 in step 1: no deficit is incurred.
+        self.assertAlmostEqual(self._net_grid_gain(opt_res_with_cost, df_input), 0.05, places=6)
         # it may take any path here as long as it doesn't discharge below 0.5
-        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
-        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50 - 1e-6)
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50 - 1e-6)
 
     def test_battery_soc_surplus_cost(self):
         """Test that the battery SOC surplus cost discourages the
