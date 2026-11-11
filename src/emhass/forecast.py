@@ -291,6 +291,13 @@ class Forecast:
     # a little below zero at night); ``split_pv_plants`` clips again, so the result is the same.
     pv_plant_raw: pd.DataFrame | None = None
 
+    # The Open-Meteo weather at its native 15-minute resolution, on the instants that span the
+    # forecast grid (one extra node, the end of the last step). It is set only when the
+    # optimisation step is a multiple of 15 minutes longer than 15, so that
+    # ``get_power_from_weather`` can run pvlib on every native instant and average the power
+    # over each step. None otherwise, and the PV power is then the value at the step start.
+    pv_native_weather: pd.DataFrame | None = None
+
     # Weather covariate columns that ``get_weather_covariates`` can supply to the mlforecaster
     # (via the ``mlforecaster_weather_features`` option). The keys are the Open-Meteo
     # ``minutely_15`` variable names; the values are the friendlier column names exposed to the
@@ -679,6 +686,8 @@ class Forecast:
             data = set_df_index_freq(data)
             # Convert mm to cm and clip minimum to 0.1 cm
             data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
+            if not use_legacy_pvlib:
+                self.pv_native_weather = self._build_pv_native_weather(data_15min)
             if use_legacy_pvlib:
                 data = data.drop(columns=["ghi", "dhi", "dni"])
                 ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
@@ -698,6 +707,75 @@ class Forecast:
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
                 )
         return data
+
+    def _build_pv_native_weather(self, data_15min: pd.DataFrame) -> pd.DataFrame | None:
+        """Open-Meteo weather on every 15-minute instant from the first step start to the end of
+        the last step, for the step-average PV power of ``get_power_from_weather``.
+
+        Returns None when the step is not a multiple of 15 minutes longer than 15, or when the
+        frame does not cover the grid, which leaves the PV power at the step-start values.
+        """
+        native_step = pd.Timedelta(minutes=15)
+        step = pd.Timedelta(self.freq)
+        if step <= native_step or step % native_step != pd.Timedelta(0):
+            return None
+        n_nodes = len(self.forecast_dates) * (step // native_step) + 1
+        # Built on the UTC clock: a step that spans a DST change is still ``step`` of real time.
+        nodes = pd.date_range(
+            self.forecast_dates[0].tz_convert("UTC"), periods=n_nodes, freq=native_step
+        ).tz_convert(self.time_zone)
+        native = data_15min.reindex(nodes)
+        native = native.interpolate(method="linear", axis=0, limit=None, limit_direction="both")
+        native["precipitable_water"] = (native["precipitable_water"] / 10).clip(lower=0.1)
+        if native.isna().any().any():
+            return None
+        return native
+
+    def _pv_power_from_weather_frame(self, df_weather: pd.DataFrame) -> pd.Series:
+        """pvlib AC power for ``df_weather``: the average over each optimisation step.
+
+        The optimiser reads each value of the PV forecast as the mean power of its step, but
+        the weather frame holds the irradiance at the step start. With a step longer than 15
+        minutes that is a point sample, up to the whole sunrise or sunset ramp away from the
+        step mean. When the native 15-minute weather is available, pvlib runs on every native
+        instant and the power is averaged over each step with the trapezoidal rule. Otherwise
+        (15-minute step, other weather source, cached frame), or when the frame does not match
+        the native grid, the power is evaluated on ``df_weather`` itself.
+        """
+        native = self.pv_native_weather
+        step = pd.Timedelta(self.freq)
+        per_step = int(step // pd.Timedelta(minutes=15)) if step > pd.Timedelta(minutes=15) else 0
+        if (
+            native is None
+            or per_step == 0
+            or len(native) != len(df_weather) * per_step + 1
+            or not (
+                pd.DatetimeIndex(native.index[:-1:per_step]).tz_convert("UTC")
+                == pd.DatetimeIndex(df_weather.index).tz_convert("UTC")
+            ).all()
+        ):
+            return self._calculate_pvlib_power(df_weather)
+        weights = np.ones(per_step + 1)
+        weights[[0, -1]] = 0.5
+
+        def step_mean(values) -> np.ndarray:
+            # A node below zero is the inverter's night consumption, not production: clip it
+            # before averaging, as the step-start value was clipped before.
+            windows = np.lib.stride_tricks.sliding_window_view(
+                np.clip(np.asarray(values, dtype=float), 0.0, None), per_step + 1
+            )[::per_step]
+            return windows @ weights / per_step
+
+        node_power = self._calculate_pvlib_power(native)
+        p_pv_forecast = pd.Series(step_mean(node_power), index=df_weather.index)
+        if self.pv_plant_raw is not None:
+            self.pv_plant_raw = self._pv_plant_frame(
+                [
+                    pd.Series(step_mean(self.pv_plant_raw[col]), index=df_weather.index)
+                    for col in self.pv_plant_raw.columns
+                ]
+            )
+        return p_pv_forecast
 
     def _solcast_rate_limit_ok(self, required_calls: int = 1, max_calls: int = 8) -> bool:
         """Atomically reserve `required_calls` of Solcast provider-call budget.
@@ -1532,6 +1610,7 @@ class Forecast:
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
         self.weather_forecast_method = method
+        self.pv_native_weather = None
         # The quantile-bias blend is supported by native Solcast and by the
         # caller-supplied list path when a P10 companion is present (#1128).
         # Other methods, including a P50-only list, retain a visible warning
@@ -2305,7 +2384,7 @@ class Forecast:
             self.pv_plant_raw = self._pv_plant_columns_from_weather(df_weather)
         else:
             # We will transform the weather data into electrical power
-            p_pv_forecast = self._calculate_pvlib_power(df_weather)
+            p_pv_forecast = self._pv_power_from_weather_frame(df_weather)
         if set_mix_forecast:
             ignore_pv_feedback = self.params["passed_data"].get(
                 "ignore_pv_feedback_during_curtailment", False
