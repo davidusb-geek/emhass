@@ -234,7 +234,9 @@ class TestFractionalRemainder(unittest.TestCase):
         res = solve(opt, [1.25], prices=[0.05, 0.3] * 6)
         self.assertEqual(opt.optim_status, "Optimal")
         p = power(res)
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 1.25, delta=1e-3)
         found = runs(p)
+        self.assertTrue(found, "requested energy must produce an active plan")
         for (_, end), (start, _) in zip(found, found[1:], strict=False):
             self.assertGreaterEqual(start - end, 2)
 
@@ -367,6 +369,38 @@ class TestFractionalRemainder(unittest.TestCase):
         for k in (0, 1):
             self.assertAlmostEqual(energy_wh(res, k), NOMINAL * 1.25, delta=1e-3)
 
+    def test_relaxed_group_budget_reserves_physical_on_power(self):
+        """Even when min-on infeasibility triggers the relaxed fallback, two
+        switch-only 3 kW loads cannot overlap on a 3.5 kW shared circuit."""
+        opt = build_optimization(
+            optim_overrides=dict(
+                BASE,
+                number_of_deferrable_loads=2,
+                nominal_power_of_deferrable_loads=[NOMINAL, NOMINAL],
+                minimum_power_of_deferrable_loads=[0.0, 0.0],
+                treat_deferrable_load_as_semi_cont=[True, True],
+                set_deferrable_load_single_constant=[False, False],
+                set_deferrable_startup_penalty=[0.0, 0.0],
+                operating_hours_of_each_deferrable_load=[0.25, 0.25],
+                start_timesteps_of_each_deferrable_load=[0, 0],
+                end_timesteps_of_each_deferrable_load=[0, 0],
+                def_minimum_on_time=[2, 2],
+                deferrable_load_groups=[
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 3500,
+                        "mutual_exclusion": False,
+                    }
+                ],
+            )
+        )
+        res = solve(opt, [0.25, 0.25], prices=[0.01, 0.10] + [0.30] * (N - 2))
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        physical_on = (power(res, 0) > 1.0).astype(int) + (power(res, 1) > 1.0).astype(int)
+        self.assertLessEqual(physical_on.max(), 1)
+        for k in (0, 1):
+            self.assertAlmostEqual(energy_wh(res, k), NOMINAL * 0.25, delta=1e-2)
+
     def test_surplus_pv_cannot_be_chased_with_several_partial_steps(self):
         """1.5 kW of free PV surplus tempts a load into many half steps. Only ONE
         step may be partial: the rest must run at the nominal power."""
@@ -430,11 +464,37 @@ class TestFractionalRemainder(unittest.TestCase):
         self.assertEqual(opt.param_rem_active[0].value, 0.0)
         self.assertEqual(opt.param_rem_level[0].value, 0.0)
 
+    def test_near_integer_hours_keep_the_fractional_energy_target(self):
+        """A 0.0000005-step remainder is not silently dropped or rounded up."""
+        for steps in (2.0000005, 2.9999995):
+            with self.subTest(steps=steps):
+                opt = make()
+                res = solve(opt, [steps * DT])
+                self.assertEqual(opt.optim_status, "Optimal")
+                self.assertEqual(opt.param_rem_active[0].value, 1.0)
+                expected = (steps - np.floor(steps)) * NOMINAL
+                self.assertAlmostEqual(opt.param_rem_level[0].value, expected, delta=1e-6)
+                self.assertAlmostEqual(energy_wh(res), steps * DT * NOMINAL, delta=1e-2)
+
+    def test_float_representation_noise_keeps_whole_steps(self):
+        """An exact whole-step requirement with IEEE-754 roundoff must not
+        become a spurious extra ON timestep or remainder."""
+        for steps in (np.nextafter(2.0, np.inf), np.nextafter(3.0, -np.inf)):
+            with self.subTest(steps=steps):
+                opt = make()
+                res = solve(opt, [float(steps * DT)])
+                self.assertEqual(opt.optim_status, "Optimal")
+                self.assertEqual(opt.param_rem_active[0].value, 0.0)
+                self.assertAlmostEqual(energy_wh(res), round(steps) * DT * NOMINAL, delta=1e-3)
+                self.assertEqual(int((power(res) > 1.0).sum()), round(steps))
+
     def test_on_state_covers_every_powered_step(self):
         """Startups, minimum on/off time and mutual exclusion read the ON state, so a
         remainder step must be ON and a step without power must be OFF."""
         opt = make()
         res = solve(opt, [1.25], prices=[0.05, 0.3] * 6)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 1.25, delta=1e-3)
         on_state = opt.vars["p_def_bin2"][0].value > 0.5
         np.testing.assert_array_equal(on_state, power(res) > 1.0)
 

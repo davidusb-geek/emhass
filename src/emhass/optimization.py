@@ -5,7 +5,7 @@ import os
 import pickle
 import threading
 import time
-from math import ceil, isfinite
+from math import ceil, floor, isfinite
 
 import cvxpy as cp
 import numpy as np
@@ -7624,18 +7624,19 @@ class Optimization:
 
         return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
-    def _add_deferrable_group_constraints(self, constraints, relaxed=False):
-        """Add shared power budget and mutual exclusion constraints for deferrable load groups.
+    def _add_deferrable_group_constraints(
+        self, constraints, relaxed=False, original_remainder_loads=None
+    ):
+        """Add shared-power budgets and mutual exclusion for deferrable groups.
+
+        In the relaxed fallback, a switch-only load may have a fractional average
+        power, but its physical ON level still counts against a shared budget.
 
         Args:
             constraints: List of CVXPY constraints to append to.
-            relaxed: If True, this is the relaxed-LP fallback rebuild. The shared
-                power budget and mutual exclusion are BOTH still added - mutual
-                exclusion is a physical constraint (one actuator cannot drive two
-                targets at once), so it must survive the fallback exactly like the
-                max_supply_temperature gate. Only the soft per-load binaries
-                (semi-continuous, single-constant) are dropped by the caller; the
-                mutual-exclusion binaries are re-created here on the spot.
+            relaxed: Whether soft per-load ON/OFF constraints were relaxed.
+            original_remainder_loads: Eligible semi-continuous load indices
+                captured before the fallback rebuild resets their metadata.
         """
         groups = self.optim_conf.get("deferrable_load_groups", [])
         if not groups:
@@ -7650,17 +7651,36 @@ class Optimization:
 
             self.logger.debug(f"Adding group {gi} constraints for deferrable loads {indices}")
 
-            # Shared power budget: sum of group members <= max_power at each timestep
+            # During the fallback, the plain semi-continuous loads lose their
+            # original ON/OFF binaries. Reserve nominal power whenever their
+            # relaxed average is positive; a group budget is an instantaneous
+            # electrical limit, not a timestep-average energy allowance.
+            # A group-specific activity variable also serves mutual exclusion.
+            fallback_activity = {}
+            if relaxed and max_power is not None:
+                for i in indices:
+                    if i not in (original_remainder_loads or ()):
+                        continue
+                    nominal = self.optim_conf["nominal_power_of_deferrable_loads"][i]
+                    activity = cp.Variable(
+                        self.num_timesteps, boolean=True, name=f"group{gi}_fallback_on_{i}"
+                    )
+                    constraints.append(p_deferrable[i] <= nominal * activity)
+                    fallback_activity[i] = (activity, nominal)
+
             if max_power is not None:
-                # A remainder step runs the load at its ON level for part of the step,
-                # so a shared budget is checked at that level, not at the step average.
-                group_power_sum = sum(
-                    cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
-                    if i in self._semi_cont_remainder and i in self._semi_cont_on_level
-                    else p_deferrable[i]
-                    for i in indices
-                )
-                constraints.append(group_power_sum <= max_power)
+                group_power_terms = []
+                for i in indices:
+                    if i in fallback_activity:
+                        activity, nominal = fallback_activity[i]
+                        group_power_terms.append(nominal * activity)
+                    elif i in self._semi_cont_remainder and i in self._semi_cont_on_level:
+                        group_power_terms.append(
+                            cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
+                        )
+                    else:
+                        group_power_terms.append(p_deferrable[i])
+                constraints.append(sum(group_power_terms) <= max_power)
 
             # Mutual exclusion: at most one load active per timestep. This is a
             # PHYSICAL limit (one heat source cannot serve two targets at once), so
@@ -7677,6 +7697,8 @@ class Optimization:
                 for i in indices:
                     if semi_cont[i] and not relaxed:
                         activity_bins.append(self.vars["p_def_bin2"][i])
+                    elif i in fallback_activity:
+                        activity_bins.append(fallback_activity[i][0])
                     else:
                         bin_var = cp.Variable(
                             self.num_timesteps,
@@ -8832,7 +8854,17 @@ class Optimization:
             elif def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0:
                 # Use hours-based specification
                 operating_hours = def_total_hours[k]
-                required_timesteps = ceil(operating_hours / self.time_step)
+                requested_steps = operating_hours / self.time_step
+                nearest_step = round(requested_steps)
+                # Only collapse IEEE-754 representational noise, not a real
+                # fractional requirement. The former 1e-6-step tolerance could
+                # silently discard physically meaningful partial runtime.
+                roundoff_tol = 16 * np.finfo(float).eps * max(1.0, abs(requested_steps))
+                required_timesteps = (
+                    nearest_step
+                    if abs(requested_steps - nearest_step) <= roundoff_tol
+                    else ceil(requested_steps)
+                )
                 target_energy = nominal_power * operating_hours
                 constraint_active = True
             else:
@@ -8911,8 +8943,17 @@ class Optimization:
             self.param_rem_active[k].value = 0.0
             if constraint_active and k not in window_empty_loads and nominal_power > 0:
                 steps_of_energy = target_energy / (nominal_power * self.time_step)
-                rem_fraction = steps_of_energy - int(steps_of_energy + 1e-6)
-                if 1e-6 < rem_fraction < 1.0 - 1e-6:
+                # Only snap values within floating-point representation noise
+                # of an integer. A genuine 1e-6-step (or smaller) remainder
+                # still has its own fractional power level.
+                nearest_step = round(steps_of_energy)
+                roundoff_tol = 16 * np.finfo(float).eps * max(1.0, abs(steps_of_energy))
+                rem_fraction = (
+                    0.0
+                    if abs(steps_of_energy - nearest_step) <= roundoff_tol
+                    else steps_of_energy - floor(steps_of_energy)
+                )
+                if rem_fraction > 0.0:
                     self.param_rem_level[k].value = float(rem_fraction * nominal_power)
                     self.param_rem_active[k].value = 1.0
 
@@ -9593,7 +9634,11 @@ class Optimization:
                 )
 
                 # Deferrable Load Group Constraints (shared power budget only in relaxed mode)
-                self._add_deferrable_group_constraints(constraints_relaxed, relaxed=True)
+                self._add_deferrable_group_constraints(
+                    constraints_relaxed,
+                    relaxed=True,
+                    original_remainder_loads=original_semi_cont_remainder,
+                )
 
                 # Re-build Objective
                 objective_expr = self._build_objective_function(batt_stress_conf, inv_stress_conf)
