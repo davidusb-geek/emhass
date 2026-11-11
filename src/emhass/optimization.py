@@ -9233,6 +9233,22 @@ class Optimization:
                         f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
                     )
 
+            # Deactivation wins over any live-current or minimum-on force from the
+            # previous state. Otherwise zero remaining hours (or a met COTS target)
+            # can require bin2[0] == 0 through param_load_active and bin2[0] == 1
+            # through param_running_lb; continuous loads can also retain a t=0
+            # power pin. Reset per tick so a later positive requirement can turn the
+            # same cached problem back on without rebuilding it.
+            if self.param_load_active[k].value == 0.0:
+                if k < len(self._def_current_power_affected):
+                    self._def_current_power_affected[k] = False
+                if k < len(self.param_def_current_power_active):
+                    self.param_def_current_power_active[k].value = 0.0
+                if k < len(self.param_running_lb):
+                    self.param_running_lb[k].value = np.zeros(n)
+                if k < len(self.param_min_on_full_lb):
+                    self.param_min_on_full_lb[k].value = np.zeros(n)
+
         # Per-load availability. Applied LAST, after every mechanism above that
         # widens a window mask or forces a load on (single-constant pin, min-on
         # remainder, current-power pin, shared-tank window reset), so none of

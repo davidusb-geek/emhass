@@ -524,6 +524,58 @@ class TestFractionalRemainder(unittest.TestCase):
                 else:
                     self.assertEqual(counted, 3)
 
+    def test_zero_remaining_hours_release_live_power_and_minimum_on_tail(self):
+        """A completed load can be switched off despite stale positive live power
+        and an unfinished minimum-on timer; the cached model can reactivate it."""
+        opt = make(
+            def_current_power=[NOMINAL],
+            def_current_state=[True],
+            def_current_on_timesteps=[0],
+            def_minimum_on_time=[2],
+        )
+
+        stopped = solve(opt, [0.0])
+        self.assertEqual(opt.optim_status, "Optimal")
+        np.testing.assert_allclose(power(stopped), 0.0, atol=1e-3)
+        self.assertEqual(opt.param_load_active[0].value, 0.0)
+        self.assertFalse(opt._def_current_power_affected[0])
+        self.assertEqual(opt.param_def_current_power_active[0].value, 0.0)
+        np.testing.assert_allclose(opt.param_running_lb[0].value, 0.0)
+        np.testing.assert_allclose(opt.param_min_on_full_lb[0].value, 0.0)
+        cached_prob = opt.prob
+
+        running = solve(opt, [1.25])
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertIs(opt.prob, cached_prob)
+        self.assertEqual(opt.param_load_active[0].value, 1.0)
+        self.assertTrue(opt._def_current_power_affected[0])
+        self.assertAlmostEqual(power(running)[0], NOMINAL, delta=1e-3)
+        self.assertAlmostEqual(energy_wh(running), NOMINAL * 1.25, delta=1e-3)
+        np.testing.assert_allclose(opt.param_running_lb[0].value[:2], 1.0)
+
+        stopped_again = solve(opt, [0.0])
+        self.assertEqual(opt.optim_status, "Optimal")
+        np.testing.assert_allclose(power(stopped_again), 0.0, atol=1e-3)
+
+    def test_inactive_load_releases_live_current_pin_for_all_power_modes(self):
+        """Explicit zero hours or completed steps deactivate the load without
+        conflicting with a stale t=0 current-power pin/force-on."""
+        for semi_cont in (True, False):
+            for hours, completed in ((0.0, 0), (1.25, 3)):
+                with self.subTest(semi_cont=semi_cont, hours=hours, completed=completed):
+                    opt = make(
+                        treat_deferrable_load_as_semi_cont=[semi_cont],
+                        def_current_power=[NOMINAL],
+                        def_current_operating_timesteps=[completed],
+                    )
+                    res = solve(opt, [hours])
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    np.testing.assert_allclose(power(res), 0.0, atol=1e-3)
+                    self.assertEqual(opt.param_load_active[0].value, 0.0)
+                    self.assertFalse(opt._def_current_power_affected[0])
+                    self.assertEqual(opt.param_def_current_power_active[0].value, 0.0)
+                    np.testing.assert_allclose(opt.param_running_lb[0].value, 0.0)
+
     def test_random_fractions_keep_exact_energy_and_one_partial_step(self):
         rng = np.random.default_rng(11)
         for _ in range(12):
