@@ -80,6 +80,8 @@ The possible dictionary keys to pass data are:
 
 Every value in these forecasts must follow the [Forecast input contract](#forecast-input-contract) below.
 
+
+
 #### Passing a forecast as timestamped values
 
 Instead of a plain list, any of these forecast keys can be passed as an object that maps ISO 8601 timestamps to values. EMHASS aggregates the points to the optimization time step and then holds each value until the next provided point (step interpolation), so you only need to supply a point where the value changes. A point whose timestamp falls before the start of the optimization window is used to anchor the first values of the horizon.
@@ -113,6 +115,74 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
   }
 }
 ```
+
+### Summary of available runtime parameters
+
+
+---
+
+#### General & Timing Settings
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`prediction_horizon`** | Integer | Configured default | Length of the prediction window in timesteps (max recommended 24 hours for MPC). |
+| **`method_ts_round`** | String | Configured default (`nearest`) | Defines how the first optimization step is rounded and anchored relative to the request timestamp (options include `"nearest"` or `"first"`). |
+
+---
+
+#### Battery Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`soc_init`** | Float or List | Configured default | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. |
+| **`soc_final`** | Float or List | Configured default | Desired final State of Charge target at the end of the optimization window (`[0, 1]` fraction). |
+| **`soc_target`** | Float or List | None | Desired minimum battery SOC target as a fraction in `[0, 1]`. |
+| **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep index by which `soc_target` must be achieved. |
+| **`battery_availability`** | Float, List, or Nested Structure | `null` (Always available) | Per-battery availability flag/fraction in `[0, 1]` per timestep. Scales max charge/discharge limits (`1` = full power, `0` = disconnected/frozen SOC; ideal for EV modeling). |
+| **`battery_discharge_energy_max`** | Float or List | `null` (No cap) | Maximum energy (Wh, battery side) the battery may deliver over the horizon (for V2G warranties or cycle limits). |
+
+---
+
+#### Deferrable Loads
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`def_total_hours`** | List | Configured default | Remaining required operating/functioning hours for each defined deferrable load during the horizon. |
+| **`def_start_timestep`** | List of Integers | `0` (Immediate) | Earliest timestep index from which each deferrable load is allowed to start consuming power. |
+| **`def_end_timestep`** | List of Integers | Horizon end | Timestep index before which each deferrable load must finish operating. |
+
+---
+
+#### Thermal Storage & Tanks Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`shared_tank_start_temperatures`** | Mapping / Dictionary | None | Per-storage start-temperature overrides keyed by storage ID (e.g., `{"dhw": 48.5}`) for rolling MPC loops. |
+| **`shared_tank_prior_heat`** | Mapping / Dictionary | None | Thermal energy already produced but delayed by thermal inertia over recent past steps, keyed by storage ID (e.g., `{"house": [0.8, 1.4]}`). |
+| **`shared_thermal_tanks`** | List of Mappings | None | Manual flat specification for shared thermal storage systems (tanks, volumes, min/max temperatures, and source mapping). |
+
+---
+
+#### Forecast Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`pv_power_forecast`** | List or Mapping | None | Central (P50) PV production forecast values in Watts. |
+| **`pv_power_forecast_p10`** | List or Mapping | None | Conservative P10 companion to `pv_power_forecast` used alongside quantile bias configuration. |
+| **`load_power_forecast`** | List or Mapping | None | Baseline household load power forecast values (excluding deferrable loads) in Watts. |
+| **`load_cost_forecast`** | List or Mapping | None | Custom pricing or cost profile for grid energy imports (currency unit per kWh). |
+| **`prod_price_forecast`** | List or Mapping | None | Feed-in tariff pricing profile for excess power exported back to the grid (currency unit per kWh). |
+| **`outdoor_temperature_forecast`** | List or Mapping | None | Ambient temperature forecast in °C, used by thermal storage and heat pump models. |
+
+---
+
+#### Tariffs & Demand Charges
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`current_period_peak`** | Float | None | Highest completed clocked tariff-interval average already incurred in the current billing period (used for demand/capacity charges). |
+| **`capacity_charge_current_interval_history`** | List / Array | None | History values representing the partly elapsed MPC interval phase inside an open tariff block. |
+
 
 ### Forecast input contract
 
