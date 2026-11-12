@@ -273,6 +273,17 @@ def _dayahead_pv(env: Env, step: int, utc: pd.Timestamp) -> pd.Series:
     return idd["df_input_data_dayahead"]["p_pv_forecast"].copy()
 
 
+def _assert_step_start_power(fcst, legacy: pd.DataFrame, modern: pd.DataFrame) -> None:
+    """The PV power of a legacy frame is pvlib on that frame itself (the step-start values),
+    not the step mean that the same request would get from the native weather."""
+    got = fcst.get_power_from_weather(legacy).to_numpy(float)
+    expected = fcst._calculate_pvlib_power(legacy).clip(lower=0).to_numpy(float)
+    assert expected.max() > 100.0
+    np.testing.assert_allclose(got, expected, atol=1e-6)
+    averaged = fcst.get_power_from_weather(modern).to_numpy(float)
+    assert np.abs(averaged - got).max() > 10.0, "averaged equals legacy: proves nothing"
+
+
 def test_a_weather_frame_without_the_native_weather_keeps_the_step_start_value():
     """A frame from elsewhere (an old pickle, a caller) is evaluated as it always was."""
     utc = pd.Timestamp("2026-10-25T23:05Z")
@@ -312,11 +323,21 @@ def test_a_cached_weather_frame_gives_the_pv_power_of_a_fetched_one(step):
         assert ok
         pkl = cached_env.data_path / "weather_forecast_data.pkl"
         assert pkl.is_file()
-        os.utime(
-            cached_env.data_path / "cached-open-meteo-forecast-b.json", (t_run.timestamp(),) * 2
-        )
+        # Make the still-fresh JSON unusable as a source: a run that reread it (and ignored the
+        # pickle) would see no irradiance and could not match the fetched forecast below.
+        json_path = cached_env.data_path / "cached-open-meteo-forecast-b.json"
+        doc = json.loads(json_path.read_text())
+        for key in (
+            "shortwave_radiation_instant",
+            "diffuse_radiation_instant",
+            "direct_normal_irradiance_instant",
+        ):
+            doc["minutely_15"][key] = [0.0] * len(doc["minutely_15"][key])
+        json_path.write_text(json.dumps(doc))
+        os.utime(json_path, (t_run.timestamp(),) * 2)
         cached = _dayahead_pv(cached_env, step, t_run)
         assert pkl.is_file(), "the pickle was dropped, so the cached path was not exercised"
+        assert fetched.max() > 100.0, "the fetched reference carries no production"
         assert fetched.index.equals(cached.index)
         np.testing.assert_allclose(cached.to_numpy(float), fetched.to_numpy(float), atol=1e-6)
         # and it is the step mean, not the step-start sample, on both paths
@@ -332,11 +353,16 @@ def test_the_last_step_without_its_right_hand_endpoint_holds_the_last_weather():
     """Open-Meteo normally reaches past the horizon. When the data ends at the last step start,
     that step is finite, every other step is untouched and the missing node holds the last weather
     (the tail policy of the step-start path)."""
-    utc = pd.Timestamp("2026-10-25T23:05Z")
+    utc = pd.Timestamp("2026-10-25T10:05Z")  # the last step is in daylight
     full_env = _set_up(60, utc)
     cut_env = _set_up(60, utc)
     try:
-        full = _dayahead_pv(full_env, 60, utc)
+        rp = list_runtimeparams(60, None)
+        del rp["pv_power_forecast"], rp["prediction_horizon"]
+        idd, err = full_env.set_input(utc, rp, "dayahead-optim")
+        assert err is None, err
+        fcst = idd["fcst"]
+        full = idd["df_input_data_dayahead"]["p_pv_forecast"].copy()
         last = full.index[-1].tz_convert("UTC")
         path = cut_env.data_path / "cached-open-meteo-forecast-b.json"
         doc = json.loads(path.read_text())
@@ -347,6 +373,27 @@ def test_the_last_step_without_its_right_hand_endpoint_holds_the_last_weather():
         cut = _dayahead_pv(cut_env, 60, utc)
         assert np.isfinite(cut.to_numpy(float)).all()
         np.testing.assert_allclose(cut.to_numpy(float)[:-1], full.to_numpy(float)[:-1], atol=1e-6)
+        # Independent value of the last step: the weather of the last step start held on the
+        # five nodes of the step, with the sun moving on, trapezoid-averaged.
+        nodes = pd.date_range(last, periods=5, freq="15min")
+        held = _clear_sky(utc).loc[last]
+        frame = pd.DataFrame(
+            {
+                "ghi": held["ghi"],
+                "dni": held["dni"],
+                "dhi": held["dhi"],
+                "temp_air": 10.0,
+                "wind_speed": 2.0,
+                "relative_humidity": 50.0,
+                "precipitable_water": 1.0,
+                "cloud_cover": 0.0,
+            },
+            index=nodes,
+        )
+        power = fcst._calculate_pvlib_power(frame).clip(lower=0).to_numpy(float)
+        expected_last = (power[0] / 2 + power[1:-1].sum() + power[-1] / 2) / 4
+        assert expected_last > 1.0, "the last step carries no production, so it proves nothing"
+        assert cut.to_numpy(float)[-1] == pytest.approx(expected_last, abs=0.5)
     finally:
         full_env.close()
         cut_env.close()
@@ -382,6 +429,7 @@ def test_legacy_pvlib_and_caller_supplied_forecasts_are_not_averaged():
         assert err is None, err
         legacy = run_async(idd["fcst"].get_weather_forecast("open-meteo", use_legacy_pvlib=True))
         assert "pv_native_weather" not in legacy.attrs
+        _assert_step_start_power(idd["fcst"], legacy, idd["df_weather"])
         rp = list_runtimeparams(60, None)  # keeps pv_power_forecast: 1000 W everywhere
         del rp["prediction_horizon"]
         idd, err = env.set_input(utc, rp, "dayahead-optim")
@@ -543,6 +591,17 @@ def test_native_weather_that_does_not_fit_the_frame_is_rejected_and_logged(fcst,
     assert any(REJECTED_LOG in m for m in handler.messages)
 
 
+def test_native_weather_on_a_timezone_naive_frame_falls_back_to_the_step_start(fcst, monkeypatch):
+    """A caller that strips the timezone but keeps the attrs gets the step-start power, not a
+    TypeError from the UTC conversion."""
+    calls = _stub_power(fcst, monkeypatch)
+    frame = _frame(3)
+    frame.index = frame.index.tz_convert("UTC").tz_localize(None)
+    got = fcst._pv_power_from_weather_frame(frame)
+    assert len(calls) == 1 and calls[0] is frame
+    assert got.to_numpy().tolist() == [0.0, 1.0, 2.0]
+
+
 def test_a_frame_without_native_weather_is_evaluated_silently(fcst, monkeypatch):
     monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
     calls = _stub_power(fcst, monkeypatch)
@@ -644,6 +703,7 @@ def test_a_legacy_request_reading_a_cache_saved_by_a_modern_run_gets_no_native_w
             assert os.path.isfile(cache)
             legacy = run_async(fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True))
             assert "pv_native_weather" not in legacy.attrs
+            _assert_step_start_power(fcst, legacy, modern)
             again = run_async(fcst.get_weather_forecast("open-meteo"))
             assert "pv_native_weather" in again.attrs, "the shared cache lost the native weather"
     finally:
