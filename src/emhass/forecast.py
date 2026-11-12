@@ -129,6 +129,10 @@ forecast_solar_max_source_gap = pd.Timedelta(hours=1)
 # 3.11+ aliases them; listing both is the same handler there.
 forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError)
 
+# ``DataFrame.attrs`` key under which ``_get_weather_open_meteo`` keeps the native 15-minute
+# weather beside the step-grid weather frame (see ``Forecast._build_pv_native_weather``).
+PV_NATIVE_WEATHER_ATTR = "pv_native_weather"
+
 # Per-plant PV power (#1150). Solcast and solar.forecast store one extra column per plant
 # next to the summed ``yhat`` of the cached frame (``yhat_plant0``, ``yhat_plant1``, ...), so
 # the plants ride the shared weather cache. Only a frame with two or more plants carries them.
@@ -290,13 +294,6 @@ class Forecast:
     # store each plant clipped at zero and the other methods as computed (a pvlib plant can be
     # a little below zero at night); ``split_pv_plants`` clips again, so the result is the same.
     pv_plant_raw: pd.DataFrame | None = None
-
-    # The Open-Meteo weather at its native 15-minute resolution, on the instants that span the
-    # forecast grid (one extra node, the end of the last step). It is set only when the
-    # optimisation step is a multiple of 15 minutes longer than 15, so that
-    # ``get_power_from_weather`` can run pvlib on every native instant and average the power
-    # over each step. None otherwise, and the PV power is then the value at the step start.
-    pv_native_weather: pd.DataFrame | None = None
 
     # Weather covariate columns that ``get_weather_covariates`` can supply to the mlforecaster
     # (via the ``mlforecaster_weather_features`` option). The keys are the Open-Meteo
@@ -687,7 +684,9 @@ class Forecast:
             # Convert mm to cm and clip minimum to 0.1 cm
             data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
             if not use_legacy_pvlib:
-                self.pv_native_weather = self._build_pv_native_weather(data_15min)
+                native = self._build_pv_native_weather(data_15min)
+                if native is not None:
+                    data.attrs[PV_NATIVE_WEATHER_ATTR] = native
             if use_legacy_pvlib:
                 data = data.drop(columns=["ghi", "dhi", "dni"])
                 ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
@@ -708,9 +707,15 @@ class Forecast:
                 )
         return data
 
-    def _build_pv_native_weather(self, data_15min: pd.DataFrame) -> pd.DataFrame | None:
+    def _build_pv_native_weather(self, data_15min: pd.DataFrame) -> dict | None:
         """Open-Meteo weather on every 15-minute instant from the first step start to the end of
         the last step, for the step-average PV power of ``get_power_from_weather``.
+
+        The result travels with the weather frame in ``DataFrame.attrs``, so it is pickled with
+        the weather cache and a cached frame gives the same PV power as a freshly fetched one.
+        It is plain lists (Unix seconds and floats): ``attrs`` values are compared by pandas
+        when frames are concatenated, which a nested DataFrame would break, and an older
+        EMHASS can still unpickle the cache.
 
         Returns None when the step is not a multiple of 15 minutes longer than 15, or when the
         frame does not cover the grid, which leaves the PV power at the step-start values.
@@ -729,7 +734,29 @@ class Forecast:
         native["precipitable_water"] = (native["precipitable_water"] / 10).clip(lower=0.1)
         if native.isna().any().any():
             return None
-        return native
+        out = native.to_dict("list")
+        out["time"] = [int(t.timestamp()) for t in native.index]
+        return out
+
+    def _pv_native_nodes(self, df_weather: pd.DataFrame, step: pd.Timedelta) -> pd.DataFrame | None:
+        """The native 15-minute weather carried by ``df_weather`` on the instants that span its
+        steps (one more node than ``len(df_weather) * step / 15 min``), or None when it is
+        missing, the step is not a multiple of 15 minutes longer than 15, the frame is not an
+        evenly spaced step grid, or the native weather does not cover it."""
+        stored = df_weather.attrs.get(PV_NATIVE_WEATHER_ATTR)
+        native_step = pd.Timedelta(minutes=15)
+        if not stored or step <= native_step or step % native_step != pd.Timedelta(0):
+            return None
+        starts = pd.DatetimeIndex(df_weather.index).tz_convert("UTC")
+        if len(starts) == 0 or not (starts[1:] - starts[:-1] == step).all():
+            return None
+        frame = pd.DataFrame(stored)
+        frame.index = pd.DatetimeIndex(pd.to_datetime(frame.pop("time"), unit="s", utc=True))
+        nodes = pd.date_range(
+            starts[0], periods=len(starts) * (step // native_step) + 1, freq=native_step
+        )
+        frame = frame.reindex(nodes)
+        return None if frame.isna().any().any() else frame
 
     def _pv_power_from_weather_frame(self, df_weather: pd.DataFrame) -> pd.Series:
         """pvlib AC power for ``df_weather``: the average over each optimisation step.
@@ -742,19 +769,11 @@ class Forecast:
         (15-minute step, other weather source, cached frame), or when the frame does not match
         the native grid, the power is evaluated on ``df_weather`` itself.
         """
-        native = self.pv_native_weather
         step = pd.Timedelta(self.freq)
-        per_step = int(step // pd.Timedelta(minutes=15)) if step > pd.Timedelta(minutes=15) else 0
-        if (
-            native is None
-            or per_step == 0
-            or len(native) != len(df_weather) * per_step + 1
-            or not (
-                pd.DatetimeIndex(native.index[:-1:per_step]).tz_convert("UTC")
-                == pd.DatetimeIndex(df_weather.index).tz_convert("UTC")
-            ).all()
-        ):
+        native = self._pv_native_nodes(df_weather, step)
+        if native is None:
             return self._calculate_pvlib_power(df_weather)
+        per_step = int(step // pd.Timedelta(minutes=15))
         weights = np.ones(per_step + 1)
         weights[[0, -1]] = 0.5
 
@@ -1610,7 +1629,6 @@ class Forecast:
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
         self.weather_forecast_method = method
-        self.pv_native_weather = None
         # The quantile-bias blend is supported by native Solcast and by the
         # caller-supplied list path when a P10 companion is present (#1128).
         # Other methods, including a P50-only list, retain a visible warning
