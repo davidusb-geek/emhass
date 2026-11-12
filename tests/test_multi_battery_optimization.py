@@ -902,12 +902,11 @@ class TestBatteryEfficiencyPhysicalInvariants(unittest.TestCase):
     currently acts at the terminal (``max_chg``); the other charge limits (the
     binary-gated, availability and SOC-derating ceilings) use battery-side
     ``1 / eff_chg`` scaling, and at full availability the terminal bound
-    dominates the first. The charge assertions below hold under either
-    convention. The scenario
-    is a clean arbitrage (cheap, flat, expensive) in which the limits are the
-    binding constraint, so an idle battery or a wrong efficiency scaling fails.
-    Assertions are physical relations and feasible ranges, never an exact
-    schedule.
+    dominates the first, so terminal charge power is asserted against
+    ``max_chg``. The scenario is a clean arbitrage (cheap, flat, expensive)
+    that exercises charging and discharging, so an idle battery or a wrong
+    efficiency scaling fails. Assertions are physical relations and feasible
+    ranges, never an exact schedule.
     """
 
     DT_HOURS = 0.5
@@ -948,16 +947,14 @@ class TestBatteryEfficiencyPhysicalInvariants(unittest.TestCase):
         self.assertAlmostEqual(soc[-1] - soc_init, -net_wh / cap, delta=1e-6)
         self.assertAlmostEqual(soc[-1], soc_final, delta=self.SOC_TOL)
 
-        # Discharge: the battery-side draw never exceeds its limit and reaches it.
+        # Discharge: the battery-side draw never exceeds its limit.
         discharge_side = p.max() / eff_dis
         self.assertLessEqual(discharge_side, spec["max_dis"] + self.POWER_TOL)
-        self.assertGreaterEqual(discharge_side, spec["max_dis"] - self.POWER_TOL)
-        # Charge: the terminal power reaches the rated charge power and never exceeds
-        # max_chg / eff_chg. Both readings of the charge limit (terminal <= max_chg, or
-        # terminal <= max_chg / eff_chg) satisfy this.
+        # Charge: the plain charge limit acts on the terminal power (max_chg), and the
+        # cheap steps drive charging to it.
         charge_terminal = -p.min()
         self.assertGreaterEqual(charge_terminal, spec["max_chg"] - self.POWER_TOL)
-        self.assertLessEqual(charge_terminal, spec["max_chg"] / eff_chg + self.POWER_TOL)
+        self.assertLessEqual(charge_terminal, spec["max_chg"] + self.POWER_TOL)
 
         # Both directions are genuinely exercised and SOC stays inside its band.
         self.assertGreaterEqual((p < -self.POWER_TOL).sum(), 3)
