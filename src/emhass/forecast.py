@@ -722,8 +722,9 @@ class Forecast:
         EMHASS can still unpickle the cache.
 
         Returns None when the step is not a multiple of 15 minutes longer than 15, or when the
-        frame lacks a 15-minute row anywhere on the grid except the final endpoint, which leaves
-        the PV power at the step-start values.
+        frame lacks a 15-minute row, or has a null in a row, anywhere on the grid except a
+        trailing run in the last step (the final endpoint), which leaves the PV power at the
+        step-start values.
         """
         native_step = pd.Timedelta(minutes=15)
         step = pd.Timedelta(self.freq)
@@ -744,6 +745,14 @@ class Forecast:
         ):
             return None
         native = data_15min.reindex(nodes)
+        # A null cell in a row that exists is a missing sample like a missing row: only a
+        # trailing run in the last step is held, a null anywhere else would be invented.
+        tail = native.iloc[last_step_start + 1 :]
+        if (
+            native.iloc[: last_step_start + 1].isna().any().any()
+            or (tail.isna().cummax() & tail.notna()).any().any()
+        ):
+            return None
         native = native.interpolate(method="linear", axis=0, limit=None, limit_direction="both")
         native["precipitable_water"] = (native["precipitable_water"] / 10).clip(lower=0.1)
         if native.isna().any().any():
