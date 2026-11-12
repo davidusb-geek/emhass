@@ -162,7 +162,7 @@ Example:
   2. **Force ON:** forces the load's binary `bin2[0] = 1` at t=0, preventing the optimizer from immediately scheduling a stop.
   3. **Suppress phantom startup:** sets the internal initial-state to ON so no startup penalty fires at t=0 (equivalent to also passing `def_current_state[k]=true`).
 
-  **No remaining requirement:** for a load with no operating requirement left (zero remaining hours or timesteps, or a window outside the horizon), `def_current_power[k]` is ignored: the pin, the force-ON and any minimum on-time tail are released, so the load can turn off without making the solve infeasible or relaxed.
+  **No remaining requirement:** for a load with no operating requirement left (zero remaining hours or timesteps, or a window outside the horizon), `def_current_power[k]` is ignored: the pin, the force-ON and any minimum on-time tail are released and the load is planned OFF for the whole horizon, even if it is running and its minimum on-time has not elapsed. This keeps the solve from becoming infeasible or relaxed.
 
   This is a separate runtime input rather than an extension of `def_current_state`, so the binary on/off decision stays strict 0/1 and a fractional watt value can never weaken it.
 
@@ -195,7 +195,7 @@ Example:
 	Here `deferrable0` stays mandatory and `deferrable1` is scheduled only if its full run costs less than 0.65. Defaults to `0` for every load (all loads mandatory).
 - `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
 	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
-	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its nominal power whenever it draws power (also in the relaxed fallback), so a member whose nominal power exceeds `max_power` can never run and the solve is infeasible.
+	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its ON level (its nominal power; a thermal source may have a lower ceiling), including the fractional remainder step, not at its step-average power. In the relaxed fallback a standard semi-continuous load (not a thermal, shared-tank or sequence load) still counts at its nominal power whenever it draws power; the other members count at their relaxed power there. A standard member with an operating-hours requirement whose nominal power exceeds `max_power` can therefore never run, and the solve is infeasible.
 	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads — the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones.
 
 	A load cannot belong to multiple groups. Examples:
