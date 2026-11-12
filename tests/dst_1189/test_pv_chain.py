@@ -334,3 +334,42 @@ def test_the_last_step_without_its_right_hand_endpoint_holds_the_last_weather():
     finally:
         full_env.close()
         cut_env.close()
+
+
+@pytest.mark.parametrize("utc", ["2026-10-24T22:05Z", "2026-10-25T23:05Z"])
+@pytest.mark.parametrize("zone", ["Europe/Copenhagen", "Europe/Amsterdam"])
+@pytest.mark.parametrize("step", [30, 60, 120])
+def test_step_mean_holds_for_each_step_zone_and_side_of_the_dst_change(step, zone, utc):
+    """Every multiple-of-15 step longer than 15 minutes is the trapezoidal mean of the 15-minute
+    power, before and after the 25 October 2026 change, in both zones, and the optimiser's energy
+    (value x step) is the energy of the 15-minute forecast over the same span (conservation)."""
+    pv, truth, _ = _run(zone, step, "nearest", pd.Timestamp(utc))
+    inst = pd.DatetimeIndex(pv.index).tz_convert("UTC")
+    expected = _step_average(truth, inst, step)
+    np.testing.assert_allclose(pv.to_numpy(float), expected, atol=0.5)
+    span = truth.reindex(
+        pd.date_range(inst[0], inst[-1] + pd.Timedelta(minutes=step), freq="15min")
+    )
+    trapezoid_wh = (span.iloc[0] / 2 + span.iloc[1:-1].sum() + span.iloc[-1] / 2) * 0.25
+    assert pv.sum() * step / 60 == pytest.approx(trapezoid_wh, abs=2.0)
+
+
+def test_legacy_pvlib_and_caller_supplied_forecasts_are_not_averaged():
+    """The cloud-cover (legacy) weather has no native 15-minute data and keeps the frame's own
+    values; a forecast passed by the caller reaches the optimiser untouched."""
+    utc = pd.Timestamp("2026-10-25T23:05Z")
+    env = _set_up(60, utc)
+    try:
+        rp = list_runtimeparams(60, None)
+        del rp["pv_power_forecast"], rp["prediction_horizon"]
+        idd, err = env.set_input(utc, rp, "dayahead-optim")
+        assert err is None, err
+        legacy = run_async(idd["fcst"].get_weather_forecast("open-meteo", use_legacy_pvlib=True))
+        assert "pv_native_weather" not in legacy.attrs
+        rp = list_runtimeparams(60, None)  # keeps pv_power_forecast: 1000 W everywhere
+        del rp["prediction_horizon"]
+        idd, err = env.set_input(utc, rp, "dayahead-optim")
+        assert err is None, err
+        assert (idd["df_input_data_dayahead"]["p_pv_forecast"] == 1000.0).all()
+    finally:
+        env.close()
