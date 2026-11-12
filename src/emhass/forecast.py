@@ -766,7 +766,7 @@ class Forecast:
         minutes that is a point sample, up to the whole sunrise or sunset ramp away from the
         step mean. When the native 15-minute weather is available, pvlib runs on every native
         instant and the power is averaged over each step with the trapezoidal rule. Otherwise
-        (15-minute step, other weather source, cached frame), or when the frame does not match
+        (15-minute step, other weather source, a cache saved by an earlier version), or when the frame does not match
         the native grid, the power is evaluated on ``df_weather`` itself.
         """
         step = pd.Timedelta(self.freq)
