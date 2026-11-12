@@ -20,6 +20,7 @@ import json
 import logging
 import os
 
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
@@ -44,6 +45,20 @@ RUNS = (
     ("Europe/Copenhagen", "2026-03-28T22:05Z", "spring-forward"),
     ("UTC", "2026-10-25T23:05Z", "utc"),
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_open_meteo(monkeypatch):
+    """Fail, not fall back to the seeded JSON, when a test would call the live Open-Meteo API.
+
+    EMHASS treats a transport error as 'keep the old cache', so a test whose cache looks stale
+    (an unfrozen clock) would pass offline and break where the network answers. The error raised
+    here is not a ``ClientError``, so it cannot be swallowed by that fallback."""
+
+    async def refuse(self, method, str_or_url, *args, **kwargs):
+        raise AssertionError(f"live HTTP request in an offline test: {method} {str_or_url}")
+
+    monkeypatch.setattr(aiohttp.ClientSession, "_request", refuse)
 
 
 @functools.cache
@@ -427,7 +442,10 @@ def test_legacy_pvlib_and_caller_supplied_forecasts_are_not_averaged():
         del rp["pv_power_forecast"], rp["prediction_horizon"]
         idd, err = env.set_input(utc, rp, "dayahead-optim")
         assert err is None, err
-        legacy = run_async(idd["fcst"].get_weather_forecast("open-meteo", use_legacy_pvlib=True))
+        with time_machine.travel(utc.to_pydatetime(), tick=False):  # the seeded JSON is fresh
+            legacy = run_async(
+                idd["fcst"].get_weather_forecast("open-meteo", use_legacy_pvlib=True)
+            )
         assert "pv_native_weather" not in legacy.attrs
         _assert_step_start_power(idd["fcst"], legacy, idd["df_weather"])
         rp = list_runtimeparams(60, None)  # keeps pv_power_forecast: 1000 W everywhere
