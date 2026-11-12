@@ -20,11 +20,15 @@ import json
 import os
 
 import numpy as np
+import orjson
 import pandas as pd
 import pytest
-from harness import Env, list_runtimeparams
+import time_machine
+from harness import LOG, Env, list_runtimeparams, run_async
 from pvlib.irradiance import get_total_irradiance
 from pvlib.location import Location
+
+from emhass import command_line as cl
 
 LAT, LON = 55.65, 11.67
 MODES = ("first", "nearest", "last")
@@ -230,25 +234,103 @@ def test_pv_plants_of_a_step_average_add_up_to_the_aggregate():
         env.close()
 
 
-def test_a_weather_frame_off_the_native_grid_falls_back_to_the_step_start_value():
-    """A cached or foreign frame (not the one just fetched) is evaluated as it always was."""
-    utc = pd.Timestamp("2026-10-25T23:05Z")
-    pv, truth, _ = _run("Europe/Copenhagen", 60, "nearest", utc)
+def _set_up(step: int, utc: pd.Timestamp, **optim) -> Env:
     env = Env(
-        "Europe/Copenhagen", 60, "nearest", weather_forecast_method="open-meteo", set_use_pv=True
+        "Europe/Copenhagen",
+        step,
+        "nearest",
+        weather_forecast_method="open-meteo",
+        set_use_pv=True,
+        **optim,
     )
+    env.params["retrieve_hass_conf"]["Latitude"] = LAT
+    env.params["retrieve_hass_conf"]["Longitude"] = LON
+    _seed(env, utc)
+    return env
+
+
+def _dayahead_pv(env: Env, step: int, utc: pd.Timestamp) -> pd.Series:
+    rp = list_runtimeparams(step, None)
+    del rp["pv_power_forecast"], rp["prediction_horizon"]
+    idd, err = env.set_input(utc, rp, "dayahead-optim")
+    assert err is None, err
+    return idd["df_input_data_dayahead"]["p_pv_forecast"].copy()
+
+
+def test_a_weather_frame_without_the_native_weather_keeps_the_step_start_value():
+    """A frame from elsewhere (an old pickle, a caller) is evaluated as it always was."""
+    utc = pd.Timestamp("2026-10-25T23:05Z")
+    _, truth, _ = _run("Europe/Copenhagen", 60, "nearest", utc)
+    env = _set_up(60, utc)
     try:
-        env.params["retrieve_hass_conf"]["Latitude"] = LAT
-        env.params["retrieve_hass_conf"]["Longitude"] = LON
-        _seed(env, utc)
         rp = list_runtimeparams(60, None)
         del rp["pv_power_forecast"], rp["prediction_horizon"]
         idd, err = env.set_input(utc, rp, "dayahead-optim")
         assert err is None, err
-        fcst = idd["fcst"]
-        frame = idd["df_weather"].iloc[3:].copy()  # not the grid the native frame was built for
-        got = fcst.get_power_from_weather(frame)
+        frame = idd["df_weather"].copy()
+        assert "pv_native_weather" in frame.attrs
+        frame.attrs.clear()
+        got = idd["fcst"].get_power_from_weather(frame)
         expected = truth.reindex(pd.DatetimeIndex(frame.index).tz_convert("UTC")).to_numpy()
         assert np.allclose(got.to_numpy(), expected, atol=0.5)
     finally:
         env.close()
+
+
+@pytest.mark.parametrize("step", [30, 60, 120])
+def test_a_cached_weather_frame_gives_the_pv_power_of_a_fetched_one(step):
+    """``weather-forecast-cache`` pickles the weather frame; a later run reads that pickle instead of
+    the Open-Meteo JSON. Same data in, same PV forecast out: the native weather rides in the frame."""
+    t_cache = pd.Timestamp("2026-10-25T23:05Z")
+    t_run = t_cache + pd.Timedelta(hours=2)  # still inside the cached (doubled) horizon
+    fetched_env = _set_up(step, t_cache)
+    cached_env = _set_up(step, t_cache)
+    try:
+        os.utime(
+            fetched_env.data_path / "cached-open-meteo-forecast-b.json", (t_run.timestamp(),) * 2
+        )
+        fetched = _dayahead_pv(fetched_env, step, t_run)
+        params = orjson.dumps(cached_env.params).decode()
+        with time_machine.travel(t_cache.to_pydatetime(), tick=False):
+            ok = run_async(cl.weather_forecast_cache(cached_env.conf, params, "{}", LOG))
+        assert ok
+        pkl = cached_env.data_path / "weather_forecast_data.pkl"
+        assert pkl.is_file()
+        os.utime(
+            cached_env.data_path / "cached-open-meteo-forecast-b.json", (t_run.timestamp(),) * 2
+        )
+        cached = _dayahead_pv(cached_env, step, t_run)
+        assert pkl.is_file(), "the pickle was dropped, so the cached path was not exercised"
+        assert fetched.index.equals(cached.index)
+        np.testing.assert_allclose(cached.to_numpy(float), fetched.to_numpy(float), atol=1e-6)
+        # and it is the step mean, not the step-start sample, on both paths
+        _, truth, _ = _run("Europe/Copenhagen", 60, "nearest", t_cache)
+        expected = _step_average(truth, pd.DatetimeIndex(cached.index).tz_convert("UTC"), step)
+        np.testing.assert_allclose(cached.to_numpy(float), expected, atol=0.5)
+    finally:
+        fetched_env.close()
+        cached_env.close()
+
+
+def test_the_last_step_without_its_right_hand_endpoint_holds_the_last_weather():
+    """Open-Meteo normally reaches past the horizon. When the data ends at the last step start,
+    that step is finite, every other step is untouched and the missing node holds the last weather
+    (the tail policy of the step-start path)."""
+    utc = pd.Timestamp("2026-10-25T23:05Z")
+    full_env = _set_up(60, utc)
+    cut_env = _set_up(60, utc)
+    try:
+        full = _dayahead_pv(full_env, 60, utc)
+        last = full.index[-1].tz_convert("UTC")
+        path = cut_env.data_path / "cached-open-meteo-forecast-b.json"
+        doc = json.loads(path.read_text())
+        keep = [i for i, t in enumerate(doc["minutely_15"]["time"]) if t <= last.timestamp()]
+        doc["minutely_15"] = {k: [v[i] for i in keep] for k, v in doc["minutely_15"].items()}
+        path.write_text(json.dumps(doc))
+        os.utime(path, (utc.timestamp(), utc.timestamp()))
+        cut = _dayahead_pv(cut_env, 60, utc)
+        assert np.isfinite(cut.to_numpy(float)).all()
+        np.testing.assert_allclose(cut.to_numpy(float)[:-1], full.to_numpy(float)[:-1], atol=1e-6)
+    finally:
+        full_env.close()
+        cut_env.close()
