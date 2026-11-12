@@ -1,4 +1,4 @@
-"""Open-Meteo irradiance -> pvlib -> P_PV stays on its UTC instant (investigation of #1287/#1330).
+"""Open-Meteo irradiance -> pvlib -> P_PV stays on its UTC instant (#1287).
 
 ``test_alignment`` proves that a ``temp_air`` marker lands on its instant. This module follows
 the irradiance columns through the rest of the PV chain: an Open-Meteo cache (unix timestamps,
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 
 import numpy as np
@@ -373,3 +374,173 @@ def test_legacy_pvlib_and_caller_supplied_forecasts_are_not_averaged():
         assert (idd["df_input_data_dayahead"]["p_pv_forecast"] == 1000.0).all()
     finally:
         env.close()
+
+
+# -- the step-mean routine on synthetic frames: clipping and rejection of the native weather ------
+
+T0 = pd.Timestamp("2026-10-25T00:00Z")
+REJECTED_LOG = "does not match the weather frame"
+
+
+class _Records(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+@pytest.fixture(scope="module")
+def fcst():
+    env = _set_up(60, pd.Timestamp("2026-10-25T23:05Z"))
+    try:
+        rp = list_runtimeparams(60, None)
+        del rp["pv_power_forecast"], rp["prediction_horizon"]
+        idd, err = env.set_input(pd.Timestamp("2026-10-25T23:05Z"), rp, "dayahead-optim")
+        assert err is None, err
+        yield idd["fcst"]
+    finally:
+        env.close()
+
+
+def _frame(n_steps: int, step: int = 60, starts=None, native=None) -> pd.DataFrame:
+    """A weather frame of ``n_steps`` step starts that carries 15-minute native weather."""
+    starts = (
+        starts
+        if starts is not None
+        else [T0 + pd.Timedelta(minutes=step * i) for i in range(n_steps)]
+    )
+    frame = pd.DataFrame(
+        {"ghi": 0.0}, index=pd.DatetimeIndex(starts).tz_convert("Europe/Copenhagen")
+    )
+    n_nodes = n_steps * (step // 15) + 1
+    if native is None:
+        native = {
+            "time": [int((T0 + pd.Timedelta(minutes=15 * i)).timestamp()) for i in range(n_nodes)],
+            "ghi": [0.0] * n_nodes,
+        }
+    frame.attrs["pv_native_weather"] = native
+    return frame
+
+
+def _stub_power(fcst, monkeypatch, power=None):
+    """Replace the pvlib call: the power is the node number (or ``power``), the frame is recorded."""
+    calls: list[pd.DataFrame] = []
+
+    def fake(df):
+        calls.append(df)
+        values = power if power is not None else np.arange(len(df), dtype=float)
+        return pd.Series(np.asarray(values, dtype=float), index=df.index)
+
+    monkeypatch.setattr(fcst, "_calculate_pvlib_power", fake)
+    fcst.pv_plant_raw = None
+    return calls
+
+
+def test_negative_node_power_is_clipped_before_it_is_averaged(fcst, monkeypatch):
+    """A night-time inverter draw is not production: it must not lower the step that ends or
+    starts at it. Two 60-minute steps over nodes -100 -100 50 100 200 100 50 -100 -100."""
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    calls = _stub_power(fcst, monkeypatch, power=[-100, -100, 50, 100, 200, 100, 50, -100, -100])
+    got = fcst._pv_power_from_weather_frame(_frame(2))
+    assert len(calls[0]) == 9, "the power was not evaluated on the native nodes"
+    np.testing.assert_allclose(got.to_numpy(), [62.5, 62.5])  # (0 + 0 + 50 + 100 + 100) / 4
+
+
+def test_valid_native_weather_is_averaged_and_not_logged_as_rejected(fcst, monkeypatch):
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    calls = _stub_power(fcst, monkeypatch)  # node power 0, 1, ..., 8
+    handler = _Records()
+    fcst.logger.addHandler(handler)
+    old_level = fcst.logger.level
+    fcst.logger.setLevel(logging.DEBUG)
+    try:
+        got = fcst._pv_power_from_weather_frame(_frame(2))
+    finally:
+        fcst.logger.removeHandler(handler)
+        fcst.logger.setLevel(old_level)
+    assert len(calls[0]) == 9
+    np.testing.assert_allclose(got.to_numpy(), [2.0, 6.0])  # trapezoid of a ramp = its middle
+    assert not any(REJECTED_LOG in m for m in handler.messages)
+
+
+def _uneven():
+    starts = [T0 + pd.Timedelta(minutes=m) for m in (0, 60, 120, 240)]
+    return 60, _frame(4, starts=starts)
+
+
+def _off_grid():
+    n = 2 * 4 + 1
+    native = {
+        "time": [int((T0 + pd.Timedelta(minutes=15 * i + 7)).timestamp()) for i in range(n)],
+        "ghi": [0.0] * n,
+    }
+    return 60, _frame(2, native=native)
+
+
+def _short_native():
+    native = _frame(2).attrs["pv_native_weather"]
+    return 60, _frame(2, native={k: v[:-1] for k, v in native.items()})  # no right-hand endpoint
+
+
+def _native_starts_late():
+    native = _frame(2).attrs["pv_native_weather"]
+    return 60, _frame(2, native={k: v[1:] for k, v in native.items()})  # misses the first node
+
+
+def _step_of_the_frame_is_not_the_run_step():
+    return 30, _frame(2, step=60)  # a 60-minute frame read by a 30-minute run
+
+
+def _step_not_a_multiple_of_15():
+    return 20, _frame(2, step=20, native=_frame(2).attrs["pv_native_weather"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        _uneven,
+        _off_grid,
+        _short_native,
+        _native_starts_late,
+        _step_of_the_frame_is_not_the_run_step,
+        _step_not_a_multiple_of_15,
+    ],
+)
+def test_native_weather_that_does_not_fit_the_frame_is_rejected_and_logged(fcst, monkeypatch, case):
+    """Irregular, off-grid, short or step-incompatible native weather is never used: the power is
+    evaluated on the frame itself, as before this change, and the debug log says so."""
+    step, frame = case()
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=step))
+    calls = _stub_power(fcst, monkeypatch)
+    handler = _Records()
+    fcst.logger.addHandler(handler)
+    old_level = fcst.logger.level
+    fcst.logger.setLevel(logging.DEBUG)
+    try:
+        got = fcst._pv_power_from_weather_frame(frame)
+    finally:
+        fcst.logger.removeHandler(handler)
+        fcst.logger.setLevel(old_level)
+    assert len(calls) == 1 and calls[0] is frame, "the native weather was used"
+    np.testing.assert_allclose(got.to_numpy(), np.arange(len(frame), dtype=float))
+    assert any(REJECTED_LOG in m for m in handler.messages)
+
+
+def test_a_frame_without_native_weather_is_evaluated_silently(fcst, monkeypatch):
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    calls = _stub_power(fcst, monkeypatch)
+    frame = _frame(2)
+    frame.attrs.clear()
+    handler = _Records()
+    fcst.logger.addHandler(handler)
+    old_level = fcst.logger.level
+    fcst.logger.setLevel(logging.DEBUG)
+    try:
+        fcst._pv_power_from_weather_frame(frame)
+    finally:
+        fcst.logger.removeHandler(handler)
+        fcst.logger.setLevel(old_level)
+    assert calls[0] is frame
+    assert not any(REJECTED_LOG in m for m in handler.messages)
