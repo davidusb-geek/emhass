@@ -147,7 +147,9 @@ def _assert_grid_is_the_runs_own(pv, step, mode, utc):
     inst = pd.DatetimeIndex(pv.index).tz_convert("UTC")
     zone = str(pv.index.tz)
     assert inst[0] == expected_start(utc, zone, step, mode), "the grid starts at another instant"
-    assert (np.diff(inst.asi8) == step * 60 * 10**9).all(), "the grid is not evenly spaced"
+    assert (inst[1:] - inst[:-1] == pd.Timedelta(minutes=step)).all(), (
+        "the grid is not evenly spaced"
+    )
 
 
 @pytest.mark.parametrize(("zone", "step", "mode", "utc"), list(_cases()))
