@@ -544,3 +544,66 @@ def test_a_frame_without_native_weather_is_evaluated_silently(fcst, monkeypatch)
         fcst.logger.setLevel(old_level)
     assert calls[0] is frame
     assert not any(REJECTED_LOG in m for m in handler.messages)
+
+
+def _raw_15min(n_nodes: int, drop=()) -> pd.DataFrame:
+    """Open-Meteo-like 15-minute rows (UTC clock, shown in the run zone) without the ``drop`` nodes."""
+    idx = pd.date_range(T0, periods=n_nodes, freq="15min")
+    idx = idx[[i for i in range(n_nodes) if i not in set(drop)]].tz_convert("Europe/Copenhagen")
+    frame = pd.DataFrame(
+        {
+            "temp_air": 10.0,
+            "relative_humidity": 80.0,
+            "precipitable_water": 10.0,
+            "cloud_cover": 0.0,
+            "wind_speed": 1.0,
+            "ghi": np.arange(len(idx), dtype=float),
+            "dhi": 1.0,
+            "dni": 1.0,
+        },
+        index=idx,
+    )
+    return frame
+
+
+def _build_native(fcst, monkeypatch, raw):
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    monkeypatch.setattr(
+        fcst,
+        "forecast_dates",
+        pd.date_range(T0, periods=2, freq="60min").tz_convert("Europe/Copenhagen"),
+    )
+    return fcst._build_pv_native_weather(raw)
+
+
+def test_complete_native_weather_is_built(fcst, monkeypatch):
+    assert _build_native(fcst, monkeypatch, _raw_15min(9)) is not None
+
+
+@pytest.mark.parametrize(
+    "drop",
+    [(1, 2, 3, 5, 6, 7), (4,), (1,), (0,)],
+    ids=["hourly-only", "mid-node", "node-1", "first-node"],
+)
+def test_missing_internal_native_intervals_are_not_interpolated_into_the_step_mean(
+    fcst, monkeypatch, drop
+):
+    """Hourly rows without the intervening 15-minute rows must not become 'native' weather by
+    linear interpolation: the PV power then keeps the step-start values (documented fallback)."""
+    assert _build_native(fcst, monkeypatch, _raw_15min(9, drop)) is None
+
+
+def test_only_the_missing_final_endpoint_is_held(fcst, monkeypatch):
+    """The documented policy: data that stops at the last step start holds its last weather at the
+    one missing right-hand endpoint."""
+    got = _build_native(fcst, monkeypatch, _raw_15min(9, drop=(8,)))
+    assert got is not None and len(got["time"]) == 9
+    assert got["ghi"][8] == got["ghi"][7]
+
+
+def test_data_stopping_at_the_last_step_start_still_builds_and_a_hole_inside_it_does_not(
+    fcst, monkeypatch
+):
+    held = _build_native(fcst, monkeypatch, _raw_15min(9, drop=(5, 6, 7, 8)))
+    assert held is not None and held["ghi"][5:] == [held["ghi"][4]] * 4
+    assert _build_native(fcst, monkeypatch, _raw_15min(9, drop=(6,))) is None

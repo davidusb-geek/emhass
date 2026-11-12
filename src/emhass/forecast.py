@@ -718,7 +718,8 @@ class Forecast:
         EMHASS can still unpickle the cache.
 
         Returns None when the step is not a multiple of 15 minutes longer than 15, or when the
-        frame does not cover the grid, which leaves the PV power at the step-start values.
+        frame lacks a 15-minute row anywhere on the grid except the final endpoint, which leaves
+        the PV power at the step-start values.
         """
         native_step = pd.Timedelta(minutes=15)
         step = pd.Timedelta(self.freq)
@@ -729,6 +730,15 @@ class Forecast:
         nodes = pd.date_range(
             self.forecast_dates[0].tz_convert("UTC"), periods=n_nodes, freq=native_step
         ).tz_convert(self.time_zone)
+        # Data may stop at the last step start (or anywhere inside the last step): the trailing
+        # nodes of that step hold the last weather. A node missing anywhere else would be
+        # invented by the interpolation below.
+        present = nodes.isin(data_15min.index)
+        last_step_start = len(nodes) - 1 - step // native_step
+        if not present[: last_step_start + 1].all() or (
+            not present.all() and present[np.argmin(present) :].any()
+        ):
+            return None
         native = data_15min.reindex(nodes)
         native = native.interpolate(method="linear", axis=0, limit=None, limit_direction="both")
         native["precipitable_water"] = (native["precipitable_water"] / 10).clip(lower=0.1)
