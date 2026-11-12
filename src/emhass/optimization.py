@@ -6905,6 +6905,9 @@ class Optimization:
         remainder = bin2 - bin1
         constraints.append(bin1 <= bin2)
         constraints.append(cp.sum(remainder) <= self.param_rem_active[k])
+        # Implied by the row above; stated per step so presolve reduces whole-step
+        # requirements (rem_active == 0) to bin1 == bin2 instead of a sum row.
+        constraints.append(remainder <= self.param_rem_active[k])
         constraints.append(
             self.vars["p_deferrable"][k]
             == cp.multiply(on_level, bin1) + self.param_rem_level[k] * remainder

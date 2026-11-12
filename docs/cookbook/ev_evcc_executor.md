@@ -223,7 +223,7 @@ that power, forces the load ON at t=0, and suppresses the phantom startup penalt
 "def_current_power": [ 0, 0, {{ states('sensor.evcc_ev_charge_power_w') | float(0) if ev_steps > 0 else 0 }} ]
 ```
 
-Send the pin only while the EV has planned steps (`ev_steps > 0`, as above): a pin on an EV with no requirement makes the solve fall back to `Optimal (Relaxed)`.
+Send the pin only while the EV has planned steps (`ev_steps > 0`, as above). EMHASS ignores a pin for a load with no remaining requirement, so a stale pin does not make the solve infeasible or relaxed, but omitting it keeps the payload minimal.
 
 Expected: when the car is charging at, say, 6.8 kW, the plan's first EV timestep is pinned to 6.8 kW
 and the optimizer schedules around it instead of stopping it.

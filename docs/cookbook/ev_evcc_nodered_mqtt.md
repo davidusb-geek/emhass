@@ -136,7 +136,7 @@ if (connected && soc_fresh) {
 }
 if (ev_steps === 0) end_step = horizon;            // 0 would mean "no end limit", not "no EV"
 
-const charging = flow.get("ev_charging") === true && ev_steps > 0;   // a pin on an EV with no requirement makes the solve fall back to Optimal (Relaxed)
+const charging = flow.get("ev_charging") === true && ev_steps > 0;   // omit the pin when the EV has no planned steps (EMHASS ignores it for a load with no requirement)
 const charge_w = Number(flow.get("ev_charge_power_w")) || 0;
 const soc_raw = flow.get("battery_soc_percent");
 const soc_batt = typeof soc_raw === "number" ? soc_raw : NaN;   // null or "" must not become 0 %

@@ -144,7 +144,7 @@ class TestFractionalRemainder(unittest.TestCase):
 
     def test_timestep_input_still_rounds_up_as_before(self):
         opt = make()
-        res = solve(opt, [0], steps=[3])
+        res = solve(opt, [0], steps=[2.5])  # a fractional step count rounds up to 3
         self.assertEqual(opt.optim_status, "Optimal")
         assert_strict_on_off(self, power(res), allowed_partial=0)
         self.assertAlmostEqual(energy_wh(res), NOMINAL * 3 * DT, delta=1e-3)
