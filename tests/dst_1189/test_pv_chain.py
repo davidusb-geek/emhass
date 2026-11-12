@@ -685,6 +685,33 @@ def test_missing_internal_native_intervals_are_not_interpolated_into_the_step_me
     assert _build_native(fcst, monkeypatch, _raw_15min(9, drop)) is None
 
 
+@pytest.mark.parametrize(
+    "node",
+    [0, 2, 4, 6],
+    ids=["first-node", "off-step-node", "step-start-node", "hole-in-the-last-step"],
+)
+def test_a_null_cell_in_a_present_row_is_not_interpolated_into_the_step_mean(
+    fcst, monkeypatch, node
+):
+    """A null in a row that exists is a missing 15-minute sample, like a missing row: the native
+    weather is not built (the PV power keeps the step-start values) rather than invented."""
+    raw = _raw_15min(9)
+    raw.iloc[node, raw.columns.get_loc("ghi")] = np.nan
+    assert _build_native(fcst, monkeypatch, raw) is None
+
+
+@pytest.mark.parametrize("nulls", [(8,), (7, 8)], ids=["endpoint", "trailing-run"])
+def test_a_trailing_null_run_in_the_last_step_is_held_like_a_missing_endpoint(
+    fcst, monkeypatch, nulls
+):
+    """The documented tail policy: nulls that only trail the last step hold the last value."""
+    raw = _raw_15min(9)
+    raw.iloc[list(nulls), raw.columns.get_loc("ghi")] = np.nan
+    got = _build_native(fcst, monkeypatch, raw)
+    assert got is not None
+    assert got["ghi"][nulls[0] :] == [got["ghi"][nulls[0] - 1]] * len(nulls)
+
+
 def test_only_the_missing_final_endpoint_is_held(fcst, monkeypatch):
     """The documented policy: data that stops at the last step start holds its last weather at the
     one missing right-hand endpoint."""
