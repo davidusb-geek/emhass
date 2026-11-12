@@ -768,10 +768,19 @@ class Forecast:
         instant and the power is averaged over each step with the trapezoidal rule. Otherwise
         (15-minute step, other weather source, a cache saved by an earlier version, or a frame
         that does not match the native grid) the power is evaluated on ``df_weather`` itself.
+
+        The native weather is read from ``df_weather.attrs``, not from its columns. A caller
+        that edits the columns of a frame carrying it (for example ``ghi`` or ``temp_air``)
+        must clear the attribute with ``df_weather.attrs.clear()`` to have the edit used.
         """
         step = pd.Timedelta(self.freq)
         native = self._pv_native_nodes(df_weather, step)
         if native is None:
+            if df_weather.attrs.get(PV_NATIVE_WEATHER_ATTR):
+                self.logger.debug(
+                    "The native Open-Meteo weather does not match the weather frame "
+                    "(step, spacing or coverage); using the PV power at the step start."
+                )
             return self._calculate_pvlib_power(df_weather)
         per_step = int(step // pd.Timedelta(minutes=15))
         weights = np.ones(per_step + 1)
