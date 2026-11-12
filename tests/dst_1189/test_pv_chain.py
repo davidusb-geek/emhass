@@ -25,6 +25,7 @@ import orjson
 import pandas as pd
 import pytest
 import time_machine
+from cases import expected_start
 from harness import LOG, Env, list_runtimeparams, run_async
 from pvlib.irradiance import get_total_irradiance
 from pvlib.location import Location
@@ -139,9 +140,20 @@ def _cases():
                 )
 
 
+def _assert_grid_is_the_runs_own(pv, step, mode, utc):
+    """The forecast grid is the one the run instant defines, not one derived from the result: it
+    starts at the independently computed first step and advances by ``step`` of real time. A grid
+    and its values shifted together by an hour would otherwise still agree with each other."""
+    inst = pd.DatetimeIndex(pv.index).tz_convert("UTC")
+    zone = str(pv.index.tz)
+    assert inst[0] == expected_start(utc, zone, step, mode), "the grid starts at another instant"
+    assert (np.diff(inst.asi8) == step * 60 * 10**9).all(), "the grid is not evenly spaced"
+
+
 @pytest.mark.parametrize(("zone", "step", "mode", "utc"), list(_cases()))
 def test_open_meteo_pv_power_is_the_utc_instants_power(zone, step, mode, utc):
     pv, truth, poa = _run(zone, step, mode, pd.Timestamp(utc))
+    _assert_grid_is_the_runs_own(pv, step, mode, pd.Timestamp(utc))
     inst = pd.DatetimeIndex(pv.index).tz_convert("UTC")
     assert inst.is_unique, "the forecast grid repeats an instant"
     expected = _step_average(truth, inst, step)
@@ -163,6 +175,7 @@ def test_open_meteo_pv_power_follows_the_sun_at_its_instant(zone, step, mode, ut
     """P_PV tracks an independent plane-of-array reference at the middle of its step, and tracks
     it better than the same reference displaced by one hour in either direction."""
     pv, _, poa = _run(zone, step, mode, pd.Timestamp(utc))
+    _assert_grid_is_the_runs_own(pv, step, mode, pd.Timestamp(utc))
     # A step value is the mean over the step: it is centred on the middle of the step.
     inst = pd.DatetimeIndex(pv.index).tz_convert("UTC") + pd.Timedelta(minutes=step) / 2
     inst = inst.floor("15min")
@@ -607,3 +620,55 @@ def test_data_stopping_at_the_last_step_start_still_builds_and_a_hole_inside_it_
     held = _build_native(fcst, monkeypatch, _raw_15min(9, drop=(5, 6, 7, 8)))
     assert held is not None and held["ghi"][5:] == [held["ghi"][4]] * 4
     assert _build_native(fcst, monkeypatch, _raw_15min(9, drop=(6,))) is None
+
+
+def test_a_legacy_request_reading_a_cache_saved_by_a_modern_run_gets_no_native_weather():
+    """The cache is shared: a legacy request keeps the step-start evaluation even when the cached
+    frame was saved with the native weather, and the modern frame in the cache is not changed."""
+    utc = pd.Timestamp("2026-10-25T23:05Z")
+    env = _set_up(60, utc)
+    try:
+        rp = list_runtimeparams(60, None)
+        del rp["pv_power_forecast"], rp["prediction_horizon"]
+        idd, err = env.set_input(utc, rp, "dayahead-optim")
+        assert err is None, err
+        fcst = idd["fcst"]
+        with time_machine.travel(utc.to_pydatetime(), tick=False):
+            modern = run_async(fcst.get_weather_forecast("open-meteo"))
+            assert "pv_native_weather" in modern.attrs
+            cache = os.path.abspath(env.data_path / "weather_forecast_data.pkl")
+            fcst.params["passed_data"]["weather_forecast_cache"] = True
+            run_async(fcst.set_cached_forecast_data(cache, modern))
+            assert os.path.isfile(cache)
+            legacy = run_async(fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True))
+            assert "pv_native_weather" not in legacy.attrs
+            again = run_async(fcst.get_weather_forecast("open-meteo"))
+            assert "pv_native_weather" in again.attrs, "the shared cache lost the native weather"
+    finally:
+        env.close()
+
+
+def test_plant_shares_add_up_to_the_aggregate_when_one_plant_is_negative(fcst, monkeypatch):
+    """Per-plant node power is clipped for the shares, the aggregate after summing, and the split
+    renormalises to the aggregate: mixed-sign plants still add up to the step mean."""
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    plant_a = np.array([-5.0, 100, 200, 300, 100, 50, 0, -5, -5])
+    plant_b = np.array([-20.0, -30, -40, 50, 60, 70, -10, -20, -20])
+
+    def fake(df):
+        idx = df.index
+        fcst.pv_plant_raw = fcst._pv_plant_frame(
+            [pd.Series(plant_a, index=idx), pd.Series(plant_b, index=idx)]
+        )
+        return pd.Series(plant_a + plant_b, index=idx)
+
+    monkeypatch.setattr(fcst, "_calculate_pvlib_power", fake)
+    aggregate = fcst._pv_power_from_weather_frame(_frame(2))
+    weights = np.array([0.5, 1, 1, 1, 0.5])
+    expected = [
+        (np.clip((plant_a + plant_b)[i : i + 5], 0, None) * weights).sum() / 4 for i in (0, 4)
+    ]
+    np.testing.assert_allclose(aggregate.to_numpy(), expected)
+    plants = fcst.split_pv_plants(aggregate, fcst.pv_plant_raw)
+    np.testing.assert_allclose(plants.sum(axis=1).to_numpy(), aggregate.to_numpy())
+    assert (plants.to_numpy() >= 0).all()

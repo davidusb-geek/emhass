@@ -705,6 +705,10 @@ class Forecast:
                 return await self._get_weather_open_meteo(
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
                 )
+        if use_legacy_pvlib:
+            # A cache saved by a non-legacy run carries the native weather: a legacy request
+            # keeps the step-start evaluation it always had.
+            data.attrs.pop(PV_NATIVE_WEATHER_ATTR, None)
         return data
 
     def _build_pv_native_weather(self, data_15min: pd.DataFrame) -> dict | None:
