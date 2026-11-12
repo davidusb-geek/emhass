@@ -755,13 +755,17 @@ class Forecast:
     def _pv_native_nodes(self, df_weather: pd.DataFrame, step: pd.Timedelta) -> pd.DataFrame | None:
         """The native 15-minute weather carried by ``df_weather`` on the instants that span its
         steps (one more node than ``len(df_weather) * step / 15 min``), or None when it is
-        missing, the step is not a multiple of 15 minutes longer than 15, the frame is not an
-        evenly spaced step grid, or the native weather does not cover it."""
+        missing, the step is not a multiple of 15 minutes longer than 15, the frame index is
+        timezone-naive, the frame is not an evenly spaced step grid, or the native weather does
+        not cover it."""
         stored = df_weather.attrs.get(PV_NATIVE_WEATHER_ATTR)
         native_step = pd.Timedelta(minutes=15)
         if not stored or step <= native_step or step % native_step != pd.Timedelta(0):
             return None
-        starts = pd.DatetimeIndex(df_weather.index).tz_convert("UTC")
+        starts = pd.DatetimeIndex(df_weather.index)
+        if starts.tz is None:
+            return None  # no instant to place the native nodes on: use the step-start values
+        starts = starts.tz_convert("UTC")
         if len(starts) == 0 or not (starts[1:] - starts[:-1] == step).all():
             return None
         frame = pd.DataFrame(stored)
