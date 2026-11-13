@@ -11,11 +11,11 @@ Send your own PV forecast to `naive-mpc-optim` on every MPC call, as a timestamp
 - A PV sensor with a `detailedForecast` attribute: a list of rows with `period_start`, `pv_estimate` in kW and, optionally, `pv_estimate10` in kW. The snippet assumes 30-minute rows, like Solcast.
 - A battery SOC sensor in percent, if you have a battery.
 - Transport tested against:
-  - Home Assistant 2026.11 and the EMHASS 0.18.8 web server at a 15-min step (tested with the RoofCast example package: payload rendered in Home Assistant from RoofCast rows, which carry ISO string timestamps, and POSTed). That package selects its source with the logic of Step 4, written inline in the `for` line. From the `t0` line on, its payload is identical to Step 3.
-  - Step 3 as printed, reading the two Solcast sensors with datetime `period_start` values: rendered offline only, with the template engine of the `homeassistant` 2026.1.2 package and stub states. Untested in a running Home Assistant, contribution welcome.
+  - Home Assistant 2026.11 and the EMHASS 0.18.8 web server at a 15-min step (tested with an earlier version of the RoofCast example package, without the coverage check: payload rendered in Home Assistant from RoofCast rows, which carry ISO string timestamps, and POSTed). The current package selects its source with the logic of Step 4. From the `{%- set slot = 1800 -%}` line on, its payload is identical to Step 3.
+  - Step 3 as printed, reading the two Solcast sensors with datetime `period_start` values: rendered in Home Assistant 2026.11 with the real Solcast sensors, and the payloads run with the EMHASS 0.18.8 CLI at 15 and 30-min steps. Not POSTed to a running EMHASS server, contribution welcome.
   - 15 and 30-min steps and a bias of 0.5: run offline with the EMHASS 0.18.8 CLI.
   - 60-min step: untested, contribution welcome.
-  - Step 4: source sensor and Solcast payload rendered offline the same way, payload run with the EMHASS 0.18.8 CLI. Untested in a running Home Assistant, contribution welcome.
+  - Step 4: the source-selection lines rendered in Home Assistant 2026.11 with real RoofCast and Solcast sensors. The template sensor itself was rendered offline only, with stub states, contribution welcome.
 
 The values you send must follow the [Forecast input contract](../passing_data.md#forecast-input-contract). This recipe does not repeat it.
 
