@@ -19,6 +19,7 @@ import functools
 import json
 import logging
 import os
+import pickle
 
 import aiohttp
 import numpy as np
@@ -30,6 +31,7 @@ from cases import expected_start
 from harness import LOG, Env, list_runtimeparams, run_async
 from pvlib.irradiance import get_total_irradiance
 from pvlib.location import Location
+from pvlib.solarposition import get_solarposition
 
 from emhass import command_line as cl
 
@@ -755,10 +757,12 @@ def test_a_legacy_request_reading_a_cache_saved_by_a_modern_run_gets_no_native_w
         env.close()
 
 
-def test_a_modern_request_reading_a_cache_saved_by_a_legacy_run_gets_the_step_mean():
-    """The cache is shared the other way round too: a legacy request that finds no cache saves one,
-    and a later modern request reads it. The saved frame carries the native weather (the legacy
-    request itself still gets none), so the modern forecast is the same step mean as without it."""
+def test_the_shared_cache_holds_the_open_meteo_weather_whatever_the_requesting_pv_mode():
+    """The weather cache is shared by modern and legacy requests, so it always stores the Open-Meteo
+    weather (irradiance and native 15-minute samples). A legacy request gets the cloud-cover
+    irradiance on the frame it returns, never in the cache: a later modern request (PV power and
+    the ``ghi`` of the thermal solar gain) matches one that fetched the weather itself, and a
+    legacy request reading the cache gets what a legacy request that fetched would."""
     utc = pd.Timestamp("2026-10-25T23:05Z")
     env = _set_up(60, utc)
     try:
@@ -767,22 +771,181 @@ def test_a_modern_request_reading_a_cache_saved_by_a_legacy_run_gets_the_step_me
         idd, err = env.set_input(utc, rp, "dayahead-optim")
         assert err is None, err
         fcst = idd["fcst"]
+        # An overcast sky: the cloud-cover irradiance of a legacy request then differs from the
+        # Open-Meteo irradiance (under the clear-sky seed the two are the same).
+        json_path = env.data_path / "cached-open-meteo-forecast-b.json"
+        doc = json.loads(json_path.read_text())
+        doc["minutely_15"]["cloud_cover"] = [90.0] * len(doc["minutely_15"]["cloud_cover"])
+        json_path.write_text(json.dumps(doc))
+        os.utime(json_path, (utc.timestamp(),) * 2)
         cache = os.path.abspath(env.data_path / "weather_forecast_data.pkl")
         with time_machine.travel(utc.to_pydatetime(), tick=False):
             reference = run_async(fcst.get_weather_forecast("open-meteo"))
-            assert not os.path.isfile(cache), "the reference run must not have saved a cache"
+            legacy_reference = run_async(
+                fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True)
+            )
+            assert not os.path.isfile(cache), "the reference runs must not have saved a cache"
             fcst.params["passed_data"]["weather_forecast_cache"] = True
             legacy = run_async(fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True))
             assert os.path.isfile(cache), "the legacy request saved no cache: nothing was tested"
-            assert "pv_native_weather" not in legacy.attrs
+            with open(cache, "rb") as fh:
+                saved = pickle.loads(fh.read())
             modern = run_async(fcst.get_weather_forecast("open-meteo"))
-        assert "pv_native_weather" in modern.attrs, "the legacy-saved cache has no native weather"
+            legacy_again = run_async(fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True))
+        assert "pv_native_weather" not in legacy.attrs
+        # the legacy request itself is unchanged: cloud-cover irradiance, step-start evaluation
+        assert np.abs(legacy["ghi"].to_numpy() - reference["ghi"].to_numpy()).max() > 10.0
+        pd.testing.assert_frame_equal(legacy, legacy_reference)
+        # the cache is canonical
+        pd.testing.assert_frame_equal(saved, reference, check_freq=False)
+        assert saved.attrs == reference.attrs
+        # a modern request reading it is a fresh modern request: ghi (thermal) and PV power
+        pd.testing.assert_frame_equal(modern, reference)
+        assert modern.attrs == reference.attrs
         got = fcst.get_power_from_weather(modern).to_numpy(float)
         expected = fcst.get_power_from_weather(reference).to_numpy(float)
         assert expected.max() > 100.0
         np.testing.assert_allclose(got, expected, atol=1e-6)
+        # a legacy request reading the cache is a legacy request that fetched
+        pd.testing.assert_frame_equal(legacy_again, legacy_reference)
+        assert "pv_native_weather" not in legacy_again.attrs
     finally:
         env.close()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda a: a.pop("time"),
+        lambda a: a.update(ghi=a["ghi"][:-1]),
+        lambda a: a.update(time=[a["time"][0]] + a["time"][:-1]),
+        lambda a: a.update(ghi=["bright"] * len(a["ghi"])),
+        lambda a: a.update(time=["noon"] * len(a["time"])),
+        lambda a: a.pop("ghi"),
+    ],
+    ids=["no-time", "unequal-lengths", "duplicate-times", "text-values", "text-times", "no-ghi"],
+)
+def test_malformed_native_weather_metadata_falls_back_to_the_step_start(fcst, monkeypatch, damage):
+    """The attrs travel through a pickle a caller or an older version may have written: a schema
+    that cannot be read is treated like absent native weather, not raised to the forecast."""
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    calls = _stub_power(fcst, monkeypatch)
+    frame = _frame(2)
+    damage(frame.attrs["pv_native_weather"])
+    got = fcst._pv_power_from_weather_frame(frame)
+    assert len(calls) == 1 and calls[0] is frame, "the damaged native weather was used"
+    np.testing.assert_allclose(got.to_numpy(), [0.0, 1.0])
+
+
+def test_a_programming_error_in_the_pv_model_is_not_taken_for_malformed_metadata(fcst, monkeypatch):
+    """Only the reading of the stored schema falls back; a failure of the power calculation on
+    valid native weather still surfaces."""
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+
+    def broken(df):
+        raise RuntimeError("pvlib exploded")
+
+    monkeypatch.setattr(fcst, "_calculate_pvlib_power", broken)
+    with pytest.raises(RuntimeError, match="pvlib exploded"):
+        fcst._pv_power_from_weather_frame(_frame(2))
+
+
+def _elevation(fcst, starts) -> np.ndarray:
+    return get_solarposition(starts, fcst.lat, fcst.lon)["elevation"].to_numpy()
+
+
+def _sunrise_steps(fcst, step: int) -> pd.DatetimeIndex:
+    """Step starts around the late-October sunrise: exactly one step starts below the horizon and
+    ends above it."""
+    starts = pd.date_range("2026-10-26T04:00Z", periods=8, freq=f"{step}min")
+    start_el = _elevation(fcst, starts)
+    end_el = _elevation(fcst, starts + pd.Timedelta(minutes=step))
+    assert ((start_el <= 0) & (end_el > 0)).sum() == 1, "the test day has no single sunrise step"
+    return starts.tz_convert("Europe/Copenhagen")
+
+
+class _Identity:
+    """A fitted model that returns the forecast: the weighting is the only thing under test."""
+
+    def predict(self, x):
+        return x["forecast"].to_numpy(float)
+
+
+def _adjusted(fcst, monkeypatch, starts, values, step_mean: bool, step: int = 60):
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=step))
+    monkeypatch.setattr(fcst, "model_adjust_pv", _Identity(), raising=False)
+    monkeypatch.setattr(fcst, "_pv_forecast_is_step_mean", step_mean)
+    frame = pd.DataFrame({"forecast": np.asarray(values, dtype=float)}, index=starts)
+    return fcst.adjust_pv_forecast_predict(frame)["adjusted_forecast"]
+
+
+def test_the_adjusted_pv_forecast_keeps_the_mean_of_a_step_that_contains_the_sunrise(
+    fcst, monkeypatch
+):
+    """A step mean is labelled at the step start. The step that starts below the horizon and ends
+    above it has a positive mean, which the night mask must not zero."""
+    starts = _sunrise_steps(fcst, 60)
+    sunrise_step = int(np.argmax(_elevation(fcst, starts) > 0)) - 1
+    values = np.zeros(len(starts))
+    values[sunrise_step:] = 300.0
+    adjusted = _adjusted(fcst, monkeypatch, starts, values, step_mean=True)
+    assert adjusted.iloc[sunrise_step - 1] == 0.0, "a step wholly before the sunrise stays zero"
+    assert adjusted.iloc[sunrise_step] > 0.0, "the sunrise-step mean was discarded"
+    assert adjusted.iloc[sunrise_step + 1] > 0.0
+
+
+def test_the_low_sun_weighting_of_a_step_mean_uses_the_higher_elevation_of_the_step(
+    fcst, monkeypatch
+):
+    starts = _sunrise_steps(fcst, 60)
+    sunrise_step = int(np.argmax(_elevation(fcst, starts) > 0)) - 1
+    end_el = _elevation(fcst, starts[sunrise_step : sunrise_step + 1] + pd.Timedelta(minutes=60))[0]
+    threshold = fcst.optim_conf["adjusted_pv_solar_elevation_threshold"]
+    assert 0 < end_el < threshold, "the sunrise step must end in the low-sun band"
+    adjusted = _adjusted(fcst, monkeypatch, starts, np.full(len(starts), 300.0), step_mean=True)
+    np.testing.assert_allclose(adjusted.iloc[sunrise_step], 300.0 * end_el / threshold)
+
+
+def test_a_pv_calculation_that_does_not_use_native_weather_clears_the_step_mean_mark(
+    fcst, monkeypatch
+):
+    monkeypatch.setattr(fcst, "_pv_forecast_is_step_mean", True)
+    monkeypatch.setitem(fcst.retrieve_hass_conf, "solar_forecast_kwp", 0)
+    fcst.get_power_from_weather(_frame(2))
+    assert fcst._pv_forecast_is_step_mean is False
+
+
+def test_the_adjusted_pv_forecast_of_a_step_start_forecast_is_unchanged(fcst, monkeypatch):
+    """15-minute steps, legacy, Solcast and the other methods do not hand over step means: the
+    night mask stays on the step start."""
+    starts = _sunrise_steps(fcst, 60)
+    adjusted = _adjusted(fcst, monkeypatch, starts, np.full(len(starts), 300.0), step_mean=False)
+    assert (adjusted.to_numpy()[_elevation(fcst, starts) <= 0] == 0.0).all()
+
+
+def test_the_adjusted_pv_forecast_at_sunset_keeps_the_step_that_contains_it(fcst, monkeypatch):
+    starts = pd.date_range("2026-10-26T13:00Z", periods=7, freq="60min").tz_convert(
+        "Europe/Copenhagen"
+    )
+    last_up = int(np.where(_elevation(fcst, starts) > 0)[0].max())  # the step with the sunset
+    assert 0 < last_up < len(starts) - 1
+    adjusted = _adjusted(fcst, monkeypatch, starts, np.full(len(starts), 100.0), step_mean=True)
+    assert (adjusted.to_numpy()[: last_up + 1] > 0.0).all()
+    assert (adjusted.to_numpy()[last_up + 1 :] == 0.0).all(), "a step wholly after the sunset"
+
+
+def test_the_pv_power_of_a_native_weather_frame_marks_the_forecast_as_a_step_mean(
+    fcst, monkeypatch
+):
+    monkeypatch.setattr(fcst, "freq", pd.Timedelta(minutes=60))
+    monkeypatch.setattr(fcst, "_pv_forecast_is_step_mean", False)
+    _stub_power(fcst, monkeypatch)
+    fcst._pv_power_from_weather_frame(_frame(2))
+    assert fcst._pv_forecast_is_step_mean is True
+    frame = _frame(2)
+    frame.attrs.clear()
+    fcst._pv_power_from_weather_frame(frame)
+    assert fcst._pv_forecast_is_step_mean is False
 
 
 def test_plant_shares_add_up_to_the_aggregate_when_one_plant_is_negative(fcst, monkeypatch):
