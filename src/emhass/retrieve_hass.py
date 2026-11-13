@@ -19,7 +19,7 @@ import orjson
 import pandas as pd
 
 from emhass.connection_manager import get_websocket_client
-from emhass.utils import set_df_index_freq
+from emhass.utils import is_valid_entity_id, set_df_index_freq
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,16 @@ _RECORDER_COMMIT_GRACE = pd.Timedelta(seconds=10)
 _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
+# The forms of the Supervisor proxy URL the code accepts (compared without a trailing slash).
+_SUPERVISOR_URLS = frozenset({hass_url, "https://supervisor/core/api"})
+
+
+def _is_supervisor_url(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
+    if url is None or not str(url).strip() or str(url).strip() == "empty":
+        return True
+    return str(url).strip().rstrip("/").lower() in _SUPERVISOR_URLS
+
 
 # When a var_list entry is an arithmetic expression, every entity it references is
 # queried over a window padded this much earlier than the requested start, then sliced
@@ -125,6 +135,18 @@ class RetrieveHass:
         """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
+        # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
+        if (
+            supervisor_token
+            and long_lived_token == supervisor_token
+            and not _is_supervisor_url(hass_url)
+        ):
+            logger.error(
+                "The Supervisor token is set as the token for a Home Assistant URL that is not "
+                "the Supervisor. It will not be sent. Set a long-lived access token for that URL."
+            )
+            self.long_lived_token = ""
         if isinstance(freq, int | float | str):
             self.freq = pd.Timedelta(minutes=int(freq))
         else:
@@ -279,7 +301,8 @@ class RetrieveHass:
         # Resolve the token: if empty, fall back to SUPERVISOR_TOKEN env var (injected by HA addon supervisor)
         token = self.long_lived_token
         if not token or token == "empty":
-            token = os.getenv("SUPERVISOR_TOKEN", "")
+            # Only the Supervisor proxy may receive the Supervisor token.
+            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for HA config retrieval."
@@ -630,6 +653,12 @@ class RetrieveHass:
         self, session: aiohttp.ClientSession, entity_id: str, headers: dict
     ) -> dict | None:
         """The entity's current state object from ``/api/states``, or None on any failure."""
+        if not is_valid_entity_id(entity_id):
+            # Not a plain entity id (an expression, say): it must not become a URL path
+            self.logger.error(
+                f"{entity_id} is not a plain entity id; its freshness cannot be verified."
+            )
+            return None
         if self.hass_url == hass_url:  # Supervisor API
             url = f"{self.hass_url}/states/{entity_id}"
         else:
@@ -745,7 +774,8 @@ class RetrieveHass:
         # environment variable injected by Home Assistant when running as an addon.
         token = self.long_lived_token
         if not token or token == "empty":
-            token = os.getenv("SUPERVISOR_TOKEN", "")
+            # Only the Supervisor proxy may receive the Supervisor token.
+            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for REST API authentication."
@@ -2136,6 +2166,12 @@ class RetrieveHass:
         """
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace(sensor_prefix, sensor_prefix + publish_prefix)
+        # It becomes part of the URL path and of a saved file name
+        if not is_valid_entity_id(entity_id):
+            self.logger.error(
+                "Not publishing: %r is not an entity id like sensor.my_name", entity_id
+            )
+            return None
         # Set the URL
         if self.hass_url == hass_url:  # If we are using the supervisor API
             url = self.hass_url + "/states/" + entity_id
