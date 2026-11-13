@@ -755,6 +755,36 @@ def test_a_legacy_request_reading_a_cache_saved_by_a_modern_run_gets_no_native_w
         env.close()
 
 
+def test_a_modern_request_reading_a_cache_saved_by_a_legacy_run_gets_the_step_mean():
+    """The cache is shared the other way round too: a legacy request that finds no cache saves one,
+    and a later modern request reads it. The saved frame carries the native weather (the legacy
+    request itself still gets none), so the modern forecast is the same step mean as without it."""
+    utc = pd.Timestamp("2026-10-25T23:05Z")
+    env = _set_up(60, utc)
+    try:
+        rp = list_runtimeparams(60, None)
+        del rp["pv_power_forecast"], rp["prediction_horizon"]
+        idd, err = env.set_input(utc, rp, "dayahead-optim")
+        assert err is None, err
+        fcst = idd["fcst"]
+        cache = os.path.abspath(env.data_path / "weather_forecast_data.pkl")
+        with time_machine.travel(utc.to_pydatetime(), tick=False):
+            reference = run_async(fcst.get_weather_forecast("open-meteo"))
+            assert not os.path.isfile(cache), "the reference run must not have saved a cache"
+            fcst.params["passed_data"]["weather_forecast_cache"] = True
+            legacy = run_async(fcst.get_weather_forecast("open-meteo", use_legacy_pvlib=True))
+            assert os.path.isfile(cache), "the legacy request saved no cache: nothing was tested"
+            assert "pv_native_weather" not in legacy.attrs
+            modern = run_async(fcst.get_weather_forecast("open-meteo"))
+        assert "pv_native_weather" in modern.attrs, "the legacy-saved cache has no native weather"
+        got = fcst.get_power_from_weather(modern).to_numpy(float)
+        expected = fcst.get_power_from_weather(reference).to_numpy(float)
+        assert expected.max() > 100.0
+        np.testing.assert_allclose(got, expected, atol=1e-6)
+    finally:
+        env.close()
+
+
 def test_plant_shares_add_up_to_the_aggregate_when_one_plant_is_negative(fcst, monkeypatch):
     """Per-plant node power is clipped for the shares, the aggregate after summing, and the split
     renormalises to the aggregate: mixed-sign plants still add up to the step mean."""
