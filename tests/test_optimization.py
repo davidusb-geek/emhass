@@ -12397,7 +12397,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "def_load_config": [],
                 "deferrable_load_groups": [],
                 "set_use_battery": False,
-            "lp_solver_mip_rel_gap": 0.0,
+                "lp_solver_mip_rel_gap": 0.0,
             }
         )
         opt = Optimization(
