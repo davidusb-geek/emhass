@@ -2524,7 +2524,7 @@ class RetrieveHass:
             ) as response:
                 await response.read()
                 if response.ok:
-                    self.logger.info(f"Successfully posted to {entity_id} = {state}")
+                    self.logger.info("Successfully posted to %s = %r", entity_id, state)
                     return True
                 self.logger.warning(f"Failed to post {entity_id}. Status code: {response.status}")
                 return False

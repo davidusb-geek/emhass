@@ -1405,7 +1405,8 @@ def _battery_fit_is_stale(
         age = _age_of(attempt.get("attempted_at"))
         if age is not None and age <= max_age:
             logger.info(
-                f"{label} recorded a failed attempt (status={attempt.get('status')}, "
+                f"{label} recorded a failed attempt "
+                f"(status={_battery_id_safe_log_value(attempt.get('status'))}, "
                 f"age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h); "
                 "keeping configured battery values, backing off."
             )
@@ -1423,10 +1424,25 @@ def _battery_fit_is_stale(
         )
     else:
         logger.warning(
-            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok', "
+            f"{label} persisted entry has status "
+            f"{_battery_id_safe_log_value(entry.get('status'))!r}, not 'ok', "
             "and no usable recorded attempt; will re-fit."
         )
     return True
+
+
+def _battery_id_safe_log_value(value: object) -> str:
+    """Render persisted battery identification scalars as bounded, single-line log text.
+
+    Normal numeric, None and status values remain unchanged. Untrusted control
+    characters are escaped before reaching the existing plain-text logger.
+    """
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        return "<invalid>"
+    raw = str(value)
+    if len(raw) > 160:
+        raw = raw[:160] + "...[truncated]"
+    return json.dumps(raw, ensure_ascii=True)[1:-1].replace("\x7f", r"\u007f")
 
 
 def _log_battery_identification_summary(
@@ -1455,8 +1471,8 @@ def _log_battery_identification_summary(
         "round-trip efficiency %.3f (one-way %.3f) vs configured one-way %.3f.",
         battery_tag,
         cap.get("value") or float("nan"),
-        cap.get("ci_low"),
-        cap.get("ci_high"),
+        _battery_id_safe_log_value(cap.get("ci_low")),
+        _battery_id_safe_log_value(cap.get("ci_high")),
         configured_cap_kwh,
         rte.get("value") or float("nan"),
         payload.get("eta_charge_symmetric") or float("nan"),
@@ -1491,8 +1507,8 @@ def _log_battery_identification_recommendation(
         battery_tag,
         configured_cap_kwh,
         identified_cap_kwh if identified_cap_kwh is not None else float("nan"),
-        configured_eta,
-        identified_eta,
+        _battery_id_safe_log_value(configured_eta),
+        _battery_id_safe_log_value(identified_eta),
     )
 
 
@@ -1679,8 +1695,10 @@ async def _identify_battery_impl(
                 # max_age cadence, per #1052) instead of re-fitting every run.
                 # Logged at INFO - this is expected operation, not a problem.
                 logger.info(
-                    f"Battery identification: recorded attempt at {attempt.get('attempted_at')} "
-                    f"failed guardrails (status={attempt.get('status')}); keeping configured "
+                    "Battery identification: recorded attempt at "
+                    f"{_battery_id_safe_log_value(attempt.get('attempted_at'))} "
+                    "failed guardrails (status="
+                    f"{_battery_id_safe_log_value(attempt.get('status'))}); keeping configured "
                     "battery values, backing off until max_age."
                 )
                 return
