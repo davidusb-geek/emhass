@@ -12308,14 +12308,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_stage2d_min_on_initial_remainder_covers_all_steps(self):
-        """An in-progress ON window must preserve its whole remaining prefix.
+        """Initial ON-time carryover must force the remainder, not the full N.
 
-        N=5, elapsed ON=2 forces t=0..2. Without elapsed information the
-        same load can instead stop at t=0 and satisfy its six required
-        operating steps in the much cheaper t=3..8 window.
+        N=4, elapsed=2 forces exactly the first two expensive steps. The
+        remaining four mandatory operating steps fit the cheapest later
+        contiguous block (t=4..7), and expensive t=2..3 must be released.
+        Without elapsed data, all six required steps fit t=4..9.
+        The counterfactual and full schedules distinguish ignored elapsed
+        time from an erroneous full-N initial force.
         """
         n = 10
-        prices = [0.9, 0.8, 0.7, 0.02, 0.01, 0.03, 0.04, 0.05, 0.06, 0.9]
+        prices = [0.9, 0.8, 0.99, 0.99, 0.03, 0.02, 0.01, 0.04, 0.05, 0.06]
         df = self._make_min_on_scenario(n=n, prices=prices)
         overrides = {
             "number_of_deferrable_loads": 2,
@@ -12328,34 +12331,38 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "set_deferrable_max_startups": [0, 0],
             "start_timesteps_of_each_deferrable_load": [0, 0],
             "end_timesteps_of_each_deferrable_load": [0, 0],
-            "def_minimum_on_time": [5, 0],
+            "def_minimum_on_time": [4, 0],
             "def_minimum_off_time": [0, 0],
             "def_current_state": [True, False],
             "def_load_config": [],
             "deferrable_load_groups": [],
             "set_use_battery": False,
         }
-        _, unconstrained = self._run_min_on_optim(overrides, df, n)
+        opt_unforced, unforced = self._run_min_on_optim(overrides, df, n)
         with_elapsed = dict(overrides, def_current_on_timesteps=[2, 0])
-        opt, constrained = self._run_min_on_optim(with_elapsed, df, n)
-        self.assertEqual(opt.optim_status, "Optimal")
+        opt_forced, forced = self._run_min_on_optim(with_elapsed, df, n)
+        self.assertEqual(opt_unforced.optim_status, "Optimal")
+        self.assertEqual(opt_forced.optim_status, "Optimal")
+
         np.testing.assert_allclose(
-            unconstrained["P_def_bin2_0"].to_numpy()[:3],
-            np.zeros(3),
+            unforced["P_def_bin2_0"].to_numpy(),
+            [0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
             atol=1e-4,
-            err_msg="Unforced counterfactual did not avoid costly initial slots",
+            err_msg="Unforced counterfactual must choose six later cheap slots",
         )
         np.testing.assert_allclose(
-            constrained["P_def_bin2_0"].to_numpy()[:3],
-            np.ones(3),
+            forced["P_def_bin2_0"].to_numpy(),
+            [1, 1, 0, 0, 1, 1, 1, 1, 0, 0],
             atol=1e-4,
-            err_msg="Remaining minimum ON-time was not honoured for all three steps",
+            err_msg="Carryover must force only the two remaining ON steps",
         )
-        self.assertAlmostEqual(
-            constrained["P_deferrable0"].sum() * 0.5,
-            9000.0,
-            delta=1e-3,
-        )
+        for result in (unforced, forced):
+            self.assertAlmostEqual(
+                result["P_deferrable0"].sum() * 0.5,
+                9000.0,
+                delta=1e-3,
+                msg="Mandatory deferrable-load energy must remain 9000 Wh",
+            )
 
     def test_stage2d_min_off_remainder_refreshes_between_solves(self):
         """Elapsed OFF time must advance on a reused Optimization instance.
