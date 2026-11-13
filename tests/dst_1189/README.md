@@ -3,7 +3,7 @@
 Offline pytest suite for #1189: one time grid per run, every value on its UTC instant; the remaining
 known failures are strict xfails.
 Runs with the normal `uv run pytest` (`time-machine` is in the `test` extra). On its own, from the repository root: `uv run --extra test python -m pytest tests/dst_1189 -q`
-Expected with the #1189 fix: **7501 passed, 42 skipped, 70 xfailed**, no failures (about 1 minute
+Expected with the #1189 fix: **7622 passed, 42 skipped, 70 xfailed**, no failures (about 1 minute
 with `-n 16` from `pytest-xdist`, about 4-5 minutes on one core).
 
 Without uv: `pip install -e '.[test]' && python -m pytest tests/dst_1189 -q`. A case that
