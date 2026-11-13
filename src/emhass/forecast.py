@@ -129,6 +129,10 @@ forecast_solar_max_source_gap = pd.Timedelta(hours=1)
 # 3.11+ aliases them; listing both is the same handler there.
 forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError)
 
+# ``DataFrame.attrs`` key under which ``_get_weather_open_meteo`` keeps the native 15-minute
+# weather beside the step-grid weather frame (see ``Forecast._build_pv_native_weather``).
+PV_NATIVE_WEATHER_ATTR = "pv_native_weather"
+
 # Per-plant PV power (#1150). Solcast and solar.forecast store one extra column per plant
 # next to the summed ``yhat`` of the cached frame (``yhat_plant0``, ``yhat_plant1``, ...), so
 # the plants ride the shared weather cache. Only a frame with two or more plants carries them.
@@ -359,6 +363,8 @@ class Forecast:
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
+        # True once the PV forecast is the mean over each step (native 15-minute weather used)
+        self._pv_forecast_is_step_mean = False
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.method_ts_round = self.retrieve_hass_conf["method_ts_round"]
         self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
@@ -679,12 +685,12 @@ class Forecast:
             data = set_df_index_freq(data)
             # Convert mm to cm and clip minimum to 0.1 cm
             data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
-            if use_legacy_pvlib:
-                data = data.drop(columns=["ghi", "dhi", "dni"])
-                ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
-                data["ghi"] = ghi_est["ghi"]
-                data["dni"] = ghi_est["dni"]
-                data["dhi"] = ghi_est["dhi"]
+            # The cache is shared by modern and legacy requests: it always holds the Open-Meteo
+            # weather, whoever fetched it. The legacy irradiance is applied below, on the frame
+            # that a legacy request gets back.
+            native = self._build_pv_native_weather(data_15min)
+            if native is not None:
+                data.attrs[PV_NATIVE_WEATHER_ATTR] = native
             if self.params["passed_data"].get("weather_forecast_cache", False):
                 data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         else:
@@ -697,7 +703,145 @@ class Forecast:
                 return await self._get_weather_open_meteo(
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
                 )
+        if use_legacy_pvlib:
+            # The weather of a legacy request is the cloud-cover irradiance, evaluated at the step
+            # start: no native weather (the cache carries it) and no Open-Meteo irradiance.
+            data = data.drop(columns=["ghi", "dhi", "dni"])
+            ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
+            data["ghi"] = ghi_est["ghi"]
+            data["dni"] = ghi_est["dni"]
+            data["dhi"] = ghi_est["dhi"]
+            data.attrs.pop(PV_NATIVE_WEATHER_ATTR, None)
         return data
+
+    def _build_pv_native_weather(self, data_15min: pd.DataFrame) -> dict | None:
+        """Open-Meteo weather on every 15-minute instant from the first step start to the end of
+        the last step, for the step-average PV power of ``get_power_from_weather``.
+
+        The result travels with the weather frame in ``DataFrame.attrs``, so it is pickled with
+        the weather cache and a cached frame gives the same PV power as a freshly fetched one.
+        It is plain lists (Unix seconds and floats): ``attrs`` values are compared by pandas
+        when frames are concatenated, which a nested DataFrame would break, and an older
+        EMHASS can still unpickle the cache.
+
+        Returns None when the step is not a multiple of 15 minutes longer than 15, or when the
+        frame lacks a 15-minute row, or has a null in a row, anywhere on the grid except a
+        trailing run in the last step (the final endpoint), which leaves the PV power at the
+        step-start values.
+        """
+        native_step = pd.Timedelta(minutes=15)
+        step = pd.Timedelta(self.freq)
+        if step <= native_step or step % native_step != pd.Timedelta(0):
+            return None
+        n_nodes = len(self.forecast_dates) * (step // native_step) + 1
+        # Built on the UTC clock: a step that spans a DST change is still ``step`` of real time.
+        nodes = pd.date_range(
+            self.forecast_dates[0].tz_convert("UTC"), periods=n_nodes, freq=native_step
+        ).tz_convert(self.time_zone)
+        # Data may stop at the last step start (or anywhere inside the last step): the trailing
+        # nodes of that step hold the last weather. A node missing anywhere else would be
+        # invented by the interpolation below.
+        present = nodes.isin(data_15min.index)
+        last_step_start = len(nodes) - 1 - step // native_step
+        if not present[: last_step_start + 1].all() or (
+            not present.all() and present[np.argmin(present) :].any()
+        ):
+            return None
+        native = data_15min.reindex(nodes)
+        # A null cell in a row that exists is a missing sample like a missing row: only a
+        # trailing run in the last step is held, a null anywhere else would be invented.
+        tail = native.iloc[last_step_start + 1 :]
+        if (
+            native.iloc[: last_step_start + 1].isna().any().any()
+            or (tail.isna().cummax() & tail.notna()).any().any()
+        ):
+            return None
+        native = native.interpolate(method="linear", axis=0, limit=None, limit_direction="both")
+        native["precipitable_water"] = (native["precipitable_water"] / 10).clip(lower=0.1)
+        if native.isna().any().any():
+            return None
+        out = native.to_dict("list")
+        out["time"] = [int(t.timestamp()) for t in native.index]
+        return out
+
+    def _pv_native_nodes(self, df_weather: pd.DataFrame, step: pd.Timedelta) -> pd.DataFrame | None:
+        """The native 15-minute weather carried by ``df_weather`` on the instants that span its
+        steps (one more node than ``len(df_weather) * step / 15 min``), or None when it is
+        missing, the step is not a multiple of 15 minutes longer than 15, the frame index is
+        timezone-naive, the frame is not an evenly spaced step grid, or the native weather is
+        malformed, lacks a column of the frame or does not cover it."""
+        stored = df_weather.attrs.get(PV_NATIVE_WEATHER_ATTR)
+        native_step = pd.Timedelta(minutes=15)
+        if not stored or step <= native_step or step % native_step != pd.Timedelta(0):
+            return None
+        starts = pd.DatetimeIndex(df_weather.index)
+        if starts.tz is None:
+            return None  # no instant to place the native nodes on: use the step-start values
+        starts = starts.tz_convert("UTC")
+        if len(starts) == 0 or not (starts[1:] - starts[:-1] == step).all():
+            return None
+        nodes = pd.date_range(
+            starts[0], periods=len(starts) * (step // native_step) + 1, freq=native_step
+        )
+        # The attrs come out of a pickle that a caller or an older version may have written: a
+        # schema that cannot be read is no native weather. Only the reading is guarded.
+        try:
+            frame = pd.DataFrame(stored)
+            frame.index = pd.DatetimeIndex(pd.to_datetime(frame.pop("time"), unit="s", utc=True))
+            frame = frame.astype(float).reindex(nodes)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not set(df_weather.columns) <= set(frame.columns):
+            return None
+        return None if frame.isna().any().any() else frame
+
+    def _pv_power_from_weather_frame(self, df_weather: pd.DataFrame) -> pd.Series:
+        """pvlib AC power for ``df_weather``: the average over each optimisation step.
+
+        The optimiser reads each value of the PV forecast as the mean power of its step, but
+        the weather frame holds the irradiance at the step start. With a step longer than 15
+        minutes that is a point sample, up to the whole sunrise or sunset ramp away from the
+        step mean. When the native 15-minute weather is available, pvlib runs on every native
+        instant and the power is averaged over each step with the trapezoidal rule. Otherwise
+        (15-minute step, other weather source, a cache saved by an earlier version, or a frame
+        that does not match the native grid) the power is evaluated on ``df_weather`` itself.
+
+        The native weather is read from ``df_weather.attrs``, not from its columns. A caller
+        that edits the columns of a frame carrying it (for example ``ghi`` or ``temp_air``)
+        must clear the attribute with ``df_weather.attrs.clear()`` to have the edit used.
+        """
+        step = pd.Timedelta(self.freq)
+        native = self._pv_native_nodes(df_weather, step)
+        self._pv_forecast_is_step_mean = native is not None
+        if native is None:
+            if df_weather.attrs.get(PV_NATIVE_WEATHER_ATTR):
+                self.logger.debug(
+                    "The native Open-Meteo weather does not match the weather frame "
+                    "(step, spacing or coverage); using the PV power at the step start."
+                )
+            return self._calculate_pvlib_power(df_weather)
+        per_step = int(step // pd.Timedelta(minutes=15))
+        weights = np.ones(per_step + 1)
+        weights[[0, -1]] = 0.5
+
+        def step_mean(values) -> np.ndarray:
+            # A node below zero is the inverter's night consumption, not production: clip it
+            # before averaging, as the step-start value was clipped before.
+            windows = np.lib.stride_tricks.sliding_window_view(
+                np.clip(np.asarray(values, dtype=float), 0.0, None), per_step + 1
+            )[::per_step]
+            return windows @ weights / per_step
+
+        node_power = self._calculate_pvlib_power(native)
+        p_pv_forecast = pd.Series(step_mean(node_power), index=df_weather.index)
+        if self.pv_plant_raw is not None:
+            self.pv_plant_raw = self._pv_plant_frame(
+                [
+                    pd.Series(step_mean(self.pv_plant_raw[col]), index=df_weather.index)
+                    for col in self.pv_plant_raw.columns
+                ]
+            )
+        return p_pv_forecast
 
     def _solcast_rate_limit_ok(self, required_calls: int = 1, max_calls: int = 8) -> bool:
         """Atomically reserve `required_calls` of Solcast provider-call budget.
@@ -2282,6 +2426,7 @@ class Forecast:
         # The per-plant carrier belongs to this call only; it is filled below when the run
         # has two or more plant series.
         self.pv_plant_raw = None
+        self._pv_forecast_is_step_mean = False  # set again if the native weather is used
         # If using csv method we consider that yhat is the PV power in W
         if (
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
@@ -2305,7 +2450,7 @@ class Forecast:
             self.pv_plant_raw = self._pv_plant_columns_from_weather(df_weather)
         else:
             # We will transform the weather data into electrical power
-            p_pv_forecast = self._calculate_pvlib_power(df_weather)
+            p_pv_forecast = self._pv_power_from_weather_frame(df_weather)
         if set_mix_forecast:
             ignore_pv_feedback = self.params["passed_data"].get(
                 "ignore_pv_feedback_during_curtailment", False
@@ -2742,17 +2887,29 @@ class Forecast:
         # Predict the adjusted forecast
         forecast_data["adjusted_forecast"] = self.model_adjust_pv.predict(forecast_data)
 
+        # The model, as in the fit, sees the solar angles at the step start. The weighting below
+        # uses the highest elevation of the step when the forecast is the mean over each step: a
+        # step that starts before the sunrise has a positive mean. Otherwise it is the step start.
+        weighting_elevation = forecast_data["solar_elevation"]
+        if self._pv_forecast_is_step_mean:
+            step_end = get_solarposition(
+                forecast_data.index + pd.Timedelta(self.freq), self.lat, self.lon
+            )["elevation"]
+            weighting_elevation = np.maximum(weighting_elevation.to_numpy(), step_end.to_numpy())
+        forecast_data["weighting_elevation"] = weighting_elevation
+
         # Apply solar elevation weighting only for specific cases
         def apply_weighting(row):
-            if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
+            if row["weighting_elevation"] <= 0:  # Nighttime or negative solar elevation
                 return 0
             elif (
-                row["solar_elevation"] < self.optim_conf["adjusted_pv_solar_elevation_threshold"]
+                row["weighting_elevation"]
+                < self.optim_conf["adjusted_pv_solar_elevation_threshold"]
             ):  # Early morning or late evening
                 return max(
                     row["adjusted_forecast"]
                     * (
-                        row["solar_elevation"]
+                        row["weighting_elevation"]
                         / self.optim_conf["adjusted_pv_solar_elevation_threshold"]
                     ),
                     0,
