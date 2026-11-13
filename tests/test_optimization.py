@@ -12255,7 +12255,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Base bin2={bin2_base}, constrained bin2={bin2_min_off}.",
             )
 
-
     def test_stage2d_min_on_is_per_load_not_global(self):
         """A minimum ON duration on load 1 must not constrain load 0.
 
@@ -12302,7 +12301,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             binary = res[f"P_def_bin2_{k}"].to_numpy()
             np.testing.assert_allclose(power, nominal * binary, atol=1e-3)
             self.assertAlmostEqual(
-                power.sum() * 0.5, nominal * 2.0, delta=1e-3,
+                power.sum() * 0.5,
+                nominal * 2.0,
+                delta=1e-3,
                 msg=f"Mandatory operating energy was not met for load {k}",
             )
 
@@ -12340,16 +12341,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt.optim_status, "Optimal")
         np.testing.assert_allclose(
             unconstrained["P_def_bin2_0"].to_numpy()[:3],
-            np.zeros(3), atol=1e-4,
+            np.zeros(3),
+            atol=1e-4,
             err_msg="Unforced counterfactual did not avoid costly initial slots",
         )
         np.testing.assert_allclose(
             constrained["P_def_bin2_0"].to_numpy()[:3],
-            np.ones(3), atol=1e-4,
+            np.ones(3),
+            atol=1e-4,
             err_msg="Remaining minimum ON-time was not honoured for all three steps",
         )
         self.assertAlmostEqual(
-            constrained["P_deferrable0"].sum() * 0.5, 9000.0, delta=1e-3,
+            constrained["P_deferrable0"].sum() * 0.5,
+            9000.0,
+            delta=1e-3,
         )
 
     def test_stage2d_min_off_remainder_refreshes_between_solves(self):
@@ -12411,11 +12416,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 expected[expected_start : expected_start + 2] = 1.0
                 np.testing.assert_allclose(
                     res["P_def_bin2_0"].to_numpy(),
-                    expected, atol=1e-4,
+                    expected,
+                    atol=1e-4,
                     err_msg=f"Elapsed OFF={elapsed}: stale or incorrect carryover",
                 )
                 self.assertAlmostEqual(
-                    res["P_deferrable0"].sum() * 0.5, 3000.0, delta=1e-3,
+                    res["P_deferrable0"].sum() * 0.5,
+                    3000.0,
+                    delta=1e-3,
                 )
 
     def test_minimum_off_time_remainder_red2(self):
