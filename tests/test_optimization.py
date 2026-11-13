@@ -12284,6 +12284,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "def_load_config": [],
             "deferrable_load_groups": [],
             "set_use_battery": False,
+            "lp_solver_mip_rel_gap": 0.0,
         }
         opt, res = self._run_min_on_optim(overrides, df, n)
         self.assertEqual(opt.optim_status, "Optimal")
@@ -12337,6 +12338,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "def_load_config": [],
             "deferrable_load_groups": [],
             "set_use_battery": False,
+            "lp_solver_mip_rel_gap": 0.0,
         }
         opt_unforced, unforced = self._run_min_on_optim(overrides, df, n)
         with_elapsed = dict(overrides, def_current_on_timesteps=[2, 0])
@@ -12395,6 +12397,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "def_load_config": [],
                 "deferrable_load_groups": [],
                 "set_use_battery": False,
+            "lp_solver_mip_rel_gap": 0.0,
             }
         )
         opt = Optimization(
