@@ -4,11 +4,13 @@ import ast
 import asyncio
 import copy
 import csv
+import html
 import itertools
 import logging
 import math
 import os
 import pathlib
+import re
 import shutil
 import stat
 import time
@@ -2805,6 +2807,20 @@ async def treat_runtimeparams(
                 # association[2] = parameter (config.json/config_defaults.json)
                 # association[3] = parameter list name if exists (not used, from legacy options.json)
                 for association in associations:
+                    # Connection settings and credentials are configuration-only
+                    if (
+                        association[2] in RUNTIME_DENIED_KEYS
+                        or association[1] in RUNTIME_DENIED_KEYS
+                    ):
+                        if (
+                            runtimeparams.get(association[2], None) is not None
+                            or runtimeparams.get(association[1], None) is not None
+                        ):
+                            logger.warning(
+                                "Runtime parameter %s ignored: it can only be set in the configuration",
+                                association[2],
+                            )
+                        continue
                     # Check parameter name exists in runtime
                     if runtimeparams.get(association[2], None) is not None:
                         params[association[0]][association[2]] = runtimeparams[association[2]]
@@ -2977,7 +2993,7 @@ async def treat_runtimeparams(
         # regressor-model-fit
         if set_type == "regressor-model-fit":
             if "csv_file" in runtimeparams:
-                csv_file = runtimeparams["csv_file"]
+                csv_file = validate_runtime_file_name("csv_file", runtimeparams["csv_file"])
                 params["passed_data"]["csv_file"] = csv_file
             if "features" in runtimeparams:
                 features = runtimeparams["features"]
@@ -3002,7 +3018,7 @@ async def treat_runtimeparams(
                 new_values = runtimeparams["new_values"]
                 params["passed_data"]["new_values"] = new_values
             if "csv_file" in runtimeparams:
-                csv_file = runtimeparams["csv_file"]
+                csv_file = validate_runtime_file_name("csv_file", runtimeparams["csv_file"])
                 params["passed_data"]["csv_file"] = csv_file
             if "features" in runtimeparams:
                 features = runtimeparams["features"]
@@ -3028,6 +3044,10 @@ async def treat_runtimeparams(
                 )
                 if k in runtimeparams
             }
+            if "csv_filename" in export_keys:
+                validate_runtime_file_name("csv_filename", export_keys["csv_filename"], ".csv")
+            if "timestamp_col_name" in export_keys:
+                validate_timestamp_col_name(export_keys["timestamp_col_name"])
             params["passed_data"].update(export_keys)
 
         # MPC control case
@@ -3612,6 +3632,10 @@ async def treat_runtimeparams(
             ("mlforecaster_weather_features", [], None),
         ]
 
+        # model_type becomes part of the model's file name
+        if runtimeparams.get("model_type") is not None:
+            validate_runtime_file_name("model_type", runtimeparams["model_type"])
+
         # Apply Configuration
         for name, default, caster in ml_param_defs:
             params["passed_data"][name] = _get_ml_param(
@@ -3915,6 +3939,9 @@ async def treat_runtimeparams(
             params["passed_data"]["custom_heating_demand_id"] = runtimeparams[
                 "custom_heating_demand_id"
             ]
+
+        # Entity ids end up in a Home Assistant URL path and in a saved file name
+        validate_runtime_entity_ids(runtimeparams)
 
     # split config categories from params
     retrieve_hass_conf = params["retrieve_hass_conf"]
@@ -4488,10 +4515,10 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
     injection_dict["subsubtitle0"] = (
         "<h4>Plotting train/test forecast model results for "
-        + mlf.model_type
+        + html.escape(str(mlf.model_type))
         + "<br>"
         + "Forecasting variable "
-        + mlf.var_model
+        + html.escape(str(mlf.var_model))
         + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
@@ -4552,10 +4579,10 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict["title"] = "<h2>Custom machine learning forecast model tune</h2>"
     injection_dict["subsubtitle0"] = (
         "<h4>Performed a tuning routine using bayesian optimization for "
-        + mlf.model_type
+        + html.escape(str(mlf.model_type))
         + "<br>"
         + "Forecasting variable "
-        + mlf.var_model
+        + html.escape(str(mlf.var_model))
         + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
@@ -5975,6 +6002,130 @@ class InverterConfigError(ValueError):
     def __init__(self, *args, problems: Sequence[InverterConfigError] | None = None):
         super().__init__(*args)
         self.problems: list[InverterConfigError] = list(problems) if problems else [self]
+
+
+class RuntimeParamError(ValueError):
+    """A runtime parameter that names a file or column has an unusable value."""
+
+
+# Connection settings that only the configuration may set. A runtime request
+# must not redirect the data source or carry its credentials elsewhere.
+# use_influxdb is not here: the web UI's export passes it, and it only picks the
+# configured InfluxDB server, which a request cannot change.
+RUNTIME_DENIED_KEYS: frozenset[str] = frozenset(
+    {
+        "influxdb_host",
+        "influxdb_port",
+        "influxdb_database",
+        "influxdb_measurement",
+        "influxdb_retention_policy",
+        "influxdb_use_ssl",
+        "influxdb_verify_ssl",
+        "influxdb_username",
+        "influxdb_password",
+        "use_victoriametrics",
+        "victoriametrics_host",
+        "victoriametrics_port",
+        "victoriametrics_database",
+        "victoriametrics_metric_regex",
+        "victoriametrics_entity_label",
+        "victoriametrics_use_ssl",
+        "victoriametrics_verify_ssl",
+        "victoriametrics_username",
+        "victoriametrics_password",
+        "use_websocket",
+        # Not read back from a runtime request today, but listed so that it stays that way
+        "hass_url",
+        "long_lived_token",
+    }
+)
+
+_RUNTIME_FILE_NAME_MAX = 128
+_TIMESTAMP_COL_NAME_RE = re.compile(r"[A-Za-z0-9_. -]{1,64}")
+# A Home Assistant entity id: domain.object_id. Upper case is allowed because
+# existing setups use ids like sensor.P_PV.
+_ENTITY_ID_RE = re.compile(r"[A-Za-z0-9_]{1,64}\.[A-Za-z0-9_]{1,190}")
+_PUBLISH_PREFIX_RE = re.compile(r"[A-Za-z0-9_]{0,64}")
+# Runtime parameters that hold one entity id
+_RUNTIME_ENTITY_ID_KEYS = ("model_predict_entity_id", "mlr_predict_entity_id")
+
+
+def is_valid_entity_id(value) -> bool:
+    """True when ``value`` is a plain ``domain.object_id`` entity id.
+
+    Entity ids become part of a Home Assistant URL path and of a saved file
+    name, so anything else (a slash, ``..``, a query) is refused.
+    """
+    return isinstance(value, str) and _ENTITY_ID_RE.fullmatch(value) is not None
+
+
+def validate_runtime_entity_ids(runtimeparams: dict) -> None:
+    """Check every entity id and the publish prefix a runtime request sets.
+
+    Covers ``model_predict_entity_id``, ``mlr_predict_entity_id``,
+    ``publish_prefix`` and the ``entity_id`` of every ``custom_*_id`` object
+    (or list of objects, for the per-load ones).
+
+    :raises RuntimeParamError: Naming the parameter whose value is not usable.
+    """
+    for key in _RUNTIME_ENTITY_ID_KEYS:
+        if key in runtimeparams and not is_valid_entity_id(runtimeparams[key]):
+            raise RuntimeParamError(f"{key} must be an entity id like sensor.my_name")
+    if "publish_prefix" in runtimeparams:
+        prefix = runtimeparams["publish_prefix"]
+        if not isinstance(prefix, str) or _PUBLISH_PREFIX_RE.fullmatch(prefix) is None:
+            raise RuntimeParamError(
+                "publish_prefix must be at most 64 letters, digits or underscores"
+            )
+    for key, value in runtimeparams.items():
+        if not (key.startswith("custom_") and key.endswith("_id")):
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, dict) and "entity_id" in item:
+                if not is_valid_entity_id(item["entity_id"]):
+                    raise RuntimeParamError(
+                        f"{key} entity_id must be an entity id like sensor.my_name"
+                    )
+
+
+def validate_runtime_file_name(name: str, value, suffix: str | None = None) -> str:
+    """Check a caller-supplied plain file name and return it.
+
+    It must be a non-empty string of at most 128 characters, with no path
+    separator or control character, not starting with a dot and without ``..``.
+    ``suffix`` (for example ``".csv"``) is matched case-insensitively.
+
+    :param name: The runtime parameter name, used in the error message.
+    :param value: The value the caller sent.
+    :param suffix: Required file name ending, if any.
+    :raises RuntimeParamError: When the value is not a plain file name.
+    """
+    if not isinstance(value, str) or not value:
+        raise RuntimeParamError(f"{name} must be a non-empty string")
+    if len(value) > _RUNTIME_FILE_NAME_MAX:
+        raise RuntimeParamError(f"{name} is longer than {_RUNTIME_FILE_NAME_MAX} characters")
+    if "/" in value or "\\" in value:
+        raise RuntimeParamError(f"{name} must be a plain file name, without a path")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise RuntimeParamError(f"{name} must not contain control characters")
+    if value.startswith(".") or ".." in value:
+        raise RuntimeParamError(f"{name} must not start with a dot or contain '..'")
+    if suffix is not None and not value.lower().endswith(suffix.lower()):
+        raise RuntimeParamError(f"{name} must end with {suffix}")
+    return value
+
+
+def validate_timestamp_col_name(value) -> str:
+    """Check the ``timestamp_col_name`` runtime parameter and return it.
+
+    :raises RuntimeParamError: When it is not 1 to 64 letters, digits, ``_``,
+        ``.``, ``-`` or spaces.
+    """
+    if not isinstance(value, str) or _TIMESTAMP_COL_NAME_RE.fullmatch(value) is None:
+        raise RuntimeParamError(
+            "timestamp_col_name must be 1 to 64 letters, digits, '_', '.', '-' or spaces"
+        )
+    return value
 
 
 def reject_configured_soc_fractions(

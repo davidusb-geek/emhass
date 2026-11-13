@@ -53,6 +53,7 @@ from emhass.utils import (
     HEAT_TOPOLOGY_KEYS,
     BatteryConfigError,
     InverterConfigError,
+    RuntimeParamError,
     SocFractionError,
     battery_count_faults,
     build_config,
@@ -65,7 +66,6 @@ from emhass.utils import (
     get_injection_dict_forecast_calibration,
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
-    get_keys_to_mask,
     inverter_config_faults,
     inverter_power_curve_faults,
     param_to_config,
@@ -129,6 +129,37 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
 
 
 app.logger.addHandler(_DryRunLog())
+
+
+@app.before_request
+async def _refuse_cross_site_writes():
+    """Refuse a state-changing request that a browser marks as cross-site.
+
+    Clients that send no Sec-Fetch-Site header (curl, Home Assistant, scripts)
+    are not affected.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    if request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site":
+        return await make_response("EMHASS >> ERROR: Cross-site requests are refused.\n", 403)
+    return None
+
+
+async def _non_json_body_response():
+    """A 415 response when the request has a body that is not declared as JSON, else None.
+
+    An empty body is accepted, as it always was.
+    """
+    try:
+        body = await request.get_data()
+    except Exception:  # noqa: BLE001 - e.g. a body over the size limit; the caller's own handling reports it
+        return None
+    if body.strip() and not request.is_json:
+        return await make_response(
+            "EMHASS >> ERROR: The request body must be sent with Content-Type: application/json.\n",
+            415,
+        )
+    return None
 
 
 def _dry_run_slot() -> Path:
@@ -341,61 +372,12 @@ async def index():
     return await make_response(template.render(injection_dict=injection_dict))
 
 
-@app.route("/configuration", methods=["GET", "POST"])
+@app.route("/configuration", methods=["GET"])
 async def configuration():
     """
     Configuration page actions:
     Render and serve configuration page html
     """
-    # Define the list of secret parameters managed by the UI
-    secret_params = get_keys_to_mask()
-
-    if request.method == "POST":
-        app.logger.info("Saving configuration/secrets...")
-        form_data = await request.form
-
-        # Load existing secrets
-        secrets = {}
-        # Ensure we have the path from config, fallback to default if missing
-        secrets_path = emhass_conf.get("secrets_path", Path("/app/secrets_emhass.yaml"))
-
-        # Try to load existing secrets to preserve others (Async)
-        if secrets_path.exists():
-            try:
-                async with aiofiles.open(secrets_path) as file:
-                    content = await file.read()
-                    loaded = yaml.safe_load(content)
-                    if loaded:
-                        secrets = loaded
-            except Exception as e:
-                app.logger.error(f"Error reading secrets file: {e}")
-
-        # Update secrets with form data
-        updated = False
-        for key in secret_params:
-            if key in form_data:
-                value = form_data[key]
-                if value != "***":
-                    secrets[key] = value
-                    updated = True
-
-        # Save to file if changes were made (Async)
-        if updated:
-            try:
-                async with aiofiles.open(secrets_path, "w") as file:
-                    # dump returns string if stream is None
-                    content = yaml.dump(secrets, default_flow_style=False)
-                    await file.write(content)
-
-                app.logger.info("Secrets saved successfully.")
-
-                # Update the global params_secrets
-                global params_secrets
-                params_secrets.update(secrets)
-
-            except Exception as e:
-                app.logger.error(f"Error saving secrets file: {e}")
-
     app.logger.info("serving configuration.html...")
 
     # get params
@@ -546,17 +528,21 @@ async def parameter_set():
             "Unable to obtain default config. only parameters passed from request will be saved to config.json"
         )
 
-    # Retrieve sent config json. get_json does not turn two failures into a 400:
-    # nesting past Python's recursion limit (RecursionError in the json module) and a
-    # body that is not UTF-8 (UnicodeDecodeError, raised before it parses).
+    # Retrieve sent config json. A body not declared as JSON is refused.
+    not_json = await _non_json_body_response()
+    if not_json is not None:
+        return not_json
+    # get_json does not turn two failures into a 400: nesting past Python's recursion
+    # limit (RecursionError in the json module) and a body that is not UTF-8
+    # (UnicodeDecodeError, raised before it parses).
     try:
-        request_data = await request.get_json(force=True)
+        request_data = await request.get_json()
     except (RecursionError, UnicodeDecodeError) as e:
         app.logger.warning("Rejected config save: the body cannot be read: %s", type(e).__name__)
         return await make_response([f"config is invalid: {ORJSON_LIMITS}"], 400)
 
-    # check if data is empty
-    if len(request_data) == 0:
+    # check if data is empty (an empty body without a JSON content type reads as None)
+    if not request_data:
         return await make_response(["failed to retrieve config json"], 400)
 
     # The body was parsed by the standard json module, but config.json is written with
@@ -694,7 +680,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
 
     # Load runtime params
     try:
-        runtimeparams = await request.get_json(force=True)
+        runtimeparams = await request.get_json()
         if runtimeparams:
             logger.info("Passed runtime parameters: " + str(runtimeparams))
         else:
@@ -770,7 +756,12 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except (SocFractionError, InverterConfigError, BatteryConfigError) as exc:
+        except (
+            SocFractionError,
+            InverterConfigError,
+            BatteryConfigError,
+            RuntimeParamError,
+        ) as exc:
             # The message names only this request's own value, unlike the shared log's tail.
             return f"EMHASS >> ERROR: {exc}\n", 400
         if not success:
@@ -784,6 +775,8 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
+        except RuntimeParamError as exc:
+            return f"EMHASS >> ERROR: {exc}\n", 400
         except (SocFractionError, InverterConfigError, BatteryConfigError):
             return await grab_log(action_str), 400
         if success:
@@ -1091,15 +1084,19 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
     if params is None:
         _explain("The configuration could not be read. Nothing was run")
         return not_run, 400
-    input_data_dict = await set_input_data_dict(
-        emhass_conf,
-        costfun,
-        params,
-        runtime_json,
-        action_name,
-        app.logger,
-        dry_run=True,
-    )
+    try:
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params,
+            runtime_json,
+            action_name,
+            app.logger,
+            dry_run=True,
+        )
+    except RuntimeParamError as exc:
+        app.logger.error(f"{exc}. Nothing was run")
+        return not_run, 400
     if not input_data_dict:
         _explain("The inputs could not be built; see the warnings. Nothing was solved")
         return not_run, 400
@@ -1216,6 +1213,11 @@ async def _action_call_unlocked(action_name: str):
     global continual_publish_thread
     global injection_dict
 
+    # A body that is not declared as JSON is refused; an empty body is fine
+    not_json = await _non_json_body_response()
+    if not_json is not None:
+        return not_json
+
     # Load Parameters
     params, costfun, runtimeparams = await _load_params_and_runtime(
         request, emhass_conf, app.logger
@@ -1251,9 +1253,14 @@ async def _action_call_unlocked(action_name: str):
     # Set Input Data Dict (Common for all other actions)
     action_str = " >> Setting input data dict"
     app.logger.info(action_str)
-    input_data_dict = await set_input_data_dict(
-        emhass_conf, costfun, params, runtimeparams, action_name, app.logger
-    )
+    try:
+        input_data_dict = await set_input_data_dict(
+            emhass_conf, costfun, params, runtimeparams, action_name, app.logger
+        )
+    except RuntimeParamError as exc:
+        # The message names only this request's own parameter, unlike the shared log's tail.
+        app.logger.warning("Rejected runtime parameter: %s", exc)
+        return await make_response(f"EMHASS >> ERROR: {exc}\n", 400)
 
     if not input_data_dict:
         return await make_response(await grab_log(action_str), 400)
