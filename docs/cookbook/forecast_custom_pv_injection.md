@@ -78,7 +78,7 @@ Set the four values at the top. Notes on each part:
 - EMHASS holds each point until the next one and backfills before the first, so it cannot tell a gap from a flat curve. The snippet therefore sends only an unbroken run of 30-minute rows that starts with the row containing "now". Rows are sorted and duplicates dropped. The run stops at the first missing slot or at the first `pv_estimate` that is not a number of at least 0 (text, null, NaN, infinity, a boolean or a negative value). A source whose first row lies in the future, for example a Solcast today sensor that is unavailable while tomorrow has data, covers 0 steps.
 - `prediction_horizon` is the number of steps that run covers, capped at `horizon_h`. EMHASS refuses an MPC horizon under 5 steps, so when no source covers 5 steps the PV keys are left out and EMHASS uses its configured method (see Caveats).
 - P10 is capped at P50 and falls back to P50 when it is missing or invalid, so both mappings always have the same timestamps.
-- `soc_init` is a fraction from 0 to 1, and EMHASS raises an error above 1. The snippet clamps the sensor to 0 to 100 % first. If the SOC state is not a finite number (`unavailable`, `unknown`, `nan`), the snippet lets `float` fail on it (no default), so Home Assistant sends nothing and the cycle is skipped instead of planning from a made-up SOC. No battery: remove the `soc_init` entry.
+- `soc_init` is a fraction from 0 to 1, and EMHASS raises an error above 1. The snippet clamps the sensor to 0 to 100 % first. If the SOC state is not a finite number (`unavailable`, `unknown`, `nan`), the snippet lets `float` fail on it (no default), so Home Assistant sends nothing and the cycle is skipped instead of planning from a made-up SOC. No battery: set `soc_entity` to `none` and the snippet leaves `soc_init` out.
 
 ```yaml
 rest_command:
@@ -89,7 +89,7 @@ rest_command:
     payload: >-
       {%- set step_min = 30 -%}
       {%- set horizon_h = 24 -%}
-      {%- set soc_entity = 'sensor.battery_soc' -%}
+      {%- set soc_entity = 'sensor.battery_soc' -%}{#- none if you have no battery -#}
       {#- Each inner list is one source; its sensors are merged. The first source that covers 5 steps wins. -#}
       {%- set sources = [['sensor.solcast_pv_forecast_forecast_today', 'sensor.solcast_pv_forecast_forecast_tomorrow']] -%}
       {%- set g = namespace(groups=[]) -%}
@@ -102,7 +102,7 @@ rest_command:
         {%- set g.groups = g.groups + [m.rows] -%}
       {%- endfor -%}
       {%- set groups = g.groups -%}
-      {%- set soc_state = states(soc_entity) -%}
+      {%- set soc_state = states(soc_entity) if soc_entity else none -%}
       {%- set slot = 1800 -%}
       {%- set now_ts = now().timestamp() -%}
       {%- set max_steps = (horizon_h * 60 / step_min) | int -%}
@@ -141,8 +141,11 @@ rest_command:
           {%- endif -%}
         {%- endif -%}
       {%- endfor -%}
-      {%- set soc = [[(soc_state if is_number(soc_state) else 'no SOC') | float / 100, 0] | max, 1] | min -%}
-      {%- set p = {'soc_init': soc | round(3), 'prediction_horizon': max_steps} -%}
+      {%- set p = {'prediction_horizon': max_steps} -%}
+      {%- if soc_state is not none -%}
+        {%- set soc = [[(soc_state if is_number(soc_state) else 'no SOC') | float / 100, 0] | max, 1] | min -%}
+        {%- set p = dict(p, soc_init=soc | round(3)) -%}
+      {%- endif -%}
       {%- if best.steps >= 5 -%}
         {%- set p = dict(p, prediction_horizon=best.steps,
                          pv_power_forecast=dict(zip(best.k, best.p50)),
