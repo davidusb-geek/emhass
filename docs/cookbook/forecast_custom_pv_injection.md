@@ -66,17 +66,19 @@ Expected: you know which form you send. This recipe sends a timestamped mapping,
 
 ## Step 3: Build the payload in a REST command
 
-<!-- transport: Home Assistant 2026.11 (tested with RoofCast rows and the Step 4 source logic written inline, POSTed to the EMHASS 0.18.8 web server at a 15-min step; the Solcast sources printed here were rendered offline only with homeassistant 2026.1.2, untested in a running Home Assistant, contribution welcome) -->
+<!-- transport: Home Assistant 2026.11 (this template rendered on a running instance: real Solcast sensors with datetime rows, a real RoofCast sensor with ISO rows, and 71 synthetic edge-case checks, among them slot boundaries, both DST changes and non-finite values; the payloads run with the EMHASS 0.18.8 CLI at 15 and 30-min steps. An earlier version without the coverage check was POSTed to the EMHASS 0.18.8 web server at a 15-min step) -->
 <!-- source: src/emhass/utils.py:3100 and src/emhass/utils.py:5994 (soc_init above 1 is rejected) -->
 <!-- source: src/emhass/optimization.py:10013 (MPC horizon below 5 steps is refused) -->
+<!-- source: src/emhass/utils.py:2168 (points are held forward and the first one backfilled, so a gap or a late start would be filled silently) -->
 
 Set the four values at the top. Notes on each part:
 
-- `step_min` must equal `optimization_time_step`. It only sets `prediction_horizon`. If it is smaller than the real step, the horizon runs past the forecast and EMHASS holds the last value.
-- `soc_init` is a fraction from 0 to 1, not a percent, and EMHASS raises an error for a value above 1. The snippet caps the sensor at 100 before dividing by 100. If the SOC sensor is `unavailable`, `float` without a default makes the template fail, so Home Assistant sends nothing. The cycle is skipped instead of planning from a made-up SOC. No battery: remove the `soc_init` entry.
-- Rows that started more than 30 minutes ago are dropped. The row that contains "now" is kept so it anchors the first step.
-- A missing `pv_estimate10` falls back to the P50 value of that row, so both mappings keep the same timestamps. A row whose `pv_estimate` is missing or not a number makes the template fail, so nothing is sent. The one exception is a boolean: `true` passes as 1000 W.
-- `covered` is the number of steps the forecast covers. `prediction_horizon` is the smaller of `covered` and `max_steps` (`horizon_h` counted in steps). EMHASS refuses an MPC horizon under 5 steps, so with fewer steps the PV keys are left out (see Caveats).
+- `step_min` must equal `optimization_time_step`. It only sets `prediction_horizon`.
+- `sources` is a list of sources, tried in order. Each source is a list of sensors whose rows are merged (the Solcast integration splits today and tomorrow over two sensors). The first source that covers at least 5 steps is sent.
+- EMHASS holds each point until the next one and backfills before the first, so it cannot tell a gap from a flat curve. The snippet therefore sends only an unbroken run of 30-minute rows that starts with the row containing "now". Rows are sorted and duplicates dropped. The run stops at the first missing slot or at the first `pv_estimate` that is not a number of at least 0 (text, null, NaN, infinity, a boolean or a negative value). A source whose first row lies in the future, for example a Solcast today sensor that is unavailable while tomorrow has data, covers 0 steps.
+- `prediction_horizon` is the number of steps that run covers, capped at `horizon_h`. EMHASS refuses an MPC horizon under 5 steps, so when no source covers 5 steps the PV keys are left out and EMHASS uses its configured method (see Caveats).
+- P10 is capped at P50 and falls back to P50 when it is missing or invalid, so both mappings always have the same timestamps.
+- `soc_init` is a fraction from 0 to 1, and EMHASS raises an error above 1. The snippet clamps the sensor to 0 to 100 % first. If the SOC state is not a finite number (`unavailable`, `unknown`, `nan`), the snippet lets `float` fail on it (no default), so Home Assistant sends nothing and the cycle is skipped instead of planning from a made-up SOC. No battery: remove the `soc_init` entry.
 
 ```yaml
 rest_command:
@@ -88,32 +90,68 @@ rest_command:
       {%- set step_min = 30 -%}
       {%- set horizon_h = 24 -%}
       {%- set soc_entity = 'sensor.battery_soc' -%}
-      {%- set sources = ['sensor.solcast_pv_forecast_forecast_today', 'sensor.solcast_pv_forecast_forecast_tomorrow'] -%}
-      {%- set ns = namespace(rows=[]) -%}
-      {%- for e in sources -%}
-        {%- set ns.rows = ns.rows + (state_attr(e, 'detailedForecast') or []) -%}
+      {#- Each inner list is one source; its sensors are merged. The first source that covers 5 steps wins. -#}
+      {%- set sources = [['sensor.solcast_pv_forecast_forecast_today', 'sensor.solcast_pv_forecast_forecast_tomorrow']] -%}
+      {%- set g = namespace(groups=[]) -%}
+      {%- for src in sources -%}
+        {%- set m = namespace(rows=[]) -%}
+        {%- for e in src -%}
+          {%- set a = state_attr(e, 'detailedForecast') -%}
+          {%- set m.rows = m.rows + (a if a is list else []) -%}
+        {%- endfor -%}
+        {%- set g.groups = g.groups + [m.rows] -%}
       {%- endfor -%}
-      {%- set t0 = now().timestamp() - 1800 -%}
-      {%- set out = namespace(k=[], p50=[], p10=[], last=0) -%}
-      {%- for r in ns.rows if as_timestamp(r.period_start, 0) > t0 -%}
-        {%- set ts = as_timestamp(r.period_start) -%}
-        {%- set out.k = out.k + [ts | timestamp_utc] -%}
-        {%- set out.p50 = out.p50 + [(r.pv_estimate * 1000) | round(0)] -%}
-        {%- set out.p10 = out.p10 + [((r.pv_estimate10 if r.pv_estimate10 is number else r.pv_estimate) * 1000) | round(0)] -%}
-        {%- set out.last = [out.last, ts] | max -%}
-      {%- endfor -%}
+      {%- set groups = g.groups -%}
+      {%- set soc_state = states(soc_entity) -%}
+      {%- set slot = 1800 -%}
+      {%- set now_ts = now().timestamp() -%}
       {%- set max_steps = (horizon_h * 60 / step_min) | int -%}
-      {%- set p = {'soc_init': ([states(soc_entity) | float, 100] | min / 100) | round(3), 'prediction_horizon': max_steps} -%}
-      {%- set covered = ((out.last + 1800 - now().timestamp()) / (step_min * 60)) | int -%}
-      {%- if out.k | count > 0 and covered >= 5 -%}
-        {%- set p = dict(p, prediction_horizon=[covered, max_steps] | min,
-                         pv_power_forecast=dict(zip(out.k, out.p50)),
-                         pv_power_forecast_p10=dict(zip(out.k, out.p10))) -%}
+      {%- set best = namespace(k=[], p50=[], p10=[], steps=0) -%}
+      {%- for rows in groups -%}
+        {%- if best.steps < 5 -%}
+          {%- set c = namespace(items=[]) -%}
+          {%- for r in rows -%}
+            {%- set t = as_timestamp(r.period_start, none) if r is mapping else none -%}
+            {%- if t is number and t > now_ts - slot -%}
+              {%- set c.items = c.items + [{'t': t, 'p50': r.pv_estimate, 'p10': r.pv_estimate10}] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set w = namespace(k=[], p50=[], p10=[], next=none, ok=true) -%}
+          {%- for it in c.items | sort(attribute='t') -%}
+            {%- if w.ok and not (w.next is number and it.t < w.next) -%}
+              {%- set v = it.p50 -%}
+              {%- set good = v is number and v is not boolean and is_number(v) and v >= 0 -%}
+              {%- set w.ok = good and (it.t <= now_ts if w.next is none else it.t == w.next) -%}
+              {%- if w.ok -%}
+                {%- set q = it.p10 -%}
+                {%- set q = [q, v] | min if (q is number and q is not boolean and q == q and q >= 0) else v -%}
+                {%- set w.k = w.k + [it.t | timestamp_utc] -%}
+                {%- set w.p50 = w.p50 + [(v * 1000) | round(0)] -%}
+                {%- set w.p10 = w.p10 + [(q * 1000) | round(0)] -%}
+                {%- set w.next = it.t + slot -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set steps = [(((w.next - now_ts) / (step_min * 60)) | int) if w.next is number else 0, max_steps] | min -%}
+          {%- if steps >= 5 -%}
+            {%- set best.k = w.k -%}
+            {%- set best.p50 = w.p50 -%}
+            {%- set best.p10 = w.p10 -%}
+            {%- set best.steps = steps -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- set soc = [[(soc_state if is_number(soc_state) else 'no SOC') | float / 100, 0] | max, 1] | min -%}
+      {%- set p = {'soc_init': soc | round(3), 'prediction_horizon': max_steps} -%}
+      {%- if best.steps >= 5 -%}
+        {%- set p = dict(p, prediction_horizon=best.steps,
+                         pv_power_forecast=dict(zip(best.k, best.p50)),
+                         pv_power_forecast_p10=dict(zip(best.k, best.p10))) -%}
       {%- endif -%}
       {{ p | tojson }}
 ```
 
-For a single sensor whose `detailedForecast` spans several days (RoofCast does), set `sources = ['sensor.pv_forecast_today']`. The Solcast integration splits today and tomorrow over two sensors, so the example reads both. The two `1800` are the 30-minute row length.
+For a single sensor whose `detailedForecast` spans several days (RoofCast does), use `sources = [['sensor.pv_forecast_today']]`. `slot = 1800` is the 30-minute row length.
 
 Expected: rendered in Developer tools, Template, the payload looks like this (values shortened):
 
@@ -126,7 +164,7 @@ Expected: rendered in Developer tools, Template, the payload looks like this (va
 
 ## Step 4 (optional): Fall back to Solcast when your own source is stale
 
-<!-- transport: Home Assistant template (rendered offline with the homeassistant 2026.1.2 template engine and stub states, payload run with the EMHASS 0.18.8 CLI; untested in a running Home Assistant, contribution welcome) -->
+<!-- transport: Home Assistant 2026.11 (the source-selection lines rendered on a running instance with a real RoofCast sensor and real Solcast sensors, including a missing today sensor; the template sensor itself rendered offline only with stub states, contribution welcome) -->
 
 If your own forecast can go stale, choose the source with a template sensor and let the payload follow it. The freshness test below uses the `generated_at` and `models_ok` attributes that RoofCast publishes. Replace it with whatever freshness signal your source has.
 
@@ -146,12 +184,12 @@ template:
 Then replace the `sources` line of Step 3 with these three lines:
 
 ```jinja
-{%- set fallback = ['sensor.solcast_pv_forecast_forecast_today', 'sensor.solcast_pv_forecast_forecast_tomorrow'] -%}
+{%- set solcast = ['sensor.solcast_pv_forecast_forecast_today', 'sensor.solcast_pv_forecast_forecast_tomorrow'] -%}
 {%- set src = states('sensor.pv_forecast_source') -%}
-{%- set sources = fallback if src in fallback or src in ['unknown', 'unavailable'] else [src] -%}
+{%- set sources = [solcast] if src in solcast or src in ['unknown', 'unavailable'] else [[src], solcast] -%}
 ```
 
-Expected: when your sensor is older than two hours, the rendered payload carries the Solcast curve, read from both Solcast sensors.
+Expected: when your sensor is older than two hours, the rendered payload carries the Solcast curve, read from both Solcast sensors. When your sensor is fresh but has a gap near the start, the coverage check of Step 3 also falls through to Solcast.
 
 ## Step 5: Run it and read the EMHASS log
 
@@ -166,7 +204,7 @@ Expected: the EMHASS log shows `Aligned paired external PV P50/P10 forecast from
 <!-- source: src/emhass/utils.py:3492-3493 and src/emhass/utils.py:3539-3540 (omitted PV keys) -->
 <!-- source: src/emhass/utils.py:3501-3502 (supplying P10 selects the list method) -->
 
-- **PV keys omitted.** With no forecast rows, or fewer than 5 steps of them, the snippet leaves out both PV keys. EMHASS then uses the `weather_forecast_method` from your config for that call. This is different from keys that are sent but invalid: those fail the cycle and EMHASS does not fall back.
+- **PV keys omitted.** When no source covers 5 unbroken steps from now, the snippet leaves out both PV keys. EMHASS then uses the `weather_forecast_method` from your config for that call. This is different from keys that are sent but invalid: those fail the cycle and EMHASS does not fall back.
 
 <!-- source: src/emhass/forecast.py:1328 (_blend_external_pv_p10) -->
 <!-- source: src/emhass/forecast.py:1364-1365 (bias * P10 + (1 - bias) * P50) -->
@@ -184,7 +222,7 @@ Expected: the EMHASS log shows `Aligned paired external PV P50/P10 forecast from
 - **`soc_init` outside your min/max bounds** only logs a warning. EMHASS keeps the value you sent.
 - **Stale SOC.** A sensor that only updates on change can be hours old. Check `last_updated` if your battery reports rarely.
 - **Timestamps.** `timestamp_utc` renders ISO 8601 with a `+00:00` offset, as the contract asks.
-- **Row length.** The `1800` in the snippet assumes 30-minute rows. Rows of another length are untested.
+- **Row length.** `slot = 1800` assumes 30-minute rows. With rows of another length set `slot` to it; this is untested.
 - **Forecast.Solar and other sources.** Build a template sensor whose `detailedForecast` attribute has the same row shape. This path is untested.
 
 ## Credits
