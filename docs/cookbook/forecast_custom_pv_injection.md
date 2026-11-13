@@ -11,11 +11,10 @@ Send your own PV forecast to `naive-mpc-optim` on every MPC call, as a timestamp
 - A PV sensor with a `detailedForecast` attribute: a list of rows with `period_start`, `pv_estimate` in kW and, optionally, `pv_estimate10` in kW. The snippet assumes 30-minute rows, like Solcast.
 - A battery SOC sensor in percent, if you have a battery.
 - Transport tested against:
-  - Home Assistant 2026.11 and the EMHASS 0.18.8 web server at a 15-min step (tested with the RoofCast example package: payload rendered in Home Assistant from RoofCast rows, which carry ISO string timestamps, and POSTed). That package selects its source with the logic of Step 4, written inline in the `for` line. From the `t0` line on, its payload is identical to Step 3.
-  - Step 3 as printed, reading the two Solcast sensors with datetime `period_start` values: rendered offline only, with the template engine of the `homeassistant` 2026.1.2 package and stub states. Untested in a running Home Assistant, contribution welcome.
-  - 15 and 30-min steps and a bias of 0.5: run offline with the EMHASS 0.18.8 CLI.
-  - 60-min step: untested, contribution welcome.
-  - Step 4: source sensor and Solcast payload rendered offline the same way, payload run with the EMHASS 0.18.8 CLI. Untested in a running Home Assistant, contribution welcome.
+  - Home Assistant 2026.11 and the EMHASS 0.18.8 web server at a 15-min step (tested with an earlier version of the RoofCast example package, without the coverage check: payload rendered in Home Assistant from RoofCast rows, which carry ISO string timestamps, and POSTed). The current package selects its source with the logic of Step 4. From the `{%- set slot = 1800 -%}` line on, its payload is identical to Step 3.
+  - Step 3 as printed, reading the two Solcast sensors with datetime `period_start` values: rendered in Home Assistant 2026.11 with the real Solcast sensors, and the payloads run with the EMHASS 0.18.8 CLI at 15, 30 and 60-min steps. Not POSTed to a running EMHASS server, contribution welcome.
+  - 15, 30 and 60-min steps, and a bias of 0.5 at a 15-min step: run offline with the EMHASS 0.18.8 CLI.
+  - Step 4: the source-selection lines rendered in Home Assistant 2026.11 with real RoofCast and Solcast sensors. The template sensor itself was rendered offline only, with stub states, contribution welcome.
 
 The values you send must follow the [Forecast input contract](../passing_data.md#forecast-input-contract). This recipe does not repeat it.
 
@@ -30,7 +29,7 @@ The values you send must follow the [Forecast input contract](../passing_data.md
 The snippet needs to know your `optimization_time_step`, so note it. `weather_forecast_pv_quantile_bias` decides whether P10 does anything. Its default is 0.0, which means the plan uses P50 only.
 
 ```yaml
-optimization_time_step: 30              # 15 and 30 verified; set step_min in Step 3 to the same value
+optimization_time_step: 30              # 15, 30 and 60 verified; set step_min in Step 3 to the same value
 weather_forecast_pv_quantile_bias: 0.0  # 0 = P50 only; 0.3 = 0.3 * P10 + 0.7 * P50
 set_use_battery: true                   # only if you send soc_init
 ```
@@ -66,7 +65,7 @@ Expected: you know which form you send. This recipe sends a timestamped mapping,
 
 ## Step 3: Build the payload in a REST command
 
-<!-- transport: Home Assistant 2026.11 (this template rendered on a running instance: real Solcast sensors with datetime rows, a real RoofCast sensor with ISO rows, and 71 synthetic edge-case checks, among them slot boundaries, both DST changes and non-finite values; the payloads run with the EMHASS 0.18.8 CLI at 15 and 30-min steps. An earlier version without the coverage check was POSTed to the EMHASS 0.18.8 web server at a 15-min step) -->
+<!-- transport: Home Assistant 2026.11 (this template rendered on a running instance: real Solcast sensors with datetime rows, a real RoofCast sensor with ISO rows, and 75 synthetic edge-case checks, among them slot boundaries, both DST changes and non-finite values; the payloads run with the EMHASS 0.18.8 CLI at 15, 30 and 60-min steps. An earlier version without the coverage check was POSTed to the EMHASS 0.18.8 web server at a 15-min step) -->
 <!-- source: src/emhass/utils.py:3100 and src/emhass/utils.py:5994 (soc_init above 1 is rejected) -->
 <!-- source: src/emhass/optimization.py:10013 (MPC horizon below 5 steps is refused) -->
 <!-- source: src/emhass/utils.py:2168 (points are held forward and the first one backfilled, so a gap or a late start would be filled silently) -->
