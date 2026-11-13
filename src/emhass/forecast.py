@@ -683,10 +683,11 @@ class Forecast:
             data = set_df_index_freq(data)
             # Convert mm to cm and clip minimum to 0.1 cm
             data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
-            if not use_legacy_pvlib:
-                native = self._build_pv_native_weather(data_15min)
-                if native is not None:
-                    data.attrs[PV_NATIVE_WEATHER_ATTR] = native
+            # Built for a legacy request too: the cache it saves is shared with modern requests.
+            # The legacy request itself drops it below.
+            native = self._build_pv_native_weather(data_15min)
+            if native is not None:
+                data.attrs[PV_NATIVE_WEATHER_ATTR] = native
             if use_legacy_pvlib:
                 data = data.drop(columns=["ghi", "dhi", "dni"])
                 ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
@@ -706,7 +707,7 @@ class Forecast:
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
                 )
         if use_legacy_pvlib:
-            # A cache saved by a non-legacy run carries the native weather: a legacy request
+            # A saved cache carries the native weather (see above): a legacy request
             # keeps the step-start evaluation it always had.
             data.attrs.pop(PV_NATIVE_WEATHER_ATTR, None)
         return data
