@@ -45,8 +45,9 @@ Additional battery recipes welcome (charging-from-grid strategies, calendar-awar
 ### Forecast
 
 - [Long training history with VictoriaMetrics](forecast_victoriametrics_long_history.md): replace the archived InfluxDB 1.x add-on by VictoriaMetrics, migrate the existing history with `vmctl`, and train the ML load forecaster on months of data through `use_victoriametrics`.
+- [Custom PV forecast injection via runtime params](forecast_custom_pv_injection.md): send your own PV forecast (any Solcast-format sensor) to `naive-mpc-optim` as a timestamp to W mapping, with an optional P10 curve and `soc_init`, from a Home Assistant `rest_command`.
 
-Other topics that would fit: ML vs naive load forecaster selection, custom forecast injection via runtime params, dealing with forecast outages. Contributions welcome.
+Other topics that would fit: ML vs naive load forecaster selection, dealing with forecast outages. Contributions welcome.
 
 ### Tariff
 
