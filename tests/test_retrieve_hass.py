@@ -11,7 +11,7 @@ import re
 import tempfile
 import unittest
 import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import aiofiles
 import aiohttp
@@ -706,7 +706,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             database="fake-db",
             ssl=False,
             verify_ssl=False,
+            session=ANY,  # a session that does not follow redirects
         )
+        self.assertEqual(mock_influx_client_class.call_args.kwargs["session"].max_redirects, 0)
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()
 

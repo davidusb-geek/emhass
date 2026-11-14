@@ -110,6 +110,11 @@ class TestFileNameValidation(unittest.TestCase):
             "",
             ".",
             "x\x00.csv",
+            # Names Windows reads as "." or "..": refused everywhere
+            ". ",
+            "...",
+            ".. ",
+            "entities/.. ",
         ]
         if os.name == "nt":
             # On POSIX this is a legal file name inside the folder
@@ -137,6 +142,37 @@ class TestFileNameValidation(unittest.TestCase):
             self.assertTrue(path.is_symlink())
             with self.assertRaises(RuntimeParamError):
                 utils.data_file_path(data, "sub/x.csv")
+
+    def test_data_file_path_refuses_a_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "entities").mkdir()
+            with self.assertRaises(RuntimeParamError):
+                utils.data_file_path(tmp, "entities")
+            # Positive control: a file in that folder is fine
+            self.assertEqual(
+                utils.data_file_path(tmp, "entities/sensor.x.json"),
+                pathlib.Path(os.path.realpath(tmp)) / "entities" / "sensor.x.json",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows junctions")
+    def test_data_file_path_refuses_a_junction_out_of_the_data_folder(self):
+        # Junctions need no privilege, so this runs on any Windows machine
+        import _winapi
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            outside = pathlib.Path(tmp) / "outside"
+            data.mkdir()
+            outside.mkdir()
+            _winapi.CreateJunction(str(outside), str(data / "jout"))
+            for name in ("jout/x.csv", "jout"):
+                with self.subTest(name=name), self.assertRaises(RuntimeParamError):
+                    utils.data_file_path(data, name)
+            # Through the junction and back again stays inside
+            self.assertEqual(
+                utils.data_file_path(data, "jout/../x.csv"),
+                pathlib.Path(os.path.realpath(data)) / "x.csv",
+            )
 
     def test_db_host(self):
         for value in ("localhost", "192.168.1.10", "a0d7b954-victoriametrics", "[::1]", "my_db"):
@@ -894,7 +930,10 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
         )
         for status, body in (
             (500, b"SECRET-REPLY-BODY"),
+            (302, b"SECRET-REPLY-BODY"),
             (200, b'{"status": "error", "error": "SECRET-REPLY-BODY"}'),
+            (200, b'{"status": "SECRET-REPLY-STATUS"}'),
+            (200, b'{"status": {"SECRET": "nested"}}'),
         ):
             response = MagicMock()
             response.status = status
@@ -904,9 +943,63 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
             context.__aexit__ = AsyncMock(return_value=False)
             session = MagicMock()
             session.get = MagicMock(return_value=context)
-            with self.subTest(status=status), self.assertLogs(logger, level="ERROR") as cm:
-                self.assertIsNone(await rh._vm_query_range(session, "up", 0, 60, 60))
-            self.assertFalse(any("SECRET" in line for line in cm.output))
+            with self.subTest(body=body):
+                with self.assertLogs(logger, level="DEBUG") as cm:
+                    self.assertIsNone(await rh._vm_query_range(session, "up", 0, 60, 60))
+                self.assertFalse(any("SECRET" in line for line in cm.output))
+                # The configured server cannot redirect EMHASS elsewhere
+                self.assertIs(session.get.call_args.kwargs["allow_redirects"], False)
+
+    def test_influxdb_client_does_not_follow_redirects(self):
+        rh = self._rh({"use_influxdb": True, "influxdb_host": "db"})
+        with patch("influxdb.InfluxDBClient") as client_class:
+            self.assertIs(rh._init_influx_client(), client_class.return_value)
+        session = client_class.call_args.kwargs["session"]
+        self.assertEqual(session.max_redirects, 0)
+
+    def test_influxdb_errors_do_not_log_the_reply(self):
+        from influxdb.exceptions import InfluxDBClientError
+
+        rh = self._rh({"use_influxdb": True, "influxdb_host": "db"})
+        reply = '{"error":"SECRET-REPLY-BODY database not found: homeassistant"}'
+        # The connection check
+        with patch("influxdb.InfluxDBClient") as client_class:
+            client_class.return_value.ping.side_effect = InfluxDBClientError(reply, 200)
+            with self.assertLogs(logger, level="DEBUG") as cm:
+                self.assertIsNone(rh._init_influx_client())
+        self.assertFalse(any("SECRET" in line for line in cm.output))
+        # A known reason is still named, in fixed words
+        self.assertTrue(any("database not found" in line for line in cm.output))
+
+        # Measurement discovery and the query itself, at debug level too
+        def query(text):
+            if text == "SHOW MEASUREMENTS":
+                result = MagicMock()
+                result.get_points.return_value = [{"name": "W"}]
+                return result
+            raise InfluxDBClientError("SECRET-REPLY-BODY", 400)
+
+        client = MagicMock()
+        client.query.side_effect = query
+        rh._measurement_cache = {}
+        start = pd.Timestamp("2026-11-01", tz="UTC")
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            self.assertIsNone(
+                rh._fetch_sensor_data(client, "sensor.x", start, start + pd.Timedelta(days=1))
+            )
+        self.assertTrue(any("HTTP 400" in line for line in cm.output))
+        self.assertFalse(any("SECRET" in line for line in cm.output))
+
+    def test_upstream_error_prefers_status_and_names_known_reasons(self):
+        class AiohttpLike(Exception):
+            status = 503
+            code = 999  # deprecated alias on aiohttp errors
+
+        self.assertEqual(retrieve_hass._upstream_error(AiohttpLike("x")), "AiohttpLike (HTTP 503)")
+        self.assertEqual(
+            retrieve_hass._upstream_error(ValueError("Authorization failed: SECRET")),
+            "ValueError: authorization failed",
+        )
 
 
 if __name__ == "__main__":
