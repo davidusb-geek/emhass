@@ -896,7 +896,7 @@ class TestWebServerWiring(AuthTestBase):
         self.assertTrue(any("No API token is set" in line for line in logs.output))
 
     async def test_before_serving_keeps_the_token_loaded_at_import(self):
-        # A worker started by Gunicorn after max_requests must not take a new
+        # A worker that Gunicorn starts later must not take a new
         # reading of the files: a secrets file missing for a moment would switch
         # auth off there.
         await self.enable()
@@ -1066,8 +1066,8 @@ class TestWebServerWiring(AuthTestBase):
         self.assertNotIn(TOKEN, text)
 
 
-class TestWithPartOneHooks(AuthTestBase):
-    """The auth hook next to part 1's cross-site check and response headers."""
+class TestWithHardeningHooks(AuthTestBase):
+    """The auth hook next to the cross-site check and response headers."""
 
     async def asyncSetUp(self):
         await super().asyncSetUp()

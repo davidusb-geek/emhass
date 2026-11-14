@@ -90,7 +90,7 @@ def _api_token_sources() -> tuple[str, str]:
 
 
 # Loaded at import: under Gunicorn with preload_app this runs once in the master,
-# so every worker, including one restarted by max_requests, shares one snapshot.
+# so every worker, including one that starts later, shares one snapshot.
 api_auth.configure_now(*_api_token_sources(), app.logger)
 
 emhass_conf: dict[str, Path] = {}
