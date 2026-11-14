@@ -61,6 +61,7 @@ from emhass.utils import (
     build_params,
     build_secrets,
     compile_heat_topology,
+    config_value_faults,
     dry_run_request_problem,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
@@ -143,6 +144,20 @@ async def _refuse_cross_site_writes():
     if request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site":
         return await make_response("EMHASS >> ERROR: Cross-site requests are refused.\n", 403)
     return None
+
+
+# Routes that answer with text or JSON, never with a page
+_API_PATH_PREFIXES = ("/action/", "/set-config", "/get-json", "/api/")
+
+
+@app.after_request
+async def _safe_response_headers(response):
+    """Tell browsers to use the declared content type, and never declare an API
+    reply as HTML: an error that names the caller's own value must not render."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if request.path.startswith(_API_PATH_PREFIXES) and response.mimetype == "text/html":
+        response.mimetype = "text/plain"
+    return response
 
 
 async def _non_json_body_response():
@@ -496,11 +511,11 @@ async def json_convert():
         return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
     config = param_to_config(params, app.logger)
-    # convert json to str
-    config = orjson.dumps(config).decode()
-
-    # Send params
-    return await make_response(config, 200)
+    # Send params as JSON. A str response would go out as text/html, which a web
+    # page could use to run script in EMHASS's origin through the values it posts.
+    response = await make_response(orjson.dumps(config), 200)
+    response.headers["Content-Type"] = "application/json"
+    return response
 
 
 @app.route("/set-config", methods=["POST"])
@@ -615,6 +630,8 @@ async def parameter_set():
         if unwritable is None:
             raise
         inverter_faults = []
+    # Settings that become a file name or a database host, checked before they are saved
+    inverter_faults += config_value_faults(request_data)
     if inverter_faults:
         app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
@@ -1259,7 +1276,7 @@ async def _action_call_unlocked(action_name: str):
         )
     except RuntimeParamError as exc:
         # The message names only this request's own parameter, unlike the shared log's tail.
-        app.logger.warning("Rejected runtime parameter: %s", exc)
+        app.logger.warning("Rejected runtime parameter: %r", str(exc))
         return await make_response(f"EMHASS >> ERROR: {exc}\n", 400)
 
     if not input_data_dict:
@@ -1281,6 +1298,11 @@ async def _action_call_unlocked(action_name: str):
         msg, status = await _handle_action_dispatch(
             action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
         )
+    except RuntimeParamError as exc:
+        # A file name that would leave the data folder (utils.data_file_path)
+        app.logger.warning("Rejected runtime parameter: %r", str(exc))
+        msg, status = f"EMHASS >> ERROR: {exc}\n", 400
+        return await make_response(msg, status)
     finally:
         # Close HTTP session unless this rh was handed to the continual_publish thread.
         # Each call to set_input_data_dict creates a fresh rh, so closing here only

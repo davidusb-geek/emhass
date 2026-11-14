@@ -3632,10 +3632,6 @@ async def treat_runtimeparams(
             ("mlforecaster_weather_features", [], None),
         ]
 
-        # model_type becomes part of the model's file name
-        if runtimeparams.get("model_type") is not None:
-            validate_runtime_file_name("model_type", runtimeparams["model_type"])
-
         # Apply Configuration
         for name, default, caster in ml_param_defs:
             params["passed_data"][name] = _get_ml_param(
@@ -3645,6 +3641,10 @@ async def treat_runtimeparams(
                 default=default,
                 cast=caster,
             )
+        # model_type becomes part of the model's file name, whether the request
+        # or the saved configuration supplied it
+        if params["passed_data"]["model_type"] is not None:
+            validate_runtime_file_name("model_type", params["passed_data"]["model_type"])
         # config_defaults.json always supplies var_model, and a GUI save writes that stock
         # value back to config.json. An unset or stock var_model follows the configured
         # load sensor, so a custom sensor_power_load_no_var_loads is the forecaster input (#1208).
@@ -3947,6 +3947,10 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # costfun becomes part of a results file name (perfect-optim). Checked on the merged
+    # value, so a saved setting gets the same check as a runtime one.
+    if optim_conf.get("costfun") is not None and optim_conf["costfun"] not in COSTFUN_VALUES:
+        raise RuntimeParamError(f"costfun must be one of {', '.join(COSTFUN_VALUES)}")
     # After the runtime merge when a request was supplied, and on the saved
     # config when it was not. A percentage in either place must fail here.
     reject_configured_soc_fractions(plant_conf, optim_conf, logger)
@@ -6049,6 +6053,85 @@ _ENTITY_ID_RE = re.compile(r"[A-Za-z0-9_]{1,64}\.[A-Za-z0-9_]{1,190}")
 _PUBLISH_PREFIX_RE = re.compile(r"[A-Za-z0-9_]{0,64}")
 # Runtime parameters that hold one entity id
 _RUNTIME_ENTITY_ID_KEYS = ("model_predict_entity_id", "mlr_predict_entity_id")
+# A runtime request may only publish to sensor entities (every EMHASS default and
+# documented id is one); other domains could overwrite e.g. a door sensor's state.
+_RUNTIME_ENTITY_DOMAINS = ("sensor.",)
+# The cost functions the optimizer knows. costfun is also part of a results file name.
+COSTFUN_VALUES = ("profit", "cost", "self-consumption")
+# A database host setting: a host name or an IP address, nothing that could add a
+# scheme, credentials, a path or a query to the URL built from it.
+_DB_HOST_RE = re.compile(r"[A-Za-z0-9_.:\[\]-]{1,253}")
+# (use flag, host key, port key) for each database integration
+_DB_KEYS = (
+    ("use_influxdb", "influxdb_host", "influxdb_port"),
+    ("use_victoriametrics", "victoriametrics_host", "victoriametrics_port"),
+)
+
+
+def is_valid_db_host(value) -> bool:
+    """True when ``value`` is a plain host name or IP address (no scheme, path or query)."""
+    return isinstance(value, str) and _DB_HOST_RE.fullmatch(value) is not None
+
+
+def is_valid_db_port(value) -> bool:
+    """True when ``value`` is a port number from 1 to 65535, as an int or a string of digits."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    return isinstance(value, int) and 1 <= value <= 65535
+
+
+def config_value_faults(config: dict) -> list[str]:
+    """Faults in the settings that name files, hosts or the cost function.
+
+    Used when a configuration is saved, so a value that the runtime checks would
+    refuse cannot be stored instead.
+    """
+    faults = []
+    costfun = config.get("costfun")
+    if costfun is not None and costfun not in COSTFUN_VALUES:
+        faults.append(f"costfun must be one of {', '.join(COSTFUN_VALUES)}")
+    for use_key, host_key, port_key in _DB_KEYS:
+        enabled = bool(config.get(use_key))
+        # The web UI sends "" for a cleared field: fine while the integration is off
+        # A key that is not sent keeps its default
+        host = config.get(host_key)
+        if host is not None and (enabled or host != "") and not is_valid_db_host(host):
+            faults.append(f"{host_key} must be a host name or IP address, without a scheme or path")
+        port = config.get(port_key)
+        if port is not None and (enabled or port != "") and not is_valid_db_port(port):
+            faults.append(f"{port_key} must be a port number from 1 to 65535")
+    model_type = config.get("model_type")
+    if model_type is not None:
+        try:
+            validate_runtime_file_name("model_type", model_type)
+        except RuntimeParamError as exc:
+            faults.append(str(exc))
+    return faults
+
+
+def data_file_path(data_path, name) -> pathlib.Path:
+    """The file ``name`` inside the data folder, refused if it would land outside it.
+
+    A second line of defence behind the runtime checks: every file whose name a
+    request or a saved setting can influence is opened through this.
+
+    :param data_path: The data folder.
+    :param name: A file name, or a relative path such as ``entities/sensor.x.json``.
+    :raises RuntimeParamError: When ``name`` resolves outside ``data_path``.
+    """
+    # Compared on the resolved paths; the joined path is returned as it was built, so
+    # it names the same file as the code that joins data_path / name directly.
+    base = os.path.realpath(str(data_path))
+    target = os.path.realpath(os.path.join(base, str(name)))
+    try:
+        inside = target != base and os.path.commonpath([base, target]) == base
+    except ValueError:  # e.g. another drive on Windows
+        inside = False
+    if not inside:
+        raise RuntimeParamError(f"{name!r} is not a file name inside the data folder")
+    return pathlib.Path(data_path) / str(name)
 
 
 def is_valid_entity_id(value) -> bool:
@@ -6076,6 +6159,8 @@ def validate_runtime_entity_ids(runtimeparams: dict) -> None:
     def check(label: str, value) -> None:
         if not is_valid_entity_id(value):
             raise RuntimeParamError(f"{label} must be an entity id like sensor.my_name")
+        if not value.startswith(_RUNTIME_ENTITY_DOMAINS):
+            raise RuntimeParamError(f"{label} must be a sensor entity id, like sensor.my_name")
         # post_data adds the prefix after "sensor."; the result must still be an entity id
         if not is_valid_entity_id(value.replace("sensor.", "sensor." + prefix)):
             raise RuntimeParamError(f"{label} is too long once publish_prefix is added")
