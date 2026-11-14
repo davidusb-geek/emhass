@@ -5064,6 +5064,9 @@ async def build_secrets(
         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
             params_secrets.update(yaml.safe_load(content))
+    # The web server's API token is read by api_auth on its own. Keep it out of the
+    # secrets that go on into params, logs and the configuration routes.
+    params_secrets.pop("emhass_api_token", None)
 
     # Receive key and url from ARG/arguments?
     if argument.get("url") is not None:
