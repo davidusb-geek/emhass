@@ -403,6 +403,14 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(ctx.exception.__cause__)
                 self.assertTrue(ctx.exception.__suppress_context__)
 
+    async def test_bad_def_current_state_is_not_quoted(self):
+        with self.assertLogs(logger, level="WARNING") as logs:
+            await self._treat({"def_current_state": "[Hidden_Value_0123456789"}, "dayahead-optim")
+        text = "\n".join(logs.output)
+        self.assertIn("def_current_state", text)
+        self.assertIn("24 characters", text)
+        self.assertNotIn("hidden", text.lower())
+
     async def test_saved_costfun_and_model_type_are_checked_too(self):
         # A value stored in the configuration gets the same check as a runtime one
         for key, value, conf in (

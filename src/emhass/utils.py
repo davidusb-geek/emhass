@@ -3770,7 +3770,9 @@ async def treat_runtimeparams(
                 try:
                     dcs = orjson.loads(dcs)
                 except Exception:
-                    logger.warning(f"Could not parse def_current_state string: {dcs}")
+                    logger.warning(
+                        f"Could not parse def_current_state string ({len(dcs)} characters)"
+                    )
             # Use _cast_bool (not bool()) so string 'False' → False, not True.
             # bool('False') = True because non-empty strings are truthy in Python.
             if isinstance(dcs, list):
@@ -5068,7 +5070,18 @@ async def build_secrets(
         logger.debug("Obtaining secrets from secrets file")
         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
-            params_secrets.update(yaml.safe_load(content))
+        try:
+            loaded = yaml.safe_load(content)
+        except yaml.YAMLError:
+            raise
+        except Exception as e:
+            # A !!bool, !!int or !!float tag that does not fit its value raises an
+            # error quoting the value lowercased or without its "_", which the log
+            # mask cannot match and which can be a secret.
+            raise ValueError(
+                f"Could not read the secrets file ({type(e).__name__} while converting a value)"
+            ) from None
+        params_secrets.update(loaded)
     # The web server's API token is read by api_auth on its own. Keep it out of the
     # secrets that go on into params, logs and the configuration routes.
     params_secrets.pop("emhass_api_token", None)

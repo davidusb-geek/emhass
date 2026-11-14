@@ -129,6 +129,14 @@ def _normalise(value) -> str | None:
     return value.strip(_TOKEN_SPACE) or None
 
 
+def _top_level_key_count(content: str, name: str) -> int:
+    """How many times ``name`` is a key of the top-level YAML mapping in ``content``."""
+    node = yaml.compose(content, Loader=yaml.SafeLoader)
+    if not isinstance(node, yaml.MappingNode):
+        return 0
+    return sum(1 for key, _ in node.value if isinstance(key, yaml.ScalarNode) and key.value == name)
+
+
 def read_api_token(
     secrets_path: pathlib.Path | str | None,
     options_path: pathlib.Path | str | None,
@@ -140,8 +148,9 @@ def read_api_token(
     None when no source sets it. Raises when a source is there but cannot be
     used, so the caller can fail closed: a path that cannot be read (a
     directory, no permission), a file that does not parse, a non-empty file
-    whose top level is not a mapping, or a YAML key with no value (an unquoted
-    token that starts with ``#`` reads as a comment). Only a missing file
+    whose top level is not a mapping, the token key twice in the secrets file,
+    or a YAML key with no value (an unquoted token that starts with ``#``
+    reads as a comment). Only a missing file
     means "not configured". Synchronous, so it can run at import.
 
     The errors are raised ``from None``: a YAML error's text quotes the line
@@ -170,6 +179,10 @@ def read_api_token(
             loaded = {}  # empty, or comments only
         if not isinstance(loaded, dict):
             raise ApiTokenError("secrets file is not a YAML mapping")
+        # safe_load keeps only the last of repeated keys, so a second, empty one
+        # would turn auth off without a word.
+        if _top_level_key_count(content, SETTING_NAME) > 1:
+            raise ApiTokenError(f"{SETTING_NAME} is set more than once in the secrets file")
         if SETTING_NAME in loaded and loaded[SETTING_NAME] is None:
             raise ApiTokenError(f"{SETTING_NAME} has no value; quote the token in YAML")
         token = _normalise(loaded.get(SETTING_NAME)) or token
