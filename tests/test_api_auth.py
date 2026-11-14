@@ -515,6 +515,62 @@ class TestWebServerWiring(AuthTestBase):
         self.assertNotIn(api_auth.API_TOKEN_KEY, built)
         self.assertEqual(built["hass_url"], "http://ha:8123/")
 
+    def test_token_is_never_a_runtime_parameter(self):
+        self.assertIn(api_auth.API_TOKEN_KEY, utils.RUNTIME_DENIED_KEYS)
+
+    def test_redacted(self):
+        self.assertEqual(
+            api_auth.redacted({api_auth.API_TOKEN_KEY: TOKEN, "a": 1}),
+            {api_auth.API_TOKEN_KEY: "***", "a": 1},
+        )
+        for value in ({"a": 1}, [1, 2], "text", None):
+            self.assertEqual(api_auth.redacted(value), value)
+
+    async def test_token_sent_in_a_body_is_not_logged(self):
+        body = {api_auth.API_TOKEN_KEY: TOKEN, "prediction_horizon": 10}
+        with patch.object(
+            web_server, "_load_params", AsyncMock(return_value=({"optim_conf": {}}, "profit"))
+        ):
+            async with web_server.app.test_request_context(
+                "/action/publish-data", method="POST", json=body
+            ):
+                with self.assertLogs(self.logger, level="INFO") as logs:
+                    await web_server._load_params_and_runtime(
+                        web_server.request, web_server.emhass_conf, self.logger
+                    )
+        text = "\n".join(logs.output)
+        self.assertIn("Passed runtime parameters", text)
+        self.assertIn("prediction_horizon", text)
+        self.assertNotIn(TOKEN, text)
+
+
+class TestWithPartOneHooks(AuthTestBase):
+    """The auth hook next to part 1's cross-site check and response headers."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.enable()
+
+    async def test_auth_runs_before_the_cross_site_check(self):
+        headers = {"Sec-Fetch-Site": "cross-site"}
+        response = await self.client.post("/action/publish-data", headers=headers, json={})
+        self.assertEqual(response.status_code, 401)
+        headers["Authorization"] = "Bearer " + TOKEN
+        response = await self.client.post("/action/publish-data", headers=headers, json={})
+        self.assertEqual(response.status_code, 403)
+
+    async def test_auth_replies_get_the_safe_headers(self):
+        for path in ("/action/publish-data", "/api/v1/last-run", "/"):
+            with self.subTest(path=path):
+                response = await self.client.get(path)
+                self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+                self.assertNotEqual(response.mimetype, "text/html")
+
+    async def test_login_page_is_still_html(self):
+        response = await self.client.get("/login")
+        self.assertEqual(response.mimetype, "text/html")
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+
 
 if __name__ == "__main__":
     unittest.main()

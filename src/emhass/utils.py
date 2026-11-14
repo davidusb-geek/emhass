@@ -6045,6 +6045,7 @@ RUNTIME_DENIED_KEYS: frozenset[str] = frozenset(
         "hass_url",
         "long_lived_token",
         "ssl_no_verify",
+        "emhass_api_token",
     }
 )
 

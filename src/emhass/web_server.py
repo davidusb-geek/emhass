@@ -713,7 +713,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     try:
         runtimeparams = await request.get_json()
         if runtimeparams:
-            logger.info("Passed runtime parameters: " + str(runtimeparams))
+            logger.info("Passed runtime parameters: " + str(api_auth.redacted(runtimeparams)))
         else:
             runtimeparams = {}
     except Exception as e:
@@ -1110,7 +1110,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
 
     if runtime:
-        app.logger.info(f"Passed runtime parameters: {runtime}")
+        app.logger.info(f"Passed runtime parameters: {api_auth.redacted(runtime)}")
     params, costfun = await _load_params(emhass_conf, app.logger)
     if params is None:
         _explain("The configuration could not be read. Nothing was run")
