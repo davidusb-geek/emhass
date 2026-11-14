@@ -2538,6 +2538,12 @@ class RetrieveHass:
         :param attributes: Attribute dict to attach (friendly_name, unit, CI, ...).
         :return: True if the post succeeded (or was skipped in file mode), else False.
         """
+        # It becomes part of the URL path
+        if not is_valid_entity_id(entity_id):
+            self.logger.error(
+                "Not publishing: %r is not an entity id like sensor.my_name", entity_id
+            )
+            return False
         if self.hass_url == hass_url:  # supervisor API
             url = self.hass_url + "/states/" + entity_id
         else:  # Home Assistant Core API

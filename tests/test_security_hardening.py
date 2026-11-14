@@ -173,11 +173,11 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         lines = (emhass_conf["associations_path"]).read_text(encoding="utf-8").splitlines()
         names = {line.split(",")[2] for line in lines[1:] if line}
         expected = {n for n in names if "influx" in n or "victoria" in n}
-        expected |= {"use_websocket", "hass_url", "long_lived_token"}
+        expected |= {"use_websocket", "hass_url", "long_lived_token", "ssl_no_verify"}
         expected.discard("use_influxdb")
         self.assertTrue(expected <= RUNTIME_DENIED_KEYS, expected - RUNTIME_DENIED_KEYS)
         self.assertNotIn("use_influxdb", RUNTIME_DENIED_KEYS)
-        self.assertGreaterEqual(len(RUNTIME_DENIED_KEYS), 22)
+        self.assertGreaterEqual(len(RUNTIME_DENIED_KEYS), 23)
 
     async def test_runtime_entity_ids_and_publish_prefix(self):
         good = {
@@ -214,6 +214,15 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
             ("mlr_predict_entity_id", {"mlr_predict_entity_id": "../../config"}),
             ("publish_prefix", {"publish_prefix": "../"}),
             ("publish_prefix", {"publish_prefix": 5}),
+            ("publish_prefix", {"publish_prefix": None}),
+            # Each is fine alone, but together they make an id that post_data would refuse
+            (
+                "custom_pv_forecast_id",
+                {
+                    "publish_prefix": "p" * 64,
+                    "custom_pv_forecast_id": {"entity_id": "sensor." + "x" * 130},
+                },
+            ),
         )
         for key, runtime in bad_cases:
             with self.subTest(runtime=runtime):
@@ -250,6 +259,8 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
             ("regressor-model-fit", {"csv_file": "../data.csv"}),
             ("forecast-model-fit", {"model_type": "a/b"}),
             ("dayahead-optim", {"model_type": ".x"}),
+            ("publish-data", {"custom_pv_forecast_id": {"entity_id": "../events/sensor.x"}}),
+            ("publish-data", {"publish_prefix": "/../../events/"}),
         ):
             with self.subTest(set_type=set_type), self.assertRaises(RuntimeParamError):
                 await command_line.set_input_data_dict(
@@ -512,46 +523,54 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
         rh = self._rh("http://ha.test:8123/", "my-own-llat")
         entities = pathlib.Path(emhass_conf["data_path"]) / "entities"
         before = set(entities.rglob("*")) if entities.exists() else set()
+        data = pd.Series([100.0, 200.0], index=pd.date_range("2024-01-01", periods=2, freq="30min"))
+        data.name = "x"
+
+        async def post(entity_id, **kwargs):
+            await rh.post_data(data, 0, entity_id, "power", "W", "X", "power", **kwargs)
+
         with aioresponses() as mocked:
             mocked.post(re.compile(r".*"), status=200, repeat=True)
-            for entity_id in ("../events/emhass_poc", "sensor.x/../../events/y"):
+            for entity_id in ("../events/sensor.emhass_poc", "sensor.x/../../events/y"):
                 with self.subTest(entity_id=entity_id), self.assertLogs(logger, level="ERROR"):
-                    await rh.post_data(
-                        pd.DataFrame({"x": [1.0]}),
-                        0,
-                        entity_id,
-                        "power",
-                        "W",
-                        "X",
-                        "power",
-                        save_entities=True,
-                    )
+                    await post(entity_id, save_entities=True)
             # A prefix cannot smuggle one in either
             with self.assertLogs(logger, level="ERROR"):
-                await rh.post_data(
-                    pd.DataFrame({"x": [1.0]}),
-                    0,
-                    "sensor.x",
-                    "power",
-                    "W",
-                    "X",
-                    "power",
-                    publish_prefix="../",
-                )
+                await post("sensor.x", publish_prefix="/../../events/")
             self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+            # Positive control: in the same setup a plain id is posted, once, where expected
+            await post("sensor.x")
+            sent = [str(url) for (_, url), calls in mocked.requests.items() for _ in calls]
+            self.assertEqual(sent, ["http://ha.test:8123/api/states/sensor.x"])
         after = set(entities.rglob("*")) if entities.exists() else set()
         self.assertEqual(after, before)
         self.assertFalse((pathlib.Path(emhass_conf["data_path"]) / "events").exists())
+        await rh.close()
+
+    async def test_post_scalar_sensor_refuses_a_non_entity_id(self):
+        rh = self._rh("http://ha.test:8123/", "my-own-llat")
+        with aioresponses() as mocked:
+            mocked.post(re.compile(r".*"), status=200, repeat=True)
+            with self.assertLogs(logger, level="ERROR"):
+                self.assertFalse(await rh.post_scalar_sensor("../events/sensor.x", 1, {}))
+            self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+            # Positive control
+            self.assertTrue(await rh.post_scalar_sensor("sensor.x", 1, {}))
+            self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 1)
         await rh.close()
 
     async def test_live_state_is_not_fetched_for_a_non_entity_id(self):
         rh = self._rh("http://ha.test:8123/", "my-own-llat")
         session = await rh._get_session()
         with aioresponses() as mocked:
-            mocked.get(re.compile(r".*"), status=200, payload={}, repeat=True)
+            mocked.get(re.compile(r".*"), status=200, payload={"state": "1"}, repeat=True)
             with self.assertLogs(logger, level="ERROR"):
                 self.assertIsNone(await rh._fetch_live_state(session, "../config", {}))
             self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+            # Positive control: a plain id is fetched from the expected path
+            self.assertEqual(await rh._fetch_live_state(session, "sensor.x", {}), {"state": "1"})
+            sent = [str(url) for (_, url), calls in mocked.requests.items() for _ in calls]
+            self.assertEqual(sent, ["http://ha.test:8123/api/states/sensor.x"])
         await rh.close()
 
     def test_only_the_supervisor_url_counts_as_the_supervisor(self):

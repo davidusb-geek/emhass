@@ -6037,6 +6037,7 @@ RUNTIME_DENIED_KEYS: frozenset[str] = frozenset(
         # Not read back from a runtime request today, but listed so that it stays that way
         "hass_url",
         "long_lived_token",
+        "ssl_no_verify",
     }
 )
 
@@ -6068,24 +6069,26 @@ def validate_runtime_entity_ids(runtimeparams: dict) -> None:
 
     :raises RuntimeParamError: Naming the parameter whose value is not usable.
     """
+    prefix = runtimeparams.get("publish_prefix", "")
+    if not isinstance(prefix, str) or _PUBLISH_PREFIX_RE.fullmatch(prefix) is None:
+        raise RuntimeParamError("publish_prefix must be at most 64 letters, digits or underscores")
+
+    def check(label: str, value) -> None:
+        if not is_valid_entity_id(value):
+            raise RuntimeParamError(f"{label} must be an entity id like sensor.my_name")
+        # post_data adds the prefix after "sensor."; the result must still be an entity id
+        if not is_valid_entity_id(value.replace("sensor.", "sensor." + prefix)):
+            raise RuntimeParamError(f"{label} is too long once publish_prefix is added")
+
     for key in _RUNTIME_ENTITY_ID_KEYS:
-        if key in runtimeparams and not is_valid_entity_id(runtimeparams[key]):
-            raise RuntimeParamError(f"{key} must be an entity id like sensor.my_name")
-    if "publish_prefix" in runtimeparams:
-        prefix = runtimeparams["publish_prefix"]
-        if not isinstance(prefix, str) or _PUBLISH_PREFIX_RE.fullmatch(prefix) is None:
-            raise RuntimeParamError(
-                "publish_prefix must be at most 64 letters, digits or underscores"
-            )
+        if key in runtimeparams:
+            check(key, runtimeparams[key])
     for key, value in runtimeparams.items():
         if not (key.startswith("custom_") and key.endswith("_id")):
             continue
         for item in value if isinstance(value, list) else [value]:
             if isinstance(item, dict) and "entity_id" in item:
-                if not is_valid_entity_id(item["entity_id"]):
-                    raise RuntimeParamError(
-                        f"{key} entity_id must be an entity id like sensor.my_name"
-                    )
+                check(f"{key} entity_id", item["entity_id"])
 
 
 def validate_runtime_file_name(name: str, value, suffix: str | None = None) -> str:
