@@ -79,6 +79,11 @@ def _upstream_error(exc: BaseException) -> str:
     """
     code = getattr(exc, "status", None) or getattr(exc, "code", None)
     text = type(exc).__name__ + (f" (HTTP {code})" if isinstance(code, int) else "")
+    if type(exc).__name__ == "TooManyRedirects":
+        return text + (
+            ": the server answered with a redirect, which EMHASS does not follow "
+            "(check the host, port and SSL settings)"
+        )
     message = str(exc).lower()
     reason = next((known for known in _KNOWN_DB_ERRORS if known in message), None)
     return text + (f": {reason}" if reason else "")
@@ -1502,16 +1507,17 @@ class RetrieveHass:
         if len(series_values) > 1:
             # Several metrics matched: the sensor changed unit at some point (e.g. W -> kW).
             # Keep the one with the most samples rather than mixing units.
+            # The metric names and labels are the server's: count them, don't print them
             self.logger.warning(
                 f"Entity '{sensor}' matches several VictoriaMetrics metrics "
-                f"{sorted(series_values)}, keeping the one with the most samples. "
+                f"({len(series_values)}), keeping the one with the most samples. "
                 "Set victoriametrics_metric_regex to pin the metric."
             )
-        metric_name, values = max(series_values.items(), key=lambda kv: len(kv[1]))
+        _, values = max(series_values.items(), key=lambda kv: len(kv[1]))
         if not values:
             self.logger.warning(f"No data found in VictoriaMetrics for entity: {sensor}")
             return None
-        self.logger.info(f"Retrieved {len(values)} data points for {sensor} ({metric_name})")
+        self.logger.info(f"Retrieved {len(values)} data points for {sensor}")
 
         df_sensor = pd.DataFrame(values, columns=["time", sensor])
         df_sensor["time"] = pd.to_datetime(
@@ -1538,9 +1544,7 @@ class RetrieveHass:
         full_index = pd.date_range(df_sensor.index.min(), last_bucket, freq=self.freq)
         df_sensor = df_sensor.reindex(full_index).ffill()
         df_sensor.index.name = "time"
-        self.logger.debug(
-            f"Successfully retrieved {len(df_sensor)} data points for '{sensor}' from metric '{metric_name}'"
-        )
+        self.logger.debug(f"Successfully retrieved {len(df_sensor)} data points for '{sensor}'")
         return df_sensor
 
     def _is_influx_expression(self, variable: str) -> bool:
@@ -1756,6 +1760,13 @@ class RetrieveHass:
             self.logger.error(f"Failed to connect to InfluxDB: {_upstream_error(e)}")
             return None
 
+    def _shown_measurement(self, measurement) -> str:
+        """A measurement name for the log: the configured one by name, any other (it
+        came from the server, and the log can end up in an action's reply) not."""
+        if measurement == getattr(self, "influxdb_measurement", None):
+            return repr(measurement)
+        return "found on the server"
+
     def _discover_entity_measurement(self, client, entity_id: str) -> str:
         """Auto-discover which measurement contains the given entity."""
         # Check cache first
@@ -1790,7 +1801,7 @@ class RetrieveHass:
                         'WITH KEY = "entity_id"'
                     )
                     self.logger.debug(
-                        f"Checking measurement '{measurement}' with tag query: {tag_query}"
+                        f"Checking measurement {self._shown_measurement(measurement)}"
                     )
                     result = client.query(tag_query)
                     points = list(result.get_points())
@@ -1799,7 +1810,8 @@ class RetrieveHass:
                     for point in points:
                         if point.get("value") == entity_id:
                             self.logger.debug(
-                                f"Found entity '{entity_id}' in measurement '{measurement}'"
+                                f"Found entity '{entity_id}' in measurement "
+                                f"{self._shown_measurement(measurement)}"
                             )
                             # Cache the result
                             self._measurement_cache[entity_id] = measurement
@@ -1807,7 +1819,7 @@ class RetrieveHass:
 
                 except Exception as query_error:
                     self.logger.debug(
-                        f"Tag query failed for measurement {measurement!r}: "
+                        f"Tag query failed for measurement {self._shown_measurement(measurement)}: "
                         f"{_upstream_error(query_error)}"
                     )
                     continue
@@ -1882,7 +1894,11 @@ class RetrieveHass:
             query = self._build_influx_query_for_measurement(
                 entity_id, measurement, start_time, end_time
             )
-            self.logger.debug(f"InfluxDB query: {query}")
+            # Not the query text: it names a measurement the server may have supplied
+            self.logger.debug(
+                f"InfluxDB query for {entity_id!r} in measurement "
+                f"{self._shown_measurement(measurement)}"
+            )
 
             # Execute query
             result = client.query(query)
@@ -1890,7 +1906,8 @@ class RetrieveHass:
 
             if not points:
                 self.logger.warning(
-                    f"No data found for entity: {entity_id} in measurement: {measurement}"
+                    f"No data found for entity: {entity_id} in measurement "
+                    f"{self._shown_measurement(measurement)}"
                 )
                 return None
 
@@ -1908,7 +1925,8 @@ class RetrieveHass:
                 df_sensor = df_sensor[["mean_value"]].rename(columns={"mean_value": sensor})
             else:
                 self.logger.error(
-                    f"Expected 'mean_value' column not found for {sensor} in measurement {measurement}"
+                    f"Expected 'mean_value' column not found for {sensor} in measurement "
+                    f"{self._shown_measurement(measurement)}"
                 )
                 return None
 
@@ -1926,13 +1944,15 @@ class RetrieveHass:
                     )
 
             self.logger.debug(
-                f"Successfully retrieved {len(df_sensor)} data points for '{entity_id}' from measurement '{measurement}'"
+                f"Successfully retrieved {len(df_sensor)} data points for '{entity_id}' "
+                f"from measurement {self._shown_measurement(measurement)}"
             )
             return df_sensor
 
         except Exception as e:
             self.logger.error(
-                f"Failed to query entity {entity_id!r} from measurement {measurement!r}: "
+                f"Failed to query entity {entity_id!r} from measurement "
+                f"{self._shown_measurement(measurement)}: "
                 f"{_upstream_error(e)}"
             )
             return None
