@@ -11,7 +11,7 @@ import re
 import tempfile
 import unittest
 import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import aiofiles
 import aiohttp
@@ -706,7 +706,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             database="fake-db",
             ssl=False,
             verify_ssl=False,
+            session=ANY,  # a session that does not follow redirects
         )
+        self.assertEqual(mock_influx_client_class.call_args.kwargs["session"].max_redirects, 0)
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()
 
@@ -2704,42 +2706,66 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
     @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "mock_supervisor_token"})
     async def test_supervisor_token_fallback_success(self):
-        """Test that SUPERVISOR_TOKEN is used when long_lived_token is empty."""
-        rh_empty_token = RetrieveHass(
-            self.retrieve_hass_conf["hass_url"],
-            "empty",  # Trigger the token == "empty" fallback
-            self.retrieve_hass_conf["optimization_time_step"],
-            self.retrieve_hass_conf["time_zone"],
-            {},
-            emhass_conf,
-            logger,
-            get_data_from_file=False,
-        )
+        """SUPERVISOR_TOKEN stands in for an empty long_lived_token, for the Supervisor URL only."""
+        supervisor_url = "http://supervisor/core/api"
 
-        # Test get_ha_config fallback (The first coverage gap: lines 184-186)
+        def make_rh(url):
+            return RetrieveHass(
+                url,
+                "empty",  # Trigger the token == "empty" fallback
+                self.retrieve_hass_conf["optimization_time_step"],
+                self.retrieve_hass_conf["time_zone"],
+                {},
+                emhass_conf,
+                logger,
+                get_data_from_file=False,
+            )
+
+        def sent_tokens(mocked):
+            return [
+                call.kwargs["headers"]["Authorization"]
+                for calls in mocked.requests.values()
+                for call in calls
+            ]
+
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.test"]
+
+        # Supervisor URL: get_ha_config uses the environment token
+        rh_supervisor = make_rh(supervisor_url)
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            with aioresponses() as mocked:
+                mocked.get(supervisor_url + "/config", status=200, payload={"time_zone": "UTC"})
+                self.assertTrue(await rh_supervisor.get_ha_config())
+                self.assertEqual(sent_tokens(mocked), ["Bearer mock_supervisor_token"])
+        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+        self.assertEqual(rh_supervisor.ha_config, {"time_zone": "UTC"})
+
+        # Supervisor URL: _get_data_rest_api uses it too
         with self.assertLogs(logger, level="DEBUG") as cm:
             with aioresponses() as mocked:
                 mocked.get(
-                    rh_empty_token.hass_url + "api/config", status=200, payload={"time_zone": "UTC"}
+                    re.compile(r"^http://supervisor/core/api/history/period/.*"),
+                    status=200,
+                    payload=[],
                 )
-                await rh_empty_token.get_ha_config()
+                await rh_supervisor._get_data_rest_api(days_list, var_list)
+                self.assertEqual(sent_tokens(mocked), ["Bearer mock_supervisor_token"])
         self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
 
-        # Test _get_data_rest_api fallback (The second coverage gap: lines 448-450)
-        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
-        var_list = ["sensor.test"]
-        with self.assertLogs(logger, level="DEBUG") as cm:
-            with aioresponses() as mocked:
-                # Mock the exact URL called
-                url = (
-                    rh_empty_token.hass_url
-                    + "api/history/period/"
-                    + days_list[0].isoformat()
-                    + "?filter_entity_id=sensor.test"
-                )
-                mocked.get(url, status=200, payload=[])
-                await rh_empty_token._get_data_rest_api(days_list, var_list)
-        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+        # Any other URL never receives the Supervisor token: nothing is sent
+        rh_custom = make_rh("https://myhass.duckdns.org/")
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r".*"), status=200, payload={"time_zone": "UTC"}, repeat=True)
+            self.assertTrue(await rh_custom.get_ha_config())
+            self.assertEqual(rh_custom.ha_config, {})
+            with self.assertLogs(logger, level="ERROR") as cm:
+                self.assertFalse(await rh_custom._get_data_rest_api(days_list, var_list))
+            self.assertEqual(sent_tokens(mocked), [])
+        self.assertTrue(any("No valid authentication token found" in log for log in cm.output))
+
+        await rh_supervisor.close()
+        await rh_custom.close()
 
     @patch.dict(os.environ, {}, clear=True)
     async def test_supervisor_token_fallback_failure(self):
