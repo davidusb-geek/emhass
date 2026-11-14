@@ -94,6 +94,81 @@ class TestFileNameValidation(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(utils.is_valid_entity_id(value))
 
+    def test_data_file_path_stays_inside_the_data_folder(self):
+        base = pathlib.Path(emhass_conf["data_path"])
+        for name in ("opt_res_latest.csv", "my export 2026.csv", "entities/sensor.x.json"):
+            with self.subTest(name=name):
+                self.assertEqual(utils.data_file_path(base, name), base / name)
+        outside = [
+            "opt_res_perfect_optim_/../../tmp/x.csv",
+            "../x.csv",
+            "a/../../x.csv",
+            "/etc/passwd",
+            "",
+            ".",
+        ]
+        if os.name == "nt":
+            # On POSIX this is a legal file name inside the folder
+            outside += ["C:\\x.csv", "\\\\server\\share\\x.csv"]
+        for name in outside:
+            with self.subTest(name=name), self.assertRaises(RuntimeParamError):
+                utils.data_file_path(base, name)
+
+    def test_db_host(self):
+        for value in ("localhost", "192.168.1.10", "a0d7b954-victoriametrics", "[::1]", "my_db"):
+            with self.subTest(value=value):
+                self.assertTrue(utils.is_valid_db_host(value))
+        for value in (
+            "127.0.0.1:9/s/txt?x=",
+            "http://db",
+            "user@db",
+            "db#x",
+            "db x",
+            "db\n",
+            "",
+            None,
+            8086,
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(utils.is_valid_db_host(value))
+
+    def test_config_value_faults(self):
+        self.assertEqual(
+            utils.config_value_faults(
+                {"costfun": "self-consumption", "influxdb_host": "db", "model_type": "load"}
+            ),
+            [],
+        )
+        faults = utils.config_value_faults(
+            {
+                "costfun": "/../../tmp/x",
+                "influxdb_host": "127.0.0.1:9/s?x=",
+                "victoriametrics_host": "http://vm",
+                "model_type": "../../x",
+            }
+        )
+        self.assertEqual(len(faults), 4)
+        for key in ("costfun", "influxdb_host", "victoriametrics_host", "model_type"):
+            self.assertTrue(any(key in fault for fault in faults), key)
+
+    def test_db_ports(self):
+        for value in (8086, "8428", 1, 65535):
+            with self.subTest(value=value):
+                self.assertTrue(utils.is_valid_db_port(value))
+        for value in ("9/s/txt?x=", "80 ", "", 0, 65536, -1, True, None, 8086.5, "８０"):
+            with self.subTest(value=value):
+                self.assertFalse(utils.is_valid_db_port(value))
+        faults = utils.config_value_faults(
+            {"use_victoriametrics": True, "victoriametrics_port": "9/s/txt?x="}
+        )
+        self.assertEqual(faults, ["victoriametrics_port must be a port number from 1 to 65535"])
+
+    def test_cleared_db_fields_are_fine_while_the_integration_is_off(self):
+        # The web UI sends "" for a cleared text field
+        cleared = {"influxdb_host": "", "victoriametrics_host": "", "influxdb_port": ""}
+        self.assertEqual(utils.config_value_faults(cleared), [])
+        self.assertEqual(len(utils.config_value_faults({**cleared, "use_influxdb": True})), 2)
+
     def test_timestamp_col_name(self):
         for value in ("timestamp", "Time stamp-1.x", "a" * 64):
             with self.subTest(value=value):
@@ -215,6 +290,17 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
             ("publish_prefix", {"publish_prefix": "../"}),
             ("publish_prefix", {"publish_prefix": 5}),
             ("publish_prefix", {"publish_prefix": None}),
+            # Only sensor entities may be published to at runtime
+            ("custom_pv_forecast_id", {"custom_pv_forecast_id": {"entity_id": "switch.garage"}}),
+            (
+                "custom_optim_status_id",
+                {"custom_optim_status_id": {"entity_id": "binary_sensor.front_door"}},
+            ),
+            ("mlr_predict_entity_id", {"mlr_predict_entity_id": "input_number.setpoint"}),
+            (
+                "custom_deferrable_state_id",
+                {"custom_deferrable_state_id": [{"entity_id": "alarm_control_panel.home"}]},
+            ),
             # Each is fine alone, but together they make an id that post_data would refuse
             (
                 "custom_pv_forecast_id",
@@ -229,6 +315,52 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(RuntimeParamError) as ctx:
                     await self._treat(runtime, "dayahead-optim")
                 self.assertIn(key, str(ctx.exception))
+
+    async def test_costfun_is_one_of_the_known_values(self):
+        for value in ("profit", "cost", "self-consumption"):
+            with self.subTest(value=value):
+                _, _, optim_conf, _ = await self._treat({"costfun": value}, "perfect-optim")
+                self.assertEqual(optim_conf["costfun"], value)
+        for value in ("/../../tmp/review_costfun_poc", "Profit", "x", 5):
+            with self.subTest(value=value), self.assertRaises(RuntimeParamError) as ctx:
+                await self._treat({"costfun": value}, "perfect-optim")
+            self.assertIn("costfun", str(ctx.exception))
+
+    async def test_saved_costfun_and_model_type_are_checked_too(self):
+        # A value stored in the configuration gets the same check as a runtime one
+        for key, value, conf in (
+            ("costfun", "/../../tmp/x", "optim_conf"),
+            ("model_type", "../../ESCAPED_model", "optim_conf"),
+        ):
+            saved = orjson.loads(self.params_json)
+            saved[conf][key] = value
+            saved_json = orjson.dumps(saved).decode()
+            retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(saved_json, logger)
+            with self.subTest(key=key):
+                with self.assertRaises(RuntimeParamError) as ctx:
+                    await utils.treat_runtimeparams(
+                        "{}",
+                        saved_json,
+                        retrieve_hass_conf,
+                        optim_conf,
+                        plant_conf,
+                        "regressor-model-fit",
+                        logger,
+                        emhass_conf,
+                    )
+                self.assertIn(key, str(ctx.exception))
+
+    async def test_results_file_cannot_leave_the_data_folder(self):
+        data_path = pathlib.Path(emhass_conf["data_path"])
+        input_data_dict = {"emhass_conf": {"data_path": data_path}}
+        with self.assertRaises(RuntimeParamError):
+            command_line._write_results(
+                input_data_dict,
+                pd.DataFrame({"x": [1.0]}),
+                "opt_res_perfect_optim_/../../review_costfun_poc.csv",
+            )
+        # data/opt_res_perfect_optim_/../../x resolves to the data folder's parent
+        self.assertFalse((data_path.parent / "review_costfun_poc.csv").exists())
 
     # The checks must run before anything connects out or writes a file
     @patch("emhass.command_line.RetrieveHass")
@@ -422,6 +554,67 @@ class TestRequestChecks(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz", headers={"Sec-Fetch-Site": "cross-site"})
         self.assertNotEqual(response.status_code, 403)
 
+    async def test_set_config_refuses_unsafe_values(self):
+        for key, value in (
+            ("costfun", "/../../tmp/review_costfun_poc"),
+            ("influxdb_host", "127.0.0.1:9/s/txt?x="),
+            ("victoriametrics_host", "http://vm.example"),
+            ("model_type", "../../ESCAPED_model"),
+        ):
+            with self.subTest(key=key):
+                response = await self.client.post("/set-config", json={key: value})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(key, await response.get_data(as_text=True))
+
+    async def test_get_json_answers_as_json(self):
+        body = "costfun: '<script>alert(1)</script>'\n"
+        with patch.object(web_server, "emhass_conf", emhass_conf):
+            response = await self.client.post(
+                "/get-json", data=body, headers={"Content-Type": "text/plain"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/json")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(
+            orjson.loads(await response.get_data())["costfun"], "<script>alert(1)</script>"
+        )
+
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_api_error_replies_are_plain_text(self, mock_load, mock_set):
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_set.side_effect = RuntimeParamError("custom_<img src=x>_id entity_id must be")
+        response = await self.client.post("/action/publish-data", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.mimetype, "text/plain")
+        # Pages are still pages
+        page = await self.client.get("/configuration")
+        self.assertNotEqual(page.mimetype, "text/plain")
+
+    async def test_every_response_has_nosniff(self):
+        for method, url in (("GET", "/healthz"), ("POST", "/configuration"), ("GET", "/nope")):
+            with self.subTest(url=url):
+                response = await self.client.open(url, method=method)
+                self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+
+    @patch("emhass.web_server._handle_action_dispatch", new_callable=AsyncMock)
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params_and_runtime", new_callable=AsyncMock)
+    async def test_runtime_param_error_during_an_action_is_a_short_400(
+        self, mock_load, mock_log, mock_set, mock_dispatch
+    ):
+        mock_load.return_value = ({}, "profit", "{}")
+        mock_log.return_value = ["SHARED LOG TAIL"]
+        mock_set.return_value = {"retrieve_hass_conf": {}}
+        mock_dispatch.side_effect = RuntimeParamError("'../x.csv' is not a file name inside")
+        response = await self.client.post("/action/perfect-optim", json={})
+        mock_dispatch.assert_awaited_once()
+        self.assertEqual(response.status_code, 400)
+        text = await response.get_data(as_text=True)
+        self.assertIn("not a file name inside", text)
+        self.assertNotIn("SHARED LOG TAIL", text)
+
     async def test_configuration_is_get_only(self):
         response = await self.client.post("/configuration", data={"long_lived_token": "x"})
         self.assertEqual(response.status_code, 405)
@@ -572,6 +765,45 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
             sent = [str(url) for (_, url), calls in mocked.requests.items() for _ in calls]
             self.assertEqual(sent, ["http://ha.test:8123/api/states/sensor.x"])
         await rh.close()
+
+    def test_history_url_encodes_the_sensor_name(self):
+        rh = self._rh("http://ha.test:8123/", "my-own-llat")
+        day = pd.Timestamp("2026-11-01", tz="UTC")
+        url = rh._build_history_url(day, "sensor.p_pv", "empty", False, False)
+        self.assertTrue(url.endswith("?filter_entity_id=sensor.p_pv"))
+        url = rh._build_history_url(day, "sensor.x&end_time=2030-01-01", "empty", False, False)
+        self.assertTrue(url.endswith("?filter_entity_id=sensor.x%26end_time%3D2030-01-01"))
+        self.assertNotIn("&end_time", url)
+
+    def test_database_host_with_a_path_disables_the_integration(self):
+        for key_use, key_host in (
+            ("use_influxdb", "influxdb_host"),
+            ("use_victoriametrics", "victoriametrics_host"),
+        ):
+            params = {"retrieve_hass_conf": {key_use: True, key_host: "127.0.0.1:9/s/txt?x="}}
+            with self.subTest(key=key_host), self.assertLogs(logger, level="ERROR"):
+                rh = RetrieveHass(
+                    "http://ha.test:8123/",
+                    "llat",
+                    pd.Timedelta(minutes=30),
+                    pytz.UTC,
+                    params,
+                    emhass_conf,
+                    logger,
+                )
+            self.assertFalse(getattr(rh, key_use))
+            # Positive control: a plain host keeps it enabled
+            params = {"retrieve_hass_conf": {key_use: True, key_host: "192.168.1.10"}}
+            rh = RetrieveHass(
+                "http://ha.test:8123/",
+                "llat",
+                pd.Timedelta(minutes=30),
+                pytz.UTC,
+                params,
+                emhass_conf,
+                logger,
+            )
+            self.assertTrue(getattr(rh, key_use))
 
     def test_only_the_supervisor_url_counts_as_the_supervisor(self):
         for url in (

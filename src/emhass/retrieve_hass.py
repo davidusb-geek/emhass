@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Self
+from urllib.parse import quote
 
 import aiofiles
 import aiohttp
@@ -19,7 +20,13 @@ import orjson
 import pandas as pd
 
 from emhass.connection_manager import get_websocket_client
-from emhass.utils import is_valid_entity_id, set_df_index_freq
+from emhass.utils import (
+    data_file_path,
+    is_valid_db_host,
+    is_valid_db_port,
+    is_valid_entity_id,
+    set_df_index_freq,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +216,16 @@ class RetrieveHass:
             self.influxdb_retention_policy = influx_conf.get("influxdb_retention_policy", "autogen")
             self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
             self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
+            if not is_valid_db_host(self.influxdb_host) or not is_valid_db_port(self.influxdb_port):
+                # A path or query in the host or port would send the stored login, and
+                # the request, somewhere other than the database server
+                self.logger.error(
+                    "influxdb_host must be a host name or IP address, without a scheme or "
+                    "path, and influxdb_port a port number. InfluxDB is disabled until "
+                    "they are fixed."
+                )
+                self.use_influxdb = False
+        if self.use_influxdb:
             self.logger.info(
                 f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}"
             )
@@ -241,6 +258,16 @@ class RetrieveHass:
                 self.victoriametrics_entity_label = ""
             self.victoriametrics_use_ssl = vm_conf.get("victoriametrics_use_ssl", False)
             self.victoriametrics_verify_ssl = vm_conf.get("victoriametrics_verify_ssl", False)
+            if not is_valid_db_host(self.victoriametrics_host) or not is_valid_db_port(
+                self.victoriametrics_port
+            ):
+                self.logger.error(
+                    "victoriametrics_host must be a host name or IP address, without a scheme "
+                    "or path, and victoriametrics_port a port number. VictoriaMetrics is "
+                    "disabled until they are fixed."
+                )
+                self.use_victoriametrics = False
+        if self.use_victoriametrics:
             if self.use_influxdb:
                 self.logger.warning(
                     "Both use_influxdb and use_victoriametrics are enabled, InfluxDB takes precedence"
@@ -493,7 +520,8 @@ class RetrieveHass:
                 )
                 self.hass_url = self.hass_url + "/"
             base_url = f"{self.hass_url}api/history/period/{day_str}"
-        url = f"{base_url}?filter_entity_id={var}"
+        # Encoded, so a sensor name cannot add query parameters of its own
+        url = f"{base_url}?filter_entity_id={quote(str(var), safe='')}"
         if minimal_response:
             url += "&minimal_response"  # Note: fixed to & if query params exist, but ? is fine if it's the only one. Actually, filter_entity_id uses ?, so we MUST use & here.
         if significant_changes_only:
@@ -2438,7 +2466,7 @@ class RetrieveHass:
                 # in-place truncating write would expose. The uuid suffix keeps
                 # the temp name unique even if the same entity is published
                 # concurrently (this write is not under _metadata_lock).
-                entity_file = entities_path / (entity_id + ".json")
+                entity_file = data_file_path(entities_path, entity_id + ".json")
                 tmp_entity_path = entity_file.with_name(
                     f"{entity_id}.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
                 )
