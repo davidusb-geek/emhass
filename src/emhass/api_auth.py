@@ -1,7 +1,7 @@
 """Optional API authentication for the EMHASS web server.
 
-Opt-in: with no ``emhass_api_token`` configured, nothing changes. With a token
-configured, every request needs one of:
+Opt-in: with no ``emhass_api_token`` configured, almost nothing changes. With
+a token configured, every request needs one of:
 
 - an ``Authorization: Bearer <token>`` header (rest_command, curl, scripts);
 - the web UI session cookie set by ``/login``;
@@ -551,7 +551,7 @@ def is_trusted_ingress_request() -> bool:
     ``request.remote_addr`` and headers such as ``X-Ingress-Path`` or
     ``X-Forwarded-For`` must not be used: a client that reaches the port
     directly can set the headers, and with forwarded-header handling switched
-    on, the address follows them. See DESIGN-part2.md.
+    on, the address follows them.
     """
     return False
 
