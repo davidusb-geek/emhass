@@ -1,5 +1,6 @@
 """Opt-in API authentication (emhass.api_auth) and its wiring into the web server."""
 
+import io
 import logging
 import os
 import pathlib
@@ -210,6 +211,97 @@ class TestUtf8Token(AuthTestBase):
         self.assertEqual(response.status_code, 401)
 
 
+class TestBearerBytes(AuthTestBase):
+    async def test_token_ending_in_a_byte_str_strip_removes(self):
+        # The UTF-8 bytes of these end in 0xA0 and 0x85, which Python's
+        # str.strip() treats as space once the header is decoded as latin-1.
+        for token in ("token-ending-in-0123456-à", "token-ending-in-0123456-Ņ"):
+            with self.subTest(token=token):
+                await self.enable(token)
+                response = await self.client.get(
+                    "/api/v1/last-run", headers={"Authorization": "Bearer " + token}
+                )
+                self.assertEqual(response.status_code, 200)
+
+
+class TestWebSocket(AuthTestBase):
+    async def handshake_status(self, headers=None) -> int:
+        from quart.testing import WebsocketResponseError
+
+        try:
+            async with self.client.websocket("/api/v1/last-run", headers=headers) as ws:
+                await ws.send("x")
+                await ws.receive()
+        except WebsocketResponseError as e:
+            return e.response.status_code
+        return 101
+
+    async def test_handshake_needs_the_bearer_token(self):
+        await self.enable()
+        self.assertEqual(await self.handshake_status(), 401)
+        cookie = {"Cookie": f"{api_auth.SESSION_COOKIE}={api_auth.make_session_value(TOKEN)}"}
+        self.assertEqual(await self.handshake_status(cookie), 401)
+        status = await self.handshake_status({"Authorization": "Bearer " + TOKEN})
+        self.assertNotEqual(status, 401)
+
+    async def test_handshake_when_configuration_failed(self):
+        await api_auth.configure(self.write_secrets("emhass_api_token: true\n"), None, self.logger)
+        self.assertEqual(await self.handshake_status(), 503)
+
+    async def test_handshake_without_a_token_is_unchanged(self):
+        await api_auth.configure(None, None, self.logger)
+        self.assertNotIn(await self.handshake_status(), (401, 503))
+
+
+class TestTokenLogFilter(AuthTestBase):
+    def record(self, msg, args=(), exc_info=None) -> logging.LogRecord:
+        return logging.LogRecord("x", logging.INFO, __file__, 1, msg, args, exc_info)
+
+    async def test_masks_the_token_by_value(self):
+        await self.enable()
+        record = self.record("body: %s", ({"nested": {"token": TOKEN}},))
+        self.assertTrue(api_auth.token_log_filter.filter(record))
+        self.assertNotIn(TOKEN, record.getMessage())
+        self.assertIn("***", record.getMessage())
+
+    async def test_masks_the_token_in_a_traceback(self):
+        await self.enable()
+        try:
+            raise ValueError(f"bad line: {TOKEN}")
+        except ValueError:
+            record = self.record("failed", exc_info=sys.exc_info())
+        api_auth.token_log_filter.filter(record)
+        text = logging.Formatter().format(record)
+        self.assertIn("ValueError", text)
+        self.assertNotIn(TOKEN, text)
+
+    async def test_leaves_records_alone_without_a_token(self):
+        await api_auth.configure(None, None, self.logger)
+        record = self.record("value %s", ("x",))
+        api_auth.token_log_filter.filter(record)
+        self.assertEqual(record.args, ("x",))
+
+    async def test_token_in_a_request_body_stays_out_of_the_action_log(self):
+        await self.enable()
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(api_auth.token_log_filter)
+        app_logger = web_server.app.logger
+        saved = (app_logger.level, app_logger.disabled)
+        app_logger.setLevel(logging.INFO)
+        app_logger.disabled = False
+        app_logger.addHandler(handler)
+        try:
+            body = {"nested": {"token": TOKEN}, "Authorization": "Bearer " + TOKEN}
+            web_server.app.logger.warning("Passed runtime parameters: %s", body)
+        finally:
+            app_logger.removeHandler(handler)
+            app_logger.setLevel(saved[0])
+            app_logger.disabled = saved[1]
+        self.assertNotIn(TOKEN, stream.getvalue())
+        self.assertIn("Passed runtime parameters", stream.getvalue())
+
+
 class TestLogin(AuthTestBase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -242,6 +334,65 @@ class TestLogin(AuthTestBase):
     async def test_cookie_is_secure_over_https(self):
         response = await self.client.post("/login", form={"token": TOKEN}, scheme="https")
         self.assertIn("Secure", response.headers["Set-Cookie"])
+
+    async def test_cookie_is_secure_behind_a_tls_proxy(self):
+        for value in ("https", "HTTPS", "https, http"):
+            with self.subTest(value=value):
+                response = await self.client.post(
+                    "/login", form={"token": TOKEN}, headers={"X-Forwarded-Proto": value}
+                )
+                self.assertIn("Secure", response.headers["Set-Cookie"])
+        response = await self.client.post("/logout", headers={"X-Forwarded-Proto": "https"})
+        self.assertIn("Secure", response.headers["Set-Cookie"])
+
+    async def test_large_login_body_is_refused_before_parsing(self):
+        with patch.object(api_auth.urllib.parse, "parse_qs") as mock_parse:
+            # The test client sends no Content-Length, as a chunked upload would not.
+            response = await self.client.post("/login", form={"token": "x" * 5000})
+            self.assertEqual(response.status_code, 413)
+            response = await self.client.post(
+                "/login",
+                data=b"token=x",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Content-Length": "999999",
+                },
+            )
+            self.assertEqual(response.status_code, 413)
+        mock_parse.assert_not_called()
+        self.assertEqual(api_auth._failures["count"], 0)
+
+    async def test_login_must_be_a_plain_form(self):
+        for headers, data in (
+            ({"Content-Type": "multipart/form-data; boundary=x"}, b"--x--"),
+            ({"Content-Type": "application/json"}, b'{"token": "x"}'),
+            ({"Content-Type": "text/plain"}, b"token=" + TOKEN.encode()),
+        ):
+            with self.subTest(content_type=headers["Content-Type"]):
+                response = await self.client.post("/login", data=data, headers=headers)
+                self.assertEqual(response.status_code, 415)
+                self.assertNotIn("Set-Cookie", response.headers)
+
+    async def test_login_with_too_many_fields(self):
+        response = await self.client.post(
+            "/login",
+            data=b"a=1&" * 100 + b"token=" + TOKEN.encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("Set-Cookie", response.headers)
+
+    async def test_head_login_is_not_a_failed_attempt(self):
+        response = await self.client.head("/login")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(api_auth._failures["count"], 0)
+
+    async def test_cookie_signed_with_another_key_is_refused(self):
+        # As after a restart: the key is made at import.
+        with patch.object(api_auth, "_SESSION_KEY", b"\x00" * 32):
+            old = api_auth.make_session_value(TOKEN)
+        self.assertFalse(api_auth.session_is_valid(TOKEN, old))
+        self.assertTrue(api_auth.session_is_valid(TOKEN, api_auth.make_session_value(TOKEN)))
 
     async def test_session_cookie_authenticates(self):
         value = api_auth.make_session_value(TOKEN)
@@ -320,6 +471,16 @@ class TestLogin(AuthTestBase):
         self.assertNotIn("Set-Cookie", response.headers)
         self.assertIn('method="post"', await response.get_data(as_text=True))
 
+    async def test_logout_by_head_does_not_log_out(self):
+        response = await self.client.head("/logout")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Set-Cookie", response.headers)
+
+    async def test_cross_site_logout_is_refused(self):
+        response = await self.client.post("/logout", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("Set-Cookie", response.headers)
+
     async def test_a_tossed_cookie_does_not_lock_the_user_out(self):
         # A page on another port can set a junk cookie with a longer path, which
         # the browser sends first.
@@ -371,9 +532,10 @@ class TestTokenSources(AuthTestBase):
         for options_text, secrets_text in (
             ('{"emhass_api_token": ""}', "emhass_api_token: ''\n"),
             ('{"emhass_api_token": "   "}', "emhass_api_token: '   '\n"),
-            ('{"emhass_api_token": null}', "emhass_api_token: null\n"),
-            ("{}", "emhass_api_token: ~\n"),
+            ('{"emhass_api_token": null}', "emhass_api_token: ''\n"),
             ("{}", "hass_url: http://x/\n"),
+            ("", "# comments only\n"),
+            ("{}", ""),
         ):
             with self.subTest(options=options_text, secrets=secrets_text):
                 options = self.write_options(options_text)
@@ -442,6 +604,50 @@ class TestFailClosed(AuthTestBase):
     async def test_boolean_token(self):
         await self.check_failed(secrets=self.write_secrets("emhass_api_token: true\n"))
 
+    async def test_secrets_path_is_a_directory(self):
+        # What Docker creates for a bind-mounted file that is missing on the host.
+        path = self.dir / "secrets_emhass.yaml"
+        path.mkdir()
+        await self.check_failed(secrets=path)
+
+    async def test_secrets_file_that_cannot_be_read(self):
+        path = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
+        with patch.object(pathlib.Path, "read_text", side_effect=PermissionError(13, "denied")):
+            await self.check_failed(secrets=path)
+
+    async def test_secrets_file_that_is_not_a_mapping(self):
+        for text in (
+            'emhass_api_token:"secret-value-0123456"\n',  # no space after the colon
+            'emhass_api_token = "secret-value-0123456"\n',
+            "- emhass_api_token: secret-value-0123456\n",
+            "just some text\n",
+        ):
+            with self.subTest(text=text):
+                api_auth.reset()
+                await self.check_failed(secrets=self.write_secrets(text))
+
+    async def test_options_file_that_is_not_an_object(self):
+        for text in ('["secret-value"]', '"secret-value"', "1"):
+            with self.subTest(text=text):
+                api_auth.reset()
+                await self.check_failed(options=self.write_options(text))
+
+    async def test_key_with_no_value(self):
+        # An unquoted token that starts with "#" is a YAML comment, so the key
+        # reads as empty. That is a mistake, not "no token".
+        for text in ("emhass_api_token: #secret-value\n", "emhass_api_token:\n"):
+            with self.subTest(text=text):
+                api_auth.reset()
+                await self.check_failed(secrets=self.write_secrets(text))
+
+    def test_errors_do_not_carry_the_yaml_text(self):
+        path = self.write_secrets("emhass_api_token: [secret-value\n")
+        with self.assertRaises(api_auth.ApiTokenError) as ctx:
+            api_auth.read_api_token(path, None, {})
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
+        self.assertNotIn("secret-value", str(ctx.exception))
+
 
 class TestStartupWarning(AuthTestBase):
     async def test_warns_when_open_on_the_network(self):
@@ -458,6 +664,9 @@ class TestStartupWarning(AuthTestBase):
             with self.subTest(host=host):
                 with self.assertNoLogs(self.logger, level="WARNING"):
                     api_auth.log_status(self.logger, host)
+                with self.assertLogs(self.logger, level="INFO") as logs:
+                    api_auth.log_status(self.logger, host)
+                self.assertIn("API authentication is off", logs.output[0])
 
     async def test_says_enabled_when_a_token_is_set(self):
         await self.enable()
@@ -546,16 +755,89 @@ class TestWebServerWiring(AuthTestBase):
         self.assertTrue(any("No API token is set" in line for line in logs.output))
 
     async def test_before_serving_keeps_the_token_loaded_at_import(self):
-        # A worker started by Gunicorn after max_requests must not re-read the
-        # files: a secrets file missing for a moment would switch auth off there.
+        # A worker started by Gunicorn after max_requests must not take a new
+        # reading of the files: a secrets file missing for a moment would switch
+        # auth off there.
         await self.enable()
+        (self.dir / "secrets_emhass.yaml").unlink()
+        env = {
+            "SECRETS_PATH": str(self.dir / "secrets_emhass.yaml"),
+            "OPTIONS_PATH": str(self.dir / "options.json"),
+        }
+        with patch.dict(os.environ, env), patch.object(web_server, "initialize", AsyncMock()):
+            await web_server.before_serving()
+        self.assertEqual(api_auth.current_token(), TOKEN)
+        response = await self.client.get("/api/v1/last-run")
+        self.assertEqual(response.status_code, 401)
+
+    async def test_before_serving_fails_closed_if_a_token_appeared(self):
+        # The import found no token, but the file holds one by the time the
+        # worker starts: refuse rather than run open.
+        await api_auth.configure(None, None, self.logger)
+        secrets = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
+        env = {"SECRETS_PATH": str(secrets), "OPTIONS_PATH": str(self.dir / "options.json")}
         with (
-            patch.object(web_server, "_configure_api_auth", AsyncMock()) as mock_configure,
+            patch.dict(os.environ, env),
             patch.object(web_server, "initialize", AsyncMock()),
+            self.assertLogs(web_server.app.logger, level="ERROR") as logs,
         ):
             await web_server.before_serving()
-        mock_configure.assert_not_awaited()
-        self.assertEqual(api_auth.current_token(), TOKEN)
+        self.assertIn("restart EMHASS", "\n".join(logs.output))
+        self.assertNotIn(TOKEN, "\n".join(logs.output))
+        response = await self.client.get(
+            "/api/v1/last-run", headers={"Authorization": "Bearer " + TOKEN}
+        )
+        self.assertEqual(response.status_code, 503)
+
+    async def test_before_serving_stays_open_when_still_no_token(self):
+        await api_auth.configure(None, None, self.logger)
+        env = {
+            "SECRETS_PATH": str(self.dir / "missing.yaml"),
+            "OPTIONS_PATH": str(self.dir / "missing.json"),
+        }
+        with patch.dict(os.environ, env), patch.object(web_server, "initialize", AsyncMock()):
+            await web_server.before_serving()
+        response = await self.client.get("/api/v1/last-run")
+        self.assertEqual(response.status_code, 200)
+
+    def test_app_logger_and_its_handlers_mask_the_token(self):
+        app_logger = web_server.app.logger
+        self.assertIn(api_auth.token_log_filter, app_logger.filters)
+        self.assertTrue(app_logger.handlers)
+        for handler in app_logger.handlers:
+            with self.subTest(handler=type(handler).__name__):
+                self.assertIn(api_auth.token_log_filter, handler.filters)
+
+    async def test_a_handler_without_the_filter_still_gets_it_masked(self):
+        # The filter sits on the app logger, so a console handler Quart (or
+        # Flask) attached, which nobody gave the filter, writes the masked text.
+        await self.enable()
+        stream = io.StringIO()
+        console = logging.StreamHandler(stream)
+        app_logger = web_server.app.logger
+        saved = (app_logger.level, app_logger.disabled)
+        app_logger.setLevel(logging.INFO)
+        app_logger.disabled = False
+        app_logger.addHandler(console)
+        try:
+            app_logger.info("Passed runtime parameters: %s", {"t": {"x": TOKEN}})
+        finally:
+            app_logger.removeHandler(console)
+            app_logger.setLevel(saved[0])
+            app_logger.disabled = saved[1]
+        self.assertNotIn(api_auth.token_log_filter, console.filters)
+        self.assertIn("Passed runtime parameters", stream.getvalue())
+        self.assertNotIn(TOKEN, stream.getvalue())
+
+    async def test_template_log_line_has_no_status_marker(self):
+        # An action's status is read from the action log after the last " >> "
+        # line, so GET /template must not write one.
+        await self.enable()
+        with self.assertLogs(web_server.app.logger, level="INFO") as logs:
+            await self.client.get("/template", headers={"Authorization": "Bearer " + TOKEN})
+        lines = [line for line in logs.output if "rendered template" in line]
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn(" >> ", lines[0])
 
     async def test_token_sources_follow_the_environment(self):
         env = {"SECRETS_PATH": "/x/secrets.yaml", "OPTIONS_PATH": "/x/options.json"}
