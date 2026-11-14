@@ -73,6 +73,7 @@ from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
     add_date_features,
     add_local_calendar_days,
+    data_file_path,
     describe_invalid_forecast_value,
     get_days_list,
     get_forecast_start,
@@ -3504,7 +3505,7 @@ class Forecast:
             return mlf
         model_type = self.params["passed_data"]["model_type"]
         filename = model_type + "_mlf.pkl"
-        filename_path = self.emhass_conf["data_path"] / filename
+        filename_path = data_file_path(self.emhass_conf["data_path"], filename)
         if not filename_path.is_file():
             self.logger.error(
                 "The ML forecaster file was not found, please run a model fit method before this predict method"
