@@ -776,6 +776,32 @@ class TestFailClosed(AuthTestBase):
                     api_auth.read_api_token(path, None, {})
                 await self.check_failed(secrets=path)
 
+    async def test_token_set_twice_through_merge_keys(self):
+        real = 'real: &real {emhass_api_token: "secret-value-0123456"}\n'
+        empty = 'empty: &empty {emhass_api_token: ""}\n'
+        for text in (
+            real + empty + "<<: *real\n<<: *empty\n",
+            real + empty + "<<: [*empty, *real]\n",
+            real + '<<: *real\nemhass_api_token: ""\n',
+        ):
+            with self.subTest(text=text):
+                api_auth.reset()
+                await self.check_failed(secrets=self.write_secrets(text))
+
+    def test_one_merged_token_is_read(self):
+        path = self.write_secrets(f'base: &base {{emhass_api_token: "{TOKEN}"}}\n<<: *base\n')
+        self.assertEqual(api_auth.read_api_token(path, None, {}), TOKEN)
+
+    def test_value_that_cannot_be_converted_is_not_quoted(self):
+        for tag in ("!!bool", "!!int", "!!float"):
+            with self.subTest(tag=tag):
+                path = self.write_secrets(f"hass_url: {tag} Hidden_Value_0123\n")
+                with self.assertRaises(api_auth.ApiTokenError) as ctx:
+                    api_auth.read_api_token(path, None, {})
+                self.assertNotIn("hidden", str(ctx.exception).lower())
+                self.assertIsNone(ctx.exception.__cause__)
+                self.assertTrue(ctx.exception.__suppress_context__)
+
     def test_other_repeated_keys_are_left_alone(self):
         path = self.write_secrets(
             f"hass_url: a\nhass_url: b\nnested:\n  {api_auth.SETTING_NAME}: x\n"
@@ -811,11 +837,20 @@ class TestFailClosed(AuthTestBase):
 class TestStartupWarning(AuthTestBase):
     async def test_warns_when_open_on_the_network(self):
         await api_auth.configure(None, None, self.logger)
-        for host in ("0.0.0.0", "192.0.2.10", "::", "emhass.lan", ""):
+        for host, where in (
+            ("0.0.0.0", "all interfaces"),
+            ("192.0.2.10", "a network address"),
+            ("::", "all interfaces"),
+            ("emhass.lan", "a network address"),
+            ("", "all interfaces"),
+        ):
             with self.subTest(host=host):
                 with self.assertLogs(self.logger, level="WARNING") as logs:
                     api_auth.log_status(self.logger, host)
                 self.assertIn("No API token is set", logs.output[0])
+                self.assertIn(f"listens on {where}.", logs.output[0])
+                if host:
+                    self.assertNotIn(host, logs.output[0])
 
     async def test_quiet_on_loopback(self):
         await api_auth.configure(None, None, self.logger)
@@ -854,7 +889,7 @@ class TestStartupWarning(AuthTestBase):
         self.assertEqual(response.status_code, 503)
 
     async def test_sixteen_characters_is_enough(self):
-        await self.enable("x" * api_auth.MIN_TOKEN_LENGTH)
+        await self.enable("x" * api_auth.MIN_LENGTH)
 
     async def test_bind_host_under_gunicorn_follows_ip_env(self):
         with patch.dict(sys.modules, {"gunicorn": object()}):
@@ -1066,6 +1101,19 @@ class TestWebServerWiring(AuthTestBase):
                 self.assertNotIn("hidden", str(ctx.exception).lower())
                 self.assertIsNone(ctx.exception.__cause__)
                 self.assertTrue(ctx.exception.__suppress_context__)
+
+    async def test_build_secrets_does_not_quote_a_yaml_error(self):
+        # PyYAML's error quotes the line, which can be a secret. Run directly or
+        # through the CLI, nothing masks it.
+        secrets = self.write_secrets("hass_url: http://ha\nlong_lived_token: [Hidden_Value_0123\n")
+        with self.assertRaises(yaml.YAMLError) as ctx:
+            await utils.build_secrets(
+                {"data_path": self.dir}, self.logger, secrets_path=secrets, no_response=True
+            )
+        self.assertNotIn("hidden", str(ctx.exception).lower())
+        self.assertIn("line", str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
 
     def test_token_is_listed_as_config_only(self):
         # Documents the rule: the runtime loop only checks keys in associations.csv,
