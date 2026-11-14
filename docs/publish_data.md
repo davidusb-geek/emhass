@@ -83,7 +83,7 @@ deferrable load:
 
 | Variable | Description | Published Sensor |
 |---|---|---|
-| P_deferrableX_state<br/>[X = 0, 1, 2, ...] | An interpretable command for deferrable load X at the current timestep: `off` (idle), `on` (running at nominal power) or `variable` (a modulated level in between). The full optimized plan over the horizon is attached as a `schedule` attribute (a list of `{date, value}` entries). This is a generic, automation-agnostic command surface — you map `on`/`off`/`variable` onto your own switch, number or script as you see fit. | sensor.p_deferrableX_state |
+| P_deferrableX_state<br/>[X = 0, 1, 2, ...] | An interpretable command for deferrable load X at the current timestep: `off` (idle), `on` (running at nominal power) or `variable` (a level in between). For a semi-continuous load, a fractional remainder step is labelled `variable` only when its average power is above max(1 % of nominal power, 1 W) and below 99 % of nominal power; smaller remainders may read `off` and larger ones `on`. The published power is the average over the step, not a setpoint, and a load that can only switch has to be on at its nominal power for that fraction of the step (see `operating_hours_of_each_deferrable_load`). The full optimized plan over the horizon is attached as a `schedule` attribute (a list of `{date, value}` entries). This is a generic, automation-agnostic command surface — you map `on`/`off`/`variable` onto your own switch, number or script as you see fit. | sensor.p_deferrableX_state |
 
 The labels are derived from the optimized `P_deferrableX` power and the load's
 `nominal_power_of_deferrable_loads`, so they stay consistent with the power
