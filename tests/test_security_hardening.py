@@ -396,11 +396,12 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         # secret sent here by mistake, changed so the log mask cannot match it.
         secret = "9Bcdefghij0123456789KLMNOPQRSTUVWXYZ_-abcde"
         for value in (secret, "yes", "1 +"):
-            with self.subTest(value=value), self.assertRaises(RuntimeParamError) as ctx:
-                await self._treat({"model_predict_publish": value}, "dayahead-optim")
-            self.assertEqual(str(ctx.exception), "model_predict_publish must be true or false")
-            self.assertIsNone(ctx.exception.__cause__)
-            self.assertTrue(ctx.exception.__suppress_context__)
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeParamError) as ctx:
+                    await self._treat({"model_predict_publish": value}, "dayahead-optim")
+                self.assertEqual(str(ctx.exception), "model_predict_publish must be true or false")
+                self.assertIsNone(ctx.exception.__cause__)
+                self.assertTrue(ctx.exception.__suppress_context__)
 
     async def test_saved_costfun_and_model_type_are_checked_too(self):
         # A value stored in the configuration gets the same check as a runtime one
