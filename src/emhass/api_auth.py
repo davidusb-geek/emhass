@@ -19,7 +19,7 @@ as the other secrets: the ``EMHASS_API_TOKEN`` environment variable, then
 replacing an earlier one as in ``build_secrets``. A source that leaves it empty
 does not replace an earlier one. The request hook looks it up on every request.
 If a token source is there but cannot be used (see ``read_api_token``), or the
-token is shorter than ``MIN_TOKEN_LENGTH``, every request except ``/healthz``
+token is shorter than ``MIN_LENGTH``, every request except ``/healthz``
 and ``/logout`` gets a 503 rather than running unauthenticated or with a
 guessable token. Only a missing file counts as "not configured".
 
@@ -69,7 +69,7 @@ SESSION_MAX_AGE_S = 30 * 24 * 3600
 # Tokens shorter than this are refused (503 on every route but /healthz). The
 # bearer check is not rate limited, and a session cookie is an HMAC keyed with
 # the token, so a short token could be guessed online or offline from a cookie.
-MIN_TOKEN_LENGTH = 16
+MIN_LENGTH = 16
 # Failed attempts are logged as a count, at most once per this many seconds.
 FAILURE_LOG_INTERVAL_S = 60.0
 # Slows down guessing through the login form, one guess at a time. It does not
@@ -130,10 +130,16 @@ def _normalise(value) -> str | None:
 
 
 def _top_level_key_count(content: str, name: str) -> int:
-    """How many times ``name`` is a key of the top-level YAML mapping in ``content``."""
-    node = yaml.compose(content, Loader=yaml.SafeLoader)
-    if not isinstance(node, yaml.MappingNode):
-        return 0
+    """How many times ``name`` is a key of the top-level YAML mapping in
+    ``content``, counting the keys that ``<<`` merge keys bring in."""
+    loader = yaml.SafeLoader(content)
+    try:
+        node = loader.get_single_node()
+        if not isinstance(node, yaml.MappingNode):
+            return 0
+        loader.flatten_mapping(node)
+    finally:
+        loader.dispose()
     return sum(1 for key, _ in node.value if isinstance(key, yaml.ScalarNode) and key.value == name)
 
 
@@ -148,13 +154,16 @@ def read_api_token(
     None when no source sets it. Raises when a source is there but cannot be
     used, so the caller can fail closed: a path that cannot be read (a
     directory, no permission), a file that does not parse, a non-empty file
-    whose top level is not a mapping, the token key twice in the secrets file,
-    or a YAML key with no value (an unquoted token that starts with ``#``
-    reads as a comment). Only a missing file
-    means "not configured". Synchronous, so it can run at import.
+    whose top level is not a mapping, the token key twice in the secrets file
+    (merge keys included), or a YAML key with no value (an unquoted token that
+    starts with ``#`` reads as a comment). Only a missing file means "not
+    configured". Synchronous, so it can run at import.
 
-    The errors are raised ``from None``: a YAML error's text quotes the line
-    of the file, which can be the token.
+    In options.json a repeated key also keeps the last value; the add-on
+    writes that file, so it is not checked.
+
+    The errors are raised ``from None``: a parser's error text can quote the
+    line of the file or the value, which can be the token.
     """
     env = os.environ if environ is None else environ
     token = _normalise(env.get(ENV_NAME))
@@ -175,6 +184,9 @@ def read_api_token(
             loaded = yaml.safe_load(content)
         except yaml.YAMLError:
             raise ApiTokenError("secrets file is not valid YAML") from None
+        except Exception:
+            # e.g. a !!int tag on a value that is not a number
+            raise ApiTokenError("secrets file has a value that cannot be converted") from None
         if loaded is None:
             loaded = {}  # empty, or comments only
         if not isinstance(loaded, dict):
@@ -235,10 +247,10 @@ def configure_now(
     except Exception as e:
         _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
         return
-    if token is not None and len(token) < MIN_TOKEN_LENGTH:
+    if token is not None and len(token) < MIN_LENGTH:
         _fail(
             logger,
-            f"{SETTING_NAME} is shorter than {MIN_TOKEN_LENGTH} characters; use a long random value",
+            f"{SETTING_NAME} is shorter than {MIN_LENGTH} characters; use a long random value",
         )
         return
     _state.update(loaded=True, token=token, failed=False)
@@ -474,12 +486,15 @@ def log_status(logger: logging.Logger, host: str) -> None:
             "API authentication is off (no %s set; listening on loopback only)", SETTING_NAME
         )
         return
-    # The address itself is not repeated here; the launch line logs it.
+    # Fixed text rather than the address, which comes from the secrets; the
+    # launch line logs the address.
+    where = "all interfaces" if host in ("0.0.0.0", "::", "[::]", "") else "a network address"
     logger.warning(
-        "No API token is set and the web server listens on a network address. Any "
-        "device that can reach this port can change the configuration and run "
-        "actions. Set %s (secrets file, add-on option or %s environment variable), "
-        "or listen on 127.0.0.1 only.",
+        "No API token is set and the web server listens on %s. Any device that can "
+        "reach this port can change the configuration and run actions. Set %s "
+        "(secrets file, add-on option or %s environment variable), or listen on "
+        "127.0.0.1 only.",
+        where,
         SETTING_NAME,
         ENV_NAME,
     )

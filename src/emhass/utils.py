@@ -3781,73 +3781,53 @@ async def treat_runtimeparams(
                 n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
                 params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)] * n_loads
 
+        def _per_load_numbers(name, value, cast):
+            """A per-load runtime list: a JSON list string, a list, or one value for
+            every load. Neither the warning nor the error quotes the value."""
+            if isinstance(value, str):
+                try:
+                    value = orjson.loads(value)
+                except Exception:
+                    logger.warning(f"Could not parse {name} string ({len(value)} characters)")
+            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+            try:
+                if isinstance(value, list):
+                    return [cast(v) for v in value]
+                return [cast(value)] * n_loads
+            except (TypeError, ValueError, OverflowError):
+                raise RuntimeParamError(f"{name} must be a number or a list of numbers") from None
+
         # def_current_on_timesteps: per-load elapsed ON timesteps for min-on remainder
         # (issue #952). Mirrors def_current_state: absent key -> no initial force (NOT
         # assumed zero). Validates that each entry is a non-negative integer.
         if "def_current_on_timesteps" in runtimeparams.keys():
-            dcot = runtimeparams["def_current_on_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcot, str):
-                try:
-                    dcot = orjson.loads(dcot)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_on_timesteps string: {dcot}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcot, list):
-                params["optim_conf"]["def_current_on_timesteps"] = [int(v) for v in dcot]
-            else:
-                params["optim_conf"]["def_current_on_timesteps"] = [int(dcot)] * n_loads
+            params["optim_conf"]["def_current_on_timesteps"] = _per_load_numbers(
+                "def_current_on_timesteps", runtimeparams["def_current_on_timesteps"], int
+            )
 
         # def_current_off_timesteps: per-load elapsed OFF timesteps for min-off remainder
         # (#952 follow-on). Mirrors def_current_on_timesteps: absent key -> no initial
         # force (NOT assumed zero). Validates that each entry is a non-negative integer.
         if "def_current_off_timesteps" in runtimeparams:
-            dcoft = runtimeparams["def_current_off_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcoft, str):
-                try:
-                    dcoft = orjson.loads(dcoft)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_off_timesteps string: {dcoft}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcoft, list):
-                params["optim_conf"]["def_current_off_timesteps"] = [int(v) for v in dcoft]
-            else:
-                params["optim_conf"]["def_current_off_timesteps"] = [int(dcoft)] * n_loads
+            params["optim_conf"]["def_current_off_timesteps"] = _per_load_numbers(
+                "def_current_off_timesteps", runtimeparams["def_current_off_timesteps"], int
+            )
 
         # def_current_power: per-load current power in watts (issue #605).
         # Absent key -> no pin, no force-on (NOT assumed zero). Mirrors def_current_on_timesteps.
         if "def_current_power" in runtimeparams:
-            dcp = runtimeparams["def_current_power"]
-            # String -> parse JSON list
-            if isinstance(dcp, str):
-                try:
-                    dcp = orjson.loads(dcp)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_power string: {dcp}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcp, list):
-                params["optim_conf"]["def_current_power"] = [float(v) for v in dcp]
-            else:
-                params["optim_conf"]["def_current_power"] = [float(dcp)] * n_loads
+            params["optim_conf"]["def_current_power"] = _per_load_numbers(
+                "def_current_power", runtimeparams["def_current_power"], float
+            )
 
         # def_current_operating_timesteps: per-load completed operating timesteps today (issue #983).
         # Absent key -> no decrement (NOT assumed zero). Mirrors def_current_on_timesteps.
         if "def_current_operating_timesteps" in runtimeparams:
-            dcots = runtimeparams["def_current_operating_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcots, str):
-                try:
-                    dcots = orjson.loads(dcots)
-                except Exception:
-                    logger.warning(
-                        f"Could not parse def_current_operating_timesteps string: {dcots}"
-                    )
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcots, list):
-                params["optim_conf"]["def_current_operating_timesteps"] = [int(v) for v in dcots]
-            else:
-                params["optim_conf"]["def_current_operating_timesteps"] = [int(dcots)] * n_loads
+            params["optim_conf"]["def_current_operating_timesteps"] = _per_load_numbers(
+                "def_current_operating_timesteps",
+                runtimeparams["def_current_operating_timesteps"],
+                int,
+            )
 
         # set_deferrable_load_single_constant arrives via the generic associations.csv
         # path as-is (may be a list of strings from runtimeparams JSON).  Apply the
@@ -5070,17 +5050,20 @@ async def build_secrets(
         logger.debug("Obtaining secrets from secrets file")
         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
+        # The parser's own error text can quote the secret: a YAML error quotes
+        # the line, and a !!bool, !!int or !!float tag that does not fit raises
+        # an error with the value lowercased or without its "_", which the log
+        # mask cannot match. Only the error type and the line number are kept.
         try:
             loaded = yaml.safe_load(content)
-        except yaml.YAMLError:
-            raise
-        except Exception as e:
-            # A !!bool, !!int or !!float tag that does not fit its value raises an
-            # error quoting the value lowercased or without its "_", which the log
-            # mask cannot match and which can be a secret.
-            raise ValueError(
-                f"Could not read the secrets file ({type(e).__name__} while converting a value)"
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = f" near line {mark.line + 1}" if mark is not None else ""
+            raise yaml.YAMLError(
+                f"secrets file is not valid YAML ({type(e).__name__}{where})"
             ) from None
+        except Exception as e:
+            raise ValueError(f"Could not read the secrets file ({type(e).__name__})") from None
         params_secrets.update(loaded)
     # The web server's API token is read by api_auth on its own. Keep it out of the
     # secrets that go on into params, logs and the configuration routes.
@@ -6032,7 +6015,8 @@ class InverterConfigError(ValueError):
 
 
 class RuntimeParamError(ValueError):
-    """A runtime parameter that names a file or column has an unusable value."""
+    """A runtime parameter has an unusable value (a file or column name, or a
+    per-load number list). The message is fixed text and never quotes the value."""
 
 
 # Connection settings that only the configuration may set. A runtime request
