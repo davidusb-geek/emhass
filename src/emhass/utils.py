@@ -5712,7 +5712,9 @@ def validate_num_batteries(plant_conf: dict) -> int:
     else:
         shown = repr(raw)
         if len(shown) > 40:
-            shown = shown[:37] + "..."
+            # Not a cut copy: the log mask matches a secret pasted here by
+            # mistake (the API token, say) only when it is whole.
+            shown = f"a value of {len(shown)} characters"
     invalid = BatteryConfigError(f"number_of_batteries must be a positive integer, got {shown}")
     if isinstance(raw, bool) or not isinstance(raw, int | float | str):
         raise invalid

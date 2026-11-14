@@ -536,10 +536,12 @@ async def json_convert():
     data = await request.get_data()
     try:
         yaml_config = yaml.safe_load(data)
-    except yaml.YAMLError as e:
+    except Exception as e:
         # A YAML error's text quotes the lines around the error, which can hold
-        # a secret: the API token, in pieces the log mask cannot match. So only
-        # its type is logged.
+        # a secret: the API token, in pieces the log mask cannot match. A tag
+        # such as !!bool or !!int raises KeyError or ValueError with the value
+        # lowercased or without its underscores, which the mask cannot match
+        # either. So only the type is logged, whatever the error.
         app.logger.warning(f"Could not parse the YAML sent to /get-json ({type(e).__name__})")
         return await make_response(["failed to Parse YAML from data"], 400)
 

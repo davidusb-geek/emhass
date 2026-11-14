@@ -339,6 +339,19 @@ class TestTokenLogFilter(AuthTestBase):
         self.assertNotIn(TOKEN, stream.getvalue())
         self.assertIn("Passed runtime parameters", stream.getvalue())
 
+    def test_battery_count_error_quotes_no_cut_copy_of_a_long_value(self):
+        # /get-json and /set-config log this message. A cut copy of a token
+        # pasted here by mistake would not be matched by the mask.
+        from emhass import utils
+
+        token = "Abcdefghij0123456789KLMNOPQRSTUVWXYZ_-abcde"
+        with self.assertRaises(utils.BatteryConfigError) as ctx:
+            utils.validate_num_batteries({"number_of_batteries": token})
+        self.assertNotIn(token[:12], str(ctx.exception))
+        with self.assertRaises(utils.BatteryConfigError) as ctx:
+            utils.validate_num_batteries({"number_of_batteries": "abc"})
+        self.assertIn("'abc'", str(ctx.exception))
+
     async def test_yaml_error_in_get_json_logs_no_piece_of_the_token(self):
         # PyYAML's error text quotes the line twice, each excerpt cut to about
         # 75 characters, so a token of 40 to 63 characters would be logged as a
@@ -353,20 +366,21 @@ class TestTokenLogFilter(AuthTestBase):
         app_logger.setLevel(logging.DEBUG)
         app_logger.disabled = False
         app_logger.addHandler(handler)
+        headers = {"Authorization": "Bearer " + token, "Content-Type": "text/plain"}
         try:
             for body in (
                 f'emhass_api_token: "{token}',
                 f"x: [{token}}}",
                 '{"token": "' + token + '"", "a": 1}',
+                # Tags whose errors are not YAMLError and hold a changed copy:
+                # lowercased (!!bool) or without underscores (!!int, !!float).
+                f"x: !!bool {token}",
+                f"x: !!int {token}",
+                f"x: !!float {token}",
             ):
                 with self.subTest(body=body.replace(token, "<token>")):
                     response = await self.client.post(
-                        "/get-json",
-                        data=body.encode(),
-                        headers={
-                            "Authorization": "Bearer " + token,
-                            "Content-Type": "text/plain",
-                        },
+                        "/get-json", data=body.encode(), headers=headers
                     )
                     self.assertEqual(response.status_code, 400)
         finally:
@@ -375,8 +389,13 @@ class TestTokenLogFilter(AuthTestBase):
             app_logger.disabled = saved[1]
         logged = stream.getvalue()
         self.assertIn("Could not parse the YAML sent to /get-json", logged)
-        self.assertNotIn(token[:12], logged)
-        self.assertNotIn(token[-12:], logged)
+
+        def plain(text):
+            return text.lower().replace("_", "").replace("-", "")
+
+        flat_token, flat_log = plain(token), plain(logged)
+        pieces = [flat_token[i : i + 12] for i in range(len(flat_token) - 11)]
+        self.assertFalse([p for p in pieces if p in flat_log])
 
 
 class TestLogin(AuthTestBase):
@@ -745,7 +764,6 @@ class TestFailClosed(AuthTestBase):
         )
         with self.assertRaises(api_auth.ApiTokenError):
             api_auth.read_api_token(None, None, {api_auth.API_TOKEN_ENV: "\udcff-secret-value-01"})
-        logging.getLogger("emhass.test").warning("still logging: %s", "x")
 
     async def test_failure_log_says_to_restart(self):
         with self.assertLogs(self.logger, level="ERROR") as logs:
