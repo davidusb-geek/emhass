@@ -27,7 +27,7 @@ from quart import Quart, make_response, request
 from quart import logging as log
 from werkzeug.exceptions import HTTPException
 
-from emhass import last_run, plan_store
+from emhass import api_auth, last_run, plan_store
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
@@ -77,6 +77,8 @@ from emhass.utils import (
 )
 
 app = Quart(__name__)
+# Opt-in API authentication: a before_request hook plus /login and /logout.
+api_auth.install(app)
 
 emhass_conf: dict[str, Path] = {}
 entity_path: Path = Path()
@@ -261,6 +263,9 @@ async def before_serving():
     """Initialize EMHASS before starting to serve requests."""
     # Capture boot timestamp first, so /healthz reports it even if initialize() fails.
     app.config["boot_ts"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    # The API token is loaded first and on its own, so a failure in initialize()
+    # cannot leave a configured token unenforced.
+    await _configure_api_auth()
     # Initialize the application
     try:
         await initialize()
@@ -270,6 +275,15 @@ async def before_serving():
         app.logger.info("Continuing without WebSocket connection...")
         # The initialize() function already sets up all necessary components except WebSocket
         # So we can continue serving requests even if WebSocket connection fails
+
+
+async def _configure_api_auth() -> None:
+    """Load the API token from the same files _setup_paths and _setup_secrets use."""
+    await api_auth.configure(
+        os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        os.getenv("OPTIONS_PATH", default="/data/options.json"),
+        app.logger,
+    )
 
 
 @app.after_serving
@@ -1563,7 +1577,10 @@ async def initialize(args: dict | None = None):
         root_path,
     ) = await _setup_paths()
     # Setup Secrets (must run BEFORE build_configuration to allow options.json to override config_path)
-    server_ip = await _setup_secrets(args, options_path)
+    try:
+        server_ip = await _setup_secrets(args, options_path)
+    finally:
+        api_auth.log_status(app.logger, api_auth.bind_host(params_secrets.get("server_ip")))
     # Build configuration (now uses potentially updated emhass_conf["config_path"] from options.json)
     config, costfun, logging_level = await _build_configuration(
         emhass_conf["config_path"],
@@ -1616,6 +1633,7 @@ async def main() -> None:
     args = parser.parse_args()
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     # Initialize the app before starting server
+    await _configure_api_auth()
     await initialize(args_dict)
     # For direct execution (development/testing), use uvicorn programmatically
     host = params_secrets.get("server_ip", "0.0.0.0")
