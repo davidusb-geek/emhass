@@ -26,7 +26,7 @@ class AuthTestBase(unittest.IsolatedAsyncioTestCase):
         api_auth.reset()
         self.env = patch.dict(os.environ, {}, clear=False)
         self.env.start()
-        os.environ.pop(api_auth.API_TOKEN_ENV, None)
+        os.environ.pop(api_auth.ENV_NAME, None)
         self.delay = patch.object(api_auth, "FAILED_LOGIN_DELAY_S", 0)
         self.delay.start()
         self.client = web_server.app.test_client()
@@ -50,7 +50,7 @@ class AuthTestBase(unittest.IsolatedAsyncioTestCase):
         return path
 
     async def enable(self, token: str = TOKEN):
-        secrets = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: token}))
+        secrets = self.write_secrets(yaml.safe_dump({api_auth.SETTING_NAME: token}))
         await api_auth.configure(secrets, None, self.logger)
         self.assertEqual(api_auth.current_token(), token)
 
@@ -624,7 +624,7 @@ class TestTokenSources(AuthTestBase):
     async def test_env_options_and_secrets_precedence(self):
         options = self.write_options('{"emhass_api_token": "from-options-0123456"}')
         secrets = self.write_secrets("emhass_api_token: from-secrets-0123456\n")
-        env = {api_auth.API_TOKEN_ENV: "from-env-0123456789"}
+        env = {api_auth.ENV_NAME: "from-env-0123456789"}
         self.assertEqual(await api_auth.load_api_token(None, None, env), "from-env-0123456789")
         self.assertEqual(await api_auth.load_api_token(None, options, env), "from-options-0123456")
         self.assertEqual(
@@ -641,11 +641,11 @@ class TestTokenSources(AuthTestBase):
         token = "trimmed-token-0123456789"
         for space in (" ", "\t", "\r\n", "\f", "\v"):
             with self.subTest(space=repr(space)):
-                env = {api_auth.API_TOKEN_ENV: space + token + space}
+                env = {api_auth.ENV_NAME: space + token + space}
                 self.assertEqual(api_auth.read_api_token(None, None, env), token)
 
     async def test_empty_later_source_keeps_earlier_token(self):
-        env = {api_auth.API_TOKEN_ENV: "e" * 20}
+        env = {api_auth.ENV_NAME: "e" * 20}
         for options_text, secrets_text in (
             ('{"emhass_api_token": ""}', "emhass_api_token: ''\n"),
             ('{"emhass_api_token": "   "}', "emhass_api_token: '   '\n"),
@@ -672,7 +672,7 @@ class TestTokenSources(AuthTestBase):
         self.assertEqual(await api_auth.load_api_token(secrets, None, {}), "0000000000001234")
 
     async def test_env_var_applies_before_configure(self):
-        os.environ[api_auth.API_TOKEN_ENV] = TOKEN
+        os.environ[api_auth.ENV_NAME] = TOKEN
         response = await self.client.get("/api/v1/last-run")
         self.assertEqual(response.status_code, 401)
         response = await self.client.get(
@@ -736,7 +736,7 @@ class TestFailClosed(AuthTestBase):
         await self.check_failed(secrets=path)
 
     async def test_secrets_file_that_cannot_be_read(self):
-        path = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
+        path = self.write_secrets(yaml.safe_dump({api_auth.SETTING_NAME: TOKEN}))
         with patch.object(pathlib.Path, "read_text", side_effect=PermissionError(13, "denied")):
             await self.check_failed(secrets=path)
 
@@ -772,7 +772,7 @@ class TestFailClosed(AuthTestBase):
             secrets=self.write_secrets('emhass_api_token: "\\ud800-secret-value-0123456"\n')
         )
         with self.assertRaises(api_auth.ApiTokenError):
-            api_auth.read_api_token(None, None, {api_auth.API_TOKEN_ENV: "\udcff-secret-value-01"})
+            api_auth.read_api_token(None, None, {api_auth.ENV_NAME: "\udcff-secret-value-01"})
 
     async def test_failure_log_says_to_restart(self):
         with self.assertLogs(self.logger, level="ERROR") as logs:
@@ -856,7 +856,7 @@ class TestWebServerWiring(AuthTestBase):
     async def test_token_loaded_even_if_initialisation_fails(self):
         # before_serving() swallows an initialize() failure and keeps serving, so
         # the token has to be loaded before initialize() runs, not inside it.
-        secrets = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
+        secrets = self.write_secrets(yaml.safe_dump({api_auth.SETTING_NAME: TOKEN}))
         env = {"SECRETS_PATH": str(secrets), "OPTIONS_PATH": str(self.dir / "options.json")}
         with (
             patch.dict(os.environ, env),
@@ -915,7 +915,7 @@ class TestWebServerWiring(AuthTestBase):
         # The import found no token, but the file holds one by the time the
         # worker starts: refuse rather than run open.
         await api_auth.configure(None, None, self.logger)
-        secrets = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
+        secrets = self.write_secrets(yaml.safe_dump({api_auth.SETTING_NAME: TOKEN}))
         env = {"SECRETS_PATH": str(secrets), "OPTIONS_PATH": str(self.dir / "options.json")}
         with (
             patch.dict(os.environ, env),
@@ -1027,29 +1027,29 @@ class TestWebServerWiring(AuthTestBase):
 
     async def test_build_secrets_drops_the_api_token(self):
         secrets = self.write_secrets(
-            yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN, "hass_url": "http://ha:8123/"})
+            yaml.safe_dump({api_auth.SETTING_NAME: TOKEN, "hass_url": "http://ha:8123/"})
         )
         _, built = await utils.build_secrets(
             {"data_path": self.dir}, self.logger, secrets_path=secrets, no_response=True
         )
-        self.assertNotIn(api_auth.API_TOKEN_KEY, built)
+        self.assertNotIn(api_auth.SETTING_NAME, built)
         self.assertEqual(built["hass_url"], "http://ha:8123/")
 
     def test_token_is_listed_as_config_only(self):
         # Documents the rule: the runtime loop only checks keys in associations.csv,
         # and the token is never read from a body (see the logging test below).
-        self.assertIn(api_auth.API_TOKEN_KEY, utils.RUNTIME_DENIED_KEYS)
+        self.assertIn(api_auth.SETTING_NAME, utils.RUNTIME_DENIED_KEYS)
 
     def test_redacted(self):
         self.assertEqual(
-            api_auth.redacted({api_auth.API_TOKEN_KEY: TOKEN, "a": 1}),
-            {api_auth.API_TOKEN_KEY: "***", "a": 1},
+            api_auth.redacted({api_auth.SETTING_NAME: TOKEN, "a": 1}),
+            {api_auth.SETTING_NAME: "***", "a": 1},
         )
         for value in ({"a": 1}, [1, 2], "text", None):
             self.assertEqual(api_auth.redacted(value), value)
 
     async def test_token_sent_in_a_body_is_not_logged(self):
-        body = {api_auth.API_TOKEN_KEY: TOKEN, "prediction_horizon": 10}
+        body = {api_auth.SETTING_NAME: TOKEN, "prediction_horizon": 10}
         with patch.object(
             web_server, "_load_params", AsyncMock(return_value=({"optim_conf": {}}, "profit"))
         ):
