@@ -175,7 +175,7 @@ class TestFileNameValidation(unittest.TestCase):
             )
 
     def test_db_host(self):
-        for value in ("localhost", "192.168.1.10", "a0d7b954-victoriametrics", "[::1]", "my_db"):
+        for value in ("localhost", "192.0.2.10", "a0d7b954-victoriametrics", "[::1]", "my_db"):
             with self.subTest(value=value):
                 self.assertTrue(utils.is_valid_db_host(value))
         for value in (
@@ -853,7 +853,7 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertFalse(getattr(rh, key_use))
             # Positive control: a plain host keeps it enabled
-            params = {"retrieve_hass_conf": {key_use: True, key_host: "192.168.1.10"}}
+            params = {"retrieve_hass_conf": {key_use: True, key_host: "192.0.2.10"}}
             rh = RetrieveHass(
                 "http://ha.test:8123/",
                 "llat",
@@ -1067,7 +1067,10 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
         )
         series = [
             {"metric": {"__name__": "LEAKED_METRIC_A"}, "values": [[1, "1"]]},
-            {"metric": {"job": "LEAKED_JOB", "instance": "10.8.8.8:9100"}, "values": [[1, "2"]]},
+            {
+                "metric": {"job": "LEAKED_JOB", "instance": "198.51.100.8:9100"},
+                "values": [[1, "2"]],
+            },
         ]
         start = pd.Timestamp("2026-11-01", tz="UTC")
         with patch.object(rh, "_vm_query_range", AsyncMock(return_value=series)):
@@ -1076,7 +1079,7 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
                     MagicMock(), "sensor.x", start, start + pd.Timedelta(hours=1)
                 )
         self.assertTrue(any("several VictoriaMetrics metrics (2)" in line for line in cm.output))
-        self.assertFalse(any("LEAKED" in line or "10.8.8.8" in line for line in cm.output))
+        self.assertFalse(any("LEAKED" in line or "198.51.100.8" in line for line in cm.output))
 
     def test_upstream_error_prefers_status_and_names_known_reasons(self):
         class AiohttpLike(Exception):
