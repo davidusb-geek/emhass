@@ -3659,9 +3659,14 @@ async def treat_runtimeparams(
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = ast.literal_eval(
-                str(runtimeparams["model_predict_publish"]).capitalize()
-            )
+            try:
+                model_predict_publish = ast.literal_eval(
+                    str(runtimeparams["model_predict_publish"]).capitalize()
+                )
+            except (ValueError, SyntaxError):
+                # The parser's error quotes the capitalized text, which the log
+                # mask cannot match if it is a secret sent here by mistake.
+                raise RuntimeParamError("model_predict_publish must be true or false") from None
         params["passed_data"]["model_predict_publish"] = model_predict_publish
         if "model_predict_entity_id" not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"

@@ -103,8 +103,9 @@ _state: dict = {"loaded": False, "token": None, "failed": False}
 
 # Only ASCII white space around a token. str.strip() would also remove
 # characters such as U+0085 and U+00A0, so a token ending in one of them
-# could never be matched.
-_TOKEN_SPACE = " \t\r\n"
+# could never be matched. Form feed and vertical tab are trimmed too: an
+# HTTP header cannot carry them, so a token ending in one could not be sent.
+_TOKEN_SPACE = " \t\r\n\f\v"
 
 
 def _normalise(value) -> str | None:
