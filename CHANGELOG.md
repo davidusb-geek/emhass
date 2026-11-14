@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.18.9 - 2026-11-14
+
+Version 0.18.9 delivers critical web API security hardening alongside major functional upgrades, including full multi-inverter optimization and UI support, per-step availability masks for deferrable loads and heat sources, expanded Python 3.12–3.14 compatibility, and numerous reliability fixes across forecasting, thermal modeling, and atomic configuration saving. Many thanks to @LesIT1, @MMicieli, @thorstenhornung1, @JustAnotherPU, and @snauwaertc for their outstanding work, testing, and documentation contributions that made this release possible.
+
+### Improvement
+- test: add asymmetric-efficiency battery physics invariants (Stage 2C of #1269) (@MMicieli)
+- Document runtime parameters and configurations (@davidusb-geek)
+- test: Stage 2B (#1269) - tolerate solver noise in SOC deficit regression (@MMicieli)
+- test: Stage 2A (#1269) - detect ignored per-load cost overrides (@MMicieli)
+- feat: publish per-inverter sensors and the inverter attribute (#1150) (@LesIT1)
+- feat: web UI per-inverter lists follow number_of_inverters (#1150 PR 5) (@LesIT1)
+- feat: run more than one inverter, with PV clip and hybrid spill (#1150 PR 3b) (@LesIT1)
+- feat: guards for more than one inverter, refusal kept (#1150 PR 3b, part 1) (@LesIT1)
+- test: add aiohttp test-server fixture and migrate representative HTTP tests (@MMicieli)
+- feat: per-inverter optimizer model, refusal kept (#1150 PR 3a) (@LesIT1)
+- test: frozen-number pins for the one-inverter optimizer (#1150) (@LesIT1)
+- feat: per-plant PV forecast series and P_PV_plant columns (#1150 PR 2) (@LesIT1)
+- Stage 2 of #1220: Python 3.12-3.14 support and aioresponses/aiohttp 3.14 test compatibility (@MMicieli)
+- feat: per-inverter config keys and validation (#1150, PR 1 of 6) (@LesIT1)
+- chore: cleaning Dockerfile and github Workflows warnings (@davidusb-geek)
+- feat: per-step availability mask for deferrable loads and heat sources (def_availability) (@thorstenhornung1)
+
+### Documentation
+- docs(cookbook): add custom PV forecast injection recipe (@JustAnotherPU)
+- docs: cookbook recipe for two hybrid inverters (#1150) (@LesIT1)
+- test/docs: AC-coupled battery-only inverter curve accounting (#1271) (@MMicieli)
+- docs: count EV deadlines in elapsed steps from the first step and keep them strict (#1223) (@MMicieli)
+- docs: make DST- and start-time-sensitive examples follow the first-step time grid (#1223) (@MMicieli)
+- docs: fix parseable examples and fail-closed Node-RED SOC input (#1223) (@MMicieli)
+
+### Fix
+- fix: prevent log injection from cached battery-identification values (@MMicieli)
+- fix: use interval-average PV power for Open-Meteo forecasts (@MMicieli)
+- fix: do not enforce thermal_config bounds inside the thermal_inertia lag window (@snauwaertc)
+- fix: validate battery_stress_segments and inverter_stress_segments (@LesIT1)
+- fix: single-flight guard and atomic result files for live optimizations (refs #1304) (@MMicieli)
+- fix: write config.json and params.pkl whole, one save at a time (@LesIT1)
+- fix: refuse a request body orjson cannot write with a 400 (@LesIT1)
+- fix: bound number_of_batteries at 100 and refuse a bad count with a 400 (@LesIT1)
+- fix: replace deprecated aiohttp.BasicAuth in VictoriaMetrics authentication (@MMicieli)
+- fix: read inverter_stress_segments for the inverter stress cost (@LesIT1)
+- fix: hold near-ceiling battery identification fits backed only by the same-source cross-check (#1072) (@LesIT1)
+- fix: stop Forecast.Solar overnight gaps becoming phantom PV (#1267) (@MMicieli)
+- Fix config UI HTML-encoding of configuration values (#1290) (@MMicieli)
+- fix: patching the thermal excess building gains (@davidusb-geek)
+
 ## 0.18.8 - 2026-11-01
 
 ### Improvement
