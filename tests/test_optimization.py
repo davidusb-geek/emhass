@@ -3784,9 +3784,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
-    def _solve_lag_window(self, min_temps, max_temps):
-        """test_thermal_inertia's fixture (L = 2 steps, no heat in flight) with the
-        given bounds. The free path is 20.0, 17.5, 15.62, 14.22."""
+    def _solve_lag_window(self, min_temps, max_temps, prior_heat=None):
+        """test_thermal_inertia's fixture (L = 2 steps) with the given bounds. Without
+        ``prior_heat`` (in-flight input power in W, oldest first) no heat is in flight
+        and the free path is 20.0, 17.5, 15.62, 14.22."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
         self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
@@ -3802,6 +3803,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     "sense": "heat",
                     "min_temperatures": min_temps,
                     "max_temperatures": max_temps,
+                    **({"prior_heat": prior_heat} if prior_heat is not None else {}),
                 }
             },
         ]
@@ -3815,6 +3817,67 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead[opt.var_prod_price].values,
         )
         return opt, res
+
+    def test_thermal_inertia_reuse_refreshes_outdoor_floor_and_balances_prior_heat(self):
+        """Re-solving a built problem must refresh the outdoor forecast and comfort floor.
+
+        With the built CVXPY problem reused, runtime weather and comfort values must
+        reach its Parameters and the trajectory must follow an independent heat and
+        standing-loss balance (including in-flight ``prior_heat``). An Optimal status
+        with a stale outdoor temperature or stale floor is not acceptable.
+        """
+        opt, _ = self._solve_lag_window([0.0] * 48, [30.0] * 48, prior_heat=[300.0, 600.0])
+        cached_problem = opt.prob
+        min_temps = [0.0] * 48
+        min_temps[3] = 20.0
+        thermal_conf = opt.optim_conf["def_load_config"][1]["thermal_config"]
+        thermal_conf["min_temperatures"] = min_temps
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        self.assertIs(opt.prob, cached_problem, "runtime refresh must use the cached problem")
+        self.assertEqual(opt.optim_status, "Optimal")
+        # Inspect the live Parameters as well as the achieved trajectory: with
+        # a zero-cost objective, an unconstrained plan might coincidentally
+        # satisfy the new floor, which must not mask a stale cached bound.
+        params = opt.param_thermal[1]
+        np.testing.assert_allclose(
+            np.asarray(params["outdoor_temp"].value, dtype=float),
+            15.0,
+            rtol=0.0,
+            atol=1e-8,
+        )
+        self.assertAlmostEqual(float(params["min_temps"].value[3]), 20.0, delta=1e-8)
+        temp = np.asarray(opt.predicted_temps[1].value, dtype=float)
+        # The first two lagged temperatures cannot be influenced by this plan's
+        # heating; they are the independent reference trajectory: passive cooling
+        # towards 15 C plus the in-flight prior_heat (300 W, 600 W -> +0.5, +1.0 C).
+        self.assertAlmostEqual(temp[1], 19.25, delta=1e-4)
+        self.assertAlmostEqual(temp[2], 19.1875, delta=1e-4)
+        self.assertGreaterEqual(temp[3], 20.0 - 1e-4)
+        # Independent balance on the exact CVXPY state (the published temperature is
+        # rounded to 0.01 C): L=2, nominal=3000 W, heating_rate=10 C/h,
+        # cooling_constant=0.5 /h. Heat arriving at step t is the oldest-first
+        # prior_heat for t < L, then the plan's own power delayed by L steps.
+        power = np.asarray(opt.vars["p_deferrable"][1].value, dtype=float)
+        dt = opt.time_step
+        arrived_heat = np.zeros(len(temp) - 1)
+        arrived_heat[:2] = np.array([300.0, 600.0]) * (10.0 * dt / 3000.0)
+        arrived_heat[2:] = power[: len(temp) - 3] * (10.0 * dt / 3000.0)
+        np.testing.assert_allclose(
+            np.diff(temp) + 0.5 * dt * (temp[:-1] - 15.0),
+            arrived_heat,
+            rtol=0.0,
+            atol=1e-4,
+            err_msg="thermal_config temperature must conserve heat and standing losses",
+        )
+        self.assertAlmostEqual(temp[0], 20.0, delta=1e-4)
+        self.assertGreater(power[0], 0.0, "the comfort floor must require actual heating")
 
     def test_thermal_inertia_bounds_inside_the_lag_window_are_not_enforced(self):
         """#1136: no decision reaches steps 1..L, so a bound the fixed path crosses
