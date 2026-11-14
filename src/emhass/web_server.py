@@ -80,6 +80,19 @@ app = Quart(__name__)
 # Opt-in API authentication: a before_request hook plus /login and /logout.
 api_auth.install(app)
 
+
+def _api_token_sources() -> tuple[str, str]:
+    """The secrets and options files, as _setup_paths and _setup_secrets find them."""
+    return (
+        os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        os.getenv("OPTIONS_PATH", default="/data/options.json"),
+    )
+
+
+# Loaded at import: under Gunicorn with preload_app this runs once in the master,
+# so every worker, including one restarted by max_requests, shares one snapshot.
+api_auth.configure_now(*_api_token_sources(), app.logger)
+
 emhass_conf: dict[str, Path] = {}
 entity_path: Path = Path()
 params_secrets: dict[str, str | float] = {}
@@ -263,15 +276,21 @@ async def before_serving():
     """Initialize EMHASS before starting to serve requests."""
     # Capture boot timestamp first, so /healthz reports it even if initialize() fails.
     app.config["boot_ts"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-    # The API token is loaded first and on its own, so a failure in initialize()
-    # cannot leave a configured token unenforced.
-    await _configure_api_auth()
+    # Normally loaded at import. If not (a test reset it), load it here, before
+    # initialize(), so a failure there cannot leave a configured token unenforced.
+    if not api_auth.is_loaded():
+        await _configure_api_auth()
     # Initialize the application
     try:
         await initialize()
         app.logger.info("Full initialization completed")
     except Exception as e:
-        app.logger.warning(f"Full initialization failed (this is normal in test environments): {e}")
+        # A YAML error's text quotes the offending line of the file, which can be
+        # a secret, so only its type is logged.
+        detail = type(e).__name__ if isinstance(e, yaml.YAMLError) else e
+        app.logger.warning(
+            f"Full initialization failed (this is normal in test environments): {detail}"
+        )
         app.logger.info("Continuing without WebSocket connection...")
         # The initialize() function already sets up all necessary components except WebSocket
         # So we can continue serving requests even if WebSocket connection fails
@@ -279,11 +298,7 @@ async def before_serving():
 
 async def _configure_api_auth() -> None:
     """Load the API token from the same files _setup_paths and _setup_secrets use."""
-    await api_auth.configure(
-        os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
-        os.getenv("OPTIONS_PATH", default="/data/options.json"),
-        app.logger,
-    )
+    await api_auth.configure(*_api_token_sources(), app.logger)
 
 
 @app.after_serving
@@ -1633,7 +1648,6 @@ async def main() -> None:
     args = parser.parse_args()
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
     # Initialize the app before starting server
-    await _configure_api_auth()
     await initialize(args_dict)
     # For direct execution (development/testing), use uvicorn programmatically
     host = params_secrets.get("server_ip", "0.0.0.0")

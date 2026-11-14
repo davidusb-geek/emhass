@@ -10,13 +10,16 @@ configured, every request needs one of:
 
 ``/healthz`` and the login page stay open.
 
-The token is read once at start-up, by ``configure()``, from the same places
+The token is read once, by ``configure_now()`` when the web server module is
+imported (in the Gunicorn master, with preload, so every worker shares one
+snapshot), from the same places
 as the other secrets: the ``EMHASS_API_TOKEN`` environment variable, then
 ``options.json`` (add-on), then ``secrets_emhass.yaml``, a later source
 replacing an earlier one as in ``build_secrets``. A source that leaves it empty
 does not replace an earlier one. The request hook looks it up on every request.
-If a token source exists but cannot be read, every request except ``/healthz``
-and ``/logout`` gets a 503 rather than running unauthenticated.
+If a token source exists but cannot be read, or the token is shorter than
+``MIN_TOKEN_LENGTH``, every request except ``/healthz`` and ``/logout`` gets a
+503 rather than running unauthenticated or with a guessable token.
 
 A request authenticated only by the session cookie must send JSON when it
 changes something (any method but GET, HEAD and OPTIONS). A page on another
@@ -41,19 +44,21 @@ import pathlib
 import sys
 import time
 
-import aiofiles
 import orjson
 import yaml
-from quart import Quart, Response, request
+from quart import Quart, Response, current_app, request
 
 API_TOKEN_KEY = "emhass_api_token"
 API_TOKEN_ENV = "EMHASS_API_TOKEN"
 
 SESSION_COOKIE = "emhass_session"
 SESSION_MAX_AGE_S = 30 * 24 * 3600
-# Tokens shorter than this get a start-up warning. A session cookie is an HMAC
-# keyed with the token, so a short token can be guessed offline from a cookie.
+# Tokens shorter than this are refused (503 on every route but /healthz). The
+# bearer check is not rate limited, and a session cookie is an HMAC keyed with
+# the token, so a short token could be guessed online or offline from a cookie.
 MIN_TOKEN_LENGTH = 16
+# Failed attempts are logged as a count, at most once per this many seconds.
+FAILURE_LOG_INTERVAL_S = 60.0
 # Slows down guessing through the login form.
 FAILED_LOGIN_DELAY_S = 1.0
 
@@ -91,7 +96,7 @@ def _normalise(value) -> str | None:
     return value.strip() or None
 
 
-async def load_api_token(
+def read_api_token(
     secrets_path: pathlib.Path | str | None,
     options_path: pathlib.Path | str | None,
     environ: dict[str, str] | None = None,
@@ -100,14 +105,13 @@ async def load_api_token(
 
     A later source replaces an earlier one, as in ``build_secrets``. Returns
     None when no source sets it. Raises when a file that exists cannot be
-    parsed, so the caller can fail closed.
+    parsed, so the caller can fail closed. Synchronous, so it can run at import.
     """
     env = os.environ if environ is None else environ
     token = _normalise(env.get(API_TOKEN_ENV))
 
     if options_path and pathlib.Path(options_path).is_file():
-        async with aiofiles.open(options_path) as f:
-            content = await f.read()
+        content = pathlib.Path(options_path).read_text(encoding="utf-8")
         try:
             options = orjson.loads(content) if content.strip() else {}
         except orjson.JSONDecodeError as e:
@@ -116,8 +120,7 @@ async def load_api_token(
             token = _normalise(options.get(API_TOKEN_KEY)) or token
 
     if secrets_path and pathlib.Path(secrets_path).is_file():
-        async with aiofiles.open(secrets_path) as f:
-            content = await f.read()
+        content = pathlib.Path(secrets_path).read_text(encoding="utf-8")
         try:
             secrets = yaml.safe_load(content)
         except yaml.YAMLError as e:
@@ -128,7 +131,16 @@ async def load_api_token(
     return token
 
 
-async def configure(
+async def load_api_token(
+    secrets_path: pathlib.Path | str | None,
+    options_path: pathlib.Path | str | None,
+    environ: dict[str, str] | None = None,
+) -> str | None:
+    """``read_api_token`` for async callers."""
+    return read_api_token(secrets_path, options_path, environ)
+
+
+def configure_now(
     secrets_path: pathlib.Path | str | None,
     options_path: pathlib.Path | str | None,
     logger: logging.Logger,
@@ -139,18 +151,39 @@ async def configure(
     ``log_status()`` reports the rest once logging is set up.
     """
     try:
-        token = await load_api_token(secrets_path, options_path)
+        token = read_api_token(secrets_path, options_path)
     except Exception as e:
         # Only the exception type: a YAML error message quotes the file.
-        _state.update(loaded=True, token=None, failed=True)
-        logger.error(
-            "Could not read %s (%s). Every request except /healthz and /logout will get 503 "
-            "until this is fixed.",
-            API_TOKEN_KEY,
-            type(e).__name__,
+        _fail(logger, f"Could not read {API_TOKEN_KEY} ({type(e).__name__})")
+        return
+    if token is not None and len(token) < MIN_TOKEN_LENGTH:
+        _fail(
+            logger,
+            f"{API_TOKEN_KEY} is shorter than {MIN_TOKEN_LENGTH} characters; use a long random value",
         )
         return
     _state.update(loaded=True, token=token, failed=False)
+
+
+async def configure(
+    secrets_path: pathlib.Path | str | None,
+    options_path: pathlib.Path | str | None,
+    logger: logging.Logger,
+) -> None:
+    """``configure_now`` for async callers."""
+    configure_now(secrets_path, options_path, logger)
+
+
+def _fail(logger: logging.Logger, reason: str) -> None:
+    _state.update(loaded=True, token=None, failed=True)
+    logger.error(
+        "%s. Every request except /healthz and /logout will get 503 until this is fixed.",
+        reason,
+    )
+
+
+def is_loaded() -> bool:
+    return _state["loaded"]
 
 
 def current_token() -> str | None:
@@ -182,6 +215,28 @@ def redacted(value):
 def reset() -> None:
     """Forget the loaded token. For tests."""
     _state.update(loaded=False, token=None, failed=False)
+    _failures.update(count=0, since=None)
+
+
+# Failed attempts since the last log line, and when that line was written.
+_failures: dict = {"count": 0, "since": None}
+
+
+def _note_failure() -> None:
+    """Count a wrong token or cookie, and log the count at most once a minute.
+
+    Nothing about the attempt itself is logged, only how many there were.
+    """
+    _failures["count"] += 1
+    now = time.monotonic()
+    since = _failures["since"]
+    if since is not None and now - since < FAILURE_LOG_INTERVAL_S:
+        return
+    current_app.logger.warning(
+        "%d failed API authentication attempt(s) since the last report",
+        _failures["count"],
+    )
+    _failures.update(count=0, since=now)
 
 
 def is_loopback(host: str | None) -> bool:
@@ -213,15 +268,8 @@ def log_status(logger: logging.Logger, host: str) -> None:
     and the server is reachable from the network. Never logs the token."""
     if _state["failed"]:
         return  # configure() already logged the error
-    token = current_token()
-    if token is not None:
+    if current_token() is not None:
         logger.info("API authentication is enabled")
-        if len(token) < MIN_TOKEN_LENGTH:
-            logger.warning(
-                "%s is shorter than %d characters. Use a long random value.",
-                API_TOKEN_KEY,
-                MIN_TOKEN_LENGTH,
-            )
         return
     if is_loopback(host):
         return
@@ -302,6 +350,25 @@ def is_trusted_ingress_request() -> bool:
     on, the address follows them. See DESIGN-part2.md.
     """
     return False
+
+
+def _session_cookie_state(token: str) -> str:
+    """ "valid", "invalid" or "absent" for the session cookies in this request.
+
+    Every cookie of that name is checked, not just the first: a page on another
+    port of the same host can set one with a longer path, which the browser
+    then sends first.
+    """
+    values = request.cookies.getlist(SESSION_COOKIE)
+    if not values:
+        return "absent"
+    if any(session_is_valid(token, value) for value in values):
+        return "valid"
+    return "invalid"
+
+
+def _bearer_presented() -> bool:
+    return request.headers.get("Authorization", "").strip().lower().startswith("bearer")
 
 
 def _cookie_request_allowed() -> bool:
@@ -411,10 +478,13 @@ async def require_api_token():
         return None
     if _bearer_matches(token) or is_trusted_ingress_request():
         return None
-    if session_is_valid(token, request.cookies.get(SESSION_COOKIE)):
+    cookie = _session_cookie_state(token)
+    if cookie == "valid":
         if _cookie_request_allowed():
             return None
         return _forbidden_cookie_post()
+    if cookie == "invalid" or _bearer_presented():
+        _note_failure()
     if (
         request.method == "GET"
         and request.endpoint in PAGE_ENDPOINTS
@@ -446,11 +516,28 @@ async def login():
             secure=request.scheme == "https",
         )
         return response
+    _note_failure()
     await asyncio.sleep(FAILED_LOGIN_DELAY_S)
     return _login_page(status=401, failed=True)
 
 
+_LOGOUT_PAGE = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>EMHASS log out</title></head>
+<body>
+<form method="post" action="logout"><input type="submit" value="Log out"></form>
+</body>
+</html>
+"""
+
+
 async def logout():
+    """GET shows a button, POST logs out, so another page cannot log a user out
+    with a plain link or image."""
+    if request.method == "GET":
+        response = Response(_LOGOUT_PAGE, content_type="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
     response = _redirect("login")
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

@@ -314,6 +314,41 @@ class TestLogin(AuthTestBase):
         self.assertTrue(cookie.startswith(api_auth.SESSION_COOKIE + "=;"))
         self.assertTrue("Max-Age=0" in cookie or "Expires=Thu, 01 Jan 1970" in cookie)
 
+    async def test_logout_by_get_only_shows_a_button(self):
+        response = await self.client.get("/logout")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Set-Cookie", response.headers)
+        self.assertIn('method="post"', await response.get_data(as_text=True))
+
+    async def test_a_tossed_cookie_does_not_lock_the_user_out(self):
+        # A page on another port can set a junk cookie with a longer path, which
+        # the browser sends first.
+        good = api_auth.make_session_value(TOKEN)
+        cookie = f"{api_auth.SESSION_COOKIE}=junk; {api_auth.SESSION_COOKIE}={good}"
+        response = await self.client.get("/api/v1/last-run", headers={"Cookie": cookie})
+        self.assertEqual(response.status_code, 200)
+
+    async def test_failed_attempts_are_logged_as_a_count(self):
+        app_logger = web_server.app.logger
+        with self.assertLogs(app_logger, level="WARNING") as logs:
+            for _ in range(3):
+                await self.client.get("/api/v1/last-run", headers={"Authorization": "Bearer nope"})
+            await self.client.get(
+                "/api/v1/last-run", headers={"Cookie": f"{api_auth.SESSION_COOKIE}=junk"}
+            )
+            await self.client.post("/login", form={"token": "nope"})
+        failures = [line for line in logs.output if "failed API authentication" in line]
+        # The first attempt is reported at once; the rest wait for the next minute.
+        self.assertEqual(len(failures), 1)
+        self.assertNotIn("nope", "\n".join(logs.output))
+        self.assertEqual(api_auth._failures["count"], 4)
+
+    async def test_no_credentials_is_not_a_failed_attempt(self):
+        await self.client.get("/api/v1/last-run")
+        await self.client.get("/", headers={"Accept": "text/html"})
+        self.assertEqual(api_auth._failures["count"], 0)
+        self.assertIsNone(api_auth._failures["since"])
+
 
 class TestTokenSources(AuthTestBase):
     async def test_env_options_and_secrets_precedence(self):
@@ -438,15 +473,20 @@ class TestStartupWarning(AuthTestBase):
         with self.assertNoLogs(self.logger, level="INFO"):
             api_auth.log_status(self.logger, "0.0.0.0")
 
-    async def test_short_token_warns_without_printing_it(self):
+    async def test_short_token_is_refused_without_printing_it(self):
         secrets = self.write_secrets("emhass_api_token: short-secret\n")
-        with self.assertNoLogs(self.logger, level="INFO"):
+        with self.assertLogs(self.logger, level="ERROR") as logs:
             await api_auth.configure(secrets, None, self.logger)
-        with self.assertLogs(self.logger, level="INFO") as logs:
-            api_auth.log_status(self.logger, "0.0.0.0")
         text = "\n".join(logs.output)
         self.assertIn("shorter than", text)
         self.assertNotIn("short-secret", text)
+        response = await self.client.get(
+            "/api/v1/last-run", headers={"Authorization": "Bearer short-secret"}
+        )
+        self.assertEqual(response.status_code, 503)
+
+    async def test_sixteen_characters_is_enough(self):
+        await self.enable("x" * api_auth.MIN_TOKEN_LENGTH)
 
     async def test_bind_host_under_gunicorn_follows_ip_env(self):
         with patch.dict(sys.modules, {"gunicorn": object()}):
@@ -505,6 +545,37 @@ class TestWebServerWiring(AuthTestBase):
             web_server.params_secrets = original_secrets
         self.assertTrue(any("No API token is set" in line for line in logs.output))
 
+    async def test_before_serving_keeps_the_token_loaded_at_import(self):
+        # A worker started by Gunicorn after max_requests must not re-read the
+        # files: a secrets file missing for a moment would switch auth off there.
+        await self.enable()
+        with (
+            patch.object(web_server, "_configure_api_auth", AsyncMock()) as mock_configure,
+            patch.object(web_server, "initialize", AsyncMock()),
+        ):
+            await web_server.before_serving()
+        mock_configure.assert_not_awaited()
+        self.assertEqual(api_auth.current_token(), TOKEN)
+
+    async def test_token_sources_follow_the_environment(self):
+        env = {"SECRETS_PATH": "/x/secrets.yaml", "OPTIONS_PATH": "/x/options.json"}
+        with patch.dict(os.environ, env):
+            self.assertEqual(
+                web_server._api_token_sources(), ("/x/secrets.yaml", "/x/options.json")
+            )
+
+    async def test_yaml_error_text_is_not_logged(self):
+        error = yaml.YAMLError("line 3: emhass_api_token: [secret-value")
+        with (
+            patch.object(web_server, "initialize", AsyncMock(side_effect=error)),
+            patch.object(web_server, "_configure_api_auth", AsyncMock()),
+            self.assertLogs(web_server.app.logger, level="WARNING") as logs,
+        ):
+            await web_server.before_serving()
+        text = "\n".join(logs.output)
+        self.assertIn("YAMLError", text)
+        self.assertNotIn("secret-value", text)
+
     async def test_build_secrets_drops_the_api_token(self):
         secrets = self.write_secrets(
             yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN, "hass_url": "http://ha:8123/"})
@@ -515,7 +586,9 @@ class TestWebServerWiring(AuthTestBase):
         self.assertNotIn(api_auth.API_TOKEN_KEY, built)
         self.assertEqual(built["hass_url"], "http://ha:8123/")
 
-    def test_token_is_never_a_runtime_parameter(self):
+    def test_token_is_listed_as_config_only(self):
+        # Documents the rule: the runtime loop only checks keys in associations.csv,
+        # and the token is never read from a body (see the logging test below).
         self.assertIn(api_auth.API_TOKEN_KEY, utils.RUNTIME_DENIED_KEYS)
 
     def test_redacted(self):
