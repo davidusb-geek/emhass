@@ -47,6 +47,7 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import json
 import logging
 import os
 import pathlib
@@ -174,6 +175,10 @@ def _read_source(path: pathlib.Path | str | None) -> str | None:
     try:
         return pathlib.Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
+        # A link whose target is missing (a secret mount being swapped, for
+        # example) is there but cannot be used.
+        if os.path.lexists(path):
+            raise ApiTokenError("token source is a link to a missing file") from None
         return None
     except (OSError, UnicodeDecodeError) as e:
         raise ApiTokenError(f"token source cannot be read ({type(e).__name__})") from None
@@ -297,13 +302,36 @@ def redacted(value):
     return value
 
 
+def _token_forms(token: str) -> list[str]:
+    """The token as it can appear in a log line: as is, escaped the way
+    ``repr()`` (a dict in a log line) and JSON write it, for a token that holds
+    a backslash, a quote, a control or a non-ASCII character, and as it looks
+    in a URL (an access log line). Longest first."""
+    forms = {
+        token,
+        repr(token)[1:-1],
+        json.dumps(token)[1:-1],
+        json.dumps(token, ensure_ascii=False)[1:-1],
+        urllib.parse.quote(token, safe=""),
+        urllib.parse.quote_plus(token, safe=""),
+        urllib.parse.quote(token),
+    }
+    return sorted(forms, key=len, reverse=True)
+
+
+def _mask(text: str, forms: list[str]) -> str:
+    for form in forms:
+        text = text.replace(form, "***")
+    return text
+
+
 class TokenLogFilter(logging.Filter):
     """Masks the configured token in a log record's message and traceback.
 
     The token is never read from a request body, but a client that puts it
     there by mistake (nested, under another key, in a YAML error) must not get
     it written to the console or the action log, whose lines are returned in
-    error responses. Attach it with ``mask_token_in()``.
+    error responses. ``install_log_masking()`` runs it on every record.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -314,32 +342,44 @@ class TokenLogFilter(logging.Filter):
             message = record.getMessage()
         except Exception:  # noqa: BLE001 - a broken record is the formatter's to report
             return True
-        if token in message:
-            record.msg = message.replace(token, "***")
+        forms = _token_forms(token)
+        masked = _mask(message, forms)
+        if masked != message:
+            record.msg = masked
             record.args = None
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
-        if record.exc_text and token in record.exc_text:
-            record.exc_text = record.exc_text.replace(token, "***")
-        if record.stack_info and token in record.stack_info:
-            record.stack_info = record.stack_info.replace(token, "***")
+        if record.exc_text:
+            record.exc_text = _mask(record.exc_text, forms)
+        if record.stack_info:
+            record.stack_info = _mask(record.stack_info, forms)
         return True
 
 
 token_log_filter = TokenLogFilter()
+_previous_record_factory = None
 
 
-def mask_token_in(logger: logging.Logger) -> None:
-    """Attach ``token_log_filter`` to ``logger`` and to each of its handlers.
+def _masking_record_factory(*args, **kwargs) -> logging.LogRecord:
+    record = _previous_record_factory(*args, **kwargs)
+    token_log_filter.filter(record)
+    return record
 
-    On the logger it covers every record logged there, whichever handler
-    writes it (Quart's console handler comes from Flask, not quart.logging).
-    On the handlers it covers records that reach them from other loggers.
-    Safe to call again after adding a handler.
+
+def install_log_masking() -> None:
+    """Mask the token in every log record made in this process.
+
+    It runs as each record is created, so it covers every logger (the app's,
+    the other ``emhass.*`` loggers, Gunicorn's and Uvicorn's, which print
+    request paths) whatever handler writes the record. Records are only
+    created for enabled levels, so the cost is one search per logged line.
+    Safe to call more than once.
     """
-    logger.addFilter(token_log_filter)
-    for handler in logger.handlers:
-        handler.addFilter(token_log_filter)
+    global _previous_record_factory
+    if _previous_record_factory is not None:
+        return
+    _previous_record_factory = logging.getLogRecordFactory()
+    logging.setLogRecordFactory(_masking_record_factory)
 
 
 def reset() -> None:
@@ -525,13 +565,21 @@ def _bearer_presented(headers=None) -> bool:
 def _came_over_https() -> bool:
     """True when the browser's side of the connection is HTTPS.
 
-    ``X-Forwarded-Proto`` is honoured even from an untrusted client: all it can
-    do is make its own browser keep the cookie off plain HTTP.
+    ``X-Forwarded-Proto`` and ``Forwarded: proto=...`` are honoured even from
+    an untrusted client: all they can do is make its own browser keep the
+    cookie off plain HTTP.
     """
     if request.scheme == "https":
         return True
     forwarded = request.headers.get("X-Forwarded-Proto", "")
-    return forwarded.split(",")[0].strip(_HEADER_SPACE).lower() == "https"
+    if forwarded.split(",")[0].strip(_HEADER_SPACE).lower() == "https":
+        return True
+    first = request.headers.get("Forwarded", "").split(",")[0]
+    for pair in first.split(";"):
+        name, _, value = pair.strip(_HEADER_SPACE).partition("=")
+        if name.lower() == "proto" and value.strip('"').lower() == "https":
+            return True
+    return False
 
 
 def _cookie_request_allowed() -> bool:
