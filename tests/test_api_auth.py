@@ -228,6 +228,7 @@ class TestBearerBytes(AuthTestBase):
         # U+00A0 and U+0085 are space to str.strip(), so trimming the token
         # with it at load would leave a token no client can send.
         for token in ("token-ending-in-0123456- ", "token-ending-in-0123456-\u0085"):
+            # (A form feed or vertical tab is trimmed instead: no header can carry it.)
             with self.subTest(token=repr(token)):
                 api_auth.reset()
                 await self.enable(token)
@@ -634,6 +635,14 @@ class TestTokenSources(AuthTestBase):
         options = self.write_options('{"emhass_api_token": ""}')
         secrets = self.write_secrets("emhass_api_token: '   '\nhass_url: http://x/\n")
         self.assertIsNone(await api_auth.load_api_token(secrets, options, {}))
+
+    async def test_ascii_white_space_is_trimmed(self):
+        # Form feed and vertical tab too: an HTTP header cannot carry them.
+        token = "trimmed-token-0123456789"
+        for space in (" ", "\t", "\r\n", "\f", "\v"):
+            with self.subTest(space=repr(space)):
+                env = {api_auth.API_TOKEN_ENV: space + token + space}
+                self.assertEqual(api_auth.read_api_token(None, None, env), token)
 
     async def test_empty_later_source_keeps_earlier_token(self):
         env = {api_auth.API_TOKEN_ENV: "e" * 20}
