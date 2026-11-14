@@ -6128,7 +6128,9 @@ def data_file_path(data_path, name) -> pathlib.Path:
     try:
         base = os.path.realpath(str(data_path))
         folder, file_name = os.path.split(os.path.join(base, str(name)))
-        if file_name in ("", ".", "..") or "\x00" in str(name):
+        # "", ".", ".." and, on Windows, names such as ". " or "..." that it reads as
+        # one of those are not file names
+        if file_name.rstrip(". ") == "" or "\x00" in str(name):
             raise refused
         folder = os.path.realpath(folder)
         inside = folder == base or os.path.commonpath([base, folder]) == base
@@ -6136,7 +6138,11 @@ def data_file_path(data_path, name) -> pathlib.Path:
         inside = False
     if not inside:
         raise refused
-    return pathlib.Path(folder) / file_name
+    path = pathlib.Path(folder) / file_name
+    # A folder (or a link to one) is not a file a caller may write or load
+    if path.is_dir():
+        raise refused
+    return path
 
 
 def is_valid_entity_id(value) -> bool:

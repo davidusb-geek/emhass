@@ -60,14 +60,28 @@ def _influx_identifier(value) -> str:
     return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
+# InfluxDB error messages worth naming in the log. Only these fixed texts are shown,
+# never the server's own words.
+_KNOWN_DB_ERRORS = (
+    "database not found",
+    "retention policy not found",
+    "authorization failed",
+    "user not found",
+    "error parsing query",
+)
+
+
 def _upstream_error(exc: BaseException) -> str:
-    """Describe a database client error by its type and HTTP status only.
+    """Describe a database client error by its type, HTTP status and a known reason.
 
     The server's reply is left out: it ends up in an action's error response,
     which would let a caller read whatever the configured address answers.
     """
-    code = getattr(exc, "code", None) or getattr(exc, "status", None)
-    return type(exc).__name__ + (f" (HTTP {code})" if code else "")
+    code = getattr(exc, "status", None) or getattr(exc, "code", None)
+    text = type(exc).__name__ + (f" (HTTP {code})" if isinstance(code, int) else "")
+    message = str(exc).lower()
+    reason = next((known for known in _KNOWN_DB_ERRORS if known in message), None)
+    return text + (f": {reason}" if reason else "")
 
 
 def _is_supervisor_url(url: str | None) -> bool:
@@ -1384,8 +1398,14 @@ class RetrieveHass:
             self.logger.error(f"Invalid VictoriaMetrics credentials: {e}")
             return None
         try:
+            # Redirects are not followed: the configured server must not be able to send
+            # EMHASS, with its credentials, to an address and path of its choosing.
             async with session.get(
-                url, params=params, headers=headers, ssl=self._vm_ssl()
+                url,
+                params=params,
+                headers=headers,
+                ssl=self._vm_ssl(),
+                allow_redirects=False,
             ) as response:
                 body = await response.read()
                 if response.status == 401:
@@ -1409,7 +1429,9 @@ class RetrieveHass:
             return None
         if not isinstance(payload, dict) or payload.get("status") != "success":
             status = payload.get("status") if isinstance(payload, dict) else None
-            self.logger.error(f"VictoriaMetrics query failed (status {status!r})")
+            # Only a known value is shown: the field is the server's text
+            shown = status if status == "error" else "unexpected"
+            self.logger.error(f"VictoriaMetrics query failed (status {shown})")
             return None
         return payload.get("data", {}).get("result", [])
 
@@ -1703,6 +1725,12 @@ class RetrieveHass:
             return None
 
         try:
+            import requests
+
+            # A redirect raises instead of being followed: the configured server must
+            # not be able to send EMHASS, with its login, to an address of its choosing.
+            session = requests.Session()
+            session.max_redirects = 0
             client = InfluxDBClient(
                 host=self.influxdb_host,
                 port=self.influxdb_port,
@@ -1711,6 +1739,7 @@ class RetrieveHass:
                 database=self.influxdb_database,
                 ssl=self.influxdb_use_ssl,
                 verify_ssl=self.influxdb_verify_ssl,
+                session=session,
             )
             # Test connection
             client.ping()
@@ -1778,7 +1807,8 @@ class RetrieveHass:
 
                 except Exception as query_error:
                     self.logger.debug(
-                        f"Tag query failed for measurement '{measurement}': {query_error}"
+                        f"Tag query failed for measurement {measurement!r}: "
+                        f"{_upstream_error(query_error)}"
                     )
                     continue
 
