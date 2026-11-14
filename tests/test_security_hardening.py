@@ -990,6 +990,94 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("HTTP 400" in line for line in cm.output))
         self.assertFalse(any("SECRET" in line for line in cm.output))
 
+    def test_influxdb_client_refuses_a_real_redirect(self):
+        # Loopback: the real client and requests, not mocks
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        reached = []
+
+        class Target(BaseHTTPRequestHandler):
+            def do_GET(self):
+                reached.append(self.path)
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        target = HTTPServer(("127.0.0.1", 0), Target)
+
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target.server_port}/x?y=1")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+        for server in (target, redirector):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            rh = self._rh(
+                {
+                    "use_influxdb": True,
+                    "influxdb_host": "127.0.0.1",
+                    "influxdb_port": redirector.server_port,
+                }
+            )
+            with self.assertLogs(logger, level="ERROR") as cm:
+                self.assertIsNone(rh._init_influx_client())
+            self.assertEqual(reached, [])
+            self.assertTrue(any("does not follow" in line for line in cm.output))
+        finally:
+            for server in (target, redirector):
+                server.shutdown()
+                server.server_close()
+
+    def test_server_supplied_names_stay_out_of_the_log(self):
+        # InfluxDB: a measurement name the server lists
+        rh = self._rh({"use_influxdb": True, "influxdb_host": "db"})
+
+        def query(text):
+            result = MagicMock()
+            if text == "SHOW MEASUREMENTS":
+                result.get_points.return_value = [{"name": "LEAKED_MEASUREMENT"}]
+            elif text.startswith("SHOW TAG VALUES"):
+                result.get_points.return_value = [{"value": "x"}]
+            else:
+                result.get_points.return_value = []
+            return result
+
+        client = MagicMock()
+        client.query.side_effect = query
+        rh._measurement_cache = {}
+        start = pd.Timestamp("2026-11-01", tz="UTC")
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            rh._fetch_sensor_data(client, "sensor.x", start, start + pd.Timedelta(days=1))
+        self.assertTrue(any("found on the server" in line for line in cm.output))
+        self.assertFalse(any("LEAKED" in line for line in cm.output))
+
+    async def test_server_supplied_metric_names_stay_out_of_the_log(self):
+        # VictoriaMetrics: several series with the server's names and labels
+        rh = self._rh(
+            {"use_victoriametrics": True, "victoriametrics_host": "vm", "victoriametrics_port": 1}
+        )
+        series = [
+            {"metric": {"__name__": "LEAKED_METRIC_A"}, "values": [[1, "1"]]},
+            {"metric": {"job": "LEAKED_JOB", "instance": "10.8.8.8:9100"}, "values": [[1, "2"]]},
+        ]
+        start = pd.Timestamp("2026-11-01", tz="UTC")
+        with patch.object(rh, "_vm_query_range", AsyncMock(return_value=series)):
+            with self.assertLogs(logger, level="DEBUG") as cm:
+                await rh._fetch_sensor_data_vm(
+                    MagicMock(), "sensor.x", start, start + pd.Timedelta(hours=1)
+                )
+        self.assertTrue(any("several VictoriaMetrics metrics (2)" in line for line in cm.output))
+        self.assertFalse(any("LEAKED" in line or "10.8.8.8" in line for line in cm.output))
+
     def test_upstream_error_prefers_status_and_names_known_reasons(self):
         class AiohttpLike(Exception):
             status = 503
