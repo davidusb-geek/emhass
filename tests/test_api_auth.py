@@ -765,6 +765,24 @@ class TestFailClosed(AuthTestBase):
                 api_auth.reset()
                 await self.check_failed(secrets=self.write_secrets(text))
 
+    async def test_token_set_twice(self):
+        # safe_load keeps the last one, so an empty second key would turn auth off.
+        for second in ('""', "' '", '"secret-value-other-01"', "\n"):
+            text = f'emhass_api_token: "secret-value-0123456"\nemhass_api_token: {second}\n'
+            with self.subTest(second=second):
+                api_auth.reset()
+                path = self.write_secrets(text)
+                with self.assertRaises(api_auth.ApiTokenError):
+                    api_auth.read_api_token(path, None, {})
+                await self.check_failed(secrets=path)
+
+    def test_other_repeated_keys_are_left_alone(self):
+        path = self.write_secrets(
+            f"hass_url: a\nhass_url: b\nnested:\n  {api_auth.SETTING_NAME}: x\n"
+            f'{api_auth.SETTING_NAME}: "{TOKEN}"\n'
+        )
+        self.assertEqual(api_auth.read_api_token(path, None, {}), TOKEN)
+
     async def test_token_that_is_not_valid_utf8(self):
         # A lone surrogate cannot be encoded, so it could not be compared or
         # masked; before, it made every log call raise.
@@ -1034,6 +1052,20 @@ class TestWebServerWiring(AuthTestBase):
         )
         self.assertNotIn(api_auth.SETTING_NAME, built)
         self.assertEqual(built["hass_url"], "http://ha:8123/")
+
+    async def test_build_secrets_does_not_quote_a_value_it_cannot_convert(self):
+        # PyYAML's own errors for these quote the value lowercased or without
+        # its "_", so the log mask would not match it.
+        for tag in ("!!bool", "!!int", "!!float"):
+            with self.subTest(tag=tag):
+                secrets = self.write_secrets(f"long_lived_token: {tag} Hidden_Value_0123\n")
+                with self.assertRaises(ValueError) as ctx:
+                    await utils.build_secrets(
+                        {"data_path": self.dir}, self.logger, secrets_path=secrets, no_response=True
+                    )
+                self.assertNotIn("hidden", str(ctx.exception).lower())
+                self.assertIsNone(ctx.exception.__cause__)
+                self.assertTrue(ctx.exception.__suppress_context__)
 
     def test_token_is_listed_as_config_only(self):
         # Documents the rule: the runtime loop only checks keys in associations.csv,
