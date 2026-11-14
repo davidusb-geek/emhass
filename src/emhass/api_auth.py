@@ -167,6 +167,18 @@ def current_token() -> str | None:
         return None
 
 
+def redacted(value):
+    """``value`` for a log line, with the API token masked if a caller sent it.
+
+    The token is never read from a request body, but a client that puts it
+    there by mistake must not get it written to the action log, whose lines
+    are returned in error responses.
+    """
+    if isinstance(value, dict) and API_TOKEN_KEY in value:
+        return {**value, API_TOKEN_KEY: "***"}
+    return value
+
+
 def reset() -> None:
     """Forget the loaded token. For tests."""
     _state.update(loaded=False, token=None, failed=False)
