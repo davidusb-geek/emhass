@@ -118,10 +118,9 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         data = await response.get_data()
         self.assertEqual(orjson.loads(data), {"converted": "config"})
-        # Test invalid YAML
-        # Expect 500 because the app currently lets YAMLError propagate
+        # Test invalid YAML: refused with 400, and the error's text is not logged
         response = await self.client.post("/get-json", data=b": - invalid")
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 400)
 
     @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.aiofiles.open")

@@ -534,7 +534,14 @@ async def json_convert():
     """
     app.logger.info("Attempting to convert YAML to JSON")
     data = await request.get_data()
-    yaml_config = yaml.safe_load(data)
+    try:
+        yaml_config = yaml.safe_load(data)
+    except yaml.YAMLError as e:
+        # A YAML error's text quotes the lines around the error, which can hold
+        # a secret: the API token, in pieces the log mask cannot match. So only
+        # its type is logged.
+        app.logger.warning(f"Could not parse the YAML sent to /get-json ({type(e).__name__})")
+        return await make_response(["failed to Parse YAML from data"], 400)
 
     # If filed to Parse YAML
     if yaml_config is None:

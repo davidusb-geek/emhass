@@ -101,6 +101,12 @@ class ApiTokenError(Exception):
 _state: dict = {"loaded": False, "token": None, "failed": False}
 
 
+# Only ASCII white space around a token. str.strip() would also remove
+# characters such as U+0085 and U+00A0, so a token ending in one of them
+# could never be matched.
+_TOKEN_SPACE = " \t\r\n"
+
+
 def _normalise(value) -> str | None:
     """A configured token as a string, or None for "not set".
 
@@ -112,7 +118,13 @@ def _normalise(value) -> str | None:
         return None
     if not isinstance(value, str):
         raise ApiTokenError(f"{API_TOKEN_KEY} must be a string; quote it in YAML")
-    return value.strip() or None
+    try:
+        # A lone surrogate (from a YAML escape, or a non-UTF-8 environment
+        # variable) cannot be compared or masked, so the token is refused.
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ApiTokenError(f"{API_TOKEN_KEY} is not valid UTF-8 text") from None
+    return value.strip(_TOKEN_SPACE) or None
 
 
 def read_api_token(
@@ -268,7 +280,8 @@ def _describe(error: Exception) -> str:
 def _fail(logger: logging.Logger, reason: str) -> None:
     _state.update(loaded=True, token=None, failed=True)
     logger.error(
-        "%s. Every request except /healthz and /logout will get 503 until this is fixed.",
+        "%s. Every request except /healthz and /logout will get 503 until this is fixed "
+        "and EMHASS is restarted.",
         reason,
     )
 
@@ -753,7 +766,7 @@ async def login():
     fields, refused = await _read_login_form()
     if refused is not None:
         return refused
-    presented = fields.get("token", [""])[0].strip().encode("utf-8")
+    presented = fields.get("token", [""])[0].strip(_TOKEN_SPACE).encode("utf-8")
     if presented and hmac.compare_digest(presented, _token_bytes(token)):
         response = _redirect("./")
         response.set_cookie(
