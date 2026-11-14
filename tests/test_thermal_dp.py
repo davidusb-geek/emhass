@@ -557,7 +557,7 @@ def test_dp_returned_dispatch_balances_per_step_heat_loss_and_cop():
     arbitrary temperature schedule. Positive external demand precludes free-gain
     shedding, so heat input and required energy must agree at every step.
     """
-    dt = 0.5
+    dt = 0.25  # not the DP default (0.5 h): the time step must be forwarded
     outdoor = np.array([5.0, 13.0, 9.0, 17.0, 6.0, 14.0])
     ambient = np.array([12.0, 14.0, 10.0, 16.0, 12.0, 15.0])
     demand = np.array([8.0, 9.0, 8.0, 9.0, 8.0, 9.0])

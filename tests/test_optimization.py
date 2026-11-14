@@ -3825,26 +3825,39 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         reach its Parameters and the trajectory must follow an independent heat and
         standing-loss balance (including in-flight ``prior_heat``). An Optimal status
         with a stale outdoor temperature or stale floor is not acceptable.
+
+        Heating is penalised and the refreshed weather is identical in both re-solves,
+        so the comfort floor is the only difference between them: without it the plan
+        stays below 20 C at step 3, and the refreshed floor must raise it.
         """
         opt, _ = self._solve_lag_window([0.0] * 48, [30.0] * 48, prior_heat=[300.0, 600.0])
         cached_problem = opt.prob
+        thermal_conf = opt.optim_conf["def_load_config"][1]["thermal_config"]
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
+        self.df_input_data_dayahead[opt.var_load_cost] = 0.3
+
+        def resolve():
+            opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+            self.assertIs(opt.prob, cached_problem, "runtime refresh must use the cached problem")
+            self.assertEqual(opt.optim_status, "Optimal")
+
+        # Same cached problem, refreshed weather, zero floor: heating costs money and
+        # nothing requires it, so step 3 stays well below the floor applied next.
+        resolve()
+        temp_free = np.array(opt.predicted_temps[1].value, dtype=float)  # copy
+        power_free = np.array(opt.vars["p_deferrable"][1].value, dtype=float)  # copy
+        self.assertLess(temp_free[3], 20.0 - 1.0, "without a floor the plan must not heat to 20 C")
         min_temps = [0.0] * 48
         min_temps[3] = 20.0
-        thermal_conf = opt.optim_conf["def_load_config"][1]["thermal_config"]
         thermal_conf["min_temperatures"] = min_temps
-        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
-        opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            self.df_input_data_dayahead[opt.var_load_cost].values,
-            self.df_input_data_dayahead[opt.var_prod_price].values,
-        )
-        self.assertIs(opt.prob, cached_problem, "runtime refresh must use the cached problem")
-        self.assertEqual(opt.optim_status, "Optimal")
-        # Inspect the live Parameters as well as the achieved trajectory: with
-        # a zero-cost objective, an unconstrained plan might coincidentally
-        # satisfy the new floor, which must not mask a stale cached bound.
+        resolve()
+        # The refreshed floor must reach the constraint, not only its Parameter.
         params = opt.param_thermal[1]
         np.testing.assert_allclose(
             np.asarray(params["outdoor_temp"].value, dtype=float),
@@ -3860,11 +3873,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(temp[1], 19.25, delta=1e-4)
         self.assertAlmostEqual(temp[2], 19.1875, delta=1e-4)
         self.assertGreaterEqual(temp[3], 20.0 - 1e-4)
+        power = np.asarray(opt.vars["p_deferrable"][1].value, dtype=float)
+        self.assertGreater(
+            power[0],
+            power_free[0] + 100.0,
+            "the refreshed floor must add heating at step 0 over the zero-floor plan",
+        )
         # Independent balance on the exact CVXPY state (the published temperature is
         # rounded to 0.01 C): L=2, nominal=3000 W, heating_rate=10 C/h,
         # cooling_constant=0.5 /h. Heat arriving at step t is the oldest-first
         # prior_heat for t < L, then the plan's own power delayed by L steps.
-        power = np.asarray(opt.vars["p_deferrable"][1].value, dtype=float)
         dt = opt.time_step
         arrived_heat = np.zeros(len(temp) - 1)
         arrived_heat[:2] = np.array([300.0, 600.0]) * (10.0 * dt / 3000.0)
