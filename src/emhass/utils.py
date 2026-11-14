@@ -6121,17 +6121,22 @@ def data_file_path(data_path, name) -> pathlib.Path:
     :param name: A file name, or a relative path such as ``entities/sensor.x.json``.
     :raises RuntimeParamError: When ``name`` resolves outside ``data_path``.
     """
-    # Compared on the resolved paths; the joined path is returned as it was built, so
-    # it names the same file as the code that joins data_path / name directly.
-    base = os.path.realpath(str(data_path))
-    target = os.path.realpath(os.path.join(base, str(name)))
+    # Only the folder the file goes in is resolved and checked. The file itself may be
+    # a symlink to somewhere else on purpose (atomic_write and replace_file replace
+    # what a link points to), so following it here would refuse a working setup.
+    refused = RuntimeParamError(f"{name!r} is not a file name inside the data folder")
     try:
-        inside = target != base and os.path.commonpath([base, target]) == base
-    except ValueError:  # e.g. another drive on Windows
+        base = os.path.realpath(str(data_path))
+        folder, file_name = os.path.split(os.path.join(base, str(name)))
+        if file_name in ("", ".", "..") or "\x00" in str(name):
+            raise refused
+        folder = os.path.realpath(folder)
+        inside = folder == base or os.path.commonpath([base, folder]) == base
+    except ValueError:  # another drive on Windows, or a NUL byte in the name
         inside = False
     if not inside:
-        raise RuntimeParamError(f"{name!r} is not a file name inside the data folder")
-    return pathlib.Path(data_path) / str(name)
+        raise refused
+    return pathlib.Path(folder) / file_name
 
 
 def is_valid_entity_id(value) -> bool:

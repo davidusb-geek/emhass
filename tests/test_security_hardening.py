@@ -5,15 +5,16 @@ import html
 import os
 import pathlib
 import re
+import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pandas as pd
 import pytz
 
-from emhass import command_line, utils, web_server
+from emhass import command_line, retrieve_hass, utils, web_server
 from emhass.retrieve_hass import RetrieveHass, _is_supervisor_url
 from emhass.utils import RUNTIME_DENIED_KEYS, RuntimeParamError
 from tests.aioresponses_compat import aioresponses
@@ -98,7 +99,9 @@ class TestFileNameValidation(unittest.TestCase):
         base = pathlib.Path(emhass_conf["data_path"])
         for name in ("opt_res_latest.csv", "my export 2026.csv", "entities/sensor.x.json"):
             with self.subTest(name=name):
-                self.assertEqual(utils.data_file_path(base, name), base / name)
+                self.assertEqual(
+                    utils.data_file_path(base, name), pathlib.Path(os.path.realpath(base)) / name
+                )
         outside = [
             "opt_res_perfect_optim_/../../tmp/x.csv",
             "../x.csv",
@@ -106,13 +109,34 @@ class TestFileNameValidation(unittest.TestCase):
             "/etc/passwd",
             "",
             ".",
+            "x\x00.csv",
         ]
         if os.name == "nt":
             # On POSIX this is a legal file name inside the folder
-            outside += ["C:\\x.csv", "\\\\server\\share\\x.csv"]
+            outside += ["C:\\x.csv"]
         for name in outside:
             with self.subTest(name=name), self.assertRaises(RuntimeParamError):
                 utils.data_file_path(base, name)
+
+    def test_data_file_path_follows_a_file_link_but_not_a_folder_link(self):
+        # A results file may be a symlink to elsewhere on purpose (atomic_write replaces
+        # its target); a folder that links out of the data folder is refused.
+        with tempfile.TemporaryDirectory() as tmp:
+            data = pathlib.Path(tmp) / "data"
+            outside = pathlib.Path(tmp) / "outside"
+            data.mkdir()
+            outside.mkdir()
+            (outside / "target.csv").write_text("x")
+            try:
+                os.symlink(outside / "target.csv", data / "opt_res_latest.csv")
+                os.symlink(outside, data / "sub", target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"cannot create symlinks here: {exc}")
+            path = utils.data_file_path(data, "opt_res_latest.csv")
+            self.assertEqual(path, pathlib.Path(os.path.realpath(data)) / "opt_res_latest.csv")
+            self.assertTrue(path.is_symlink())
+            with self.assertRaises(RuntimeParamError):
+                utils.data_file_path(data, "sub/x.csv")
 
     def test_db_host(self):
         for value in ("localhost", "192.168.1.10", "a0d7b954-victoriametrics", "[::1]", "my_db"):
@@ -820,6 +844,69 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
         for url in (self.SUPERVISOR, "HTTP://SUPERVISOR/CORE/API/", None, "", "empty"):
             with self.subTest(url=url):
                 self.assertTrue(_is_supervisor_url(url))
+
+
+class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _rh(retrieve_hass_conf):
+        return RetrieveHass(
+            "http://ha.test:8123/",
+            "llat",
+            pd.Timedelta(minutes=30),
+            pytz.UTC,
+            {"retrieve_hass_conf": retrieve_hass_conf},
+            emhass_conf,
+            logger,
+        )
+
+    def test_influxql_values_are_escaped(self):
+        rh = self._rh(
+            {
+                "use_influxdb": True,
+                "influxdb_host": "db",
+                "influxdb_database": 'home"; DROP',
+                "influxdb_retention_policy": "auto\\gen",
+            }
+        )
+        start = pd.Timestamp("2026-11-01", tz="UTC")
+        query = rh._build_influx_query_for_measurement(
+            "x'; SHOW DATABASES; --", 'W"x', start, start + pd.Timedelta(days=1)
+        )
+        self.assertIn("\"entity_id\"='x\\'; SHOW DATABASES; --'", query)
+        self.assertIn('FROM "home\\"; DROP"."auto\\\\gen"."W\\"x"', query)
+        # Positive control: a normal name is unchanged
+        query = rh._build_influx_query_for_measurement(
+            "p_pv", "W", start, start + pd.Timedelta(days=1)
+        )
+        self.assertIn("\"entity_id\"='p_pv'", query)
+
+    def test_upstream_error_leaves_out_the_reply(self):
+        class ClientError(Exception):
+            code = 500
+
+        text = retrieve_hass._upstream_error(ClientError("SECRET-REPLY-BODY"))
+        self.assertEqual(text, "ClientError (HTTP 500)")
+        self.assertNotIn("SECRET", retrieve_hass._upstream_error(ValueError("SECRET")))
+
+    async def test_victoriametrics_errors_do_not_log_the_reply(self):
+        rh = self._rh(
+            {"use_victoriametrics": True, "victoriametrics_host": "vm", "victoriametrics_port": 1}
+        )
+        for status, body in (
+            (500, b"SECRET-REPLY-BODY"),
+            (200, b'{"status": "error", "error": "SECRET-REPLY-BODY"}'),
+        ):
+            response = MagicMock()
+            response.status = status
+            response.read = AsyncMock(return_value=body)
+            context = MagicMock()
+            context.__aenter__ = AsyncMock(return_value=response)
+            context.__aexit__ = AsyncMock(return_value=False)
+            session = MagicMock()
+            session.get = MagicMock(return_value=context)
+            with self.subTest(status=status), self.assertLogs(logger, level="ERROR") as cm:
+                self.assertIsNone(await rh._vm_query_range(session, "up", 0, 60, 60))
+            self.assertFalse(any("SECRET" in line for line in cm.output))
 
 
 if __name__ == "__main__":

@@ -50,6 +50,26 @@ sensor_prefix = "sensor."
 _SUPERVISOR_URLS = frozenset({hass_url, "https://supervisor/core/api"})
 
 
+def _influx_string(value) -> str:
+    """``value`` escaped for the inside of an InfluxQL single-quoted string."""
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _influx_identifier(value) -> str:
+    """``value`` escaped for the inside of an InfluxQL double-quoted identifier."""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _upstream_error(exc: BaseException) -> str:
+    """Describe a database client error by its type and HTTP status only.
+
+    The server's reply is left out: it ends up in an action's error response,
+    which would let a caller read whatever the configured address answers.
+    """
+    code = getattr(exc, "code", None) or getattr(exc, "status", None)
+    return type(exc).__name__ + (f" (HTTP {code})" if code else "")
+
+
 def _is_supervisor_url(url: str | None) -> bool:
     """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
     if url is None or not str(url).strip() or str(url).strip() == "empty":
@@ -1375,18 +1395,21 @@ class RetrieveHass:
                     return None
                 if response.status > 299:
                     self.logger.error(
-                        f"VictoriaMetrics query_range error {response.status}: {body[:300]!r}"
+                        f"VictoriaMetrics query_range error {response.status} ({len(body)} bytes)"
                     )
                     return None
                 payload = orjson.loads(body)
         except aiohttp.ClientError as e:
-            self.logger.error(f"Network error connecting to VictoriaMetrics at {url}: {e}")
+            self.logger.error(
+                f"Network error connecting to VictoriaMetrics at {url}: {_upstream_error(e)}"
+            )
             return None
         except (orjson.JSONDecodeError, ValueError) as e:
-            self.logger.error(f"Invalid JSON from VictoriaMetrics: {e}")
+            self.logger.error(f"Invalid JSON from VictoriaMetrics: {type(e).__name__}")
             return None
-        if payload.get("status") != "success":
-            self.logger.error(f"VictoriaMetrics query failed: {payload.get('error', payload)}")
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            status = payload.get("status") if isinstance(payload, dict) else None
+            self.logger.error(f"VictoriaMetrics query failed (status {status!r})")
             return None
         return payload.get("data", {}).get("result", [])
 
@@ -1701,7 +1724,7 @@ class RetrieveHass:
 
             return client
         except Exception as e:
-            self.logger.error(f"Failed to connect to InfluxDB: {e}")
+            self.logger.error(f"Failed to connect to InfluxDB: {_upstream_error(e)}")
             return None
 
     def _discover_entity_measurement(self, client, entity_id: str) -> str:
@@ -1733,7 +1756,10 @@ class RetrieveHass:
 
                 try:
                     # Use SHOW TAG VALUES to get all entity_ids in this measurement
-                    tag_query = f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
+                    tag_query = (
+                        f'SHOW TAG VALUES FROM "{_influx_identifier(measurement)}" '
+                        'WITH KEY = "entity_id"'
+                    )
                     self.logger.debug(
                         f"Checking measurement '{measurement}' with tag query: {tag_query}"
                     )
@@ -1757,7 +1783,9 @@ class RetrieveHass:
                     continue
 
         except Exception as e:
-            self.logger.error(f"Error discovering measurement for entity {entity_id}: {e}")
+            self.logger.error(
+                f"Error discovering measurement for entity {entity_id!r}: {_upstream_error(e)}"
+            )
 
         # Fallback to default measurement if not found
         self.logger.warning(
@@ -1777,13 +1805,18 @@ class RetrieveHass:
         start_time_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # Every value is escaped, so a sensor name or a saved setting cannot end the
+        # string or identifier and add statements of its own.
+        database = _influx_identifier(self.influxdb_database)
+        retention_policy = _influx_identifier(self.influxdb_retention_policy)
+        measurement_id = _influx_identifier(measurement)
         # Use FILL(previous) instead of FILL(linear) for compatibility with open-source InfluxDB
         query = f"""
         SELECT mean("value") AS "mean_value"
-        FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{measurement}"
+        FROM "{database}"."{retention_policy}"."{measurement_id}"
         WHERE time >= '{start_time_str}'
         AND time < '{end_time_str}'
-        AND "entity_id"='{entity_id}'
+        AND "entity_id"='{_influx_string(entity_id)}'
         GROUP BY time({interval}) FILL(previous)
         """
         return query
@@ -1869,7 +1902,8 @@ class RetrieveHass:
 
         except Exception as e:
             self.logger.error(
-                f"Failed to query entity {entity_id} from measurement {measurement}: {e}"
+                f"Failed to query entity {entity_id!r} from measurement {measurement!r}: "
+                f"{_upstream_error(e)}"
             )
             return None
 
