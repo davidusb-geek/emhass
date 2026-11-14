@@ -224,6 +224,21 @@ class TestBearerBytes(AuthTestBase):
                 )
                 self.assertEqual(response.status_code, 200)
 
+    async def test_token_ending_in_a_character_str_strip_removes(self):
+        # U+00A0 and U+0085 are space to str.strip(), so trimming the token
+        # with it at load would leave a token no client can send.
+        for token in ("token-ending-in-0123456- ", "token-ending-in-0123456-\u0085"):
+            with self.subTest(token=repr(token)):
+                api_auth.reset()
+                await self.enable(token)
+                response = await self.client.get(
+                    "/api/v1/last-run", headers={"Authorization": "Bearer " + token}
+                )
+                self.assertEqual(response.status_code, 200)
+                response = await self.client.post("/login", form={"token": token})
+                self.assertEqual(response.status_code, 303)
+                self.assertIn(api_auth.SESSION_COOKIE, response.headers.get("Set-Cookie", ""))
+
 
 class TestWebSocket(AuthTestBase):
     async def handshake_status(self, headers=None) -> int:
@@ -323,6 +338,45 @@ class TestTokenLogFilter(AuthTestBase):
             app_logger.disabled = saved[1]
         self.assertNotIn(TOKEN, stream.getvalue())
         self.assertIn("Passed runtime parameters", stream.getvalue())
+
+    async def test_yaml_error_in_get_json_logs_no_piece_of_the_token(self):
+        # PyYAML's error text quotes the line twice, each excerpt cut to about
+        # 75 characters, so a token of 40 to 63 characters would be logged as a
+        # head and a tail, which a whole-token mask cannot match.
+        token = "Abcdefghij0123456789KLMNOPQRSTUVWXYZ_-abcde"
+        await self.enable(token)
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        app_logger = web_server.app.logger
+        saved = (app_logger.level, app_logger.disabled)
+        app_logger.setLevel(logging.DEBUG)
+        app_logger.disabled = False
+        app_logger.addHandler(handler)
+        try:
+            for body in (
+                f'emhass_api_token: "{token}',
+                f"x: [{token}}}",
+                '{"token": "' + token + '"", "a": 1}',
+            ):
+                with self.subTest(body=body.replace(token, "<token>")):
+                    response = await self.client.post(
+                        "/get-json",
+                        data=body.encode(),
+                        headers={
+                            "Authorization": "Bearer " + token,
+                            "Content-Type": "text/plain",
+                        },
+                    )
+                    self.assertEqual(response.status_code, 400)
+        finally:
+            app_logger.removeHandler(handler)
+            app_logger.setLevel(saved[0])
+            app_logger.disabled = saved[1]
+        logged = stream.getvalue()
+        self.assertIn("Could not parse the YAML sent to /get-json", logged)
+        self.assertNotIn(token[:12], logged)
+        self.assertNotIn(token[-12:], logged)
 
 
 class TestLogin(AuthTestBase):
@@ -682,6 +736,23 @@ class TestFailClosed(AuthTestBase):
             with self.subTest(text=text):
                 api_auth.reset()
                 await self.check_failed(secrets=self.write_secrets(text))
+
+    async def test_token_that_is_not_valid_utf8(self):
+        # A lone surrogate cannot be encoded, so it could not be compared or
+        # masked; before, it made every log call raise.
+        await self.check_failed(
+            secrets=self.write_secrets('emhass_api_token: "\\ud800-secret-value-0123456"\n')
+        )
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth.read_api_token(None, None, {api_auth.API_TOKEN_ENV: "\udcff-secret-value-01"})
+        logging.getLogger("emhass.test").warning("still logging: %s", "x")
+
+    async def test_failure_log_says_to_restart(self):
+        with self.assertLogs(self.logger, level="ERROR") as logs:
+            await api_auth.configure(
+                self.write_secrets("emhass_api_token: true\n"), None, self.logger
+            )
+        self.assertIn("restarted", "\n".join(logs.output))
 
     def test_errors_do_not_carry_the_yaml_text(self):
         path = self.write_secrets("emhass_api_token: [secret-value\n")
