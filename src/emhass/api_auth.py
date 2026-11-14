@@ -60,8 +60,9 @@ import orjson
 import yaml
 from quart import Quart, Response, current_app, request, websocket
 
-API_TOKEN_KEY = "emhass_api_token"
-API_TOKEN_ENV = "EMHASS_API_TOKEN"
+# The names of the setting and of the environment variable, not their values.
+SETTING_NAME = "emhass_api_token"
+ENV_NAME = "EMHASS_API_TOKEN"
 
 SESSION_COOKIE = "emhass_session"
 SESSION_MAX_AGE_S = 30 * 24 * 3600
@@ -118,13 +119,13 @@ def _normalise(value) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ApiTokenError(f"{API_TOKEN_KEY} must be a string; quote it in YAML")
+        raise ApiTokenError(f"{SETTING_NAME} must be a string; quote it in YAML")
     try:
         # A lone surrogate (from a YAML escape, or a non-UTF-8 environment
         # variable) cannot be compared or masked, so the token is refused.
         value.encode("utf-8")
     except UnicodeEncodeError:
-        raise ApiTokenError(f"{API_TOKEN_KEY} is not valid UTF-8 text") from None
+        raise ApiTokenError(f"{SETTING_NAME} is not valid UTF-8 text") from None
     return value.strip(_TOKEN_SPACE) or None
 
 
@@ -147,7 +148,7 @@ def read_api_token(
     of the file, which can be the token.
     """
     env = os.environ if environ is None else environ
-    token = _normalise(env.get(API_TOKEN_ENV))
+    token = _normalise(env.get(ENV_NAME))
 
     content = _read_source(options_path)
     if content is not None:
@@ -157,7 +158,7 @@ def read_api_token(
             raise ApiTokenError("options file is not valid JSON") from None
         if not isinstance(options, dict):
             raise ApiTokenError("options file is not a JSON object")
-        token = _normalise(options.get(API_TOKEN_KEY)) or token
+        token = _normalise(options.get(SETTING_NAME)) or token
 
     content = _read_source(secrets_path)
     if content is not None:
@@ -169,9 +170,9 @@ def read_api_token(
             loaded = {}  # empty, or comments only
         if not isinstance(loaded, dict):
             raise ApiTokenError("secrets file is not a YAML mapping")
-        if API_TOKEN_KEY in loaded and loaded[API_TOKEN_KEY] is None:
-            raise ApiTokenError(f"{API_TOKEN_KEY} has no value; quote the token in YAML")
-        token = _normalise(loaded.get(API_TOKEN_KEY)) or token
+        if SETTING_NAME in loaded and loaded[SETTING_NAME] is None:
+            raise ApiTokenError(f"{SETTING_NAME} has no value; quote the token in YAML")
+        token = _normalise(loaded.get(SETTING_NAME)) or token
 
     return token
 
@@ -219,12 +220,12 @@ def configure_now(
     try:
         token = read_api_token(secrets_path, options_path)
     except Exception as e:
-        _fail(logger, f"Could not read {API_TOKEN_KEY} ({_describe(e)})")
+        _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
         return
     if token is not None and len(token) < MIN_TOKEN_LENGTH:
         _fail(
             logger,
-            f"{API_TOKEN_KEY} is shorter than {MIN_TOKEN_LENGTH} characters; use a long random value",
+            f"{SETTING_NAME} is shorter than {MIN_TOKEN_LENGTH} characters; use a long random value",
         )
         return
     _state.update(loaded=True, token=token, failed=False)
@@ -248,12 +249,12 @@ def recheck_now(
     try:
         token = read_api_token(secrets_path, options_path)
     except Exception as e:
-        _fail(logger, f"Could not read {API_TOKEN_KEY} ({_describe(e)})")
+        _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
         return
     if token is not None:
         _fail(
             logger,
-            f"{API_TOKEN_KEY} was set after EMHASS started loading; restart EMHASS to turn "
+            f"{SETTING_NAME} was set after EMHASS started loading; restart EMHASS to turn "
             "API authentication on",
         )
 
@@ -300,7 +301,7 @@ def current_token() -> str | None:
     if _state["loaded"]:
         return _state["token"]
     try:
-        return _normalise(os.environ.get(API_TOKEN_ENV))
+        return _normalise(os.environ.get(ENV_NAME))
     except ApiTokenError:
         return None
 
@@ -311,8 +312,8 @@ def redacted(value):
     Only that top-level key; ``TokenLogFilter`` masks the token by value
     wherever else it turns up.
     """
-    if isinstance(value, dict) and API_TOKEN_KEY in value:
-        return {**value, API_TOKEN_KEY: "***"}
+    if isinstance(value, dict) and SETTING_NAME in value:
+        return {**value, SETTING_NAME: "***"}
     return value
 
 
@@ -456,16 +457,18 @@ def log_status(logger: logging.Logger, host: str) -> None:
         logger.info("API authentication is enabled")
         return
     if is_loopback(host):
-        logger.info("API authentication is off (no %s set; listening on %s)", API_TOKEN_KEY, host)
+        logger.info(
+            "API authentication is off (no %s set; listening on loopback only)", SETTING_NAME
+        )
         return
+    # The address itself is not repeated here; the launch line logs it.
     logger.warning(
-        "No API token is set and the web server listens on %s. Any device that can "
-        "reach this port can change the configuration and run actions. Set %s "
-        "(secrets file, add-on option or %s environment variable), or listen on "
-        "127.0.0.1 only.",
-        host,
-        API_TOKEN_KEY,
-        API_TOKEN_ENV,
+        "No API token is set and the web server listens on a network address. Any "
+        "device that can reach this port can change the configuration and run "
+        "actions. Set %s (secrets file, add-on option or %s environment variable), "
+        "or listen on 127.0.0.1 only.",
+        SETTING_NAME,
+        ENV_NAME,
     )
 
 
