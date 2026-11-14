@@ -118,7 +118,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         data = await response.get_data()
         self.assertEqual(orjson.loads(data), {"converted": "config"})
-        # Test invalid YAML: refused with 400, and the error's text is not logged
+        # Test invalid YAML: refused with 400 (test_api_auth checks the log)
         response = await self.client.post("/get-json", data=b": - invalid")
         self.assertEqual(response.status_code, 400)
 
