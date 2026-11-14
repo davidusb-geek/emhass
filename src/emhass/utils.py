@@ -3789,13 +3789,14 @@ async def treat_runtimeparams(
                     value = orjson.loads(value)
                 except Exception:
                     logger.warning(f"Could not parse {name} string ({len(value)} characters)")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
             try:
                 if isinstance(value, list):
                     return [cast(v) for v in value]
-                return [cast(value)] * n_loads
+                one = cast(value)
             except (TypeError, ValueError, OverflowError):
                 raise RuntimeParamError(f"{name} must be a number or a list of numbers") from None
+            # Only one value for every load needs the load count; a list has its own.
+            return [one] * len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
 
         # def_current_on_timesteps: per-load elapsed ON timesteps for min-on remainder
         # (issue #952). Mirrors def_current_state: absent key -> no initial force (NOT
