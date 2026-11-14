@@ -144,7 +144,10 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
     return _dry_run_log.get() is None
 
 
-app.logger.addHandler(_DryRunLog())
+_dry_run_handler = _DryRunLog()
+app.logger.addHandler(_dry_run_handler)
+# Mask the API token by value in everything the app logger writes or returns.
+api_auth.mask_token_in(app.logger)
 
 
 @app.before_request
@@ -278,8 +281,8 @@ async def before_serving():
     app.config["boot_ts"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     # Normally loaded at import. If not (a test reset it), load it here, before
     # initialize(), so a failure there cannot leave a configured token unenforced.
-    if not api_auth.is_loaded():
-        await _configure_api_auth()
+    # If it was, check that no token appeared since the snapshot found none.
+    await _configure_api_auth()
     # Initialize the application
     try:
         await initialize()
@@ -297,8 +300,12 @@ async def before_serving():
 
 
 async def _configure_api_auth() -> None:
-    """Load the API token from the same files _setup_paths and _setup_secrets use."""
-    await api_auth.configure(*_api_token_sources(), app.logger)
+    """Load the API token from the same files _setup_paths and _setup_secrets use,
+    or, when the import already loaded it, recheck them."""
+    if not api_auth.is_loaded():
+        await api_auth.configure(*_api_token_sources(), app.logger)
+    else:
+        api_auth.recheck_now(*_api_token_sources(), app.logger)
 
 
 @app.after_serving
@@ -445,7 +452,9 @@ async def template_action():
     template page actions:
     Render and serve template html
     """
-    app.logger.info(" >> Sending rendered template data")
+    # No " >> " here: an action's status is read from the action log after the
+    # last line holding it, so this line would hide a failing action's errors.
+    app.logger.info("Sending rendered template data")
 
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
@@ -1524,6 +1533,7 @@ async def _configure_logging(logging_level: str) -> None:
         file_logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(file_logger)
+    api_auth.mask_token_in(app.logger)
     # Clear Action File logger file, ready for new instance
     await clear_file_log()
 
