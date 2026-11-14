@@ -1,6 +1,7 @@
 """Opt-in API authentication (emhass.api_auth) and its wiring into the web server."""
 
 import io
+import json
 import logging
 import os
 import pathlib
@@ -275,6 +276,28 @@ class TestTokenLogFilter(AuthTestBase):
         self.assertIn("ValueError", text)
         self.assertNotIn(TOKEN, text)
 
+    async def test_masks_escaped_forms_of_the_token(self):
+        # A dict in a log line is written with repr(), which escapes a
+        # backslash, quotes and control characters; JSON escapes them too.
+        for token in (
+            "tok\\en-0123456789abcdef",
+            'it\'s-a-"quoted"-token-0123',
+            "tab\there-0123456789abcdef",
+            "töken-with-ümlauts-0123456",
+        ):
+            with self.subTest(token=token):
+                await self.enable(token)
+                for text in (
+                    repr({"x": token}),
+                    json.dumps({"x": token}),
+                    token,
+                    "GET /x?t=" + api_auth.urllib.parse.quote(token, safe=""),
+                    "GET /x?t=" + api_auth.urllib.parse.quote_plus(token),
+                ):
+                    record = self.record("body: %s", (text,))
+                    api_auth.token_log_filter.filter(record)
+                    self.assertEqual(record.getMessage().count("***"), 1, record.getMessage())
+
     async def test_leaves_records_alone_without_a_token(self):
         await api_auth.configure(None, None, self.logger)
         record = self.record("value %s", ("x",))
@@ -344,6 +367,18 @@ class TestLogin(AuthTestBase):
                 self.assertIn("Secure", response.headers["Set-Cookie"])
         response = await self.client.post("/logout", headers={"X-Forwarded-Proto": "https"})
         self.assertIn("Secure", response.headers["Set-Cookie"])
+        for value in ("proto=https", 'for=192.0.2.1;proto="https"', "Proto=HTTPS;host=x"):
+            with self.subTest(forwarded=value):
+                response = await self.client.post(
+                    "/login", form={"token": TOKEN}, headers={"Forwarded": value}
+                )
+                self.assertIn("Secure", response.headers["Set-Cookie"])
+        for value in ("proto=http", "for=192.0.2.1, proto=https", "host=https"):
+            with self.subTest(forwarded=value):
+                response = await self.client.post(
+                    "/login", form={"token": TOKEN}, headers={"Forwarded": value}
+                )
+                self.assertNotIn("Secure", response.headers["Set-Cookie"])
 
     async def test_large_login_body_is_refused_before_parsing(self):
         with patch.object(api_auth.urllib.parse, "parse_qs") as mock_parse:
@@ -610,6 +645,14 @@ class TestFailClosed(AuthTestBase):
         path.mkdir()
         await self.check_failed(secrets=path)
 
+    async def test_link_to_a_missing_file(self):
+        path = self.dir / "secrets_emhass.yaml"
+        try:
+            path.symlink_to(self.dir / "not-there.yaml")
+        except OSError:
+            self.skipTest("symlinks need admin rights here")
+        await self.check_failed(secrets=path)
+
     async def test_secrets_file_that_cannot_be_read(self):
         path = self.write_secrets(yaml.safe_dump({api_auth.API_TOKEN_KEY: TOKEN}))
         with patch.object(pathlib.Path, "read_text", side_effect=PermissionError(13, "denied")):
@@ -800,16 +843,42 @@ class TestWebServerWiring(AuthTestBase):
         response = await self.client.get("/api/v1/last-run")
         self.assertEqual(response.status_code, 200)
 
-    def test_app_logger_and_its_handlers_mask_the_token(self):
-        app_logger = web_server.app.logger
-        self.assertIn(api_auth.token_log_filter, app_logger.filters)
-        self.assertTrue(app_logger.handlers)
-        for handler in app_logger.handlers:
-            with self.subTest(handler=type(handler).__name__):
-                self.assertIn(api_auth.token_log_filter, handler.filters)
+    def test_importing_the_web_server_installs_log_masking(self):
+        self.assertIs(logging.getLogRecordFactory(), api_auth._masking_record_factory)
+        api_auth.install_log_masking()  # a second call changes nothing
+        self.assertIs(logging.getLogRecordFactory(), api_auth._masking_record_factory)
+        self.assertIsNot(api_auth._previous_record_factory, api_auth._masking_record_factory)
+
+    async def test_other_loggers_are_masked_too(self):
+        # emhass.utils, retrieve_hass, Gunicorn and Uvicorn do not log through
+        # the app logger.
+        await self.enable()
+        for name in ("emhass.utils", "emhass.retrieve_hass", "uvicorn.access", "x"):
+            with self.subTest(logger=name):
+                stream = io.StringIO()
+                handler = logging.StreamHandler(stream)
+                other = logging.getLogger(name)
+                saved = (other.level, other.disabled, other.propagate)
+                other.setLevel(logging.INFO)
+                other.disabled = False
+                other.propagate = False
+                other.addHandler(handler)
+                try:
+                    other.info("GET /x?t=%s", TOKEN)
+                    try:
+                        raise ValueError(TOKEN)
+                    except ValueError:
+                        other.exception("failed")
+                finally:
+                    other.removeHandler(handler)
+                    other.setLevel(saved[0])
+                    other.disabled, other.propagate = saved[1], saved[2]
+                self.assertIn("GET /x?t=***", stream.getvalue())
+                self.assertIn("ValueError", stream.getvalue())
+                self.assertNotIn(TOKEN, stream.getvalue())
 
     async def test_a_handler_without_the_filter_still_gets_it_masked(self):
-        # The filter sits on the app logger, so a console handler Quart (or
+        # Masking runs as records are made, so a console handler Quart (or
         # Flask) attached, which nobody gave the filter, writes the masked text.
         await self.enable()
         stream = io.StringIO()

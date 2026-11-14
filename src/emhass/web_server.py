@@ -146,8 +146,8 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
 
 _dry_run_handler = _DryRunLog()
 app.logger.addHandler(_dry_run_handler)
-# Mask the API token by value in everything the app logger writes or returns.
-api_auth.mask_token_in(app.logger)
+# Mask the API token by value in every log record this process makes.
+api_auth.install_log_masking()
 
 
 @app.before_request
@@ -1533,7 +1533,6 @@ async def _configure_logging(logging_level: str) -> None:
         file_logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(file_logger)
-    api_auth.mask_token_in(app.logger)
     # Clear Action File logger file, ready for new instance
     await clear_file_log()
 
