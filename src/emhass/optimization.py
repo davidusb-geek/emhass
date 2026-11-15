@@ -168,23 +168,25 @@ HEAT_PUMP_COP_MAX = 8.0
 # ``r`` near 1e-6 can be reported as an "almost full" or "almost off" step instead of the
 # remainder step: the energy stays exact but the full/remainder split is not
 # determinable (measured with the 3 kW test load: failures at r <= 1e-6, none at 2e-6 and
-# above, for 100 W to 22 kW). A requirement within 1e-5 steps (10x that tolerance) of a
-# whole number of steps is therefore taken as that whole number, up or down, in the
-# required steps and the energy target alike. The error is at most
-# ``1e-5 * nominal * dt`` Wh and ``1e-5 * dt`` of run time per load and request (0.015 Wh,
-# 18 ms for 3 kW at 30 min). Only loads with a remainder step use it. See docs/config.md.
+# above, for 100 W to 22 kW), and a remainder of about 1e-8 steps or less can make the
+# strict solve numerically infeasible. A requirement within 1e-5 steps (10x that
+# tolerance) of a whole number of steps is therefore taken as that whole number, up or
+# down, and a positive requirement below 1e-5 steps is raised to 1e-5 steps (never
+# dropped, never promoted to a full step), in the required steps and the energy target
+# alike. The error is at most ``1e-5 * nominal * dt`` Wh and ``1e-5 * dt`` of run time per
+# load and request (0.015 Wh, 18 ms for 3 kW at 30 min). Only loads with a remainder step
+# use it. See docs/config.md.
 FRACTIONAL_STEP_RESOLUTION = 1e-5
 
 
-def _snap_to_whole_steps(steps: float, resolution: float = FRACTIONAL_STEP_RESOLUTION):
-    """Return the whole number of steps ``steps`` is within ``resolution`` of, else None.
+def _snap_to_whole_steps(steps: float):
+    """Return the whole number of steps ``steps`` is within the resolution of, else None.
 
     Snaps in either direction, only to >= 1 (a positive requirement never becomes "no
-    requirement"), and never closer than IEEE-754 representation noise. ``resolution=0``
-    keeps only that noise, for loads without a remainder step.
+    requirement"). Only called for a load that carries a remainder step.
     """
     nearest = round(steps)
-    tol = max(resolution, 16 * np.finfo(float).eps * abs(steps))
+    tol = max(FRACTIONAL_STEP_RESOLUTION, 16 * np.finfo(float).eps * abs(steps))
     return int(nearest) if nearest >= 1 and abs(steps - nearest) <= tol else None
 
 
@@ -6993,6 +6995,18 @@ class Optimization:
             and k < len(self.param_target_energy)
         )
 
+    def _required_steps_for_hours(self, k, hours, shared_tank_membership=None):
+        """Whole timesteps a load needs for ``hours``: the ceiling, except that a load
+        with a remainder step takes a requirement within FRACTIONAL_STEP_RESOLUTION of a
+        whole number of steps as that number. Shared by the build-time window check and
+        the per-solve update so both see the same requirement."""
+        steps = hours / self.time_step
+        if self._has_remainder_step(k, shared_tank_membership):
+            whole_steps = _snap_to_whole_steps(steps)
+            if whole_steps is not None:
+                return whole_steps
+        return ceil(steps)
+
     def _add_semi_cont_remainder(self, constraints, k, on_level, bin1, bin2):
         """Semi-continuous power with at most one fractional remainder step (#1105).
 
@@ -7290,7 +7304,9 @@ class Optimization:
             elif def_total_timestep and def_total_timestep[k] > 0:
                 min_steps = ceil(def_total_timestep[k])
             else:
-                min_steps = ceil(def_total_hours[k] / self.time_step)
+                min_steps = self._required_steps_for_hours(
+                    k, def_total_hours[k], shared_tank_membership
+                )
             def_start, def_end, warning = Optimization.validate_def_timewindow(
                 def_start_timestep[k],
                 def_end_timestep[k],
@@ -8933,12 +8949,9 @@ class Optimization:
             if isinstance(nominal_power, list):
                 nominal_power = max(nominal_power)
 
-            # Snap near-whole requirements only for a load that carries a remainder step.
-            resolution = (
-                FRACTIONAL_STEP_RESOLUTION
-                if self._has_remainder_step(k, shared_tank_membership)
-                else 0.0
-            )
+            # Only a standard semi-continuous load carries a remainder step; every other
+            # load keeps the previous ceil / exact-energy behaviour (issue #1105).
+            has_remainder = self._has_remainder_step(k, shared_tank_membership)
 
             # Determine operating requirement: def_total_timestep takes priority over def_total_hours
             # def_total_timestep is specified in number of timesteps
@@ -8952,15 +8965,10 @@ class Optimization:
             elif def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0:
                 # Use hours-based specification
                 operating_hours = def_total_hours[k]
-                requested_steps = operating_hours / self.time_step
-                # Within the resolution of a whole number of steps (see
-                # FRACTIONAL_STEP_RESOLUTION) the requirement is that whole number.
-                whole_steps = _snap_to_whole_steps(
-                    requested_steps,
-                    resolution,
-                )
-                required_timesteps = (
-                    whole_steps if whole_steps is not None else ceil(requested_steps)
+                # A load with a remainder step takes a requirement within
+                # FRACTIONAL_STEP_RESOLUTION of a whole number of steps as that number.
+                required_timesteps = self._required_steps_for_hours(
+                    k, operating_hours, shared_tank_membership
                 )
                 target_energy = nominal_power * operating_hours
                 constraint_active = True
@@ -9036,14 +9044,23 @@ class Optimization:
             # Fractional remainder step (issue #1105): the (remaining) energy target as
             # steps at nominal power is f + r. Whole steps stay strict ON/OFF; the single
             # remainder step carries r * nominal so the energy is delivered exactly.
-            self.param_rem_level[k].value = 0.0
-            self.param_rem_active[k].value = 0.0
-            if constraint_active and k not in window_empty_loads and nominal_power > 0:
+            if has_remainder:
+                self.param_rem_level[k].value = 0.0
+                self.param_rem_active[k].value = 0.0
+            if (
+                has_remainder
+                and constraint_active
+                and k not in window_empty_loads
+                and nominal_power > 0
+            ):
                 steps_of_energy = target_energy / (nominal_power * self.time_step)
-                whole_steps = _snap_to_whole_steps(
-                    steps_of_energy,
-                    resolution,
-                )
+                if 0.0 < steps_of_energy < FRACTIONAL_STEP_RESOLUTION:
+                    # Not below the resolution: a remainder this small is numerically
+                    # unreliable, and the error stays within the documented bound.
+                    steps_of_energy = FRACTIONAL_STEP_RESOLUTION
+                    target_energy = steps_of_energy * nominal_power * self.time_step
+                    self.param_target_energy[k].value = target_energy
+                whole_steps = _snap_to_whole_steps(steps_of_energy)
                 if whole_steps is not None:
                     # Below the solver's resolution (FRACTIONAL_STEP_RESOLUTION): the
                     # target is the whole number of steps, so the energy equality
@@ -9066,14 +9083,13 @@ class Optimization:
                     if rem_fraction > 0.0:
                         self.param_rem_level[k].value = float(rem_fraction * nominal_power)
                         self.param_rem_active[k].value = 1.0
-                if resolution > 0.0:
-                    # One snap decision per load: the remaining energy decides, so the
-                    # required steps always match the ON steps that energy needs (the
-                    # hours-based and the energy-based ratio can differ by an ulp
-                    # exactly at the resolution).
-                    required_timesteps = (
-                        whole_steps if whole_steps is not None else ceil(steps_of_energy)
-                    )
+                # One snap decision per load: the remaining energy decides, so the
+                # required steps always match the ON steps that energy needs (the
+                # hours-based and the energy-based ratio can differ by an ulp
+                # exactly at the resolution).
+                required_timesteps = (
+                    whole_steps if whole_steps is not None else ceil(steps_of_energy)
+                )
 
             # For single-constant (binary) loads, set the required timesteps
             is_single_const = self.optim_conf["set_deferrable_load_single_constant"][k]

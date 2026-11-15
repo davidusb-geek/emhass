@@ -213,6 +213,13 @@ class TestFractionalRemainder(unittest.TestCase):
 
     def test_minimum_on_time_counts_full_steps(self):
         """A run that contains the remainder step still has min-on full steps."""
+        # 1.5 steps (one full step plus the remainder) cannot form a run of 2 full
+        # steps: the strict solve must refuse it rather than count the remainder step
+        # as a minimum on-time step.
+        opt = make(def_minimum_on_time=[2])
+        solve(opt, [0.75])
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+
         opt = make(def_minimum_on_time=[2])
         res = solve(opt, [1.25], prices=[0.05, 0.3] * 6)
         self.assertEqual(opt.optim_status, "Optimal")
@@ -410,6 +417,21 @@ class TestFractionalRemainder(unittest.TestCase):
         np.testing.assert_allclose(power(res)[:3], NOMINAL, atol=1e-3)
         self.assertAlmostEqual(energy_wh(res), NOMINAL * 1.75, delta=1e-3)
 
+    def test_forced_minimum_on_tail_ends_where_availability_blocks_the_load(self):
+        """A still-owed minimum on-time tail is truncated at the first step the load
+        cannot run (def_availability 0), and the tail's FULL-step floor with it:
+        otherwise bin1[t] >= 1 meets a power ceiling of 0 and the strict solve is
+        infeasible (negative check: the clamp is what keeps it Optimal)."""
+        opt = make(def_minimum_on_time=[3], def_current_state=[True], def_current_on_timesteps=[1])
+        # 2.25 h = 4.5 steps: the running load's one full step, then (the blocked step
+        # having ended its forced run) a new run of 3 full steps plus the remainder.
+        res = solve(opt, [2.25], def_availability=[[1, 0] + [1] * (N - 2)])
+        self.assertEqual(opt.optim_status, "Optimal")
+        p = power(res)
+        self.assertAlmostEqual(p[1], 0.0, delta=1e-6)
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 2.25, delta=1e-3)
+        self.assertEqual(float(opt.param_min_on_full_lb[0].value[1:].max()), 0.0)
+
     def test_partial_step_is_exactly_the_remainder_not_its_complement(self):
         """2.3 steps: full, full, 30 %. A surplus of exactly 70 % of the nominal power
         tempts a plan into a 70 % step (the complement) that is not an ON step."""
@@ -517,14 +539,35 @@ class TestFractionalRemainder(unittest.TestCase):
                                 self.assertAlmostEqual(energy_wh(res), requested, delta=1e-3)
 
     def test_requirement_below_one_step_is_never_snapped_to_nothing(self):
-        for steps in (1e-6, 5e-6, 1e-5, 2e-5):
-            with self.subTest(steps=steps):
-                opt = make()
-                res = solve(opt, [steps * DT])
-                self.assertEqual(opt.optim_status, "Optimal")
-                self.assertEqual(opt.param_rem_active[0].value, 1.0)
-                self.assertEqual(self._decisions(opt), (0, 1))
-                self.assertAlmostEqual(energy_wh(res), steps * DT * NOMINAL, delta=1e-4)
+        """A positive requirement below one step keeps its own remainder step: it is
+        neither dropped nor promoted to a full step, at any nominal power. One below the
+        resolution (1e-5 steps) is raised to it, because a remainder of ~1e-8 steps or
+        less made the strict solve numerically infeasible (22 kW at 1e-9 steps fell back
+        to the relaxed solve); the error stays within 1e-5 * nominal * dt Wh. Run on
+        HiGHS 1.10.0 and 1.16.0: 7 powers x 13 requests from 1e-14 to 2e-5 steps."""
+        from emhass.optimization import FRACTIONAL_STEP_RESOLUTION
+
+        for nominal in (100.0, 3000.0, 22000.0):
+            for steps in (1e-12, 1e-9, 3e-9, 1e-6, 5e-6, 1e-5, 2e-5):
+                with self.subTest(nominal=nominal, steps=steps):
+                    opt = make(nominal_power_of_deferrable_loads=[nominal])
+                    res = solve(opt, [steps * DT])
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    effective = max(steps, FRACTIONAL_STEP_RESOLUTION)
+                    self.assertEqual(opt.param_rem_active[0].value, 1.0)
+                    self.assertAlmostEqual(
+                        opt.param_rem_level[0].value, effective * nominal, delta=1e-9 * nominal
+                    )
+                    # No silent loss, no promotion to a (much larger) full step.
+                    self.assertAlmostEqual(
+                        energy_wh(res), effective * DT * nominal, delta=1e-6 * nominal * DT
+                    )
+                    self.assertLessEqual(
+                        abs(energy_wh(res) - steps * DT * nominal),
+                        FRACTIONAL_STEP_RESOLUTION * nominal * DT + 1e-9,
+                    )
+                    self.assertLess(float(power(res).max()), 1e-3 * nominal)
+                    self.assertEqual(self._decisions(opt), (0, 1))
 
     def test_snap_is_limited_to_loads_with_a_remainder_step(self):
         """A continuous load keeps the exact energy target; only a semi-continuous
@@ -615,23 +658,59 @@ class TestFractionalRemainder(unittest.TestCase):
                     nominal_power_of_deferrable_loads=[nominal],
                     set_deferrable_load_single_constant=[True],
                 )
-                solve(opt, [hours])
+                res = solve(opt, [hours])
                 self.assertEqual(opt.optim_status, "Optimal")
-                steps_needed = round(hours / DT) if opt.param_rem_active[0].value == 0.0 else None
-                if steps_needed is None:
-                    self.assertEqual(
-                        opt.param_required_timesteps[0].value, int(np.floor(hours / DT)) + 1
-                    )
-                else:
-                    self.assertEqual(opt.param_required_timesteps[0].value, steps_needed)
+                # 5.00001 and 6.00001 steps are inside the resolution (whole steps); the
+                # independent oracle is the ON steps of the plan itself, which must be one
+                # run of exactly the required steps.
+                on_steps = int((power(res) > 1e-6).sum())
+                self.assertEqual(opt.param_required_timesteps[0].value, on_steps)
+                self.assertEqual(len(runs(power(res))), 1)
 
-    def test_snap_without_resolution_only_removes_float_noise(self):
+    def test_snap_removes_float_noise_for_a_remainder_load(self):
         from emhass.optimization import _snap_to_whole_steps
 
-        self.assertEqual(_snap_to_whole_steps(249.00000000000003, 0.0), 249)
-        self.assertEqual(_snap_to_whole_steps(2.9999999999999996, 0.0), 3)
-        self.assertIsNone(_snap_to_whole_steps(2.000001, 0.0))
-        self.assertIsNone(_snap_to_whole_steps(2.9999995, 0.0))
+        self.assertEqual(_snap_to_whole_steps(249.00000000000003), 249)
+        self.assertEqual(_snap_to_whole_steps(2.9999999999999996), 3)
+
+    def test_loads_without_a_remainder_step_keep_the_previous_requirement(self):
+        """No behavioural change for a load that cannot carry a remainder step: the
+        required steps are the plain ceiling (an ulp above a whole number is one more
+        step, exactly as on upstream) and the energy target is nominal * hours."""
+        noise = float(np.nextafter(4.0, np.inf))
+        for label, over in (
+            ("continuous single-constant", {"treat_deferrable_load_as_semi_cont": [False]}),
+            ("sequence", {"nominal_power_of_deferrable_loads": [[1000.0, 2000.0]]}),
+        ):
+            with self.subTest(load=label):
+                opt = make(set_deferrable_load_single_constant=[True], **over)
+                self.assertFalse(opt._has_remainder_step(0))
+                hours = noise * DT
+                self.assertEqual(opt._required_steps_for_hours(0, hours), 5)
+                if label == "continuous single-constant":
+                    solve(opt, [hours])
+                    self.assertEqual(opt.param_required_timesteps[0].value, 5)
+                    self.assertEqual(opt.param_target_energy[0].value, NOMINAL * hours)
+                    self.assertEqual(opt.param_rem_active[0].value, 0.0)
+                    self.assertEqual(opt.param_rem_level[0].value, 0.0)
+
+    def test_window_check_uses_the_effective_requirement(self):
+        """A requirement a hair above 4 steps is solved as 4 whole steps, so a 4-step
+        window must not log 'Available timeframe is shorter' and must stay strict."""
+
+        def window_warnings(opt, steps):
+            with self.assertLogs(opt.logger, level="WARNING") as captured:
+                res = solve(opt, [steps * DT], start=[0], end=[4])
+            return res, [m for m in captured.output if "timeframe" in m]
+
+        opt = make()
+        res, warned = window_warnings(opt, 4 + 5e-6)
+        self.assertEqual(warned, [])
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertEqual(int((power(res) > 1.0).sum()), 4)
+        # Beyond the resolution a fifth step is genuinely needed: the window check warns.
+        _, warned = window_warnings(make(), 4 + 5e-5)
+        self.assertGreaterEqual(len(warned), 1)
 
     def test_remainder_step_is_limited_to_plain_semi_continuous_loads(self):
         opt = make()
@@ -670,10 +749,16 @@ class TestFractionalRemainder(unittest.TestCase):
         np.testing.assert_array_equal(on_state, power(res) > 1.0)
 
     def test_remainder_step_reads_as_variable_in_published_states(self):
-        """The existing opt-in command-state sensor already labels an in-between
-        power ``variable``, so the remainder step is never published as ``on``."""
-        self.assertEqual(_deferrable_power_to_state(0.5 * NOMINAL, NOMINAL), "variable")
-        self.assertEqual(_deferrable_power_to_state(NOMINAL, NOMINAL), "on")
+        """The command-state sensor labels the optimizer's own remainder step
+        ``variable`` (not ``on``): the label is derived from the planned power."""
+        opt = make()
+        res = solve(opt, [1.25])
+        self.assertEqual(opt.optim_status, "Optimal")
+        labels = [_deferrable_power_to_state(float(v), NOMINAL) for v in power(res)]
+        self.assertEqual(labels.count("on"), 2)
+        self.assertEqual(labels.count("variable"), 1)
+        last_active = max(i for i, label in enumerate(labels) if label != "off")
+        self.assertEqual(labels.index("variable"), last_active)
 
     def test_remainder_near_the_state_thresholds(self):
         """The command-state sensor keeps its generic bands: a remainder at or below
