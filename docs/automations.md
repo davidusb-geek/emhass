@@ -98,7 +98,7 @@ Setting the parameter `continual_publish` to `true` in the configuration page wi
 
 option 1 and 2 are very similar, however, option 2 (`continual_publish`) will require a CPU thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail below in [continual_publish](https://emhass.readthedocs.io/en/latest/publish_data.html#continual-publish-emhass-automation).
 
-Lastly, we can link an EMHASS published entity/sensor's current state to a Home Assistant entity on/off switch, controlling a desired controllable load. Note that a fractional `operating_hours_of_each_deferrable_load` of a semi-continuous load ends with one step at a partial *average* power, so a plain on/off switch is ON for that whole step unless your automation limits the ON time (see the math model page). 
+Lastly, we can link an EMHASS published entity/sensor's current state to a Home Assistant entity on/off switch, controlling a desired controllable load. Note that a fractional `operating_hours_of_each_deferrable_load` of a semi-continuous load ends with one step at a partial *average* power, so a plain on/off switch is ON for that whole step unless your automation limits the ON time (see [the math model page](advanced_math_model.md)); a remainder averaging below the 0.1 W threshold of the example does not switch it ON at all. 
 For example, imagine that I want to control my water heater. I can use a published `deferrable` EMHASS entity to control my water heater's desired behavior. In this case, we could use an automation like the below, to control the desired water heater on and off:
   
 on:

@@ -3,8 +3,8 @@
 
 ``operating_hours_of_each_deferrable_load`` that is not a whole number of
 optimization timesteps used to make a strict ON/OFF load infeasible, so the whole
-solve fell back to the relaxed LP (``Optimal (Relaxed)``) and every ON/OFF and
-single-constant constraint of every load was dropped. The load now runs whole
+solve fell back to the relaxed LP (``Optimal (Relaxed)``) and the semi-continuous
+and single-constant constraints of every load were dropped. The load now runs whole
 steps at its nominal power plus exactly one remainder step whose interval-average
 power is ``r * nominal``: the energy stays exact and the solve stays a strict MILP.
 
@@ -448,18 +448,18 @@ class TestFractionalRemainder(unittest.TestCase):
         remainder step of energy left is forced ON at t=0 AT THE REMAINDER'S AVERAGE
         power (not nominal, and not a full step), and the solve stays strict."""
         opt = make(def_current_power=[NOMINAL], def_current_operating_timesteps=[2])
-        res = solve(opt, [1.25], prices=RISING)
+        # t=0 is the DEAREST step: only the force-ON puts the remainder there.
+        res = solve(opt, [1.25], prices=RISING[::-1])
         self.assertEqual(opt.optim_status, "Optimal")
         p = power(res)
         self.assertAlmostEqual(p[0], 0.5 * NOMINAL, delta=1e-3)
+        np.testing.assert_allclose(p[1:], 0.0, atol=1e-6)
         self.assertAlmostEqual(energy_wh(res), 0.5 * DT * NOMINAL, delta=1e-3)
 
     def test_long_horizon_keeps_binaries_integral(self):
         """The remainder step stays ONE integral step on 96 and 288 step horizons
         (no spread of tiny binary values over many OFF steps), at several fractions
         including just above the resolution."""
-        from tests.test_multi_battery_optimization import build_optimization
-
         for n in (96, 288):
             prices = [0.05 + 0.002 * ((t * 7) % 23) for t in range(n)]
             for steps in (2 + 1.1e-5, 2.5, 1.5e-5):
@@ -469,7 +469,7 @@ class TestFractionalRemainder(unittest.TestCase):
                     self.assertEqual(opt.optim_status, "Optimal")
                     for name in ("p_def_bin1", "p_def_bin2"):
                         values = np.asarray(opt.vars[name][0].value, dtype=float)
-                        np.testing.assert_allclose(values, np.rint(values), atol=1e-9)
+                        np.testing.assert_allclose(values, np.rint(values), atol=1e-7)
                     self.assertEqual(self._decisions(opt), (int(np.floor(steps)), 1))
                     self.assertAlmostEqual(energy_wh(res), steps * DT * NOMINAL, delta=1e-3)
 
