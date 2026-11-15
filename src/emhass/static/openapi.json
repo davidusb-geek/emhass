@@ -240,7 +240,7 @@
             "description": "participant_api is not set"
           },
           "503": {
-            "description": "No participant_token, or params.pkl unreadable"
+            "description": "No participant_token, params.pkl unreadable, or more than one web worker (WEB_CONCURRENCY)"
           }
         }
       },
@@ -279,7 +279,7 @@
             "description": "A commit while a live optimization runs"
           },
           "503": {
-            "description": "No participant_token, or params.pkl unreadable"
+            "description": "No participant_token, params.pkl unreadable, or more than one web worker (WEB_CONCURRENCY)"
           }
         }
       }

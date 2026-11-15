@@ -330,7 +330,10 @@ def build_spec(routes: set | None = None) -> dict:
                     "200": {"description": "Its description"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
-                    "503": {"description": "No participant_token, or params.pkl unreadable"},
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
+                    },
                 },
             },
             "post": {
@@ -349,7 +352,10 @@ def build_spec(routes: set | None = None) -> dict:
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
                     "413": {"description": "A body over 1 MiB"},
                     "429": {"description": "A commit while a live optimization runs"},
-                    "503": {"description": "No participant_token, or params.pkl unreadable"},
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
+                    },
                 },
             },
         },

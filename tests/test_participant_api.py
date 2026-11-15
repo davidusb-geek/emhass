@@ -159,6 +159,59 @@ def test_the_participant_api_needs_a_token(data_path):
     assert status == 503 and "participant_token" in body["detail"]
 
 
+def test_the_participant_api_needs_one_web_worker(data_path, monkeypatch):
+    """A coordinator's answers live in one worker's memory: with more, its
+    commit could reach a worker that never gave the answer it names."""
+    monkeypatch.setenv("WEB_CONCURRENCY", "2")
+    params = _params(_conf(data_path), **GARAGE)
+    status, body = _client_get(data_path, params, "/participant/v1/describe", token="t")
+    assert status == 503 and "one web worker" in body["detail"]
+
+
+def test_a_cancelled_commit_keeps_the_slot_until_it_ends(data_path):
+    """The slot is held in the commit's own thread: a request cancelled while
+    its commit runs does not free it for a live optimization under it."""
+    import threading
+
+    saved_conf = web_server.emhass_conf
+    web_server.emhass_conf = {**saved_conf, "data_path": data_path}
+    started, release = threading.Event(), threading.Event()
+
+    def commit():
+        started.set()
+        assert release.wait(10)
+        return 200, {"accepted": True}
+
+    def slot_free() -> bool:
+        with open(web_server._live_optim_slot(), "a+") as f:
+            if utils.try_lock_file(f):
+                utils.unlock_file(f)
+                return True
+            return False
+
+    async def cancel_mid_commit():
+        task = asyncio.ensure_future(asyncio.to_thread(web_server._in_live_optim_slot, commit))
+        assert await asyncio.to_thread(started.wait, 10)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        held = not slot_free()
+        release.set()
+        for _ in range(100):
+            if slot_free():
+                return held, True
+            await asyncio.sleep(0.05)
+        return held, False
+
+    try:
+        held, freed = asyncio.run(cancel_mid_commit())
+    finally:
+        release.set()
+        web_server.emhass_conf = saved_conf
+    assert held, "the slot was freed while the commit still ran"
+    assert freed, "the slot was not freed once the commit ended"
+
+
 @pytest.mark.parametrize("busy", [False, True], ids=["free", "live-run"])
 def test_a_commit_waits_for_no_live_optimization(data_path, busy):
     """A commit ends a live run - it writes the latest results and publishes -

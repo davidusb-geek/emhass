@@ -183,6 +183,32 @@ def _live_optim_slot() -> Path:
     return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
 
 
+def _in_live_optim_slot(run):
+    """`run()` holding the live-optimization slot: ("done", its result),
+    ("busy", None) while a live optimization holds it, or ("unavailable",
+    why). Taken and released in the calling thread, so a request cancelled
+    while `run` works does not free the slot under it."""
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        return "unavailable", str(exc)
+    with slot:
+        if not try_lock_file(slot):
+            return "busy", None
+        try:
+            return "done", run()
+        finally:
+            unlock_file(slot)
+
+
+def _web_workers() -> int:
+    """The web workers serving this EMHASS (gunicorn.conf.py's WEB_CONCURRENCY)."""
+    try:
+        return max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
+
+
 # Add custom filter for trusted HTML content
 def mark_safe(value):
     """Mark pre-rendered HTML plots as safe (use only for trusted content)"""
@@ -1012,6 +1038,14 @@ async def participant_v1(op: str):
     token = params_secrets.get("participant_token")
     if not token:
         return await _problem(503, "Service Unavailable", "set participant_token in the secrets")
+    if _web_workers() > 1:
+        # A coordinator's answers live in one worker's memory: its commit, sent
+        # to another worker, would name an answer that worker never gave.
+        return await _problem(
+            503,
+            "Service Unavailable",
+            "the participant API needs one web worker (WEB_CONCURRENCY=1)",
+        )
     try:
         import home_energy_optimizer.remote  # noqa: F401
     except ImportError:
@@ -1036,26 +1070,23 @@ async def participant_v1(op: str):
         # and is refused (429) while this EMHASS runs its own. The coordinator then
         # records the remote as refused. Queries are not slotted: they write
         # nothing, and belong to another EMHASS's live run.
-        try:
-            slot = open(_live_optim_slot(), "a+")
-        except OSError as exc:
+        headers = dict(request.headers)
+        outcome, result = await asyncio.to_thread(
+            _in_live_optim_slot,
+            lambda: service.handle(request.method, f"/v1/{op}", headers, body),
+        )
+        if outcome == "unavailable":
             return await _problem(
                 503,
                 "Service Unavailable",
-                f"the live optimization lock is unavailable ({exc})",
+                f"the live optimization lock is unavailable ({result})",
                 "2",
             )
-        with slot:
-            if not try_lock_file(slot):
-                return await _problem(
-                    429, "Too Many Requests", "a live optimization is running; retry shortly", "2"
-                )
-            try:
-                status, out = await asyncio.to_thread(
-                    service.handle, request.method, f"/v1/{op}", dict(request.headers), body
-                )
-            finally:
-                unlock_file(slot)
+        if outcome == "busy":
+            return await _problem(
+                429, "Too Many Requests", "a live optimization is running; retry shortly", "2"
+            )
+        status, out = result
     else:
         status, out = await asyncio.to_thread(
             service.handle, request.method, f"/v1/{op}", dict(request.headers), body
