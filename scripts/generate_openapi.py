@@ -66,6 +66,8 @@ def _input_to_schema(input_str: str, param: dict, scalar_default: bool = False) 
     dv = param.get("default_value", None)
     if dv is not None:
         leaf["default"] = dv
+    if param.get("minimum") is not None:
+        leaf["minimum"] = param["minimum"]
     if param.get("maximum") is not None:
         leaf["maximum"] = param["maximum"]
     schema = leaf
@@ -160,6 +162,14 @@ _PARTICIPANT_API = (
 _PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
+_RETRY_AFTER_HEADER = {
+    "Retry-After": {
+        "description": "Seconds to wait before retrying the request.",
+        "schema": {"type": "integer"},
+    }
+}
+
+
 def _load_json(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     data.pop("$schema", None)  # not meaningful inside an openapi component
@@ -212,6 +222,7 @@ def build_spec(routes: set | None = None) -> dict:
                 "responses": {
                     "200": {"description": "Saved"},
                     "400": {"description": "Empty/invalid config"},
+                    "409": {"description": "Another save is running; nothing was saved, retry"},
                     "500": {"description": "Save failure"},
                 },
             }
@@ -251,6 +262,25 @@ def build_spec(routes: set | None = None) -> dict:
                         "content": {"application/json": {"schema": {"type": "object"}}},
                     },
                     "400": {"description": "Action failure"},
+                    "429": {
+                        "description": (
+                            "Only for the live optimization actions naive-mpc-optim, "
+                            "dayahead-optim and perfect-optim: another live optimization is "
+                            "already running. This request was rejected and not run (it is not "
+                            "queued and does not replace the running one); retry after the "
+                            "delay in Retry-After."
+                        ),
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
+                    "503": {
+                        "description": (
+                            "Only for the live optimization actions naive-mpc-optim, "
+                            "dayahead-optim and perfect-optim: the live optimization lock "
+                            "could not be opened. The request failed closed and was not run; "
+                            "retry after the delay in Retry-After."
+                        ),
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
                 },
             }
         },

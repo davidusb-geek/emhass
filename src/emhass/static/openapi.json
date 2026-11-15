@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "EMHASS API",
-    "version": "1.0",
+    "version": "1.1",
     "description": "Machine-readable contract for the EMHASS JSON API. `default` values are sourced from param_definitions.json (the maintainer-declared source of truth); runtime currently loads config_defaults.json, which is kept aligned but not enforced in code."
   },
   "paths": {
@@ -58,6 +58,9 @@
           },
           "400": {
             "description": "Empty/invalid config"
+          },
+          "409": {
+            "description": "Another save is running; nothing was saved, retry"
           },
           "500": {
             "description": "Save failure"
@@ -137,6 +140,28 @@
           },
           "400": {
             "description": "Action failure"
+          },
+          "429": {
+            "description": "Only for the live optimization actions naive-mpc-optim, dayahead-optim and perfect-optim: another live optimization is already running. This request was rejected and not run (it is not queued and does not replace the running one); retry after the delay in Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Only for the live optimization actions naive-mpc-optim, dayahead-optim and perfect-optim: the live optimization lock could not be opened. The request failed closed and was not run; retry after the delay in Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       }
@@ -1069,9 +1094,11 @@
           "inverter_stress_segments": {
             "type": "integer",
             "default": 10,
+            "minimum": 1,
+            "maximum": 100,
             "title": "Hybrid Inverter Stress Segments",
             "x-unit": "count",
-            "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
+            "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. A whole number from 1 to 100. (unit: count)"
           },
           "compute_curtailment": {
             "anyOf": [
@@ -1094,7 +1121,7 @@
             "default": 1,
             "title": "Number of inverters",
             "x-unit": "count",
-            "description": "Number of physical inverters in the plant (default 1). More than one inverter is not supported yet: a value above 1 is refused with an error. The per-inverter settings are described in docs/config.md. (unit: count)"
+            "description": "Number of physical inverters in the plant (default 1). With more than one inverter, the per-inverter settings and how the optimizer models them are described in docs/config.md. (unit: count)"
           },
           "battery_inverter_index": {
             "type": "array",
@@ -1487,9 +1514,11 @@
           "number_of_batteries": {
             "type": "integer",
             "default": 1,
+            "minimum": 1,
+            "maximum": 100,
             "title": "Number of batteries",
             "x-unit": "count",
-            "description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. (unit: count)"
+            "description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. At most 100. (unit: count)"
           },
           "set_nocharge_from_grid": {
             "type": "boolean",
@@ -1737,9 +1766,11 @@
           "battery_stress_segments": {
             "type": "integer",
             "default": 10,
+            "minimum": 1,
+            "maximum": 100,
             "title": "Battery Stress Segments",
             "x-unit": "count",
-            "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. (unit: count)"
+            "description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time. A whole number from 1 to 100. (unit: count)"
           },
           "battery_soc_deficit_threshold": {
             "anyOf": [

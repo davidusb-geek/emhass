@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import base64
 import copy
 import logging
 import operator
@@ -1218,13 +1219,29 @@ class RetrieveHass:
         scheme = "https" if self.victoriametrics_use_ssl else "http"
         return f"{scheme}://{self.victoriametrics_host}:{self.victoriametrics_port}"
 
-    def _vm_auth(self) -> aiohttp.BasicAuth | None:
-        """HTTP Basic auth for VictoriaMetrics, or None when no username is configured."""
-        if self.victoriametrics_username:
-            return aiohttp.BasicAuth(
-                self.victoriametrics_username, self.victoriametrics_password or ""
-            )
-        return None
+    def _vm_auth_headers(self) -> dict[str, str]:
+        """HTTP headers authenticating against VictoriaMetrics.
+
+        Empty when no username is configured. Otherwise a ``Basic`` ``Authorization`` header
+        encoded as latin-1, matching the encoding EMHASS has always sent. It is built with
+        ``base64`` since ``aiohttp.encode_basic_auth`` only exists in aiohttp >= 3.14.
+
+        Raises:
+            ValueError: if the credentials cannot be encoded. The message never contains
+                the username, password or token.
+        """
+        if not self.victoriametrics_username:
+            return {}
+        if ":" in self.victoriametrics_username:
+            raise ValueError("victoriametrics_username must not contain a colon")
+        credentials = f"{self.victoriametrics_username}:{self.victoriametrics_password or ''}"
+        try:
+            token = base64.b64encode(credentials.encode("latin1")).decode("ascii")
+        except UnicodeEncodeError:
+            raise ValueError(
+                "victoriametrics_username/password must be encodable as latin-1"
+            ) from None
+        return {"Authorization": f"Basic {token}"}
 
     def _vm_ssl(self) -> bool | None:
         """aiohttp ``ssl`` argument: False disables certificate verification over HTTPS."""
@@ -1284,8 +1301,13 @@ class RetrieveHass:
         url = f"{self._vm_base_url()}/api/v1/query_range"
         params = {"query": query, "start": start_s, "end": end_s, "step": step_s}
         try:
+            headers = self._vm_auth_headers()
+        except ValueError as e:
+            self.logger.error(f"Invalid VictoriaMetrics credentials: {e}")
+            return None
+        try:
             async with session.get(
-                url, params=params, auth=self._vm_auth(), ssl=self._vm_ssl()
+                url, params=params, headers=headers, ssl=self._vm_ssl()
             ) as response:
                 body = await response.read()
                 if response.status == 401:
@@ -2074,6 +2096,7 @@ class RetrieveHass:
         save_entities: bool | None = False,
         logger_levels: str | None = "info",
         dont_post: bool | None = False,
+        extra_attributes: dict | None = None,
     ) -> None:
         r"""
         Post passed data to hass using REST API.
@@ -2106,6 +2129,9 @@ class RetrieveHass:
         :type logger_levels: str, optional
         :param dont_post: dont post to HA
         :type dont_post: bool, optional
+        :param extra_attributes: extra attributes merged into the sensor attributes, and kept in
+            the saved entity metadata so a continual publish posts them again
+        :type extra_attributes: dict, optional
 
         """
         # Add a possible prefix to the entity ID
@@ -2315,6 +2341,8 @@ class RetrieveHass:
                 "state": f"{state:.2f}",
                 "attributes": attributes,
             }
+        if extra_attributes:
+            data["attributes"].update(extra_attributes)
         # Actually post the data
         if self.get_data_from_file or dont_post:
             # Create mock response for file mode or dont_post mode
@@ -2418,6 +2446,8 @@ class RetrieveHass:
                         "type_var": type_var,
                         "optimization_time_step": int(self.freq.seconds / 60),
                     }
+                    if extra_attributes:
+                        metadata[entity_id]["attributes"] = extra_attributes
 
                     # Find lowest frequency to set for continual loop freq
                     if metadata.get("lowest_time_step") is None or metadata[
@@ -2494,7 +2524,7 @@ class RetrieveHass:
             ) as response:
                 await response.read()
                 if response.ok:
-                    self.logger.info(f"Successfully posted to {entity_id} = {state}")
+                    self.logger.info("Successfully posted to %s = %r", entity_id, state)
                     return True
                 self.logger.warning(f"Failed to post {entity_id}. Status code: {response.status}")
                 return False

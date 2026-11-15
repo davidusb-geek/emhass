@@ -892,5 +892,151 @@ class TestMultiBatteryUpdatePowerLimits(unittest.TestCase):
         self.assertEqual(opt.param_battery_charge_power_max[1].value, 2222)
 
 
+class TestBatteryEfficiencyPhysicalInvariants(unittest.TestCase):
+    """Solver-independent battery physics with asymmetric, non-unity efficiencies.
+
+    ``P_batt`` is the battery terminal power in W (positive = discharge). A
+    discharge of P draws ``P / eff_dis`` from the cell and a charge of P stores
+    ``P * eff_chg``. The discharge limit is enforced battery-side, so the
+    terminal discharge ceiling is ``eff_dis * max_dis``. The plain charge limit
+    currently acts at the terminal (``max_chg``); the other charge limits (the
+    binary-gated, availability and SOC-derating ceilings) use battery-side
+    ``1 / eff_chg`` scaling, and at full availability the terminal bound
+    dominates the first, so terminal charge power is asserted against
+    ``max_chg``. The scenario is a clean arbitrage (cheap, flat, expensive)
+    that exercises charging and discharging, so an idle battery or a wrong
+    efficiency scaling fails. Assertions are physical relations and feasible
+    ranges, never an exact schedule.
+    """
+
+    DT_HOURS = 0.5
+    POWER_TOL = 1.0  # W: solver feasibility on terminal power of order 1e3 W
+    SOC_TOL = 1e-4  # fraction: <= 1 Wh on a 10 kWh pack, well above solver noise
+
+    def _scenario(self):
+        n = 10
+        index = pd.date_range("2026-03-02", periods=n, freq="30min", tz="Europe/Tallinn")
+        df_input = pd.DataFrame(index=index)
+        # 4 cheap, 2 flat, 4 expensive steps; no export revenue, no PV.
+        df_input["unit_load_cost"] = [0.05] * 4 + [0.30] * 2 + [0.60] * 4
+        df_input["unit_prod_price"] = [0.0] * n
+        return (
+            index,
+            pd.Series([0.0] * n, index=index),
+            pd.Series([6000.0] * n, index=index),
+            df_input,
+        )
+
+    def _check_battery(self, res, suffix, soc_init, soc_final, spec):
+        p = res[f"P_batt{suffix}"].to_numpy()
+        soc = res[f"SOC_opt{suffix}"].to_numpy()
+        cap, eff_chg, eff_dis = spec["cap"], spec["eff_chg"], spec["eff_dis"]
+
+        # Independent SOC walk from the published terminal power (battery side).
+        expected = []
+        level = soc_init
+        for p_t in p:
+            discharged = max(p_t, 0.0) / eff_dis
+            charged = min(p_t, 0.0) * eff_chg
+            level -= self.DT_HOURS / cap * (discharged + charged)
+            expected.append(level)
+        np.testing.assert_allclose(soc, expected, atol=1e-6)
+
+        # Energy conservation: the horizon's net battery-side energy equals the SOC change.
+        net_wh = sum(max(x, 0.0) / eff_dis + min(x, 0.0) * eff_chg for x in p) * self.DT_HOURS
+        self.assertAlmostEqual(soc[-1] - soc_init, -net_wh / cap, delta=1e-6)
+        self.assertAlmostEqual(soc[-1], soc_final, delta=self.SOC_TOL)
+
+        # Discharge: the battery-side draw never exceeds its limit.
+        discharge_side = p.max() / eff_dis
+        self.assertLessEqual(discharge_side, spec["max_dis"] + self.POWER_TOL)
+        # Charge: the plain charge limit acts on the terminal power (max_chg), and the
+        # cheap steps drive charging to it.
+        charge_terminal = -p.min()
+        self.assertGreaterEqual(charge_terminal, spec["max_chg"] - self.POWER_TOL)
+        self.assertLessEqual(charge_terminal, spec["max_chg"] + self.POWER_TOL)
+
+        # Both directions are genuinely exercised and SOC stays inside its band.
+        self.assertGreaterEqual((p < -self.POWER_TOL).sum(), 3)
+        self.assertGreaterEqual((p > self.POWER_TOL).sum(), 3)
+        self.assertTrue((soc >= spec["soc_min"] - self.SOC_TOL).all())
+        self.assertTrue((soc <= spec["soc_max"] + self.SOC_TOL).all())
+
+    def test_single_battery_asymmetric_efficiency(self):
+        spec = {
+            "cap": 10000,
+            "eff_chg": 0.9,
+            "eff_dis": 0.8,
+            "max_chg": 2000,
+            "max_dis": 2000,
+            "soc_min": 0.1,
+            "soc_max": 0.9,
+        }
+        opt = build_optimization(
+            plant_overrides={
+                "battery_nominal_energy_capacity": spec["cap"],
+                "battery_charge_efficiency": spec["eff_chg"],
+                "battery_discharge_efficiency": spec["eff_dis"],
+                "battery_charge_power_max": spec["max_chg"],
+                "battery_discharge_power_max": spec["max_dis"],
+                "battery_minimum_state_of_charge": spec["soc_min"],
+                "battery_maximum_state_of_charge": spec["soc_max"],
+            }
+        )
+        _, p_pv, p_load, df_input = self._scenario()
+        res = opt.perform_dayahead_forecast_optim(
+            df_input, p_pv, p_load, soc_init=0.5, soc_final=0.5
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self._check_battery(res, "", 0.5, 0.5, spec)
+
+    def test_two_batteries_each_use_their_own_efficiency_and_limits(self):
+        specs = [
+            {
+                "cap": 10000,
+                "eff_chg": 0.9,
+                "eff_dis": 0.8,
+                "max_chg": 2000,
+                "max_dis": 2000,
+                "soc_min": 0.1,
+                "soc_max": 0.9,
+            },
+            {
+                "cap": 6000,
+                "eff_chg": 0.7,
+                "eff_dis": 0.95,
+                "max_chg": 1500,
+                "max_dis": 1000,
+                "soc_min": 0.2,
+                "soc_max": 0.85,
+            },
+        ]
+
+        def col(key):
+            return [s[key] for s in specs]
+
+        opt = build_optimization(
+            plant_overrides={
+                "number_of_batteries": 2,
+                "battery_nominal_energy_capacity": col("cap"),
+                "battery_charge_efficiency": col("eff_chg"),
+                "battery_discharge_efficiency": col("eff_dis"),
+                "battery_charge_power_max": col("max_chg"),
+                "battery_discharge_power_max": col("max_dis"),
+                "battery_minimum_state_of_charge": col("soc_min"),
+                "battery_maximum_state_of_charge": col("soc_max"),
+                "battery_target_state_of_charge": [0.5, 0.5],
+            }
+        )
+        _, p_pv, p_load, df_input = self._scenario()
+        res = opt.perform_dayahead_forecast_optim(
+            df_input, p_pv, p_load, soc_init=[0.5, 0.5], soc_final=[0.5, 0.5]
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        for k, spec in enumerate(specs):
+            with self.subTest(battery=k):
+                self._check_battery(res, f"_{k}", 0.5, 0.5, spec)
+
+
 if __name__ == "__main__":
     unittest.main()

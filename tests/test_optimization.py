@@ -3784,6 +3784,89 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
+    def _solve_lag_window(self, min_temps, max_temps):
+        """test_thermal_inertia's fixture (L = 2 steps, no heat in flight) with the
+        given bounds. The free path is 20.0, 17.5, 15.62, 14.22."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+        self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+        self.optim_conf["def_load_config"] = [
+            {},
+            {
+                "thermal_config": {
+                    "heating_rate": 10.0,
+                    "cooling_constant": 0.5,
+                    "start_temperature": 20.0,
+                    "thermal_inertia": 1.0,
+                    "sense": "heat",
+                    "min_temperatures": min_temps,
+                    "max_temperatures": max_temps,
+                }
+            },
+        ]
+        self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+        opt = self.create_optimization()
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            self.df_input_data_dayahead[opt.var_load_cost].values,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res
+
+    def test_thermal_inertia_bounds_inside_the_lag_window_are_not_enforced(self):
+        """#1136: no decision reaches steps 1..L, so a bound the fixed path crosses
+        there is logged, not enforced; it used to make the solve infeasible."""
+        for side, step, value in (("min", 2, 15.7), ("min", 1, 17.6), ("max", 1, 17.0)):
+            with self.subTest(side=side, step=step):
+                mins, maxs = [0.0] * 48, [30.0] * 48
+                (mins if side == "min" else maxs)[step] = value
+                with self.assertLogs(logger, level="WARNING") as logs:
+                    opt, res = self._solve_lag_window(mins, maxs)
+                self.assertEqual(opt.optim_status, "Optimal")
+                temp = res["predicted_temp_heater1"].to_numpy()
+                np.testing.assert_allclose(temp[1:3], [17.5, 15.62], atol=0.01)
+                side_word = "minimum" if side == "min" else "maximum"
+                warnings_ = [line for line in logs.output if "thermal_inertia lag" in line]
+                self.assertEqual(len(warnings_), 1, logs.output)
+                self.assertIn(f"step {step}:", warnings_[0])
+                self.assertIn(f"the {side_word} of {value:.2f} C", warnings_[0])
+
+    def test_thermal_inertia_bounds_after_the_lag_window_still_hold(self):
+        """The first step a decision reaches keeps its hard bound, and a lag-window
+        bound the fixed path respects logs nothing."""
+        mins = [0.0] * 48
+        mins[1] = 17.4  # below the fixed 17.5: no warning
+        mins[3] = 18.0  # after the lag: the heater has to run at t=0
+        with self.assertNoLogs(logger, level="WARNING"):
+            opt, res = self._solve_lag_window(mins, [30.0] * 48)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertGreaterEqual(res["predicted_temp_heater1"].iloc[3], 18.0 - 1e-6)
+        self.assertGreater(res["P_deferrable1"].iloc[0], 0)
+
+    def test_thermal_inertia_lag_window_warning_on_cache_hit(self):
+        """A second solve reuses the built problem, so the fixed path is rechecked
+        against the new bounds there too, and the run still solves."""
+        opt, _ = self._solve_lag_window([0.0] * 48, [30.0] * 48)
+        problem = opt.prob
+        mins = [0.0] * 48
+        mins[2] = 15.7
+        opt.optim_conf["def_load_config"][1]["thermal_config"]["min_temperatures"] = mins
+        with self.assertLogs(logger, level="WARNING") as logs:
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+        self.assertIs(opt.prob, problem, "the second solve must be a cache hit")
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertAlmostEqual(res["predicted_temp_heater1"].iloc[2], 15.62, delta=0.01)
+        self.assertTrue(any("step 2: 15.62 C under" in line for line in logs.output), logs.output)
+
     def test_thermal_inertia(self):
         """
         Test that the thermal_inertia parameter correctly delays the heating effect.
@@ -7743,48 +7826,89 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_per_load_cost_override_shifts_dispatch(self):
-        """When a load is given a per-timestep cost that's HIGHER than the global
-        tariff, the optimizer should dispatch less of that load (cheaper to run
-        the unconstrained alternative or skip)."""
-        self.df_input_data_dayahead = self.prepare_forecast_data()
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+        """A per-load price override must move a mandatory load to the intervals
+        that are cheapest under that override, at unchanged total energy.
 
-        # Two loads; override load 0 with a 10x penalty so the optimizer prefers
-        # load 1 (which still uses the global tariff).
-        penalty_cost = (np.array(unit_load_cost) * 10.0).tolist()
+        Scenario: 4 x 30 min, no PV, no battery, one mandatory 1 kWh load at
+        1 kW nominal (semi-continuous, so exactly two full intervals). The
+        shared tariff makes intervals 0-1 uniquely cheapest; the override makes
+        intervals 2-3 uniquely cheapest. An ignored override leaves the
+        schedule on intervals 0-1 and fails the assertions below.
+        """
+        tz = self.retrieve_hass_conf["time_zone"]
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        self.assertAlmostEqual(step_h, 0.5)
+        nominal_w = 1000.0
+        required_kwh = 1.0
+        shared_price = np.array([0.10, 0.10, 0.40, 0.40])
+        override_price = np.array([0.40, 0.40, 0.10, 0.10])
 
-        cheap_conf = copy.deepcopy(self.optim_conf)
-        cheap_conf["cost_forecast_per_deferrable_load"] = [None, None]
-        self.optim_conf = cheap_conf
-        opt_cheap = self.create_optimization()
-        res_cheap = opt_cheap.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
+        index = pd.date_range(
+            start=pd.Timestamp("2024-06-15 09:00:00", tz=tz),
+            periods=4,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
         )
+        df = pd.DataFrame(index=index)
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 500.0
+        df[self.fcst.var_load_cost] = shared_price
+        df[self.fcst.var_prod_price] = 0.0
 
-        expensive_conf = copy.deepcopy(self.optim_conf)
-        expensive_conf["cost_forecast_per_deferrable_load"] = [penalty_cost, None]
-        self.optim_conf = expensive_conf
-        opt_expensive = self.create_optimization()
-        res_expensive = opt_expensive.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
+        def run(override):
+            conf = copy.deepcopy(self.optim_conf)
+            conf.update(
+                {
+                    "set_use_pv": False,
+                    "set_use_battery": False,
+                    "number_of_deferrable_loads": 1,
+                    "nominal_power_of_deferrable_loads": [nominal_w],
+                    "minimum_power_of_deferrable_loads": [0.0],
+                    "operating_hours_of_each_deferrable_load": [required_kwh],
+                    "start_timesteps_of_each_deferrable_load": [0],
+                    "end_timesteps_of_each_deferrable_load": [0],
+                    "treat_deferrable_load_as_semi_cont": [True],
+                    "set_deferrable_load_single_constant": [False],
+                    "set_deferrable_startup_penalty": [0.0],
+                    "deferrable_load_max_cost": [0.0],
+                    "set_deferrable_max_startups": [0],
+                    "deferrable_load_groups": [],
+                    "cost_forecast_per_deferrable_load": [override],
+                }
+            )
+            opt = self.create_optimization(optim_conf=conf)
+            res = opt.perform_optimization(
+                df,
+                df["p_pv_forecast"].values,
+                df["p_load_forecast"].values,
+                df[opt.var_load_cost].values,
+                df[opt.var_prod_price].values,
+            )
+            self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+            return res["P_deferrable0"].to_numpy(dtype=float)
 
-        # Penalised load 0 should consume strictly less energy when its cost is
-        # 10x higher than the baseline tariff.
-        self.assertLess(
-            res_expensive["P_deferrable0"].sum(),
-            res_cheap["P_deferrable0"].sum() + 1e-3,
-            "Penalised load should not consume MORE than baseline.",
-        )
+        p_base = run(None)
+        p_over = run(override_price.tolist())
+
+        for p in (p_base, p_over):
+            self.assertTrue(np.all(p >= -1e-6) and np.all(p <= nominal_w + 1e-6))
+            # Mandatory energy is unchanged and exactly as required.
+            self.assertAlmostEqual(p.sum() * step_h / 1000.0, required_kwh, places=4)
+
+        # Baseline uses the uniquely cheapest intervals 0-1, override uses 2-3.
+        np.testing.assert_allclose(p_base, [nominal_w, nominal_w, 0.0, 0.0], atol=1e-3)
+        np.testing.assert_allclose(p_over, [0.0, 0.0, nominal_w, nominal_w], atol=1e-3)
+
+        # Independent load scheduling cost (EUR) from price x power x interval.
+        def load_cost(p, price):
+            return float(np.sum(p / 1000.0 * step_h * price))
+
+        self.assertAlmostEqual(load_cost(p_base, shared_price), 0.10, places=6)
+        self.assertAlmostEqual(load_cost(p_over, override_price), 0.10, places=6)
+        # The overridden schedule would cost 0.40 under the shared tariff, and the
+        # baseline schedule would cost 0.40 under the override: each is optimal
+        # only for its own prices.
+        self.assertAlmostEqual(load_cost(p_over, shared_price), 0.40, places=6)
+        self.assertAlmostEqual(load_cost(p_base, override_price), 0.40, places=6)
 
     def test_cost_forecast_per_load_string_null_does_not_crash(self):
         """String "null" for cost_forecast_per_deferrable_load must not crash;
@@ -10409,6 +10533,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
             )
 
+    # Absolute currency tolerance for the grid-flow gain checks. A SOC error of
+    # 1e-6 on the 2 kWh battery is 2 mWh per step; across 4 steps at <= 0.2 per
+    # kWh that moves the gain by < 2e-6, so 1e-5 covers solver noise. Deviations
+    # the tests must catch change the plan itself: e.g. a deficit rate x0.01 makes
+    # the solver pick the full-discharge plan and moves the gain by about 0.05.
+    GRID_GAIN_TOL = 1e-5
+
+    def _net_grid_gain(self, opt_res, df_input):
+        """Export revenue minus import cost from the grid flows (currency)."""
+        hours = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600
+        imported = opt_res["P_grid_pos"].to_numpy() / 1000 * hours
+        exported = -opt_res["P_grid_neg"].to_numpy() / 1000 * hours  # P_grid_neg <= 0
+        buy = df_input[self.fcst.var_load_cost].to_numpy()
+        sell = df_input[self.fcst.var_prod_price].to_numpy()
+        return float((exported * sell - imported * buy).sum())
+
     def test_battery_soc_deficit_cost(self):
         """Test that battery SOC deficit cost prevents battery
         discharge below threshold unless price difference is
@@ -10518,26 +10658,118 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Verify SOC without deficit cost. Should be a full discharge
         # followed by a full charge, for a total gain of 1kWh*0.1 =
         # 0.1.
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[0], 0.25)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[1], 0.00)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[2], 0.25)
-        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[3], 0.50)
+        # This plan is the unique optimum, so the SOC path is pinned, but
+        # compared to a tolerance: an LP solver returns bound values only to
+        # within its feasibility tolerance, not bit-exactly.
+        np.testing.assert_allclose(
+            opt_res_no_cost["SOC_opt"].to_numpy(), [0.25, 0.00, 0.25, 0.50], atol=1e-6
+        )
+        # Independent economics from the grid flows: sell 1 kWh at 0.2, buy 1 kWh at 0.1.
+        self.assertAlmostEqual(
+            self._net_grid_gain(opt_res_no_cost, df_input), 0.1, delta=self.GRID_GAIN_TOL
+        )
         logger.debug("soc cost\n{}".format(opt_res_with_cost["SOC_opt"]))
 
         # Verify SOC with deficit cost. The optimizer can always avoid
         # a deficit penalty by first charging one timestep and then
         # discharging for one, for a gain of 0.05.  A significant
         # deficit cost will make this the preferred action.
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[0], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[1], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[2], 0.0)
-        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[3], 0.0)
+        np.testing.assert_allclose(opt_res_with_cost["soc_deficit_cost"].to_numpy(), 0.0, atol=1e-6)
 
-        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[0], 0.75)
-        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[1], 0.50)
+        np.testing.assert_allclose(
+            opt_res_with_cost["SOC_opt"].iloc[:2].to_numpy(), [0.75, 0.50], atol=1e-6
+        )
+        # Buy 0.5 kWh at 0.1 in step 0, sell it at 0.2 in step 1: no deficit is incurred.
+        self.assertAlmostEqual(
+            self._net_grid_gain(opt_res_with_cost, df_input), 0.05, delta=self.GRID_GAIN_TOL
+        )
         # it may take any path here as long as it doesn't discharge below 0.5
-        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
-        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50 - 1e-6)
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50 - 1e-6)
+
+    def _run_forced_soc_deficit(self, deficit_cost):
+        """Hold a 2 kWh battery idle at SOC 0.25, under a 0.5 deficit threshold.
+
+        Export is unpaid, so lifting the SOC would cost the grid import and never
+        be recovered; with a small deficit rate idling is the unique optimum and
+        the deficit trajectory is fixed whatever the rate (checked by the caller).
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": 2000,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 1000,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.25,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": False,
+                "set_nodischarge_to_grid": False,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_deficit_threshold": 0.5,
+                "battery_soc_deficit_cost": deficit_cost,
+            }
+        )
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=4,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.0] * 4
+        df_input[self.fcst.var_load_cost] = [0.1] * 4
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+        res = opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[opt.var_load_cost].values,
+            df_input[opt.var_prod_price].values,
+            soc_init=0.25,
+            soc_final=0.25,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        return res
+
+    def test_battery_soc_deficit_cost_positive_penalty_scales_with_rate(self):
+        """A battery held below the threshold pays the configured deficit
+        penalty, and the penalty is proportional to the configured rate."""
+        hours = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600
+        capacity_wh, threshold, soc = 2000.0, 0.5, 0.25
+        penalties = {}
+        for rate in (0.01, 0.02):  # currency per kWh per hour
+            res = self._run_forced_soc_deficit(rate)
+            # The trajectory is fixed: idle at the initial SOC, no grid exchange.
+            np.testing.assert_allclose(res["SOC_opt"].to_numpy(), soc, atol=1e-6)
+            np.testing.assert_allclose(res["P_grid"].to_numpy(), 0.0, atol=1e-3)
+            # Independent formula: (threshold - SOC) * capacity (Wh) * rate / 1000 * hours.
+            expected = (threshold - soc) * capacity_wh * rate / 1000 * hours
+            self.assertGreater(expected, 0.0)
+            np.testing.assert_allclose(res["soc_deficit_cost"].to_numpy(), expected, atol=1e-6)
+            penalties[rate] = res["soc_deficit_cost"].to_numpy()
+        # Doubling only the configured rate doubles the penalty at every step.
+        np.testing.assert_allclose(penalties[0.02], 2 * penalties[0.01], atol=1e-6)
 
     def test_battery_soc_surplus_cost(self):
         """Test that the battery SOC surplus cost discourages the

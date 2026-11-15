@@ -61,6 +61,15 @@ The possible dictionary keys to pass data are:
 
 - `pv_power_forecast_p10` as an optional conservative P10 companion to `pv_power_forecast`. It must use the same representation (list or timestamped mapping) and the same source timeline as P50. When present, the pair is validated/aligned together and `weather_forecast_pv_quantile_bias` applies `bias * P10 + (1 - bias) * P50`. Omitting the companion leaves the existing P50-only behavior unchanged.
 
+- With one inverter (`number_of_inverters` at 1, the default) `pv_power_forecast` is one flat list of numbers, or one timestamped mapping, for the whole plant. A list that holds lists or mappings (one per inverter, or one per PV plant) is refused: the action stops with an error and asks for one flat list; the error names `number_of_inverters` unless a `pv_power_forecast_p10` is sent with it, in which case the pair check refuses it with its own message. A nested P10 companion is refused as well. A flat list of the wrong length keeps its existing behavior and falls back to the configured forecast method.
+
+- With more than one inverter the PV forecast is sent per inverter (see [`number_of_inverters`](config.md#per-inverter-settings-and-the-one-inverter-default)):
+  - `pv_power_forecast` is a list with exactly `number_of_inverters` entries, one per inverter in inverter order. An inverter that has no PV plant (it is not named in `pv_plant_inverter_index`) gets an empty list. An inverter that has at least one PV plant gets a list of at least one number per forecast step. All the PV plants on one inverter are sent as one series, the sum for that inverter. For example, with two inverters, the first with PV and a battery and the second with PV only: `"pv_power_forecast": [[0, 450, 1200, 2100], [0, 300, 900, 1500]]`.
+  - The timestamped form is a list of `number_of_inverters` mappings with the same rule (an empty mapping for an inverter without PV). All entries are lists or all are mappings, not a mix.
+  - `pv_power_forecast_p10` has the same shape, entry by entry, with an empty entry in the same places. Each inverter's P50 and P10 are checked as a pair, as above.
+  - A flat list, a single mapping, a list with the wrong number of entries, an empty entry for an inverter that has PV, a filled entry for one that has none, or a value that is not a finite number stops the action with an error and does not fall back to the configured forecast method. The error names the entry and, for a value, its position or timestamp.
+  - A PV forecast from a CSV file (`weather_forecast_method: csv`) gets one value column after the timestamp for each inverter that has PV, in inverter order.
+
 - `load_power_forecast` for the Load power forecast.
 
 - `load_cost_forecast` for the Load cost forecast.
@@ -70,6 +79,8 @@ The possible dictionary keys to pass data are:
 - `outdoor_temperature_forecast` for the outdoor temperature forecast in °C, used by thermal loads. When it is omitted, EMHASS uses the weather-forecast air temperature if available.
 
 Every value in these forecasts must follow the [Forecast input contract](#forecast-input-contract) below.
+
+
 
 #### Passing a forecast as timestamped values
 
@@ -104,6 +115,74 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
   }
 }
 ```
+
+### Summary of available runtime parameters
+
+
+---
+
+#### General & Timing Settings
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`prediction_horizon`** | Integer | Configured default | Length of the prediction window in timesteps (max recommended 24 hours for MPC). |
+| **`method_ts_round`** | String | Configured default (`nearest`) | Defines how the first optimization step is rounded and anchored relative to the request timestamp (options include `"nearest"` or `"first"`). |
+
+---
+
+#### Battery Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`soc_init`** | Float or List | Configured default | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. |
+| **`soc_final`** | Float or List | Configured default | Desired final State of Charge target at the end of the optimization window (`[0, 1]` fraction). |
+| **`soc_target`** | Float or List | None | Desired minimum battery SOC target as a fraction in `[0, 1]`. |
+| **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep index by which `soc_target` must be achieved. |
+| **`battery_availability`** | Float, List, or Nested Structure | `null` (Always available) | Per-battery availability flag/fraction in `[0, 1]` per timestep. Scales max charge/discharge limits (`1` = full power, `0` = disconnected/frozen SOC; ideal for EV modeling). |
+| **`battery_discharge_energy_max`** | Float or List | `null` (No cap) | Maximum energy (Wh, battery side) the battery may deliver over the horizon (for V2G warranties or cycle limits). |
+
+---
+
+#### Deferrable Loads
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`def_total_hours`** | List | Configured default | Remaining required operating/functioning hours for each defined deferrable load during the horizon. |
+| **`def_start_timestep`** | List of Integers | `0` (Immediate) | Earliest timestep index from which each deferrable load is allowed to start consuming power. |
+| **`def_end_timestep`** | List of Integers | Horizon end | Timestep index before which each deferrable load must finish operating. |
+
+---
+
+#### Thermal Storage & Tanks Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`shared_tank_start_temperatures`** | Mapping / Dictionary | None | Per-storage start-temperature overrides keyed by storage ID (e.g., `{"dhw": 48.5}`) for rolling MPC loops. |
+| **`shared_tank_prior_heat`** | Mapping / Dictionary | None | Thermal energy already produced but delayed by thermal inertia over recent past steps, keyed by storage ID (e.g., `{"house": [0.8, 1.4]}`). |
+| **`shared_thermal_tanks`** | List of Mappings | None | Manual flat specification for shared thermal storage systems (tanks, volumes, min/max temperatures, and source mapping). |
+
+---
+
+#### Forecast Config
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`pv_power_forecast`** | List or Mapping | None | Central (P50) PV production forecast values in Watts. |
+| **`pv_power_forecast_p10`** | List or Mapping | None | Conservative P10 companion to `pv_power_forecast` used alongside quantile bias configuration. |
+| **`load_power_forecast`** | List or Mapping | None | Baseline household load power forecast values (excluding deferrable loads) in Watts. |
+| **`load_cost_forecast`** | List or Mapping | None | Custom pricing or cost profile for grid energy imports (currency unit per kWh). |
+| **`prod_price_forecast`** | List or Mapping | None | Feed-in tariff pricing profile for excess power exported back to the grid (currency unit per kWh). |
+| **`outdoor_temperature_forecast`** | List or Mapping | None | Ambient temperature forecast in °C, used by thermal storage and heat pump models. |
+
+---
+
+#### Tariffs & Demand Charges
+
+| Parameter | Type | Default | Description / Usage |
+| --- | --- | --- | --- |
+| **`current_period_peak`** | Float | None | Highest completed clocked tariff-interval average already incurred in the current billing period (used for demand/capacity charges). |
+| **`capacity_charge_current_interval_history`** | List / Array | None | History values representing the partly elapsed MPC interval phase inside an open tariff block. |
+
 
 ### Forecast input contract
 
@@ -214,7 +293,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `solcast_rooftop_id` for the ID of your rooftop for the SolCast service implementation.
 
-- `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
+- `solar_forecast_kwp` for the peak power in kW of one PV plane, used for the solar.forecast API call. With one plane that is the peak power of your installation. With several planes a single number is used for each plane, so pass a list with one number per plane, in the order of `pv_module_model`, or a single number if all the planes have the same size. See [the forecast documentation](forecasts.md#solarforecast) for the rules and checks.
 
 - `battery_minimum_state_of_charge` the minimum possible SOC.
 

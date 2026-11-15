@@ -21,6 +21,7 @@ import orjson
 import pandas as pd
 
 from emhass import last_run, plan_store, utils
+from emhass.atomic_file import atomic_write
 from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
 from emhass.battery_identification import BatteryIdentification
 from emhass.forecast import Forecast
@@ -42,7 +43,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
-EMHASS_SCHEMA_VERSION = "1.0"
+EMHASS_SCHEMA_VERSION = "1.1"
 
 
 def is_dry_run(input_data_dict: dict) -> bool:
@@ -117,10 +118,8 @@ def _record_optim_snapshot(
 def _write_results(input_data_dict: dict, opt_res: pd.DataFrame, filename: str) -> None:
     """Write the results CSV that publish-data reads, except on a dry run."""
     if not is_dry_run(input_data_dict):
-        opt_res.to_csv(
-            input_data_dict["emhass_conf"]["data_path"] / filename,
-            index_label="timestamp",
-        )
+        target = input_data_dict["emhass_conf"]["data_path"] / filename
+        atomic_write(target, lambda stream: opt_res.to_csv(stream, index_label="timestamp"))
 
 
 def _saves_entities(input_data_dict: dict, params: dict) -> bool:
@@ -235,13 +234,11 @@ class OptimizationCacheKey:
     is_electric_load: tuple  # per-load electric-bus membership flag
     sequence_load_running_state: tuple  # (index, current state, completed steps) per sequence load
     inverter_is_hybrid: bool
-    compute_curtailment: bool
+    compute_curtailment: bool | tuple
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
     num_timesteps: int | None
     costfun: str
-    optimization_backend: str  # cvxpy, or a coordinator over separate participants
-    site: str  # stable JSON of the site list (devices, solvers, wiring)
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
@@ -435,6 +432,18 @@ class OptimizationCache:
             if isinstance(power, list)
         )
 
+        # Above one inverter the optimizer does not read the plant-wide hybrid flag (it is
+        # fixed here and left out of the plant hash) and curtailment is a per-inverter
+        # list, kept hashable as a tuple (#1150).
+        n_inv = utils.validate_num_inverters(plant_conf)
+        inverter_is_hybrid = False if n_inv > 1 else plant_conf.get("inverter_is_hybrid", False)
+        compute_curtailment = plant_conf.get("compute_curtailment", False)
+        if isinstance(compute_curtailment, list):
+            compute_curtailment = tuple(compute_curtailment)
+        plant_hash_skips = (
+            (plant_runtime_keys | {"inverter_is_hybrid"}) if n_inv > 1 else plant_runtime_keys
+        )
+
         return OptimizationCacheKey(
             number_of_deferrable_loads=optim_conf.get("number_of_deferrable_loads", 0),
             set_use_battery=optim_conf.get("set_use_battery", False),
@@ -484,15 +493,13 @@ class OptimizationCache:
             # power balance shape, hence structural.
             is_electric_load=to_tuple(optim_conf.get("is_electric_load", [])),
             sequence_load_running_state=sequence_load_running_state,
-            inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
-            compute_curtailment=plant_conf.get("compute_curtailment", False),
+            inverter_is_hybrid=inverter_is_hybrid,
+            compute_curtailment=compute_curtailment,
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             num_timesteps=num_timesteps,
             costfun=costfun,
-            optimization_backend=str(optim_conf.get("optimization_backend") or "cvxpy"),
-            site=orjson.dumps(optim_conf.get("site") or [], option=orjson.OPT_SORT_KEYS).decode(),
-            plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
+            plant_conf_hash=config_hash(plant_conf, plant_hash_skips),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
 
@@ -833,7 +840,7 @@ async def _retrieve_and_fit_pv_model(
     # here (no history, entity missing) falls back to unfiltered training.
     curtailment_series = None
     plant_conf = getattr(fcst, "plant_conf", None) or {}
-    if plant_conf.get("compute_curtailment", False) and not get_data_from_file:
+    if utils.any_inverter_curtails(plant_conf) and not get_data_from_file:
         params = getattr(fcst, "params", None) or {}
         curtailment_entity = (
             params.get("passed_data", {})
@@ -1398,7 +1405,8 @@ def _battery_fit_is_stale(
         age = _age_of(attempt.get("attempted_at"))
         if age is not None and age <= max_age:
             logger.info(
-                f"{label} recorded a failed attempt (status={attempt.get('status')}, "
+                f"{label} recorded a failed attempt "
+                f"(status={_battery_id_safe_log_value(attempt.get('status'))}, "
                 f"age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h); "
                 "keeping configured battery values, backing off."
             )
@@ -1416,10 +1424,25 @@ def _battery_fit_is_stale(
         )
     else:
         logger.warning(
-            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok', "
+            f"{label} persisted entry has status "
+            f"{_battery_id_safe_log_value(entry.get('status'))!r}, not 'ok', "
             "and no usable recorded attempt; will re-fit."
         )
     return True
+
+
+def _battery_id_safe_log_value(value: object) -> str:
+    """Render persisted battery identification scalars as bounded, single-line log text.
+
+    Normal numeric, None and status values remain unchanged. Untrusted control
+    characters are escaped before reaching the existing plain-text logger.
+    """
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        return "<invalid>"
+    raw = str(value)
+    if len(raw) > 160:
+        raw = raw[:160] + "...[truncated]"
+    return json.dumps(raw, ensure_ascii=True)[1:-1].replace("\x7f", r"\u007f")
 
 
 def _log_battery_identification_summary(
@@ -1448,8 +1471,8 @@ def _log_battery_identification_summary(
         "round-trip efficiency %.3f (one-way %.3f) vs configured one-way %.3f.",
         battery_tag,
         cap.get("value") or float("nan"),
-        cap.get("ci_low"),
-        cap.get("ci_high"),
+        _battery_id_safe_log_value(cap.get("ci_low")),
+        _battery_id_safe_log_value(cap.get("ci_high")),
         configured_cap_kwh,
         rte.get("value") or float("nan"),
         payload.get("eta_charge_symmetric") or float("nan"),
@@ -1484,8 +1507,8 @@ def _log_battery_identification_recommendation(
         battery_tag,
         configured_cap_kwh,
         identified_cap_kwh if identified_cap_kwh is not None else float("nan"),
-        configured_eta,
-        identified_eta,
+        _battery_id_safe_log_value(configured_eta),
+        _battery_id_safe_log_value(identified_eta),
     )
 
 
@@ -1672,8 +1695,10 @@ async def _identify_battery_impl(
                 # max_age cadence, per #1052) instead of re-fitting every run.
                 # Logged at INFO - this is expected operation, not a problem.
                 logger.info(
-                    f"Battery identification: recorded attempt at {attempt.get('attempted_at')} "
-                    f"failed guardrails (status={attempt.get('status')}); keeping configured "
+                    "Battery identification: recorded attempt at "
+                    f"{_battery_id_safe_log_value(attempt.get('attempted_at'))} "
+                    "failed guardrails (status="
+                    f"{_battery_id_safe_log_value(attempt.get('status'))}); keeping configured "
                     "battery values, backing off until max_age."
                 )
                 return
@@ -2031,20 +2056,24 @@ async def _prepare_perfect_optim(ctx: SetupContext):
 
 
 async def _get_dayahead_pv_forecast(ctx: SetupContext):
-    """Helper to retrieve and optionally adjust PV forecast."""
+    """Helper to retrieve and optionally adjust PV forecast.
+
+    Returns ``(p_pv_forecast, df_weather, p_pv_plants)``; ``p_pv_plants`` is the per-plant
+    split of the final aggregate, or None (see ``Forecast.get_pv_plant_split``).
+    """
     # Check if we should calculate PV forecast
     if not (
         ctx.optim_conf["set_use_pv"]
         or ctx.optim_conf.get("weather_forecast_method", None) == "list"
     ):
-        return pd.Series(0, index=ctx.fcst.forecast_dates), None
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None, None
     # Get weather forecast
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
     # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
     if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
-        return None, None
+        return None, None, None
     p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
     if ctx.optim_conf["set_use_adjusted_pv"]:
@@ -2059,7 +2088,9 @@ async def _get_dayahead_pv_forecast(ctx: SetupContext):
             ctx.emhass_conf,
             test_df_literal,
         )
-    return p_pv_forecast, df_weather
+    # After the adjustment (also when it failed and returned the raw series, or was off), so the
+    # plants add up to the aggregate the optimization uses.
+    return p_pv_forecast, df_weather, ctx.fcst.get_pv_plant_split(p_pv_forecast)
 
 
 def _apply_df_freq_horizon(
@@ -2092,7 +2123,7 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
         stage_times = {}
     # Get PV Forecast
     with stage_timer(stage_times, "pv_forecast", ctx.logger):
-        p_pv_forecast, df_weather = await _get_dayahead_pv_forecast(ctx)
+        p_pv_forecast, df_weather, p_pv_plants = await _get_dayahead_pv_forecast(ctx)
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
@@ -2120,6 +2151,8 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
         "df_input_data_dayahead": df_input_data_dayahead,
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
+        "p_pv_plants": p_pv_plants,
+        "pv_plant_inverters": ctx.fcst.get_pv_plant_inverters(),
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2148,19 +2181,23 @@ async def _get_naive_mpc_history(ctx: SetupContext):
 
 
 async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_input_data):
-    """Helper to generate PV forecast for Naive MPC."""
+    """Helper to generate PV forecast for Naive MPC.
+
+    Returns ``(p_pv_forecast, df_weather, p_pv_plants)``; ``p_pv_plants`` is the per-plant
+    split of the final aggregate, or None (see ``Forecast.get_pv_plant_split``).
+    """
     # If PV is disabled and no weather list, return zero series
     if not (
         ctx.optim_conf["set_use_pv"] or ctx.optim_conf.get("weather_forecast_method") == "list"
     ):
-        return pd.Series(0, index=ctx.fcst.forecast_dates), None
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None, None
     # Get weather forecast
     df_weather = await ctx.fcst.get_weather_forecast(
         method=ctx.optim_conf["weather_forecast_method"]
     )
     # None: e.g. a rejected runtime PV forecast (#1135) - fail, don't crash.
     if df_weather is None or (isinstance(df_weather, bool) and not df_weather):
-        return None, None
+        return None, None, None
     # Calculate PV power
     p_pv_forecast = ctx.fcst.get_power_from_weather(
         df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
@@ -2178,7 +2215,9 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
             ctx.emhass_conf,
             test_df_literal,
         )
-    return p_pv_forecast, df_weather
+    # After the adjustment (also when it failed and returned the raw series, or was off), so the
+    # plants add up to the aggregate the optimization uses.
+    return p_pv_forecast, df_weather, ctx.fcst.get_pv_plant_split(p_pv_forecast)
 
 
 async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None = None):
@@ -2195,7 +2234,7 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
         return None
     # Get PV Forecast
     with stage_timer(stage_times, "pv_forecast", ctx.logger):
-        p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
+        p_pv_forecast, df_weather, p_pv_plants = await _get_naive_mpc_pv_forecast(
             ctx, set_mix_forecast, df_input_data
         )
     if p_pv_forecast is None:
@@ -2224,6 +2263,8 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
         "df_input_data_dayahead": df_input_data_dayahead,
         "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
+        "p_pv_plants": p_pv_plants,
+        "pv_plant_inverters": ctx.fcst.get_pv_plant_inverters(),
         "p_load_forecast": p_load_forecast,
     }
 
@@ -2421,8 +2462,8 @@ async def _set_input_data_dict(
             logger,
             emhass_conf,
         )
-    except (utils.SocFractionError, utils.InverterConfigError):
-        # The fraction-vs-percentage and the inverter configuration errors are already
+    except (utils.SocFractionError, utils.InverterConfigError, utils.BatteryConfigError):
+        # The fraction-vs-percentage, inverter and battery count errors are already
         # logged. Stop before the solver.
         return False
     log_runtime_banner(logger, optim_conf=optim_conf)
@@ -2602,6 +2643,8 @@ async def _set_input_data_dict(
         "df_input_data_dayahead": None,
         "df_weather": None,
         "p_pv_forecast": None,
+        "p_pv_plants": None,
+        "pv_plant_inverters": None,
         "p_load_forecast": None,
         "days_list": None,
     }
@@ -3033,6 +3076,8 @@ async def dayahead_forecast_optim(
                     soc_final=soc_final,
                     current_period_peak=current_period_peak,
                     stage_times=input_data_dict["stage_times"],
+                    p_pv_plants=input_data_dict.get("p_pv_plants"),
+                    pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
                 )
         else:
             opt_res_dayahead = opt.perform_dayahead_forecast_optim(
@@ -3043,6 +3088,8 @@ async def dayahead_forecast_optim(
                 soc_final=soc_final,
                 current_period_peak=current_period_peak,
                 stage_times=input_data_dict["stage_times"],
+                p_pv_plants=input_data_dict.get("p_pv_plants"),
+                pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:
@@ -3167,6 +3214,8 @@ async def naive_mpc_optim(
                     def_start_timestep=def_start_timestep,
                     def_end_timestep=def_end_timestep,
                     stage_times=input_data_dict["stage_times"],
+                    p_pv_plants=input_data_dict.get("p_pv_plants"),
+                    pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
                 )
         else:
             opt_res_naive_mpc = opt.perform_naive_mpc_optim(
@@ -3190,6 +3239,8 @@ async def naive_mpc_optim(
                 def_start_timestep=def_start_timestep,
                 def_end_timestep=def_end_timestep,
                 stage_times=input_data_dict["stage_times"],
+                p_pv_plants=input_data_dict.get("p_pv_plants"),
+                pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
             )
     # Save CSV file for publish_data
     if save_data_to_file:
@@ -3939,6 +3990,117 @@ def _get_closest_index(retrieve_hass_conf: dict, index: pd.DatetimeIndex) -> int
     return idx_closest
 
 
+def _plan_column_present(ctx: PublishContext, opt_res_latest: pd.DataFrame, column: str) -> bool:
+    """Whether the saved plan has the column, with a warning when it does not (#1150)."""
+    if column in opt_res_latest.columns:
+        return True
+    ctx.logger.warning(
+        f"{column} is not in the saved plan, so it is not published; run a new optimization"
+    )
+    return False
+
+
+# Per-inverter sensors above one inverter (#1150). Like the per-battery sensors these are
+# fixed templates, not configurable: (plan column prefix, entity id, friendly name).
+_INVERTER_PV_SENSOR = (
+    "P_PV",
+    "sensor.p_pv_forecast_inverter{i}",
+    "PV Power Forecast Inverter {i}",
+)
+_INVERTER_CURTAILMENT_SENSOR = (
+    "P_PV_curtailment",
+    "sensor.p_pv_curtailment_inverter{i}",
+    "PV Power Curtailment Inverter {i}",
+)
+_INVERTER_SPILL_SENSOR = (
+    "P_PV_spill",
+    "sensor.p_pv_spill_inverter{i}",
+    "PV Power Spill Inverter {i}",
+)
+_INVERTER_HYBRID_SENSOR = (
+    "P_hybrid_inverter",
+    "sensor.p_hybrid_inverter_inverter{i}",
+    "PV Hybrid Inverter Inverter {i}",
+)
+
+
+def _publish_num_inverters(ctx: PublishContext) -> int:
+    """The configured inverter count; one when it cannot be read (#1150)."""
+    try:
+        return utils.validate_num_inverters(ctx.plant_conf)
+    except utils.InverterConfigError:
+        # The count was validated when the configuration was loaded; an action never
+        # gets here with a bad one. Fall back to the one-inverter path.
+        return 1
+
+
+def _publish_pv_inverters(ctx: PublishContext) -> set[int]:
+    """The inverters that carry a PV plant; none when the index cannot be read (#1150)."""
+    try:
+        return set(utils.pv_carrying_inverters(ctx.plant_conf))
+    except utils.InverterConfigError:
+        # Validated when the configuration was loaded, like the inverter count.
+        return set()
+
+
+def _curtailing_inverters(ctx: PublishContext, pv_inverters: set[int]) -> set[int]:
+    """The PV inverters with their own curtailment on (#1150).
+
+    These are the inverters the per-inverter optimizer (#1314) gives a ``P_PV_curtailment_{i}`` column, and
+    the site total ``P_PV_curtailment`` exists when there is at least one. A single flag
+    (a configuration not yet normalised to one flag per inverter) applies to every inverter.
+    """
+    flags = utils.inverter_curtailment_flags(ctx.plant_conf)
+    if len(flags) == 1:
+        return pv_inverters if flags[0] else set()
+    return {i for i in pv_inverters if i < len(flags) and flags[i]}
+
+
+async def _publish_per_inverter_sensors(
+    ctx: PublishContext,
+    opt_res_latest: pd.DataFrame,
+    num_inverters: int,
+    pv_inverters: set[int],
+    curtailing: set[int],
+) -> list[str]:
+    """Publish one sensor per inverter for the per-inverter plan columns (#1150).
+
+    Only inverters 0 to num_inverters - 1 are read, so columns of a stale plan from a
+    larger fleet are ignored. A column the topology expects but the plan lacks is
+    skipped with a warning; the spill column is optional and never warns. Curtailment
+    is published only for an inverter in ``curtailing``.
+    """
+    cols: list[str] = []
+    for i in range(num_inverters):
+        # (sensor, whether the topology expects the column for this inverter)
+        sensors = [(_INVERTER_PV_SENSOR, i in pv_inverters)]
+        if i in curtailing:
+            sensors.append((_INVERTER_CURTAILMENT_SENSOR, True))
+        sensors += [(_INVERTER_SPILL_SENSOR, False), (_INVERTER_HYBRID_SENSOR, True)]
+        for (prefix, entity_template, name_template), expected in sensors:
+            column = f"{prefix}_{i}"
+            # An expected column that is missing warns; an optional one is just skipped.
+            present = (
+                _plan_column_present(ctx, opt_res_latest, column)
+                if expected
+                else column in opt_res_latest.columns
+            )
+            if not present:
+                continue
+            await ctx.rh.post_data(
+                opt_res_latest[column],
+                ctx.idx,
+                entity_template.format(i=i),
+                "power",
+                "W",
+                name_template.format(i=i),
+                type_var="power",
+                **ctx.common_kwargs,
+            )
+            cols.append(column)
+    return cols
+
+
 async def _publish_standard_forecasts(
     ctx: PublishContext, opt_res_latest: pd.DataFrame
 ) -> list[str]:
@@ -3971,8 +4133,24 @@ async def _publish_standard_forecasts(
             **ctx.common_kwargs,
         )
         cols.append("P_PV")
+    num_inverters = _publish_num_inverters(ctx)
+    pv_inverters: set[int] = set()
+    curtailing: set[int] = set()
+    if num_inverters > 1:
+        # Site totals first (#1150), the per-inverter sensors after them. inverter_is_hybrid
+        # is not read above one inverter. A column missing from a stale plan is skipped.
+        # The curtailment total exists only when an inverter that carries PV curtails.
+        pv_inverters = _publish_pv_inverters(ctx)
+        curtailing = _curtailing_inverters(ctx, pv_inverters)
+        publish_curtailment = bool(curtailing) and _plan_column_present(
+            ctx, opt_res_latest, "P_PV_curtailment"
+        )
+        publish_hybrid = _plan_column_present(ctx, opt_res_latest, "P_hybrid_inverter")
+    else:
+        publish_curtailment = ctx.plant_conf["compute_curtailment"]
+        publish_hybrid = ctx.plant_conf["inverter_is_hybrid"]
     # Curtailment
-    if ctx.plant_conf["compute_curtailment"]:
+    if publish_curtailment:
         custom_curt = ctx.params["passed_data"]["custom_pv_curtailment_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_PV_curtailment"],
@@ -3986,7 +4164,7 @@ async def _publish_standard_forecasts(
         )
         cols.append("P_PV_curtailment")
     # Hybrid Inverter
-    if ctx.plant_conf["inverter_is_hybrid"]:
+    if publish_hybrid:
         custom_inv = ctx.params["passed_data"]["custom_hybrid_inverter_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_hybrid_inverter"],
@@ -3999,6 +4177,12 @@ async def _publish_standard_forecasts(
             **ctx.common_kwargs,
         )
         cols.append("P_hybrid_inverter")
+    if num_inverters > 1:
+        cols.extend(
+            await _publish_per_inverter_sensors(
+                ctx, opt_res_latest, num_inverters, pv_inverters, curtailing
+            )
+        )
     return cols
 
 
@@ -4194,6 +4378,26 @@ _BATTERY_SOC_ENTITY_TEMPLATE = "sensor.soc_batt_forecast_battery{k}"
 _DEFAULT_SOC_ENTITY_ID = "sensor.soc_batt_forecast"
 
 
+def _battery_inverter_numbers(ctx: PublishContext) -> list[int] | None:
+    """The inverter of each battery above one inverter, else None (#1150)."""
+    if _publish_num_inverters(ctx) <= 1:
+        return None
+    index = ctx.plant_conf.get("battery_inverter_index")
+    if not isinstance(index, list):
+        return None
+    try:
+        return [int(value) for value in index]
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _inverter_attribute(inverters: list[int] | None, k: int) -> dict:
+    """post_data keyword for the ``inverter`` attribute of battery k; empty at one inverter."""
+    if inverters is None or k >= len(inverters):
+        return {}
+    return {"extra_attributes": {"inverter": inverters[k]}}
+
+
 async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish Battery Power (fleet total; per-battery at N>1) and SOC
     (bare at N=1, per-battery only at N>1)."""
@@ -4203,6 +4407,10 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
     if "P_batt" not in opt_res_latest.columns:
         ctx.logger.error("P_batt was not found in results DataFrame.")
         return cols
+    n_batt = utils.validate_num_batteries(ctx.plant_conf)
+    # Above one inverter the bare sensors of a single battery name that battery's inverter.
+    battery_inverters = _battery_inverter_numbers(ctx)
+    bare_attributes = _inverter_attribute(battery_inverters, 0) if n_batt == 1 else {}
     # Power - fleet total. custom_batt_forecast_id overrides this one entity at
     # any N: unchanged code path, so this stays a true no-op at N=1.
     custom_batt = ctx.params["passed_data"]["custom_batt_forecast_id"]
@@ -4215,10 +4423,10 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
         custom_batt["friendly_name"],
         type_var="batt",
         **ctx.common_kwargs,
+        **bare_attributes,
     )
     cols.append("P_batt")
 
-    n_batt = utils.validate_num_batteries(ctx.plant_conf)
     if n_batt == 1:
         # N=1: exactly today's entity set, zero new entities. Still
         # overridable via custom_batt_soc_forecast_id.
@@ -4239,6 +4447,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
             custom_soc["friendly_name"],
             type_var="SOC",
             **ctx.common_kwargs,
+            **bare_attributes,
         )
         cols.append("SOC_opt")
         return cols
@@ -4273,6 +4482,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
                 f"Battery Power Forecast Battery {k}",
                 type_var="batt",
                 **ctx.common_kwargs,
+                **_inverter_attribute(battery_inverters, k),
             )
             cols.append(p_col)
         else:
@@ -4289,6 +4499,7 @@ async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFram
                 f"Battery SOC Forecast Battery {k}",
                 type_var="SOC",
                 **ctx.common_kwargs,
+                **_inverter_attribute(battery_inverters, k),
             )
             cols.append(soc_col)
         else:
@@ -4521,6 +4732,23 @@ async def _publish_and_update_freq(input_data_dict, entity_path, logger, current
     return current_freq
 
 
+def _saved_attributes(entity_metadata: dict, entity_id: str, logger: logging.Logger) -> dict | None:
+    """The extra attributes saved for an entity (#1150), or None.
+
+    metadata.json is a plain file, so a value that is not a dict is ignored with a warning
+    rather than stopping the publish of every saved entity.
+    """
+    attributes = entity_metadata.get("attributes")
+    if attributes is None or isinstance(attributes, dict):
+        return attributes
+    logger.warning(
+        "Ignoring the saved attributes of %s: expected an object in metadata.json, got %s",
+        entity_id,
+        type(attributes).__name__,
+    )
+    return None
+
+
 async def publish_json(
     entity: dict,
     input_data_dict: dict,
@@ -4594,6 +4822,7 @@ async def publish_json(
         type_var=metadata[entity_id].get("type_var", ""),
         save_entities=False,
         logger_levels=logger_levels,
+        extra_attributes=_saved_attributes(metadata[entity_id], entity_id, logger),
     )
     return entity_data[metadata[entity_id]["name"]]
 

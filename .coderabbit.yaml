@@ -1,0 +1,9 @@
+language: "en"
+reviews:
+  profile: "assertive" # Keeps noise down by only commenting on significant issues
+  request_changes_workflow: false # Prevents CodeRabbit from hard-blocking the PR
+  high_level_summary: true # Generates a summary of the PR changes
+  high_level_summary_in_walkthrough: true # Forces the summary to be posted as a new PR comment
+  poem: false # Disables the playful poems for a strictly technical tone
+  auto_review:
+    enabled: true # Automatically reviews all new PRs and pushed commits

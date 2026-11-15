@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import contextvars
+import errno
 import hashlib
 import logging
 import os
@@ -10,6 +11,7 @@ import pickle
 import platform
 import re
 import tempfile
+import time
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -49,8 +51,10 @@ from emhass.utils import (
     DRY_RUN_ACTIONS,
     DRY_RUN_FLAGS,
     HEAT_TOPOLOGY_KEYS,
+    BatteryConfigError,
     InverterConfigError,
     SocFractionError,
+    battery_count_faults,
     build_config,
     build_legacy_config_params,
     build_params,
@@ -66,6 +70,7 @@ from emhass.utils import (
     inverter_power_curve_faults,
     param_to_config,
     read_flag,
+    replace_file,
     try_lock_file,
     unlock_file,
 )
@@ -86,6 +91,11 @@ templates = jinja2.Environment(
 action_log_str = "action_logs.txt"
 injection_dict_file = "injection_dict.pkl"
 params_file = "params.pkl"
+# What orjson cannot write back, for the 400 a request body that hits it gets.
+ORJSON_LIMITS = (
+    "Whole numbers must fit in 64 bits, objects and lists can be nested at most "
+    "254 levels deep, and text must be valid UTF-8"
+)
 error_msg_associations_file = "Unable to obtain associations file"
 
 # The (level, message) records of the dry run being served, or None outside
@@ -128,6 +138,49 @@ def _dry_run_slot() -> Path:
     each have their own."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
     return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
+
+
+# How long a configuration save waits for another one to finish writing. Writing the
+# two files takes milliseconds, so this only runs out if a save is stuck.
+CONFIG_SAVE_LOCK_WAIT_S = 5.0
+
+
+def _config_save_slot() -> Path:
+    """The lock file that lets one configuration save at a time write config.json and
+    params.pkl, across all Gunicorn workers. Placed and named like the dry run's."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-config-save-{key[:16]}.lock"
+
+
+async def _write_config_json(path: Path, content: str) -> None:
+    """Replace config.json whole, or write it in place where it cannot be replaced: a
+    config.json bind-mounted on its own (docker run -v ./config.json:...) is a mount
+    point, and renaming over it fails with EBUSY. The content is built before this runs,
+    so only the write itself is left to fail there."""
+    try:
+        await replace_file(path, content)
+    except OSError as e:
+        if e.errno not in (errno.EBUSY, errno.EXDEV):
+            raise
+        async with aiofiles.open(str(path), "w") as f:
+            await f.write(content)
+
+
+async def _wait_for_lock(slot, timeout_s: float) -> bool:
+    """Take the lock on the open file ``slot``, retrying until ``timeout_s`` runs out.
+    True if it was taken."""
+    deadline = time.monotonic() + timeout_s
+    while not try_lock_file(slot):
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
+    return True
+
+
+def _live_optim_slot() -> Path:
+    """One live optimization at a time across workers sharing a data folder."""
+    key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
 
 
 # Add custom filter for trusted HTML content
@@ -493,12 +546,27 @@ async def parameter_set():
             "Unable to obtain default config. only parameters passed from request will be saved to config.json"
         )
 
-    # Retrieve sent config json
-    request_data = await request.get_json(force=True)
+    # Retrieve sent config json. get_json does not turn two failures into a 400:
+    # nesting past Python's recursion limit (RecursionError in the json module) and a
+    # body that is not UTF-8 (UnicodeDecodeError, raised before it parses).
+    try:
+        request_data = await request.get_json(force=True)
+    except (RecursionError, UnicodeDecodeError) as e:
+        app.logger.warning("Rejected config save: the body cannot be read: %s", type(e).__name__)
+        return await make_response([f"config is invalid: {ORJSON_LIMITS}"], 400)
 
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # The body was parsed by the standard json module, but config.json is written with
+    # orjson, which refuses more (ORJSON_LIMITS). Find that out now, but answer it after
+    # the checks below that name a setting, and before anything is built or written.
+    try:
+        orjson.dumps(request_data)
+        unwritable = None
+    except orjson.JSONEncodeError as e:
+        unwritable = e
 
     # Validate heat_topology at save time instead of at the next optimization
     # run: the compiler's ValueError names the offending field, so surface it
@@ -545,13 +613,29 @@ async def parameter_set():
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
     # here would leave the user believing the curve is active. The per-inverter settings
     # (#1150) are checked in the same pass, so one answer lists every fault: the curves
-    # first, then the inverter settings, then the refusal of more than one inverter.
-    inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
-        request_data
-    )
+    # first, then the other inverter settings.
+    try:
+        inverter_faults = inverter_power_curve_faults(request_data) + inverter_config_faults(
+            request_data
+        )
+        # A bad battery count would otherwise escape build_params as a 500. The inverter
+        # check above already names it when it reads the battery list, so add it once.
+        inverter_faults += [
+            f for f in battery_count_faults(request_data) if f not in inverter_faults
+        ]
+    except RecursionError:
+        # inverter_config_faults copies the whole body, which a body nested several
+        # hundred levels deep cannot survive. orjson has already refused such a body.
+        if unwritable is None:
+            raise
+        inverter_faults = []
     if inverter_faults:
-        app.logger.warning("Rejected config save: inverter settings invalid: %s", inverter_faults)
+        app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
+
+    if unwritable is not None:
+        app.logger.warning("Rejected config save: %s", unwritable)
+        return await make_response([f"config is invalid: {unwritable}. {ORJSON_LIMITS}"], 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
@@ -562,25 +646,36 @@ async def parameter_set():
     # Overwrite existing default parameters in config
     config.update(param_to_config(params, app.logger))
 
-    # Save config to config.json
-    if os.path.exists(emhass_conf["config_path"].parent):
-        async with aiofiles.open(str(emhass_conf["config_path"]), "w") as f:
-            await f.write(orjson.dumps(config, option=orjson.OPT_INDENT_2).decode())
-    else:
+    if not os.path.exists(emhass_conf["config_path"].parent):
         return await make_response(["Unable to save config file"], 500)
-
-    # Save params with updated config
-    if os.path.exists(emhass_conf["data_path"]):
-        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps(
-                (
-                    emhass_conf["config_path"],
-                    await build_params(emhass_conf, params_secrets, config, app.logger),
-                )
-            )
-            await fid.write(content)
-    else:
+    if not os.path.exists(emhass_conf["data_path"]):
         return await make_response(["Unable to save params file, missing data_path"], 500)
+
+    # Build both files' contents before writing either, so a failure here leaves the
+    # saved pair as it was instead of a new config.json next to an empty params.pkl.
+    saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    if type(saved_params) is bool and not saved_params:
+        return await make_response([error_msg_associations_file], 500)
+    config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
+    params_content = pickle.dumps((emhass_conf["config_path"], saved_params))
+
+    # Each file is replaced whole, so an action reading params.pkl meanwhile sees the
+    # old file or the new one. The lock keeps two saves, on this worker or another,
+    # from leaving config.json from one next to params.pkl from the other.
+    with open(_config_save_slot(), "a+") as slot:
+        if not await _wait_for_lock(slot, CONFIG_SAVE_LOCK_WAIT_S):
+            app.logger.error("Another configuration save is running. Nothing was saved")
+            response = await make_response(
+                ["Another configuration save is running. Nothing was saved, retry shortly"],
+                409,
+            )
+            response.headers["Retry-After"] = "1"
+            return response
+        try:
+            await _write_config_json(emhass_conf["config_path"], config_content)
+            await replace_file(emhass_conf["data_path"] / params_file, params_content)
+        finally:
+            unlock_file(slot)
 
     app.logger.info("Saved parameters from webserver")
     return await make_response({}, 200)
@@ -609,7 +704,14 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
         logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
 
-    runtimeparams = orjson.dumps(runtimeparams).decode()
+    # The body was parsed by the standard json module, which takes more than orjson can
+    # write back (ORJSON_LIMITS; orjson.JSONEncodeError is TypeError), so say so here as
+    # a bad request rather than letting it escape as a 500.
+    try:
+        runtimeparams = orjson.dumps(runtimeparams).decode()
+    except orjson.JSONEncodeError as e:
+        logger.error(f"Unable to read the runtime parameters: {e}. {ORJSON_LIMITS}")
+        return None, None, None
 
     return params, costfun, runtimeparams
 
@@ -668,7 +770,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        except (SocFractionError, InverterConfigError) as exc:
+        except (SocFractionError, InverterConfigError, BatteryConfigError) as exc:
             # The message names only this request's own value, unlike the shared log's tail.
             return f"EMHASS >> ERROR: {exc}\n", 400
         if not success:
@@ -682,7 +784,7 @@ async def _handle_action_dispatch(
         logger.info(action_str)
         try:
             success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
-        except (SocFractionError, InverterConfigError):
+        except (SocFractionError, InverterConfigError, BatteryConfigError):
             return await grab_log(action_str), 400
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 200
@@ -705,7 +807,13 @@ async def _handle_action_dispatch(
     if action_name in optim_actions:
         action_str = f" >> Performing {action_name}..."
         logger.info(action_str)
-        opt_res = await optim_actions[action_name](input_data_dict, logger)
+        try:
+            opt_res = await optim_actions[action_name](input_data_dict, logger)
+        except InverterConfigError as exc:
+            # Above one inverter the optimizer refuses a plan it cannot build (perfect-optim,
+            # or a PV forecast with no per-inverter split): a bad request, not a crash.
+            logger.error("%s", exc)
+            return await grab_log(action_str), 400
         # False: the action stopped before the solver, e.g. on a rejected
         # runtime forecast (#1135); there is no plan to render.
         if isinstance(opt_res, bool) and not opt_res:
@@ -1022,6 +1130,13 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         if key in runtime:
             runtime[key] = read_flag(runtime[key], key)
 
+    # orjson reads nesting up to 1024 levels deep but writes only 254 (ORJSON_LIMITS).
+    try:
+        runtime_json = orjson.dumps(runtime).decode()
+    except orjson.JSONEncodeError as exc:
+        app.logger.error(f"The body cannot be used ({exc}). {ORJSON_LIMITS}. Nothing was run")
+        return not_run, 400
+
     if runtime:
         app.logger.info(f"Passed runtime parameters: {runtime}")
     params, costfun = await _load_params(emhass_conf, app.logger)
@@ -1032,7 +1147,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         emhass_conf,
         costfun,
         params,
-        orjson.dumps(runtime).decode(),
+        runtime_json,
         action_name,
         app.logger,
         dry_run=True,
@@ -1042,6 +1157,10 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
     try:
         opt_res = await wrappers[action_name](input_data_dict, app.logger)
+    except InverterConfigError as exc:
+        # Same as /action: a plan the inverter settings rule out is a bad request.
+        _explain(str(exc))
+        return not_run, 400
     finally:
         if "rh" in input_data_dict:
             await input_data_dict["rh"].close()
@@ -1100,9 +1219,52 @@ async def healthz():
 
 @app.route("/action/<action_name>", methods=["POST"])
 async def action_call(action_name: str):
+    """Reject concurrent live optimizations before loading inputs or writing results.
+
+    The non-blocking file lock also protects against another Gunicorn worker.
+    publish-data and dry runs are not locked; atomic result files remain readable.
     """
-    Receive Post action, run action according to passed slug(action_name)
-    """
+    if action_name not in {"naive-mpc-optim", "dayahead-optim", "perfect-optim"}:
+        return await _action_call_unlocked(action_name)
+
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        # Fail closed: without the lock an overlapping run could not be told apart,
+        # so nothing is loaded, solved or written. The caller may retry.
+        app.logger.warning(
+            "Live optimization lock unavailable (%s); %s rejected (503)", exc, action_name
+        )
+        response = await make_response(
+            "EMHASS >> The live optimization lock is unavailable. "
+            "Retry shortly; this request was not run.\n",
+            503,
+        )
+        response.headers["Retry-After"] = "2"
+        return response
+
+    with slot:
+        if not try_lock_file(slot):
+            # Warning only, and no " >> ": an ERROR line in the shared action log
+            # would make the in-flight request incorrectly report a failure.
+            app.logger.warning(
+                "Another live optimization is running; %s rejected (429)", action_name
+            )
+            response = await make_response(
+                "EMHASS >> Another live optimization is running. "
+                "Retry shortly; this request was not run.\n",
+                429,
+            )
+            response.headers["Retry-After"] = "2"
+            return response
+        try:
+            return await _action_call_unlocked(action_name)
+        finally:
+            unlock_file(slot)
+
+
+async def _action_call_unlocked(action_name: str):
+    """Existing action dispatch, called with the live-optimization slot if needed."""
     global continual_publish_thread
     global injection_dict
 
@@ -1317,10 +1479,13 @@ async def _build_and_save_params(
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
     # Save params to file for later reference (use emhass_conf["config_path"] which may have been updated by build_secrets)
+    # Replaced whole: every Gunicorn worker writes this file as it starts, while the
+    # others may already be reading it.
     if os.path.exists(str(emhass_conf["data_path"])):
-        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps((emhass_conf["config_path"], params))
-            await fid.write(content)
+        await replace_file(
+            emhass_conf["data_path"] / params_file,
+            pickle.dumps((emhass_conf["config_path"], params)),
+        )
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
     return params

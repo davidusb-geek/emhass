@@ -5,7 +5,9 @@ Backs the GET /api/v1/last-run endpoint and the future GET /healthz endpoint
 
 State model: in-memory cache (_cache) + write-through to
 <data_path>/last_run.json. Thread-safe via _lock to handle multi-worker
-Quart deployments.
+Quart deployments. The file is the shared source of truth across workers; the
+cache outranks it only while a snapshot is pending (its write failed) and is
+strictly newer than the file.
 """
 
 import json
@@ -15,9 +17,19 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from emhass.atomic_file import atomic_write
+
 _LAST_RUN_FILENAME = "last_run.json"
 _lock = threading.Lock()
 _cache: dict | None = None
+# True while _cache holds a snapshot that could not be written to disk. Only then
+# may the cache outrank an existing file: a successful write makes the file the
+# single source of truth, so another worker's newer file is never hidden.
+_unpersisted = False
+# The snapshot this process last wrote successfully. While a later write is
+# pending, a file that still equals it was not touched by another worker, so the
+# pending snapshot is newer whatever the (one second) timestamps say.
+_persisted: dict | None = None
 _logger = logging.getLogger(__name__)
 
 # Action names — single source of truth for `action` enum used by the
@@ -81,7 +93,7 @@ def record(
     breaks the caller's return path. The snapshot is the one snapshot()
     builds.
     """
-    global _cache
+    global _cache, _unpersisted, _persisted
     snap = snapshot(
         action,
         stage_times,
@@ -96,9 +108,11 @@ def record(
         _cache = snap
         target = _path(data_path)
         try:
-            payload = json.dumps(snap, indent=2)
-            target.write_text(payload, encoding="utf-8")
+            atomic_write(target, lambda stream: json.dump(snap, stream, indent=2))
+            _unpersisted = False
+            _persisted = snap
         except OSError as exc:
+            _unpersisted = True
             _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
 
     # Return the stamped timestamp so callers (e.g. _record_optim_snapshot)
@@ -153,26 +167,59 @@ def snapshot(
     return snap
 
 
+def instant(value: object) -> datetime | None:
+    """Parse an ISO timestamp to an aware UTC datetime; naive means UTC, junk is None."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def pending_wins(cached: dict | None, on_disk: dict | None, key: str) -> bool:
+    """True iff an unpersisted ``cached`` snapshot is strictly newer than ``on_disk``.
+
+    ``on_disk`` None (missing or unreadable file) lets a valid pending snapshot win;
+    an invalid or equal timestamp never does.
+    """
+    if cached is None:
+        return False
+    cached_at = instant(cached.get(key))
+    if cached_at is None:
+        return False
+    if on_disk is None:
+        return True
+    disk_at = instant(on_disk.get(key))
+    return disk_at is None or cached_at > disk_at
+
+
 def read(data_path: Path) -> dict | None:
     """Return the most recent snapshot, or None if no run yet.
 
-    Reads the in-memory cache first; falls back to the on-disk file for
-    cold-start after a restart. A corrupted JSON file logs a warning and
-    returns None.
+    Read the shared on-disk file each time: a cached value from another worker
+    may have been superseded. The in-memory snapshot is returned instead when the
+    file is missing, or when this process holds a snapshot whose write failed that
+    is newer than the file (or the file is unreadable): the file is still the one
+    this process wrote earlier, or its timestamp is strictly older. A corrupt file
+    otherwise logs a warning and returns None.
     """
-    global _cache
+    global _cache, _unpersisted, _persisted
     with _lock:
-        if _cache is not None:
-            return dict(_cache)
         path = _path(data_path)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("snapshot root is not a JSON object")
         except FileNotFoundError:
-            return None
-        except (OSError, json.JSONDecodeError) as exc:
+            return dict(_cache) if _cache is not None else None
+        except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
             _logger.warning("last_run: corrupt or unreadable snapshot file", exc_info=exc)
-            return None
+            return dict(_cache) if _unpersisted and _cache is not None else None
+        if _unpersisted and (data == _persisted or pending_wins(_cache, data, "timestamp")):
+            return dict(_cache)
         _cache = data
+        _persisted = data
+        _unpersisted = False
         return dict(data)
 
 

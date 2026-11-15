@@ -13,6 +13,10 @@ import pandas as pd
 
 from emhass import utils
 
+# Most segments accepted for battery_stress_segments / inverter_stress_segments
+# (see Optimization._get_stress_segments for why this bound is generous).
+STRESS_SEGMENTS_MAX = 100
+
 # Keys the thermal model actually reads from a load's thermal_config (issue #943).
 # Any other key is silently ignored, so a typo such as the singular
 # `min_temperature` (the model reads the list key `min_temperatures`) yields a
@@ -51,6 +55,22 @@ THERMAL_CONFIG_KEY_HINTS = {
 # curtailment powers in W).
 CURTAILMENT_TIEBREAK_EPS = 1e-7
 
+# Price of spilled PV on a hybrid inverter that does not curtail (#1150). Spill only
+# competes with a negative price (export at a loss, import that pays) or with an inverter
+# stress cost, never with a positive price: spilling instead of exporting at +p loses p,
+# and instead of serving a load loses the import price. So in each time step the base is
+# the size of the more negative of that step's import and export price, doubled
+# (SPILL_PRICE_FACTOR) so spilling stays the last resort, and floored at SPILL_PRICE_FLOOR
+# so a step with only positive prices still prices it (as a tie-break). The price is per
+# step on purpose: one negative step must not raise the price of spilling in the other
+# steps, or the battery would be paid to make room for PV in steps that have nothing to do
+# with it. The top-segment marginal rate of the spilling inverters' stress cost is added
+# on top. Anything dearer would pay the battery to make room for PV it would otherwise
+# spill, and override the user's battery weights on every clipping day.
+SPILL_PRICE_FACTOR = 2.0
+SPILL_PRICE_FLOOR = 1e-3
+SPILL_LOG_MAX_STEPS = 10
+
 # Multi-battery symmetry-breaking tie-break (issue #610): with N>1 batteries of
 # identical (or near-identical) cost/efficiency, the LP has many equally-optimal
 # ways to split charge/discharge across batteries. A tiny index-scaled usage
@@ -73,6 +93,16 @@ CURTAILMENT_TIEBREAK_EPS = 1e-7
 # that governs general schedule repeatability, not something specific to
 # multi-battery.
 BATTERY_TIEBREAK_EPS = 1e-9
+
+# Per-inverter curtailment split tie-break (#1150): two curtailing inverters with equal
+# efficiencies share the same optimum for any split of the curtailed energy, and each
+# P_PV_curtailment_{i} is a setpoint an executor sends. An index-scaled tilt on top of the
+# timing weights makes the lowest-index inverter curtail first on an exact tie. Sized and
+# bounded like BATTERY_TIEBREAK_EPS (see above). Like that one, it makes the
+# mathematical optimum unique, but the solver reports it only within its tolerances,
+# so a strictly deterministic split needs a tight lp_solver_mip_rel_gap and is not
+# guaranteed on long horizons (a larger value would be visible but makes HiGHS time out).
+INVERTER_TIEBREAK_EPS = 1e-9
 
 # Battery-first priority (issue #834/#1002): when set_battery_first_priority is
 # on, importing from the grid while the battery is still above its minimum SoC is
@@ -315,6 +345,13 @@ class Optimization:
         # number_of_deferrable_loads) it must invalidate any cached problem
         # rather than update a cp.Parameter in place.
         self.n_batt = int(self.plant_conf.get("number_of_batteries", 1))
+        # Number of inverters (#1150). Above one, the model has one bus per inverter,
+        # built from the resolved per-inverter specs and never from the plant-wide
+        # inverter_is_hybrid key; compute_curtailment is only read per inverter (a
+        # scalar broadcasts, as in utils). Like n_batt it is structural.
+        self.n_inv = utils.validate_num_inverters(self.plant_conf)
+        self.pv_inverters: list[int] = []
+        self.inverter_specs: list[dict] = []
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.time_step = self.freq.seconds / 3600  # in hours
@@ -377,6 +414,17 @@ class Optimization:
             self.num_timesteps = int(self.time_delta / self.freq)
         self.logger.debug(f"CVXPY: Initialization with {self.num_timesteps} time steps.")
 
+        # Resolve the per-inverter topology (after the logger exists, before the
+        # Parameters and variables that read it).
+        if self.n_inv > 1:
+            self.pv_inverters = utils.pv_carrying_inverters(self.plant_conf)
+            self.inverter_specs = self._resolve_inverter_specs()
+            self._warn_lossless_battery_inverters()
+            self.param_spill_price = cp.Parameter(
+                self.num_timesteps, nonneg=True, name="spill_price"
+            )
+            self._clip_logged: set[tuple[int, int]] = set()
+
         # Define Parameters (Data holders)
         # These will be updated in perform_optimization without rebuilding the problem
         self.param_pv_forecast = cp.Parameter(self.num_timesteps, name="pv_forecast")
@@ -408,6 +456,9 @@ class Optimization:
         self.param_soc_final_penalty = cp.Parameter(nonneg=True, name="soc_final_penalty")
         self.param_soc_final_reward = cp.Parameter(nonneg=False, name="soc_final_reward")
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
+        # One PV Parameter per inverter that carries PV (empty at one inverter). The
+        # horizon-shaped ones are re-created on resize by the same helper.
+        self._init_pv_inverter_params()
 
         # Per-deferrable-load cost override parameters. When the user supplies a
         # `cost_forecast_per_deferrable_load[k]` array, that load is priced at its
@@ -529,6 +580,283 @@ class Optimization:
         # unconditionally whenever the build block runs.
         self._batt_stress_conf = None
         self._inv_stress_conf = None
+        # (key, repr(value)) pairs already warned about by _get_stress_segments.
+        self._stress_segments_warned: set[tuple[str, str]] = set()
+
+    def _init_pv_inverter_params(self) -> None:
+        """(Re)create the per-inverter PV Parameters at the current horizon length (#1150).
+
+        A list with one vector Parameter per inverter that carries PV and None for the
+        others; empty at one inverter, where the single aggregate Parameter is used.
+        """
+        self.param_pv_inv = [
+            cp.Parameter(self.num_timesteps, name=f"pv_forecast_{i}") if spec["has_pv"] else None
+            for i, spec in enumerate(self.inverter_specs)
+        ]
+
+    def _resolve_inverter_specs(self) -> list[dict]:
+        """Resolve what every inverter is and carries, once, above one inverter (#1150).
+
+        The result is one dict per inverter and is the only place the per-inverter
+        constraints read the inverter configuration from. Keys: ``batteries`` (the
+        ACTIVE batteries on it; none while set_use_battery is off), ``has_pv``,
+        ``shape`` (hybrid, pv_only, battery_only or inert), ``binary`` ("own" for a
+        direction binary of its own, "battery" to reuse the direction binary of its
+        single battery, None for no binary), ``cap_out`` / ``cap_in`` (W),
+        ``eff_dc_ac`` / ``eff_ac_dc``, ``stress_cost``, ``curtail`` and the two curve
+        entries (the AC-to-DC one is dropped on an inverter with no active battery).
+        Reads ``self.pv_inverters``, which ``__init__`` sets just before calling this.
+        """
+        plant_conf = self.plant_conf
+        n_inv = self.n_inv
+        # Config values go through the same utils helpers the config path uses, so both
+        # accept and refuse the same things. The cap lists come first: they check their
+        # length before building anything, so a wrong number_of_inverters fails here
+        # before anything is allocated for it.
+        caps = {
+            key: utils._cap_param_update(plant_conf, key, n_inv)
+            for key in ("inverter_ac_output_max", "inverter_ac_input_max")
+        }
+
+        def _inv_list(key, default):
+            value = plant_conf.get(key, default)
+            if isinstance(value, list | tuple):
+                if len(value) != n_inv:
+                    raise ValueError(
+                        f"{key} has {len(value)} entr{'y' if len(value) == 1 else 'ies'} "
+                        f"but number_of_inverters={n_inv}"
+                    )
+                return [
+                    utils._coerce_inverter_element(v, default, key, i) for i, v in enumerate(value)
+                ]
+            return [utils._coerce_inverter_element(value, default, key)] * n_inv
+
+        use_battery = bool(self.optim_conf.get("set_use_battery", False))
+        battery_inverters = []
+        if use_battery:
+            battery_inverters = utils._inverter_index_values(
+                plant_conf, "battery_inverter_index", n_inv
+            )
+        eff_dc_ac = _inv_list("inverter_efficiency_dc_ac", 1.0)
+        eff_ac_dc = _inv_list("inverter_efficiency_ac_dc", 1.0)
+        stress_cost = _inv_list("inverter_stress_cost", 0)
+        curtail_flags = _inv_list("compute_curtailment", False)
+        specs = []
+        for i in range(n_inv):
+            batteries = [k for k, inv in enumerate(battery_inverters) if inv == i]
+            has_pv = i in self.pv_inverters
+            if has_pv:
+                shape = "hybrid" if batteries else "pv_only"
+            else:
+                shape = "battery_only" if batteries else "inert"
+            if shape == "hybrid" or (shape == "battery_only" and len(batteries) > 1):
+                binary = "own"
+            elif shape == "battery_only":
+                binary = "battery"
+            else:
+                binary = None
+            if shape == "inert":
+                self.logger.warning(
+                    f"Inverter {i} has no PV plant and no active battery (set_use_battery "
+                    "may be off), so it is planned at 0 W."
+                )
+            specs.append(
+                {
+                    "batteries": batteries,
+                    "has_pv": has_pv,
+                    "shape": shape,
+                    "binary": binary,
+                    "cap_out": caps["inverter_ac_output_max"][i],
+                    "cap_in": caps["inverter_ac_input_max"][i],
+                    "eff_dc_ac": float(eff_dc_ac[i]),
+                    "eff_ac_dc": float(eff_ac_dc[i]),
+                    "stress_cost": float(stress_cost[i]),
+                    "curtail": bool(curtail_flags[i]) and has_pv,
+                    "curve_dc_ac": self._inverter_power_curve(
+                        "inverter_power_curve_dc_ac", "dc_ac", index=i
+                    ),
+                    "curve_ac_dc": (
+                        self._inverter_power_curve("inverter_power_curve_ac_dc", "ac_dc", index=i)
+                        if batteries
+                        else None
+                    ),
+                }
+            )
+        return specs
+
+    @staticmethod
+    def _is_lossless(scalar_eff, curve) -> bool:
+        """True when a conversion direction loses nothing: scalar 1.0 or an all-1.0 curve."""
+        if curve is None:
+            return scalar_eff == 1.0
+        return all(a == d for a, d in zip(*curve, strict=True))
+
+    def _warn_lossless_battery_inverters(self) -> None:
+        """Warn when two batteries could trade energy through lossless inverters (#1150).
+
+        One inverter lossless DC to AC and a different one lossless AC to DC, both with an
+        active battery: energy then moves between the two units for free, so the split
+        between them is arbitrary. An inverter that cannot move AC in that direction (cap
+        0) is no way for energy to travel and does not count. One warning per Optimization.
+        """
+        specs = self.inverter_specs
+        with_battery = [i for i, spec in enumerate(specs) if spec["batteries"]]
+
+        def lossless_with_cap(cap, eff, curve):
+            return {
+                i
+                for i in with_battery
+                if specs[i][cap] > 0 and self._is_lossless(specs[i][eff], specs[i][curve])
+            }
+
+        out_free = lossless_with_cap("cap_out", "eff_dc_ac", "curve_dc_ac")
+        in_free = lossless_with_cap("cap_in", "eff_ac_dc", "curve_ac_dc")
+        # A pair i != j exists unless both sets are the same single inverter.
+        if out_free and in_free and not (len(out_free) == 1 and out_free == in_free):
+            names = sorted(out_free | in_free)
+            self.logger.warning(
+                f"Inverters {names} have batteries and no conversion loss: energy can move "
+                "between the two units for free, so how it is split between them is "
+                "arbitrary. Use a realistic inverter efficiency or non-zero battery weights."
+            )
+
+    @staticmethod
+    def _pv_only_clip_limit(spec: dict) -> float:
+        """The most DC power a PV-only inverter can convert, in W (#1150).
+
+        ``cap_out / eff_dc_ac`` for a scalar efficiency. With a DC-to-AC curve the largest
+        DC power whose AC on the curve is at most min(cap_out, the last AC point).
+        """
+        curve = spec["curve_dc_ac"]
+        if curve is None:
+            eff = spec["eff_dc_ac"]
+            return spec["cap_out"] / eff if eff > 0 else 0.0
+        ac, dc = curve
+        # The AC points start at the origin and rise strictly, so this is a plain
+        # interpolation; a target at the far end gives the last DC point.
+        return float(np.interp(min(spec["cap_out"], ac[-1]), ac, dc))
+
+    def _clip_pv_only_inverters(self, pv_inv: list) -> list:
+        """Clip the PV of each non-curtailing PV-only inverter to what it can convert (#1150).
+
+        Such an inverter has no curtailment variable and no battery to absorb the rest, so
+        PV above its limit could not be placed and the problem would be infeasible. The
+        clipped series is what the model, the export ceiling and the results all use.
+        The info line is logged once per inverter and limit; later calls (MPC runs every
+        few minutes) log it at debug.
+        """
+        out = list(pv_inv)
+        for i, spec in enumerate(self.inverter_specs):
+            series = pv_inv[i]
+            if series is None or spec["shape"] != "pv_only" or spec["curtail"]:
+                continue
+            limit = self._pv_only_clip_limit(spec)
+            over = series > limit
+            if over.any():
+                key = (i, round(limit))
+                log = self.logger.debug if key in self._clip_logged else self.logger.info
+                self._clip_logged.add(key)
+                log(
+                    f"Inverter {i} cannot convert all of its PV forecast: clipped in "
+                    f"{int(over.sum())} steps to {limit:.0f} W (peak {float(series.max()):.0f} W)"
+                )
+                out[i] = np.minimum(series, limit)
+        return out
+
+    def _spill_stress_rate(self) -> float:
+        """Largest marginal stress cost of a spilling hybrid inverter, per kWh (#1150).
+
+        Spilling lowers the power an inverter converts, so it can save stress cost. The
+        stress cost is a piece-wise quadratic whose steepest segment has slope
+        ``unit_cost * (2 - 1 / segments)`` per kWh (the step length cancels). The largest such
+        rate over the spilling inverters is safe for every one of them, because spilling a
+        watt removes at most one watt of converted power.
+        """
+        segments = max(int(self.plant_conf.get("inverter_stress_segments", 10)), 1)
+        rate = 0.0
+        for spec in self.inverter_specs:
+            if spec["shape"] == "hybrid" and not spec["curtail"] and spec["stress_cost"] > 0:
+                rate = max(rate, float(spec["stress_cost"]) * (2.0 - 1.0 / segments))
+        return rate
+
+    def _log_spill(self, spill: dict, index) -> None:
+        """Log when and how much PV a non-curtailing hybrid inverter spilled (#1150)."""
+        for i, values in spill.items():
+            steps = np.flatnonzero(values > 1.0)
+            if not len(steps):
+                continue
+            shown = ", ".join(f"{index[t]}: {values[t]:.0f} W" for t in steps[:SPILL_LOG_MAX_STEPS])
+            more = len(steps) - SPILL_LOG_MAX_STEPS
+            tail = f", and {more} more" if more > 0 else ""
+            self.logger.info(
+                f"Inverter {i} spilled PV in {len(steps)} steps that its battery and the "
+                f"inverter could not or would not take: {shown}{tail}"
+            )
+
+    def _assemble_inverter_pv(self, p_pv, p_pv_plants, pv_plant_inverters):
+        """Build the PV series of each inverter and the aggregate they add up to (#1150).
+
+        Returns ``(pv_inv, p_pv)``: ``pv_inv`` has one float array per inverter that
+        carries PV (None for the others) and ``p_pv`` is their sum. One PV inverter
+        takes the whole forecast. With two or more, the per-plant split is needed:
+        ``p_pv_plants`` columns summed per inverter by ``pv_plant_inverters``.
+        """
+        pv_inverters = self.pv_inverters
+        pv_inv: list = [None] * self.n_inv
+        aggregate = np.asarray(p_pv, dtype=float)
+        if not pv_inverters:
+            if np.any(aggregate > 0):
+                raise utils.InverterConfigError(
+                    f"number_of_inverters={self.n_inv}: the PV forecast has nowhere to go, "
+                    "because no inverter has a PV plant in pv_plant_inverter_index."
+                )
+        elif len(pv_inverters) == 1:
+            pv_inv[pv_inverters[0]] = aggregate
+        elif p_pv_plants is None and not np.any(aggregate != 0):
+            # PV is off (or the forecast is all zeros): nothing to split.
+            for i in pv_inverters:
+                pv_inv[i] = np.zeros(len(aggregate))
+        else:
+            refresh = (
+                "To fix it: Solcast, run the weather-forecast-cache action; solar.forecast, "
+                "delete weather_forecast_data.pkl in the data folder; csv/list, pass one "
+                "series per PV inverter."
+            )
+            if p_pv_plants is None:
+                raise utils.InverterConfigError(
+                    f"number_of_inverters={self.n_inv} with PV on inverters {pv_inverters} "
+                    f"needs one PV series per plant (per PV inverter for csv and list), and this "
+                    f"forecast has none. {refresh}"
+                )
+            mapping = pv_plant_inverters
+            if (
+                mapping is None
+                or not all(
+                    isinstance(i, int | np.integer) and not isinstance(i, bool) for i in mapping
+                )
+                or len(mapping) != p_pv_plants.shape[1]
+                or set(mapping) != set(pv_inverters)
+                or len(p_pv_plants) != len(aggregate)
+            ):
+                raise utils.InverterConfigError(
+                    f"number_of_inverters={self.n_inv} with PV on inverters {pv_inverters}: the "
+                    f"per-plant PV series ({p_pv_plants.shape[1]} columns, {len(p_pv_plants)} "
+                    f"rows, inverter map {mapping if mapping is None else list(mapping)}) do "
+                    f"not match the inverters or the {len(aggregate)}-step horizon. {refresh}"
+                )
+            for col, i in enumerate(mapping):
+                column = p_pv_plants.iloc[:, col].to_numpy(dtype=float)
+                pv_inv[i] = column if pv_inv[i] is None else pv_inv[i] + column
+        for i in pv_inverters:
+            if not np.all(np.isfinite(pv_inv[i])):
+                raise utils.InverterConfigError(
+                    f"The PV forecast for inverter {i} has non-finite values"
+                )
+        total = np.zeros(len(p_pv))
+        for series in pv_inv:
+            if series is not None:
+                total = total + series
+        return pv_inv, total
 
     def _init_soc_recovery_params(self) -> None:
         """Initialize CVXPY parameters used for out-of-band SOC recovery.
@@ -1143,6 +1471,10 @@ class Optimization:
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
+        # Lag window of each thermal_config load with thermal_inertia (#1136): its
+        # length and the fixed heat and cooling terms, so a cache hit can recheck the
+        # fixed temperature path against the new bounds without rebuilding.
+        self._thermal_lag_window = {}
         # Effective per-step floor of each shared tank (static list and
         # min_temperature_curve combined), keyed by tank index; filled when the
         # tank is built and published as min_temp_heater{k} for its members.
@@ -1798,7 +2130,7 @@ class Optimization:
             "vars": stress_cost_var,
             "unit_cost": stress_unit_cost,
             "max_power": max_power,
-            "segments": self.plant_conf.get("battery_stress_segments", 10),
+            "segments": self._get_stress_segments("battery_stress_segments") if active else 10,
         }
 
     def update_battery_power_limits(self, plant_conf: dict) -> None:
@@ -1910,6 +2242,9 @@ class Optimization:
                 # Update desired_temperatures
                 desired_temps = hc.get("desired_temperatures", [])
                 params["desired_temps"].value = self._pad_temp_array(desired_temps, n, 22.0)
+
+                # The lag window's bounds are not enforced; recheck the fixed path.
+                self._warn_lag_window_bounds(k, new_start_temp, outdoor_temp, min_temps, max_temps)
 
             elif thermal_type == "thermal_battery" and "thermal_battery" in cfg:
                 hc = cfg["thermal_battery"]
@@ -2139,9 +2474,42 @@ class Optimization:
             "vars": stress_cost_var,
             "unit_cost": stress_unit_cost,
             "max_power": max_power,
-            # Defaults to 10 segments if not provided in config
-            "segments": self.plant_conf.get(segments_conf_key, 10),
+            "segments": self._get_stress_segments(segments_conf_key) if active else 10,
         }
+
+    def _get_stress_segments(self, conf_key):
+        """Return the number of stress-curve segments for ``conf_key``.
+
+        ``battery_stress_segments`` and ``inverter_stress_segments`` are read the
+        same way. Default 10. A value that is not a whole number from 1 to
+        ``STRESS_SEGMENTS_MAX`` warns and falls back to 10. The bound is well past
+        any useful accuracy: with n equal segments the curve overestimates the
+        quadratic cost by at most 1/(4 n^2) of its full-load value, so 0.25% at 10
+        segments and 0.0025% at 100, while each segment adds two constraints.
+        Runtime params are copied verbatim, so a numeric string such as "10" is
+        accepted. The warning is logged once per key and value, since the battery
+        setup reads the shared key once per battery.
+        """
+        raw = self.plant_conf.get(conf_key, 10)
+        try:
+            # A JSON true/false is not a count, even though float(True) is 1.0.
+            value = None if isinstance(raw, bool) else float(raw)
+        except (TypeError, ValueError, OverflowError):
+            value = None
+        if (
+            value is not None
+            and isfinite(value)
+            and value == int(value)
+            and 1 <= value <= STRESS_SEGMENTS_MAX
+        ):
+            return int(value)
+        if (conf_key, repr(raw)) not in self._stress_segments_warned:
+            self._stress_segments_warned.add((conf_key, repr(raw)))
+            self.logger.warning(
+                f"{conf_key} must be a whole number from 1 to {STRESS_SEGMENTS_MAX}, "
+                f"got {raw!r}; falling back to 10 segments."
+            )
+        return 10
 
     def _build_stress_segments(self, max_power, stress_unit_cost, segments):
         """
@@ -2858,8 +3226,29 @@ class Optimization:
         if self.costfun == "self-consumption":
             vars_dict["SC"] = cp.Variable(n, nonneg=True, name="SC")
 
-        # Hybrid Inverter variable
-        if self.plant_conf["inverter_is_hybrid"]:
+        # Hybrid Inverter variable. Above one inverter every inverter has an AC output
+        # variable and each curtailing inverter its own curtailment variable. Both are
+        # result-facing, so they are created here and not in the builder (a relaxed
+        # retry restores the builder's variables before the results are read).
+        if self.n_inv > 1:
+            vars_dict["p_inverter"] = [
+                cp.Variable(n, name=f"p_inverter_{i}") for i in range(self.n_inv)
+            ]
+            vars_dict["p_pv_curtailment_inv"] = [
+                cp.Variable(n, nonneg=True, name=f"p_pv_curtailment_{i}")
+                if spec["curtail"]
+                else None
+                for i, spec in enumerate(self.inverter_specs)
+            ]
+            # A hybrid that may not curtail spills PV it cannot place instead (priced in
+            # the objective, so the battery and the grid always come first).
+            vars_dict["p_pv_spill_inv"] = [
+                cp.Variable(n, nonneg=True, name=f"p_pv_spill_{i}")
+                if spec["shape"] == "hybrid" and not spec["curtail"]
+                else None
+                for i, spec in enumerate(self.inverter_specs)
+            ]
+        elif self.plant_conf["inverter_is_hybrid"]:
             vars_dict["p_hybrid_inverter"] = cp.Variable(n, name="p_hybrid_inverter")
 
         # Curtailment variable
@@ -3143,7 +3532,12 @@ class Optimization:
         # Stress Costs
         # These variables represent a cost to be minimized.
         # Since we are Maximizing the objective, we subtract them.
-        if inv_stress_conf and inv_stress_conf["active"]:
+        if self.n_inv > 1:
+            # One stress config per inverter, summed like the batteries' (#1150).
+            inv_stress_vars = [c["vars"] for c in inv_stress_conf or [] if c["active"]]
+            if inv_stress_vars:
+                objective_terms.append(-cp.sum(sum(inv_stress_vars)))
+        elif inv_stress_conf and inv_stress_conf["active"]:
             objective_terms.append(-cp.sum(inv_stress_conf["vars"]))
 
         # batt_stress_conf is now a list of one per-battery stress config dict
@@ -3238,7 +3632,38 @@ class Optimization:
         # The weight is normalized by the horizon length and the epsilon is orders of
         # magnitude below any real tariff coefficient, so it breaks ties without ever
         # flipping a real economic decision.
-        if self.plant_conf["compute_curtailment"]:
+        if self.n_inv > 1:
+            # Per curtailing inverter: the same time weights, plus an index tilt so an
+            # exact tie splits deterministically (lowest index curtails first).
+            tiebreak_weights = np.arange(self.num_timesteps, 0, -1) / self.num_timesteps
+            for i, curt in enumerate(self.vars["p_pv_curtailment_inv"]):
+                if curt is not None:
+                    objective_terms.append(
+                        -CURTAILMENT_TIEBREAK_EPS * cp.sum(cp.multiply(tiebreak_weights, curt))
+                        - INVERTER_TIEBREAK_EPS * i * cp.sum(curt)
+                    )
+            # Spilled PV on a non-curtailing hybrid, priced so it is the last resort
+            # (#1150), with the same latest-first timing tie-break as the curtailment.
+            for spill in self.vars["p_pv_spill_inv"]:
+                if spill is not None:
+                    objective_terms.append(
+                        -scale * cp.sum(cp.multiply(self.param_spill_price, spill))
+                        - CURTAILMENT_TIEBREAK_EPS * cp.sum(cp.multiply(tiebreak_weights, spill))
+                    )
+            # Charging a battery from the AC bus and discharging another one onto it
+            # burns energy in conversion and battery losses. Without a cost on AC input
+            # that round trip is a free way to dodge the time weights above (curtail
+            # late instead of now), so batteries would cycle for nothing whenever
+            # export is blocked or negative. At this weight per W of AC input the loop
+            # always costs more than the curtailment it defers, and the term stays
+            # far below a real tariff coefficient.
+            if any(curt is not None for curt in self.vars["p_pv_curtailment_inv"]):
+                for internals in self.vars["inverter_internals"]:
+                    if "ac_in" in internals:
+                        objective_terms.append(
+                            -CURTAILMENT_TIEBREAK_EPS * cp.sum(internals["ac_in"])
+                        )
+        elif self.plant_conf["compute_curtailment"]:
             p_pv_curtailment = self.vars["p_pv_curtailment"]
             tiebreak_weights = np.arange(self.num_timesteps, 0, -1) / self.num_timesteps
             objective_terms.append(
@@ -3283,7 +3708,12 @@ class Optimization:
         )
 
         # Main Power Balance Constraints
-        if self.plant_conf["inverter_is_hybrid"]:
+        if self.n_inv > 1:
+            # Every inverter's AC output, and nothing else on the bus (#1150).
+            constraints.append(
+                sum(self.vars["p_inverter"]) - p_def_sum - p_load + p_grid_neg + p_grid_pos == 0
+            )
+        elif self.plant_conf["inverter_is_hybrid"]:
             constraints.append(
                 p_hybrid_inverter - p_def_sum - p_load + p_grid_neg + p_grid_pos == 0
             )
@@ -3319,21 +3749,33 @@ class Optimization:
         # -p_grid_neg <= max_to_grid[t] * (1 - D[t])
         constraints.append(-p_grid_neg <= cp.multiply(max_power_to_grid_arr, (1 - D)))
 
-    def _inverter_power_curve(self, parameter_name: str, direction: str):
+    def _inverter_power_curve(self, parameter_name: str, direction: str, index: int | None = None):
         """Return the validated (ac_points, dc_points) of one inverter curve, or None.
 
         None (absent parameter or explicit empty list) means the scalar efficiency of
         that direction applies. Any other value is validated and a malformed one raises
         ValueError naming the parameter: it is a physical model, so silently falling
-        back to the scalar would hide the error.
+        back to the scalar would hide the error. With ``index`` (above one inverter) the
+        parameter holds one curve, or an empty entry, per inverter: the entry of that
+        inverter is read and validated, and named ``parameter[index]`` in any error.
         """
         raw = self.plant_conf.get(parameter_name, [])
+        if index is not None and not utils.inverter_power_curve_is_unset(raw):
+            if not isinstance(raw, list | tuple) or len(raw) != self.n_inv:
+                raise ValueError(
+                    f"{parameter_name} must be a list with one curve (or an empty entry) per "
+                    f"inverter (number_of_inverters={self.n_inv} here)"
+                )
+            raw = raw[index]
+            parameter_name = f"{parameter_name}[{index}]"
+        elif index is not None:
+            return None
         if utils.inverter_power_curve_is_unset(raw):
             return None
         points = utils.validate_inverter_power_curve(raw, parameter_name, direction)
         return [p[0] for p in points], [p[1] for p in points]
 
-    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate):
+    def _add_inverter_pwl_transfer(self, constraints, name, dc_var, curve, gate, store=None):
         """Exact piecewise-linear transfer dc = f(ac) by the incremental method.
 
         The curve is indexed on the AC side, the power the user commands and
@@ -3351,8 +3793,11 @@ class Optimization:
         binary, or its complement) bounds the first segment, so no extra on/off
         binary is needed and the direction cannot be active together with the
         opposite one. The curve's last AC point is the supported power domain: no
-        extrapolation. Returns the AC-side power expression.
+        extrapolation. Returns the AC-side power expression. The fill and ordering
+        variables go into ``store`` (``self.vars`` unless one is given: above one
+        inverter each inverter keeps its own dict).
         """
+        store = self.vars if store is None else store
         ac_pts, dc_pts = curve
         n = self.num_timesteps
         n_seg = len(ac_pts) - 1
@@ -3369,12 +3814,19 @@ class Optimization:
         for k in range(n_seg - 1):
             constraints.append(u[k + 1] <= b[k])
             constraints.append(b[k] <= u[k])
-        self.vars[f"{name}_u"] = u
-        self.vars[f"{name}_b"] = b
+        store[f"{name}_u"] = u
+        store[f"{name}_b"] = b
         return sum(w * u_k for w, u_k in zip(widths, u, strict=True))
 
     def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
-        """Add constraints specific to hybrid inverters (Vectorized)."""
+        """Add the inverter constraints (Vectorized).
+
+        Above one inverter this hands over to ``_add_per_inverter_constraints``; the
+        rest is the one-inverter hybrid model.
+        """
+        if self.n_inv > 1:
+            self._add_per_inverter_constraints(constraints, inv_stress_conf)
+            return
         if not self.plant_conf["inverter_is_hybrid"]:
             return
 
@@ -3513,6 +3965,162 @@ class Optimization:
                 seg_params,
             )
 
+    def _add_per_inverter_constraints(self, constraints, inv_stress_conf):
+        """Add the DC bus, AC conversion and caps of every inverter above one (#1150).
+
+        Reads only ``self.inverter_specs``. Per inverter: DC bus ``pv - curtailment +
+        its batteries == p_dc_ac - p_ac_dc``, AC output ``p_inverter == ac_out - ac_in``
+        (scalar efficiency or curve, the same expressions as the one-inverter builder),
+        and per-direction caps gated by one direction binary: its own (hybrid, battery
+        only with 2+ batteries), the direction binary of its single battery (battery
+        only), or none (PV only: no AC input at all, and no first-segment gate). An
+        inverter with nothing active is pinned to 0 W. The internal variables live
+        under ``vars["inverter_internals"]`` so the relaxed retry snapshot covers them.
+        """
+        n = self.num_timesteps
+        p_sto_pos = self.vars["p_sto_pos"]
+        p_sto_neg = self.vars["p_sto_neg"]
+        internals = []
+        for i, spec in enumerate(self.inverter_specs):
+            p_inv = self.vars["p_inverter"][i]
+            store = {}
+            internals.append(store)
+            if spec["shape"] == "inert":
+                constraints.append(p_inv == 0)
+                continue
+            has_batt = bool(spec["batteries"])
+            curt = self.vars["p_pv_curtailment_inv"][i]
+            spill = self.vars["p_pv_spill_inv"][i]
+            p_dc_ac = cp.Variable(n, nonneg=True, name=f"p_dc_ac_{i}")
+            store["p_dc_ac"] = p_dc_ac
+            p_ac_dc = None
+            if has_batt:
+                p_ac_dc = cp.Variable(n, nonneg=True, name=f"p_ac_dc_{i}")
+                store["p_ac_dc"] = p_ac_dc
+            gate = None
+            if spec["binary"] == "own":
+                gate = cp.Variable(n, boolean=True, name=f"is_dc_sourcing_{i}")
+                store["is_dc_sourcing"] = gate
+            elif spec["binary"] == "battery":
+                # E[k] is 1 while battery k discharges, i.e. while DC flows to AC, so
+                # it is the DC-to-AC gate of the inverter this battery is alone on.
+                gate = self.vars["E"][spec["batteries"][0]]
+
+            # DC bus: PV (less curtailment) and the batteries on this inverter
+            dc_in = sum(p_sto_pos[k] + p_sto_neg[k] for k in spec["batteries"])
+            if spec["has_pv"]:
+                dc_in = dc_in + self.param_pv_inv[i]
+            if curt is not None:
+                dc_in = dc_in - curt
+                constraints.append(curt <= self.param_pv_inv[i])
+            if spill is not None:
+                dc_in = dc_in - spill
+                constraints.append(spill <= self.param_pv_inv[i])
+                # A battery on an inverter that is spilling PV never discharges: its output
+                # would only displace PV that is being thrown away at the cap, so the plan
+                # could otherwise cycle the battery to shrink the priced spill. E[k] is 1
+                # while battery k discharges; no new binary.
+                for k in spec["batteries"]:
+                    constraints.append(
+                        spill <= cp.multiply(self.param_pv_inv[i], 1 - self.vars["E"][k])
+                    )
+            constraints.append(dc_in == (p_dc_ac - p_ac_dc if has_batt else p_dc_ac))
+
+            # AC conversion. A curve is an equality, as in the one-inverter builder.
+            curve_dc_ac, curve_ac_dc = spec["curve_dc_ac"], spec["curve_ac_dc"]
+            if curve_dc_ac is None:
+                ac_out = p_dc_ac * spec["eff_dc_ac"]
+            else:
+                ac_out = self._add_inverter_pwl_transfer(
+                    constraints,
+                    f"inv_curve_dc_ac_{i}",
+                    p_dc_ac,
+                    curve_dc_ac,
+                    1 if gate is None else gate,
+                    store=store,
+                )
+            ac_in = 0
+            if has_batt and curve_ac_dc is None:
+                ac_in = p_ac_dc * (1.0 / spec["eff_ac_dc"])
+            elif has_batt:
+                ac_in = self._add_inverter_pwl_transfer(
+                    constraints, f"inv_curve_ac_dc_{i}", p_ac_dc, curve_ac_dc, 1 - gate, store=store
+                )
+            constraints.append(p_inv == ac_out - ac_in)
+            if has_batt:
+                store["ac_in"] = ac_in  # read by the curtailment tie-break in the objective
+
+            # Caps: a curved direction is limited on its AC side, a scalar one on its DC
+            # side. Caps and efficiencies are Python constants, so everything stays DPP.
+            if has_batt and curve_ac_dc is None:
+                constraints.append(p_ac_dc <= (1 - gate) * (spec["cap_in"] * spec["eff_ac_dc"]))
+            elif has_batt:
+                constraints.append(ac_in <= (1 - gate) * spec["cap_in"])
+            if curve_dc_ac is None:
+                dc_limit = spec["cap_out"] / spec["eff_dc_ac"]
+                constraints.append(p_dc_ac <= (dc_limit if gate is None else gate * dc_limit))
+            else:
+                constraints.append(
+                    ac_out <= (spec["cap_out"] if gate is None else gate * spec["cap_out"])
+                )
+
+            stress_conf = inv_stress_conf[i] if inv_stress_conf else None
+            if stress_conf and stress_conf["active"]:
+                seg_params = self._build_stress_segments(
+                    stress_conf["max_power"], stress_conf["unit_cost"], stress_conf["segments"]
+                )
+                self._add_stress_constraints(constraints, p_inv, stress_conf["vars"], seg_params)
+        self.vars["inverter_internals"] = internals
+
+    def _setup_inverter_stress_cost(self, i: int, spec: dict) -> dict:
+        """Stress config of inverter ``i`` above one inverter (#1150).
+
+        Like _setup_battery_stress_cost: the already-resolved per-inverter cost, the
+        shared inverter_stress_segments knob and an index-qualified variable name. The
+        full-load power is the larger cap for an inverter with a battery and the output
+        cap for a PV-only one (its AC input is fixed to 0). An inert inverter is inactive.
+        """
+        max_power = max(spec["cap_out"], spec["cap_in"]) if spec["batteries"] else spec["cap_out"]
+        active = spec["shape"] != "inert" and spec["stress_cost"] > 0 and max_power > 0
+        stress_cost_var = None
+        if active:
+            stress_cost_var = cp.Variable(
+                self.num_timesteps, nonneg=True, name=f"inv_stress_cost_{i}"
+            )
+        return {
+            "active": active,
+            "vars": stress_cost_var,
+            "unit_cost": spec["stress_cost"],
+            "max_power": max_power,
+            "segments": self.plant_conf.get("inverter_stress_segments", 10),
+        }
+
+    @staticmethod
+    def _inverter_max_efficiency(spec: dict) -> float:
+        """Highest DC-to-AC efficiency of an inverter: the scalar, or the curve's best point."""
+        curve = spec["curve_dc_ac"]
+        if curve is None:
+            return spec["eff_dc_ac"]
+        return max(ac / dc for ac, dc in zip(*curve, strict=True) if dc > 0)
+
+    def _inverter_pv_ac_output(self, pv_inv: list) -> np.ndarray:
+        """The most AC power the PV of all inverters can deliver, per time step (#1150).
+
+        Per PV inverter the AC output of its PV alone: ``pv * eff`` for a scalar
+        efficiency, or the highest AC power on the DC-to-AC curve whose DC input does not
+        exceed the PV (DC is non-decreasing along the curve, so a flat DC stretch gives
+        its highest AC, and the value is capped at the last AC point), then at the AC
+        output cap.
+        """
+        total = np.zeros(self.num_timesteps)
+        for spec, pv in zip(self.inverter_specs, pv_inv, strict=True):
+            if pv is None:
+                continue
+            curve = spec["curve_dc_ac"]
+            ac = spec["eff_dc_ac"] * pv if curve is None else np.interp(pv, curve[1], curve[0])
+            total += np.minimum(ac, spec["cap_out"])
+        return total
+
     def _add_battery_constraints(self, constraints, batt_stress_conf):
         """Add all battery-related constraints (Vectorized).
 
@@ -3559,7 +4167,27 @@ class Optimization:
         # (#795, reintroduced by #981). Bounding by the surplus blocks battery-to-grid while still
         # allowing battery-to-load.
         if self.optim_conf["set_nodischarge_to_grid"]:
-            if self.plant_conf["inverter_is_hybrid"]:
+            if self.n_inv > 1:
+                # Above one inverter E<=D is not used (a hybrid may export PV while another
+                # inverter's battery discharges): export is bounded by the AC the PV can
+                # deliver less the load, as for AC-coupled systems.
+                constraints.append(self.vars["p_grid_neg"] + self.param_export_ceiling >= 0)
+                curt_vars = self.vars["p_pv_curtailment_inv"]
+                spill_vars = self.vars["p_pv_spill_inv"]
+                if any(c is not None for c in curt_vars + spill_vars):
+                    # Curtailed or spilled PV cannot be exported either: through each
+                    # inverter's best efficiency, so the bound never cuts an export that
+                    # can happen.
+                    pv_ac = 0
+                    for spec, pv, curt, spill in zip(
+                        self.inverter_specs, self.param_pv_inv, curt_vars, spill_vars, strict=True
+                    ):
+                        if pv is not None:
+                            net = pv if curt is None else pv - curt
+                            net = net if spill is None else net - spill
+                            pv_ac = pv_ac + self._inverter_max_efficiency(spec) * net
+                    constraints.append(self.vars["p_grid_neg"] + pv_ac >= 0)
+            elif self.plant_conf["inverter_is_hybrid"]:
                 for k in range(self.n_batt):
                     constraints.append(E[k] <= D)
             else:
@@ -3880,15 +4508,17 @@ class Optimization:
     # avoid re-implementing the same min/max bounds, overshoot indicator and
     # comfort penalty three times). Behaviour-preserving extraction.
     # ------------------------------------------------------------------
-    def _add_temp_bound(self, constraints, predicted_temp, config_list, param, n, lower):
+    def _add_temp_bound(self, constraints, predicted_temp, config_list, param, n, lower, start=1):
         """Per-step hard temperature bound (lower=True -> min, else max), skipping
-        index 0 (pinned by start_temperature) and any None/nan entries (an
-        unbounded step). Uses a cp.Parameter when given (warm-start), else the raw
-        config values."""
+        the steps before `start` (index 0 is pinned by start_temperature) and any
+        None/nan entries (an unbounded step). Uses a cp.Parameter when given
+        (warm-start), else the raw config values."""
         if not config_list:
             return
         valid = [
-            i for i, v in enumerate(config_list) if v is not None and not np.isnan(v) and 0 < i < n
+            i
+            for i, v in enumerate(config_list)
+            if v is not None and not np.isnan(v) and max(start, 1) <= i < n
         ]
         if not valid:
             return
@@ -4030,7 +4660,23 @@ class Optimization:
                 - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
             )
 
-        # Hard min/max temperature bounds (shared helper).
+        # Hard min/max temperature bounds (shared helper). Steps 1..L are fixed by
+        # the start temperature, the in-flight heat and the cooling term: no decision
+        # reaches them, so a bound there cannot be acted on and would only make the
+        # solve infeasible when the fixed path grazes it (#1136). They are left
+        # unbounded, and a crossing is logged instead.
+        self._thermal_lag_window[k] = {
+            "steps": L,
+            "heat": np.asarray(prior_heat, dtype=float) * sense_coeff * heat_factor,
+            "cool": cool_factor,
+        }
+        self._warn_lag_window_bounds(
+            k,
+            start_temperature.value if k in self.param_thermal else start_temperature,
+            outdoor_temp.value if k in self.param_thermal else outdoor_temp,
+            hc.get("min_temperatures", []),
+            hc.get("max_temperatures", []),
+        )
         self._add_temp_bound(
             constraints,
             predicted_temp,
@@ -4038,6 +4684,7 @@ class Optimization:
             min_temps_param,
             required_len,
             lower=True,
+            start=1 + L,
         )
         self._add_temp_bound(
             constraints,
@@ -4046,6 +4693,7 @@ class Optimization:
             max_temps_param,
             required_len,
             lower=False,
+            start=1 + L,
         )
 
         # Soft comfort: shared overshoot indicator + load-specific power
@@ -4088,6 +4736,42 @@ class Optimization:
             constraints.append(p_deferrable == p_def_bin2 * nominal_power)
 
         return predicted_temp, None, total_penalty
+
+    def _warn_lag_window_bounds(self, k, start_temperature, outdoor_temp, min_temps, max_temps):
+        """Log each step of a thermal_config load's lag window where the fixed
+        temperature path crosses a configured bound (#1136). Those steps are not
+        bounded in the model, so this is the only signal that the plan starts
+        outside the comfort band."""
+        lag = self._thermal_lag_window.get(k)
+        if not lag or lag["steps"] == 0:
+            return
+
+        def bound_at(values, step):
+            if not values or step >= len(values):
+                return None
+            v = values[step]
+            return None if v is None or np.isnan(v) else float(v)
+
+        temp = float(start_temperature)
+        crossings = []
+        for t in range(lag["steps"]):
+            temp = temp + lag["heat"][t] - lag["cool"] * (temp - float(outdoor_temp[t]))
+            step = t + 1
+            low, high = bound_at(min_temps, step), bound_at(max_temps, step)
+            if low is not None and temp < low - 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C under the minimum of {low:.2f} C")
+            elif high is not None and temp > high + 1e-6:
+                crossings.append(f"step {step}: {temp:.2f} C over the maximum of {high:.2f} C")
+        if crossings:
+            # One line per load and run: under rolling MPC this can recur every run.
+            self.logger.warning(
+                "Load %s: the first %d steps are set by the start temperature and the "
+                "thermal_inertia lag, no decision reaches them, so their bounds are not "
+                "enforced (%s).",
+                k,
+                lag["steps"],
+                "; ".join(crossings),
+            )
 
     @staticmethod
     def _tile_profile(profile, required_len):
@@ -7083,8 +7767,14 @@ class Optimization:
         debug,
         q_inputs=None,
         transfer_vars=None,
+        p_pv_plants=None,
     ):
-        """Build the final results DataFrame (Vectorized extraction)."""
+        """Build the final results DataFrame (Vectorized extraction).
+
+        ``p_pv_plants`` is the optional per-plant split of ``p_pv`` (#1150): a frame with
+        one ``P_PV_plant{j}`` column per plant, row for row like ``p_pv``. The columns are
+        diagnostic output only, written next to ``P_PV``; the optimization never reads them.
+        """
         opt_tp = pd.DataFrame(index=data_opt.index)
         solver_zero_tol = 1e-9
 
@@ -7101,9 +7791,30 @@ class Optimization:
 
         # Main Power Variables
         opt_tp["P_PV"] = p_pv
+        if p_pv_plants is not None:
+            # Positional, exactly like P_PV above (an array), so the index never matters.
+            for plant_col in p_pv_plants.columns:
+                opt_tp[plant_col] = p_pv_plants[plant_col].to_numpy(dtype=float)
         opt_tp["P_Load"] = p_load
 
-        if self.plant_conf["compute_curtailment"]:
+        if self.n_inv > 1:
+            # Per inverter: the PV forecast the model was given, its curtailment and its spill (#1150)
+            curt_vars = self.vars["p_pv_curtailment_inv"]
+            for i, pv_param in enumerate(self.param_pv_inv):
+                if pv_param is not None:
+                    opt_tp[f"P_PV_{i}"] = np.array(pv_param.value, dtype=float)
+            for i, curt in enumerate(curt_vars):
+                if curt is not None:
+                    opt_tp[f"P_PV_curtailment_{i}"] = get_val(curt)
+            if any(c is not None for c in curt_vars):
+                opt_tp["P_PV_curtailment"] = sum(get_val(c) for c in curt_vars if c is not None)
+            spilled = {}
+            for i, spill in enumerate(self.vars["p_pv_spill_inv"]):
+                if spill is not None:
+                    spilled[i] = get_val(spill)
+                    opt_tp[f"P_PV_spill_{i}"] = spilled[i]
+            self._log_spill(spilled, data_opt.index)
+        elif self.plant_conf["compute_curtailment"]:
             opt_tp["P_PV_curtailment"] = get_val(self.vars.get("p_pv_curtailment"))
 
         opt_tp["P_grid_pos"] = get_val(self.vars["p_grid_pos"])
@@ -7185,7 +7896,15 @@ class Optimization:
                     opt_tp["soc_surplus_cost"] = get_val(soc_surplus_vars[0])
 
         # Hybrid Inverter Results
-        if self.plant_conf["inverter_is_hybrid"]:
+        if self.n_inv > 1:
+            p_inverter_list = [get_val(v) for v in self.vars["p_inverter"]]
+            for i, p_inv in enumerate(p_inverter_list):
+                opt_tp[f"P_hybrid_inverter_{i}"] = p_inv
+            opt_tp["P_hybrid_inverter"] = sum(p_inverter_list)
+            for i, stress_var in enumerate(self.vars.get("inv_stress_cost_inv", [])):
+                if stress_var is not None:
+                    opt_tp[f"inv_stress_cost_{i}"] = get_val(stress_var)
+        elif self.plant_conf["inverter_is_hybrid"]:
             opt_tp["P_hybrid_inverter"] = get_val(self.vars["p_hybrid_inverter"])
             if "inv_stress_cost" in self.vars:
                 opt_tp["inv_stress_cost"] = get_val(self.vars["inv_stress_cost"])
@@ -7427,6 +8146,8 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
+        pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
@@ -7461,6 +8182,17 @@ class Optimization:
         deferrable load (see _apply_def_availability): it scales the load's
         power ceiling, and ``0`` keeps the load off in that step whatever else
         would force it on.
+
+        ``p_pv_plants`` is the optional per-plant split of ``p_pv`` (a frame of
+        ``P_PV_plant{j}`` columns, row for row like ``p_pv``; see
+        ``Forecast.get_pv_plant_split``). It is only copied into the results next to
+        ``P_PV``; it does not touch any variable, constraint or the objective. ``None``
+        (the default) gives exactly the results without it.
+
+        ``pv_plant_inverters`` is the inverter number of each ``p_pv_plants`` column
+        (``Forecast.get_pv_plant_inverters``). It is read only above one inverter, where
+        the PV of each inverter is the sum of its columns; with one PV inverter the whole
+        ``p_pv`` goes to it and the argument may be ``None``.
         """
         with self._solve_lock:
             return self._perform_optimization_locked(
@@ -7488,6 +8220,8 @@ class Optimization:
                 battery_availability=battery_availability,
                 battery_discharge_energy_max=battery_discharge_energy_max,
                 def_availability=def_availability,
+                p_pv_plants=p_pv_plants,
+                pv_plant_inverters=pv_plant_inverters,
             )
 
     def _perform_optimization_locked(
@@ -7516,6 +8250,8 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
+        pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Opt-in coordinator backend (optional extra): the devices are planned as separate
@@ -7562,7 +8298,10 @@ class Optimization:
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_load_cost_pos = cp.Parameter(current_n, nonneg=True, name="load_cost_pos")
             self.param_export_ceiling = cp.Parameter(current_n, nonneg=True, name="export_ceiling")
+            if self.n_inv > 1:
+                self.param_spill_price = cp.Parameter(current_n, nonneg=True, name="spill_price")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
+            self._init_pv_inverter_params()
             self.param_cost_per_load = [
                 cp.Parameter(current_n, name=f"cost_per_load_{k}")
                 for k in range(self.optim_conf.get("number_of_deferrable_loads", 0))
@@ -7853,14 +8592,32 @@ class Optimization:
         def_start_timestep = [s if s is not None else 0 for s in def_start_timestep]
         def_end_timestep = [e if e is not None else 0 for e in def_end_timestep]
 
+        # Above one inverter each inverter gets its own PV series, and the aggregate
+        # the rest of this method uses is rebuilt from them (#1150).
+        if self.n_inv > 1:
+            pv_inv, p_pv = self._assemble_inverter_pv(p_pv, p_pv_plants, pv_plant_inverters)
+            clipped = self._clip_pv_only_inverters(pv_inv)
+            if any(a is not b for a, b in zip(clipped, pv_inv, strict=True)):
+                pv_inv = clipped
+                p_pv = sum(series for series in pv_inv if series is not None)
+            for i, series in enumerate(pv_inv):
+                if series is not None:
+                    self.param_pv_inv[i].value = series
+
         # Parameter Updates
         self.param_pv_forecast.value = p_pv
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
         self.param_load_cost_pos.value = np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0)
-        self.param_export_ceiling.value = np.maximum(
-            np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
-        )
+        if self.n_inv > 1:
+            # The AC the PV of each inverter can deliver, not the raw DC (#1150).
+            self.param_export_ceiling.value = np.maximum(
+                self._inverter_pv_ac_output(pv_inv) - np.asarray(p_load, dtype=float), 0.0
+            )
+        else:
+            self.param_export_ceiling.value = np.maximum(
+                np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
+            )
         # Price the terminal-SoC miss well above the dearest import slot so the target is
         # never traded away for energy cost; the 0.001 converts the Wh slacks to kWh. The
         # floor keeps the penalty meaningful when every tariff is zero or negative.
@@ -7889,6 +8646,30 @@ class Optimization:
                 * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
             )
         self.param_prod_price.value = unit_prod_price
+        if self.n_inv > 1:
+            # Spill only competes with a negative price, so in each step the base is the
+            # size of that step's more negative price (see SPILL_PRICE_FACTOR), each taken
+            # as the objective weighs it: under self-consumption import is scaled by the
+            # big-M and export is not, and the cost objective has no export term, so a
+            # negative export price does not count there. The floor is a tie-break and is
+            # not scaled: scaled, it would price spill far above the battery weights on
+            # every self-consumption clipping day. With set_total_pv_sell, profit and cost
+            # charge the load at the tariff and never price grid import, so a negative
+            # import price does not count either. The inverter stress rate is a plain cost
+            # and is added unscaled.
+            n_steps = len(unit_load_cost)
+            if self.costfun in ("profit", "cost") and self.optim_conf["set_total_pv_sell"]:
+                import_neg = np.zeros(n_steps)
+            else:
+                import_neg = -np.asarray(unit_load_cost, dtype=float) * penalty_scale
+            if self.costfun == "cost":
+                export_neg = np.zeros(n_steps)
+            else:
+                export_neg = -np.asarray(unit_prod_price, dtype=float)
+            negative = np.maximum.reduce(
+                [import_neg, export_neg, np.full(n_steps, SPILL_PRICE_FLOOR)]
+            )
+            self.param_spill_price.value = SPILL_PRICE_FACTOR * negative + self._spill_stress_rate()
 
         # Per-load cost forecast overrides. Default each load's per-timestep cost
         # to the shared electricity tariff (no-op adjustment in the objective). If
@@ -8563,7 +9344,14 @@ class Optimization:
                 if any(c["active"] for c in batt_stress_conf):
                     self.vars["batt_stress_cost"] = [c["vars"] for c in batt_stress_conf]
 
-            if self.plant_conf["inverter_is_hybrid"]:
+            if self.n_inv > 1:
+                inv_stress_conf = [
+                    self._setup_inverter_stress_cost(i, spec)
+                    for i, spec in enumerate(self.inverter_specs)
+                ]
+                if any(c["active"] for c in inv_stress_conf):
+                    self.vars["inv_stress_cost_inv"] = [c["vars"] for c in inv_stress_conf]
+            elif self.plant_conf["inverter_is_hybrid"]:
                 P_nom_inverter_max = max(
                     self.plant_conf.get("inverter_ac_output_max", 0),
                     self.plant_conf.get("inverter_ac_input_max", 0),
@@ -8582,7 +9370,7 @@ class Optimization:
             self._add_hybrid_inverter_constraints(constraints, inv_stress_conf)
             self._add_battery_constraints(constraints, batt_stress_conf)
 
-            if self.plant_conf["compute_curtailment"]:
+            if self.n_inv == 1 and self.plant_conf["compute_curtailment"]:
                 constraints.append(self.vars["p_pv_curtailment"] <= self.param_pv_forecast)
 
             if self.costfun == "self-consumption" and "SC" in self.vars:
@@ -8782,6 +9570,7 @@ class Optimization:
                 "inv_curve_dc_ac_b",
                 "inv_curve_ac_dc_u",
                 "inv_curve_ac_dc_b",
+                "inverter_internals",
             )
             original_hybrid_vars = {
                 key: self.vars[key] for key in hybrid_var_keys if key in self.vars
@@ -8815,12 +9604,12 @@ class Optimization:
                 # Guard on feature flags, matching the build block's own gating: these
                 # builders also add the non-stress battery/inverter constraints, so they
                 # must run whenever the feature is on, stress cost or not.
-                if self.plant_conf.get("inverter_is_hybrid", False):
+                if self.n_inv > 1 or self.plant_conf.get("inverter_is_hybrid", False):
                     self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
                 if self.optim_conf.get("set_use_battery", False):
                     self._add_battery_constraints(constraints_relaxed, batt_stress_conf)
 
-                if self.plant_conf["compute_curtailment"]:
+                if self.n_inv == 1 and self.plant_conf["compute_curtailment"]:
                     constraints_relaxed.append(
                         self.vars["p_pv_curtailment"] <= self.param_pv_forecast
                     )
@@ -8976,6 +9765,7 @@ class Optimization:
             debug,
             q_inputs=q_inputs,
             transfer_vars=solved_transfer_vars,
+            p_pv_plants=p_pv_plants,
         )
         if fallback_reason:
             _with_backend(results_df, backend, fallback_reason)
@@ -9000,6 +9790,12 @@ class Optimization:
         :rtype: pandas.DataFrame
 
         """
+        if self.n_inv > 1:
+            raise utils.InverterConfigError(
+                f"number_of_inverters={self.n_inv}: perfect-optim has no PV history per "
+                "inverter, so it supports one inverter only for now. Use dayahead-optim or "
+                "naive-mpc-optim instead."
+            )
         with self._solve_lock:
             self.logger.info("Perform optimization for perfect forecast scenario")
             # Each window is ``time_delta`` of elapsed time from a UTC midnight of days_list, not a
@@ -9067,6 +9863,8 @@ class Optimization:
         soc_final: float | list | None = None,
         stage_times: dict[str, float] | None = None,
         current_period_peak: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
+        pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a day-ahead optimization task using real forecast data. \
@@ -9108,6 +9906,15 @@ class Optimization:
             With several capacity components (a list ``capacity_cost_per_kw``), \
             one value per component.
         :type current_period_peak: float | list, optional
+        :param p_pv_plants: Optional per-plant split of ``p_pv`` (``P_PV_plant{j}`` \
+            columns, same length as ``p_pv``), written to the results next to ``P_PV``. \
+            Diagnostic only; ``None`` (the default) leaves the results unchanged.
+        :type p_pv_plants: pandas.DataFrame, optional
+        :param pv_plant_inverters: Optional inverter number of each ``p_pv_plants`` \
+            column (``Forecast.get_pv_plant_inverters``), used only above one inverter \
+            to build the PV of each inverter. ``None`` (the default) is right at one \
+            inverter.
+        :type pv_plant_inverters: list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -9132,6 +9939,8 @@ class Optimization:
             soc_final=soc_final,
             current_period_peak=current_period_peak,
             stage_times=stage_times,
+            p_pv_plants=p_pv_plants,
+            pv_plant_inverters=pv_plant_inverters,
         )
         return self.opt_res
 
@@ -9157,6 +9966,8 @@ class Optimization:
         battery_availability: float | list | None = None,
         battery_discharge_energy_max: float | list | None = None,
         def_availability: float | list | None = None,
+        p_pv_plants: pd.DataFrame | None = None,
+        pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -9298,6 +10109,16 @@ class Optimization:
             fraction in [0, 1] per timestep that scales the load's power ceiling \
             (0 = the load must not run). See ``_apply_def_availability``.
         :type def_availability: float | list, optional
+        :param p_pv_plants: Optional per-plant split of ``p_pv`` (``P_PV_plant{j}`` \
+            columns, same length as ``p_pv``). It is sliced to ``prediction_horizon`` \
+            like ``p_pv`` and written to the results next to ``P_PV``. Diagnostic only; \
+            ``None`` (the default) leaves the results unchanged.
+        :type p_pv_plants: pandas.DataFrame, optional
+        :param pv_plant_inverters: Optional inverter number of each ``p_pv_plants`` \
+            column (``Forecast.get_pv_plant_inverters``), used only above one inverter \
+            to build the PV of each inverter. It is passed through unsliced. \
+            ``None`` (the default) is right at one inverter.
+        :type pv_plant_inverters: list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -9324,6 +10145,9 @@ class Optimization:
         # Extract inputs as arrays
         # Note: We must ensure p_pv and p_load are sliced exactly like df_input_data
         p_pv_slice = p_pv.iloc[:prediction_horizon].values.ravel()
+        p_pv_plants_slice = (
+            p_pv_plants.iloc[:prediction_horizon] if p_pv_plants is not None else None
+        )
         p_load_slice = p_load.iloc[:prediction_horizon].values.ravel()
         unit_load_cost = subset_data[self.var_load_cost].values
         unit_prod_price = subset_data[self.var_prod_price].values
@@ -9351,6 +10175,8 @@ class Optimization:
             battery_availability=battery_availability,
             battery_discharge_energy_max=battery_discharge_energy_max,
             def_availability=def_availability,
+            p_pv_plants=p_pv_plants_slice,
+            pv_plant_inverters=pv_plant_inverters,
         )
         return self.opt_res
 
