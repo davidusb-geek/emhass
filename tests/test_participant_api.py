@@ -11,7 +11,9 @@ import importlib.util
 import pathlib
 import pickle
 import shutil
+import sys
 import tempfile
+import types
 from unittest import mock
 
 import numpy as np
@@ -188,9 +190,17 @@ def test_a_commit_waits_for_no_live_optimization(data_path, busy):
             else:
                 web_server.params_secrets["participant_token"] = saved_secret
 
+    # The route needs the federated extra only to build a service, mocked here,
+    # so the slot is tested with or without the package installed.
+    package = types.ModuleType("home_energy_optimizer")
+    package.remote = types.ModuleType("home_energy_optimizer.remote")
     with (
         mock.patch.object(participant_api, "make_service", return_value=service),
         mock.patch.object(web_server, "_participant_service", None),
+        mock.patch.dict(
+            sys.modules,
+            {"home_energy_optimizer": package, "home_energy_optimizer.remote": package.remote},
+        ),
     ):
         status, retry = asyncio.run(post())
     if busy:

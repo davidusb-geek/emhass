@@ -1626,7 +1626,7 @@ def test_the_published_schema_is_the_check():
     """openapi.json describes site as the check reads it - one allowed key
     set per kind of element, these device names and solvers - and offers only
     the backends EMHASS runs."""
-    spec = json.loads((root / "src/emhass/static/openapi.json").read_text())
+    spec = json.loads((root / "src/emhass/static/openapi.json").read_text(encoding="utf-8"))
     props = spec["components"]["schemas"]["Config"]["properties"]
     assert props["optimization_backend"]["enum"] == list(_BACKENDS)
     assert props["site"]["type"] == ["array", "null"]
