@@ -1706,6 +1706,30 @@ def test_a_null_efficiency_is_an_omitted_one():
     assert plant["inverter_efficiency_dc_ac"] == plant["inverter_efficiency_ac_dc"] == 1.0
 
 
+@pytest.mark.parametrize(
+    "omitted, plant_key, cap",
+    [
+        ("max_export", "inverter_ac_output_max", 5000),
+        ("max_import", "inverter_ac_input_max", 2000),
+    ],
+)
+def test_an_omitted_inverter_rating_keeps_the_configured_cap(omitted, plant_key, cap):
+    """A qualifying hybrid node without max_export / max_import keeps
+    plant_conf's cap on the node, so the coordinator (omitted = unlimited)
+    and the default solver (keeps the configured cap) model the same inverter."""
+    site = [dict(e) for e in SITE]
+    inverter = next(e for e in site if e.get("type") == "hybrid_inverter")
+    inverter.pop(omitted)
+    plant = {
+        "inverter_is_hybrid": False,
+        "inverter_ac_output_max": 5000,
+        "inverter_ac_input_max": 2000,
+    }
+    assert utils.compile_site(site, plant, logger, battery=True)
+    assert inverter[omitted] == cap
+    assert plant[plant_key] == cap
+
+
 def test_the_input_pipeline_compiles_the_site():
     """Set in the configuration (or a request), the site's inverter and meter
     reach the default solver's plant configuration; a request's site that
@@ -1738,6 +1762,43 @@ def test_the_input_pipeline_compiles_the_site():
     assert plant["maximum_power_to_grid"] == 5000
     _, optim = asyncio.run(run({"site": [REMOTE]}))
     assert optim["site"] == SITE  # the configured one, kept
+
+
+def test_a_request_site_enables_hybrid_before_a_supplied_curve():
+    """A request that turns the plant hybrid via site, and supplies a curve,
+    compiles the site before the curve check. Otherwise hybrid is still off
+    and the curve is refused."""
+
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = pathlib.Path(tmp) / "data"
+            shutil.copytree(root / "data", data_path)
+            ec = _conf(data_path)
+            _, secrets = await build_secrets(ec, logger, no_response=True)
+            params = await build_params(
+                ec, secrets, await build_config(ec, logger, ec["defaults_path"]), logger
+            )
+            params["optim_conf"]["set_use_battery"] = True
+            idd = await set_input_data_dict(
+                ec,
+                "profit",
+                orjson.dumps(params).decode(),
+                orjson.dumps(
+                    {
+                        **FORECASTS,
+                        "site": SITE,
+                        "inverter_power_curve_dc_ac": [[1000, 0.7], [4000, 0.9]],
+                    }
+                ).decode(),
+                "dayahead-optim",
+                logger,
+                get_data_from_file=True,
+            )
+            return idd["opt"].plant_conf
+
+    plant = asyncio.run(run())
+    assert plant["inverter_is_hybrid"] is True
+    assert plant["inverter_power_curve_dc_ac"]
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])

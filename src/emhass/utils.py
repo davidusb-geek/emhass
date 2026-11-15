@@ -879,7 +879,9 @@ def site_grid(site: list) -> dict:
     return keys
 
 
-def site_inverter(site: list, battery: bool = False) -> dict | None:
+def site_inverter(
+    site: list, battery: bool = False, plant_conf: dict | None = None
+) -> dict | None:
     """The hybrid inverter in `site` that EMHASS's own model can hold, as the
     plant_conf keys that describe it, or None.
 
@@ -891,6 +893,10 @@ def site_inverter(site: list, battery: bool = False) -> dict | None:
     (set_use_battery). Its model puts that battery on the inverter, so the
     inverter qualifies only if site does too - not for a battery site leaves
     out (planned on the main meter) or wires elsewhere.
+
+    When `plant_conf` is given, an omitted max_export / max_import on the
+    qualifying node is filled from that plant's cap so both backends share
+    it (the coordinator treats omitted as unlimited).
     """
     under: dict[str, set[str]] = {}
     for element in site:
@@ -909,6 +915,19 @@ def site_inverter(site: list, battery: bool = False) -> dict | None:
     if len(fits) != 1:
         return None
     n = fits[0]
+    if plant_conf is not None:
+        for site_key, plant_key in (
+            ("max_export", "inverter_ac_output_max"),
+            ("max_import", "inverter_ac_input_max"),
+        ):
+            if n.get(site_key) is not None:
+                continue
+            cap = plant_conf.get(plant_key)
+            if isinstance(cap, list | tuple):
+                cap = cap[0] if len(cap) == 1 else None
+            if isinstance(cap, bool) or not isinstance(cap, int | float):
+                continue
+            n[site_key] = cap
     keys = {"inverter_is_hybrid": True}
     if n.get("max_export") is not None:
         keys["inverter_ac_output_max"] = n["max_export"]
@@ -930,10 +949,11 @@ def compile_site(
     limits (`site_grid`) and the hybrid inverter EMHASS's model can hold
     (`site_inverter`), so the default solver - on a fallback, or as the
     backend - plans the same meter and inverter. `site` wins where the keys
-    disagree, with a warning. Returns whether an inverter was filled.
+    disagree, with a warning. An omitted inverter rating is copied onto the
+    node from `plant_conf` first. Returns whether an inverter was filled.
     """
     keys = site_grid(site)
-    inverter = site_inverter(site, battery)
+    inverter = site_inverter(site, battery, plant_conf)
     try:
         inverters = validate_num_inverters(plant_conf)
     except InverterConfigError:
@@ -3203,6 +3223,21 @@ async def treat_runtimeparams(
                     inverter_distinct_config_lists,
                     logger,
                 )
+        # A request (or saved) site that turns the plant hybrid must fill
+        # plant_conf before the curve check, which otherwise refuses a
+        # supplied curve while inverter_is_hybrid is still off.
+        site = params["optim_conf"].get("site")
+        if site:
+            problem = site_problem(site)
+            if problem:
+                logger.error("site: %s; not used", problem)
+            else:
+                compile_site(
+                    site,
+                    params["plant_conf"],
+                    logger,
+                    bool(params["optim_conf"].get("set_use_battery")),
+                )
         require_usable_inverter_config(params["plant_conf"], logger)
         inverters_checked = True
         # Strict: a curve in the request must be valid and usable (no recovery).
@@ -4341,13 +4376,16 @@ async def treat_runtimeparams(
     # site: the house in one list, the coordinator's (optimization_backend);
     # its main meter and hybrid inverter are EMHASS's own too - fill those
     # keys from it, so the default solver plans the same meter and inverter.
-    site = optim_conf.get("site")
-    if site:
-        problem = site_problem(site)
-        if problem:
-            logger.error("site: %s; not used", problem)
-        else:
-            compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
+    # When runtimeparams were given the fill already ran before the curve
+    # check; do it here for the no-runtimeparams path (saved config only).
+    if runtimeparams is None:
+        site = optim_conf.get("site")
+        if site:
+            problem = site_problem(site)
+            if problem:
+                logger.error("site: %s; not used", problem)
+            else:
+                compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
 
     # Per-tank start-temperature override (issue #539), keyed by tank id.
     # Applied AFTER the heat_topology compile so it patches manual and

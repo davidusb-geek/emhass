@@ -239,6 +239,9 @@
           "404": {
             "description": "participant_api is not set"
           },
+          "501": {
+            "description": "Needs the federated extra"
+          },
           "503": {
             "description": "No participant_token, params.pkl unreadable, or more than one web worker (WEB_CONCURRENCY)"
           }
@@ -256,6 +259,18 @@
             "participantToken": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "description": "baseline and query: a horizon and prices; commit: the chosen answer. Bodies are participant-api.v1.json (externalDocs).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "An answer, or whether a commit was accepted"
@@ -280,6 +295,9 @@
           },
           "429": {
             "description": "A commit while a live optimization runs"
+          },
+          "501": {
+            "description": "Needs the federated extra"
           },
           "503": {
             "description": "No participant_token, params.pkl unreadable, or more than one web worker (WEB_CONCURRENCY)"

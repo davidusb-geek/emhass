@@ -330,6 +330,7 @@ def build_spec(routes: set | None = None) -> dict:
                     "200": {"description": "Its description"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
+                    "501": {"description": "Needs the federated extra"},
                     "503": {
                         "description": "No participant_token, params.pkl unreadable,"
                         " or more than one web worker (WEB_CONCURRENCY)"
@@ -344,6 +345,14 @@ def build_spec(routes: set | None = None) -> dict:
                 ),
                 "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
                 "security": [{"participantToken": []}],
+                "requestBody": {
+                    "required": True,
+                    "description": (
+                        "baseline and query: a horizon and prices; commit: the chosen "
+                        "answer. Bodies are participant-api.v1.json (externalDocs)."
+                    ),
+                    **json_ct({"type": "object", "additionalProperties": True}),
+                },
                 "responses": {
                     "200": {"description": "An answer, or whether a commit was accepted"},
                     "400": {"description": "Not a query or commit of this API"},
@@ -353,6 +362,7 @@ def build_spec(routes: set | None = None) -> dict:
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
                     "413": {"description": "A body over 1 MiB"},
                     "429": {"description": "A commit while a live optimization runs"},
+                    "501": {"description": "Needs the federated extra"},
                     "503": {
                         "description": "No participant_token, params.pkl unreadable,"
                         " or more than one web worker (WEB_CONCURRENCY)"

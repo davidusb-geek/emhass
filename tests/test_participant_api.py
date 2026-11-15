@@ -905,9 +905,10 @@ def test_a_session_refuses_slots_it_does_not_forecast(data_path):
 def test_the_published_api_says_how_to_authenticate():
     """A client generated from openapi.json sends the participant token."""
     spec = json.loads((root / "src/emhass/static/openapi.json").read_text(encoding="utf-8"))
+    path = spec["paths"]["/participant/v1/{op}"]
     scheme = spec["components"]["securitySchemes"]["participantToken"]
     assert scheme == {**scheme, "type": "http", "scheme": "bearer"}
     for method in ("get", "post"):
-        assert spec["paths"]["/participant/v1/{op}"][method]["security"] == [
-            {"participantToken": []}
-        ]
+        assert path[method]["security"] == [{"participantToken": []}]
+        assert "501" in path[method]["responses"]
+    assert "application/json" in path["post"]["requestBody"]["content"]
