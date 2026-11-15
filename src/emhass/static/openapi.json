@@ -269,6 +269,9 @@
           "404": {
             "description": "participant_api is not set"
           },
+          "408": {
+            "description": "The body did not arrive within 30 s"
+          },
           "409": {
             "description": "A horizon it cannot plan, or a plan it did not give"
           },

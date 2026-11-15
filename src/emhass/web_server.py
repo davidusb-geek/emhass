@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 import errno
 import hashlib
+import hmac
 import logging
 import os
 import pickle
@@ -1002,6 +1003,8 @@ async def api_v1_plan():
 
 _participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
 PARTICIPANT_BODY_MAX = 1 << 20  # 1 MiB
+# As Quart's own BODY_TIMEOUT bounds get_data(): a body that stalls is refused.
+PARTICIPANT_BODY_TIMEOUT_S = 30.0
 
 
 async def _problem(status: int, title: str, detail: str = "", retry_after: str | None = None):
@@ -1046,6 +1049,10 @@ async def participant_v1(op: str):
             "Service Unavailable",
             "the participant API needs one web worker (WEB_CONCURRENCY=1)",
         )
+    presented = request.headers.get("Authorization", "").encode()
+    if not hmac.compare_digest(presented, f"Bearer {token}".encode()):
+        # Before any body is read: a caller without the token costs nothing more.
+        return await _problem(401, "Unauthorized", "present participant_token as a bearer token")
     try:
         import home_energy_optimizer.remote  # noqa: F401
     except ImportError:
@@ -1057,12 +1064,27 @@ async def participant_v1(op: str):
         service = participant_api.make_service(emhass_conf, params, token, app.logger)
         _participant_service = (built_from, service)
     service = _participant_service[1]
-    # A chunked body has no Content-Length: the limit holds on what arrives.
+    # A chunked body has no Content-Length: the limit holds on what arrives,
+    # and the whole body must arrive in time.
     received = bytearray()
-    async for chunk in request.body:
-        received.extend(chunk)
-        if len(received) > PARTICIPANT_BODY_MAX:
-            return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+
+    async def receive() -> bool:
+        async for chunk in request.body:
+            received.extend(chunk)
+            if len(received) > PARTICIPANT_BODY_MAX:
+                return False
+        return True
+
+    try:
+        within = await asyncio.wait_for(receive(), PARTICIPANT_BODY_TIMEOUT_S)
+    except TimeoutError:
+        return await _problem(
+            408,
+            "Request Timeout",
+            f"the body did not arrive within {PARTICIPANT_BODY_TIMEOUT_S:g} s",
+        )
+    if not within:
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
     body = bytes(received)
     if op == "commit" and request.method == "POST":
         # A commit ends a live run - it writes the latest results and publishes - so

@@ -349,6 +349,7 @@ def build_spec(routes: set | None = None) -> dict:
                     "400": {"description": "Not a query or commit of this API"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
+                    "408": {"description": "The body did not arrive within 30 s"},
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
                     "413": {"description": "A body over 1 MiB"},
                     "429": {"description": "A commit while a live optimization runs"},

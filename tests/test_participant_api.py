@@ -782,26 +782,36 @@ def test_a_large_body_is_refused_before_it_is_read(data_path):
     read.assert_not_called()
 
 
-def test_a_chunked_large_body_is_refused_as_it_arrives(data_path):
-    """With no Content-Length (a chunked body; Quart's test client sends
-    none), the 1 MiB limit holds on the bytes received, not the header."""
+def _stream(data_path, chunks: list[bytes], token: str = "t"):
+    """POST /participant/v1/query as a chunked upload that sends `chunks` and
+    then stops, never ending its body: the status answered before the end
+    (None if none), and the service the route would have called."""
     params = _params(_conf(data_path), **GARAGE)
     service = mock.MagicMock()
     service.handle.return_value = (200, {})
 
-    async def post():
+    async def upload():
         saved_conf = web_server.emhass_conf
         saved_secret = web_server.params_secrets.get("participant_token")
         web_server.emhass_conf = {**saved_conf, "data_path": data_path}
         web_server.params_secrets["participant_token"] = "t"
         (data_path / "params.pkl").write_bytes(pickle.dumps((None, params)))
         try:
-            r = await web_server.app.test_client().post(
+            client = web_server.app.test_client()
+            async with client.request(
                 "/participant/v1/query",
-                data=b"x" * (web_server.PARTICIPANT_BODY_MAX + 1),
-                headers={"Authorization": "Bearer t"},
-            )
-            return r.status_code, r.headers.get("Content-Length")
+                method="POST",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            ) as connection:
+                for chunk in chunks:
+                    await connection.send(chunk)
+                for _ in range(200):  # up to 4 s for an answer, the body not ended
+                    if connection.status_code is not None:
+                        break
+                    await asyncio.sleep(0.02)
+                status = connection.status_code
+                await connection.send_complete()  # so a route that waits for it ends
+            return status
         finally:
             web_server.emhass_conf = saved_conf
             if saved_secret is None:
@@ -819,8 +829,34 @@ def test_a_chunked_large_body_is_refused_as_it_arrives(data_path):
             {"home_energy_optimizer": package, "home_energy_optimizer.remote": package.remote},
         ),
     ):
-        status, _ = asyncio.run(post())
+        return asyncio.run(upload()), service
+
+
+def test_a_chunked_large_body_is_refused_as_it_arrives(data_path):
+    """Chunks each well below 1 MiB, more than 1 MiB together, and no
+    Content-Length: refused (413) before the upload ends."""
+    chunk = b" " * (64 * 1024)
+    status, service = _stream(
+        data_path, [chunk] * (web_server.PARTICIPANT_BODY_MAX // len(chunk) + 1)
+    )
     assert status == 413
+    service.handle.assert_not_called()
+
+
+def test_a_body_that_stalls_is_refused(data_path, monkeypatch):
+    """A body that stops arriving is refused (408), as Quart's own
+    BODY_TIMEOUT refuses one read whole."""
+    monkeypatch.setattr(web_server, "PARTICIPANT_BODY_TIMEOUT_S", 0.2)
+    status, service = _stream(data_path, [b"{"])
+    assert status == 408
+    service.handle.assert_not_called()
+
+
+def test_a_caller_without_the_token_is_refused_before_its_body(data_path):
+    """A wrong token is refused (401) before any body is read: the upload has
+    not ended when the answer comes."""
+    status, service = _stream(data_path, [b"{"], token="wrong")
+    assert status == 401
     service.handle.assert_not_called()
 
 
