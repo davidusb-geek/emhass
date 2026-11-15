@@ -36,12 +36,9 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Special dependencies for macos
+      - name: Install HDF5 for macOS
         if: matrix.os == 'macos-latest'
-        run: |
-          brew install hdf5
-          uv venv
-          uv pip install numpy==2.0.0 tables==3.10.2
+        run: brew install hdf5
           
       - name: Install EMHASS with test dependencies
         run: |
