@@ -226,7 +226,6 @@ async def study_case(optim: dict, action: str, runtime: dict, backend: str, gap:
     """
     params = await _params()
     params["optim_conf"].update(optim, optimization_backend=backend, lp_solver_mip_rel_gap=gap)
-    runtime = {**runtime, "dry_run": True}
     params["passed_data"] = runtime
     with _Capture() as capture:
         t0 = time.perf_counter()
@@ -238,6 +237,7 @@ async def study_case(optim: dict, action: str, runtime: dict, backend: str, gap:
             action,
             LOGGER,
             get_data_from_file=True,
+            dry_run=True,
         )
         run = dayahead_forecast_optim if action == "dayahead-optim" else naive_mpc_optim
         await run(idd, LOGGER)
