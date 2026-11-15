@@ -574,6 +574,30 @@ def col(res, name):
     return res[name].to_numpy()
 
 
+def test_battery_first_import_floor_sums_what_each_inverter_can_deliver():
+    # #1253: above one inverter, the import exempt from the battery-first penalty is
+    # the load above what every inverter can deliver on its own. Inverter 0 converts
+    # its PV plus its battery's full discharge (0.8 x 2 kW) and caps it at 3 kW;
+    # inverter 1 converts its PV alone at 0.9 and caps it at 1.5 kW.
+    opt = build_multi(
+        cap_out=[3000, 1500],
+        eff_dc_ac=[1.0, 0.9],
+        optim_overrides={"set_battery_first_priority": True},
+        plant_overrides={
+            "battery_discharge_power_max": [2000],
+            "battery_discharge_efficiency": [0.8],
+        },
+    )
+    pv0 = np.array([0.0, 0.0, 500.0, 1500.0, 0.0, 0.0, 0.0, 0.0])
+    pv1 = np.array([0.0, 1000.0, 0.0, 0.0, 2000.0, 0.0, 0.0, 0.0])
+    load = np.array([1000.0, 6000.0, 3000.0, 6000.0, 8000.0, 0.0, 2000.0, 300.0])
+    solve(opt, pv=(pv0, pv1), load=load)
+    reach = np.minimum(3000.0, pv0 + 0.8 * 2000.0) + np.minimum(1500.0, 0.9 * pv1)
+    np.testing.assert_allclose(
+        opt.param_battery_first_import_floor.value, np.maximum(load - reach, 0.0)
+    )
+
+
 def test_caps_bind_per_inverter_even_when_the_sum_would_allow_more():
     # 5 kW of PV on inverter 0, whose own AC cap is 3 kW; inverter 1 (cap 3 kW) has none.
     opt = build_multi(
