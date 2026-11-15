@@ -923,7 +923,18 @@ def compile_site(site: list, plant_conf: dict, logger: logging.Logger) -> bool:
     """
     keys = site_grid(site)
     inverter = site_inverter(site)
-    if inverter is None and any(
+    try:
+        inverters = validate_num_inverters(plant_conf)
+    except InverterConfigError:
+        inverters = 0  # reported where the configuration is checked
+    if inverter is not None and inverters != 1:
+        # Per-inverter keys (#1150) are lists; one inverter's values would replace them.
+        logger.warning(
+            "site: its hybrid inverter is not copied to EMHASS's keys, which describe "
+            "number_of_inverters inverters of their own; only the main meter is"
+        )
+        inverter = None
+    elif inverter is None and any(
         site_kind(e) == "node" and e.get("type") == "hybrid_inverter" for e in site
     ):
         logger.warning(

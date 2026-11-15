@@ -977,12 +977,14 @@ async def api_v1_plan():
 _participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
 
 
-async def _problem(status: int, title: str, detail: str = ""):
+async def _problem(status: int, title: str, detail: str = "", retry_after: str | None = None):
     """An RFC 9457 problem response."""
     body = {"type": "about:blank", "title": title, "status": status, "detail": detail}
     response = await make_response(orjson.dumps(body), status)
     response.headers["Content-Type"] = "application/problem+json"
     response.headers["Cache-Control"] = "no-store"
+    if retry_after:
+        response.headers["Retry-After"] = retry_after
     return response
 
 
@@ -1015,9 +1017,36 @@ async def participant_v1(op: str):
         _participant_service = (built_from, service)
     service = _participant_service[1]
     body = await request.get_data()
-    status, out = await asyncio.to_thread(
-        service.handle, request.method, f"/v1/{op}", dict(request.headers), body
-    )
+    if op == "commit" and request.method == "POST":
+        # A commit ends a live run - it writes the latest results and publishes - so
+        # it takes the live-optimization slot, as POST /action/<optimization> does,
+        # and is refused (429) while this EMHASS runs its own. The coordinator then
+        # records the remote as refused. Queries are not slotted: they write
+        # nothing, and belong to another EMHASS's live run.
+        try:
+            slot = open(_live_optim_slot(), "a+")
+        except OSError as exc:
+            return await _problem(
+                503,
+                "Service Unavailable",
+                f"the live optimization lock is unavailable ({exc})",
+                "2",
+            )
+        with slot:
+            if not try_lock_file(slot):
+                return await _problem(
+                    429, "Too Many Requests", "a live optimization is running; retry shortly", "2"
+                )
+            try:
+                status, out = await asyncio.to_thread(
+                    service.handle, request.method, f"/v1/{op}", dict(request.headers), body
+                )
+            finally:
+                unlock_file(slot)
+    else:
+        status, out = await asyncio.to_thread(
+            service.handle, request.method, f"/v1/{op}", dict(request.headers), body
+        )
     response = await make_response(orjson.dumps(out), status)
     response.headers["Content-Type"] = (
         "application/problem+json" if status >= 400 else "application/json"

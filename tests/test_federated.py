@@ -162,6 +162,37 @@ def test_missing_package_falls_back_to_cvxpy():
     _fell_back(res, milp, "the optional extra is not installed")
 
 
+@needs_package
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("battery_availability", 0.5),
+        ("battery_discharge_energy_max", 2000.0),
+        ("def_availability", 0.5),
+    ],
+)
+def test_inputs_the_coordinator_does_not_model_mean_the_default_solver(name, value):
+    """Runtime inputs the coordinator does not model yet (battery and load
+    availability, a discharge energy cap): cvxpy plans, and says which input."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = {**copy.deepcopy(oc), "optimization_backend": "dantzig_wolfe"}
+    opt = Optimization(
+        rh,
+        oc,
+        copy.deepcopy(pc),
+        "unit_load_cost",
+        "unit_prod_price",
+        "profit",
+        emhass_conf,
+        logger,
+    )
+    res = opt.perform_optimization(
+        data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5, **{name: value}
+    )
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains(name, regex=False).all()
+
+
 def test_the_web_page_shows_which_backend_made_the_plan():
     """The web page's tables and plots take a plan with text columns: the
     backend that made it, and why, go in the summary table, not the plots."""

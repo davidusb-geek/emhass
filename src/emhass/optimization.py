@@ -186,7 +186,9 @@ def _coordinated_plan(opt, *args, **kwargs):
         None; or None and why not, when the package is missing or cannot plan
         this configuration, so the caller runs the default cvxpy solver.
     """
-    reason = _coordinated_config_problem(opt.optim_conf)
+    reason = _coordinated_config_problem(opt.optim_conf) or _coordinated_plant_problem(
+        opt.plant_conf
+    )
     if reason:
         opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
         return None, reason
@@ -241,6 +243,21 @@ def _with_backend(res, requested: str, fallback_reason: str | None):
 
 
 _BACKENDS = ("cvxpy", "dantzig_wolfe")
+
+
+def _coordinated_plant_problem(plant_conf: dict) -> str | None:
+    """Why the coordinator cannot plan this plant, or None if it can.
+
+    It models one inverter. With more (number_of_inverters, #1150) the default
+    solver plans, which holds each inverter and the PV and battery on it.
+    """
+    try:
+        inverters = utils.validate_num_inverters(plant_conf)
+    except utils.InverterConfigError as exc:
+        return str(exc)
+    if inverters > 1:
+        return f"number_of_inverters is {inverters}; the coordinator models one inverter"
+    return None
 
 
 def _coordinated_config_problem(optim_conf: dict) -> str | None:

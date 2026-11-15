@@ -12,13 +12,14 @@ import pathlib
 import pickle
 import shutil
 import tempfile
+from unittest import mock
 
 import numpy as np
 import orjson
 import pandas as pd
 import pytest
 
-from emhass import participant_api, web_server
+from emhass import participant_api, utils, web_server
 from emhass.optimization import Optimization
 from emhass.utils import (
     build_config,
@@ -151,6 +152,53 @@ def test_the_participant_api_needs_a_token(data_path):
     params = _params(_conf(data_path), **GARAGE)
     status, body = _client_get(data_path, params, "/participant/v1/describe")
     assert status == 503 and "participant_token" in body["detail"]
+
+
+@pytest.mark.parametrize("busy", [False, True], ids=["free", "live-run"])
+def test_a_commit_waits_for_no_live_optimization(data_path, busy):
+    """A commit ends a live run - it writes the latest results and publishes -
+    so while this EMHASS runs a live optimization of its own (it holds the
+    live-optimization slot) a commit is refused with 429 and does nothing."""
+    params = _params(_conf(data_path), **GARAGE)
+    service = mock.MagicMock()
+    service.handle.return_value = (200, {"accepted": True})
+
+    async def post():
+        saved_conf = web_server.emhass_conf
+        saved_secret = web_server.params_secrets.get("participant_token")
+        web_server.emhass_conf = {**saved_conf, "data_path": data_path}
+        web_server.params_secrets["participant_token"] = "t"
+        (data_path / "params.pkl").write_bytes(pickle.dumps((None, params)))
+        try:
+            with open(web_server._live_optim_slot(), "a+") as live:
+                if busy:
+                    assert utils.try_lock_file(live)
+                try:
+                    r = await web_server.app.test_client().post(
+                        "/participant/v1/commit", data=b"{}", headers={"Authorization": "Bearer t"}
+                    )
+                finally:
+                    if busy:
+                        utils.unlock_file(live)
+            return r.status_code, r.headers.get("Retry-After")
+        finally:
+            web_server.emhass_conf = saved_conf
+            if saved_secret is None:
+                web_server.params_secrets.pop("participant_token", None)
+            else:
+                web_server.params_secrets["participant_token"] = saved_secret
+
+    with (
+        mock.patch.object(participant_api, "make_service", return_value=service),
+        mock.patch.object(web_server, "_participant_service", None),
+    ):
+        status, retry = asyncio.run(post())
+    if busy:
+        assert status == 429 and retry == "2"
+        service.handle.assert_not_called()
+    else:
+        assert status == 200
+        service.handle.assert_called_once()
 
 
 @REMOTE_READY

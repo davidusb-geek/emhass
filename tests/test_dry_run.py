@@ -32,7 +32,7 @@ import pandas as pd
 import pytest
 import time_machine
 
-from emhass import command_line, last_run, plan_store, utils, web_server
+from emhass import command_line, last_run, optimization, plan_store, utils, web_server
 from emhass.command_line import (
     OptimizationCache,
     dayahead_forecast_optim,
@@ -1741,3 +1741,71 @@ def test_a_malformed_site_in_a_request_still_plans(dry, caplog):
     assert "site[0] must be an object with an id" in caplog.text
     assert "coordinator raised" not in caplog.text
     OptimizationCache.clear()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"optimization_backend": "dantzig_wolfe"}, {"site": SITE}],
+    ids=["backend", "site"],
+)
+def test_the_backend_and_the_site_are_part_of_the_cache_key(change):
+    """Switching the backend, or changing site, builds a new problem rather
+    than reusing the cached one: both are in optim_conf, which the cache key
+    hashes whole (optim_conf_structural_hash)."""
+    params = asyncio.run(_params(root / "data"))
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+        orjson.dumps(params).decode(), logger
+    )
+    base = OptimizationCache._compute_cache_key(
+        optim_conf, plant_conf, "profit", retrieve_hass_conf
+    )
+    changed = OptimizationCache._compute_cache_key(
+        {**optim_conf, **change}, plant_conf, "profit", retrieve_hass_conf
+    )
+    assert changed != base
+
+
+def test_site_leaves_the_keys_of_several_inverters_as_they_are(caplog):
+    """With number_of_inverters above 1 (#1150) EMHASS's inverter keys are per
+    inverter; site's one hybrid inverter does not replace them. The main
+    meter's limits still apply."""
+    plant = {"number_of_inverters": 2, "inverter_ac_output_max": [5000, 3000]}
+    with caplog.at_level("WARNING"):
+        assert not utils.compile_site(SITE, plant, logger)
+    assert plant == {
+        "number_of_inverters": 2,
+        "inverter_ac_output_max": [5000, 3000],
+        "maximum_power_from_grid": 9000,
+        "maximum_power_to_grid": 5000,
+    }
+    assert "number_of_inverters inverters of their own" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "plant, problem",
+    [
+        ({}, None),
+        ({"number_of_inverters": 1}, None),
+        ({"number_of_inverters": 2}, "number_of_inverters is 2"),
+        ({"number_of_inverters": "two"}, "number_of_inverters must be a positive integer"),
+    ],
+)
+def test_the_coordinator_plans_one_inverter(plant, problem):
+    """More than one inverter means the default solver, which holds each one."""
+    reason = optimization._coordinated_plant_problem(plant)
+    assert (reason is None) if problem is None else (problem in reason)
+
+
+def test_several_inverters_never_reach_the_coordinator():
+    """_coordinated_plan answers "no" before asking the coordinator: with more
+    than one inverter the default solver plans, and the plan says why."""
+    opt = types.SimpleNamespace(
+        optim_conf={"optimization_backend": "dantzig_wolfe"},
+        plant_conf={"number_of_inverters": 3},
+        logger=logger,
+    )
+    called = types.ModuleType("home_energy_optimizer.integrations.emhass")
+    called.optimize = lambda *a, **k: pytest.fail("the coordinator was asked")
+    with patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": called}):
+        res, reason = optimization._coordinated_plan(opt)
+    assert res is None and "number_of_inverters is 3" in reason

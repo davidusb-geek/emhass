@@ -76,7 +76,7 @@ The coordinator asks it what it would do at given prices, and, once it has chose
 "participant_api": {"publish_prefix": "garage_"}
 ```
 
-It then answers at `/participant/v1/describe`, `baseline`, `query` and `commit`, every call presenting `participant_token` as a bearer token (off, 404, without `participant_api`; 503 without the token). Its answers come from its own model: its battery, starting from its `sensor_battery_state_of_charge`, and its deferrable loads, planned together within its own `maximum_power_from_grid` / `maximum_power_to_grid` - its connection's limits, a panel's rating, no backfeed. Queries have no effect; a commit publishes the chosen plan as a run would, its sensors prefixed by `publish_prefix` so two EMHASS on one Home Assistant do not collide. While it is coordinated it should not run its own optimizations, and `continual_publish` should stay off.
+It then answers at `/participant/v1/describe`, `baseline`, `query` and `commit`, every call presenting `participant_token` as a bearer token (off, 404, without `participant_api`; 503 without the token). Its answers come from its own model: its battery, starting from its `sensor_battery_state_of_charge`, and its deferrable loads, planned together within its own `maximum_power_from_grid` / `maximum_power_to_grid` - its connection's limits, a panel's rating, no backfeed. Queries have no effect; a commit publishes the chosen plan as a run would, its sensors prefixed by `publish_prefix` so two EMHASS on one Home Assistant do not collide. While it is coordinated it should not run its own optimizations, and `continual_publish` should stay off. If it does, a commit that arrives during one of them is refused (429, as a second live optimization is), and the coordinator records it as refused.
 
 ## What falls back
 
@@ -89,6 +89,7 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 - `deferrable_load_groups` with `mutual_exclusion` across groups, a group on two parents, a limit that holds part of a group, and a group of `home_energy_optimizer` devices (it plans each device on its own)
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
+- more than one inverter (`number_of_inverters`), and the runtime `battery_availability`, `battery_discharge_energy_max`, `def_availability` and per-plant PV split (`p_pv_plants`): the coordinator does not model them yet
 
 `set_nodischarge_to_grid` is supported (without a hybrid inverter): the coordinator caps export at the PV surplus, as EMHASS does.
 
