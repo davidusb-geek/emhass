@@ -1904,15 +1904,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         period longer than 30 minutes would show in the 09:00 step.
         """
         self._solcast_grid_setup("30min", start="09:00:00", end="11:00:00")
+
+        # Solcast sends UTC period_end values; derive them from the configured local time
+        # so the rows land on the same grid steps whatever the time zone is.
+        def period_end(local_time):
+            return self._win(local_time).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
         payload = {
             "forecasts": [
                 {
-                    "period_end": "2026-08-22T08:00:00.0000000Z",  # 10:00 in Europe/Paris
+                    "period_end": period_end("10:00"),
                     "period": "PT30M",
                     "pv_estimate": 0.2,
                 },
                 {
-                    "period_end": "2026-08-22T09:00:00.0000000Z",  # 11:00 in Europe/Paris
+                    "period_end": period_end("11:00"),
                     "period": "PT60M",
                     "pv_estimate": 0.4,
                 },
