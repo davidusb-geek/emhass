@@ -11,6 +11,7 @@ power is ``r * nominal``: the energy stays exact and the solve stays a strict MI
 Synthetic and self-contained, built on the multi-battery test helper.
 """
 
+import logging
 import unittest
 
 import numpy as np
@@ -442,6 +443,36 @@ class TestFractionalRemainder(unittest.TestCase):
         assert_strict_on_off(self, power(res), allowed_partial=1, level=0.3 * NOMINAL)
         self.assertAlmostEqual(energy_wh(res), NOMINAL * 1.15, delta=1e-3)
 
+    def test_current_power_forces_the_remainder_step_when_less_than_one_step_remains(self):
+        """Documented def_current_power case: a running semi-continuous load with one
+        remainder step of energy left is forced ON at t=0 AT THE REMAINDER'S AVERAGE
+        power (not nominal, and not a full step), and the solve stays strict."""
+        opt = make(def_current_power=[NOMINAL], def_current_operating_timesteps=[2])
+        res = solve(opt, [1.25], prices=RISING)
+        self.assertEqual(opt.optim_status, "Optimal")
+        p = power(res)
+        self.assertAlmostEqual(p[0], 0.5 * NOMINAL, delta=1e-3)
+        self.assertAlmostEqual(energy_wh(res), 0.5 * DT * NOMINAL, delta=1e-3)
+
+    def test_long_horizon_keeps_binaries_integral(self):
+        """The remainder step stays ONE integral step on 96 and 288 step horizons
+        (no spread of tiny binary values over many OFF steps), at several fractions
+        including just above the resolution."""
+        from tests.test_multi_battery_optimization import build_optimization
+
+        for n in (96, 288):
+            prices = [0.05 + 0.002 * ((t * 7) % 23) for t in range(n)]
+            for steps in (2 + 1.1e-5, 2.5, 1.5e-5):
+                with self.subTest(n=n, steps=steps):
+                    opt = build_optimization(optim_overrides=dict(BASE), opt_time_delta=int(n * DT))
+                    res = solve(opt, [steps * DT], prices=prices, n=n)
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    for name in ("p_def_bin1", "p_def_bin2"):
+                        values = np.asarray(opt.vars[name][0].value, dtype=float)
+                        np.testing.assert_allclose(values, np.rint(values), atol=1e-9)
+                    self.assertEqual(self._decisions(opt), (int(np.floor(steps)), 1))
+                    self.assertAlmostEqual(energy_wh(res), steps * DT * NOMINAL, delta=1e-3)
+
     def test_remainder_parameters_follow_each_call(self):
         opt = make()
         expected = {1.25: (1.0, 0.5 * NOMINAL), 1.5: (0.0, 0.0), 0.1: (1.0, 0.2 * NOMINAL)}
@@ -699,9 +730,19 @@ class TestFractionalRemainder(unittest.TestCase):
         window must not log 'Available timeframe is shorter' and must stay strict."""
 
         def window_warnings(opt, steps):
-            with self.assertLogs(opt.logger, level="WARNING") as captured:
+            captured = []
+
+            class Capture(logging.Handler):
+                def emit(self, record):
+                    captured.append(record.getMessage())
+
+            handler = Capture(level=logging.WARNING)
+            opt.logger.addHandler(handler)
+            try:
                 res = solve(opt, [steps * DT], start=[0], end=[4])
-            return res, [m for m in captured.output if "timeframe" in m]
+            finally:
+                opt.logger.removeHandler(handler)
+            return res, [m for m in captured if "timeframe" in m]
 
         opt = make()
         res, warned = window_warnings(opt, 4 + 5e-6)

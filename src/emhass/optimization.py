@@ -175,7 +175,7 @@ HEAT_PUMP_COP_MAX = 8.0
 # dropped, never promoted to a full step), in the required steps and the energy target
 # alike. The error is at most ``1e-5 * nominal * dt`` Wh and ``1e-5 * dt`` of run time per
 # load and request (0.015 Wh, 18 ms for 3 kW at 30 min). Only loads with a remainder step
-# use it. See docs/config.md.
+# use it. See docs/advanced_math_model.md.
 FRACTIONAL_STEP_RESOLUTION = 1e-5
 
 
