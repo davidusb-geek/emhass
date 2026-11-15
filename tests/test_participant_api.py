@@ -8,6 +8,7 @@ the coordinator is another EMHASS's optimize, as a live run calls it."""
 import asyncio
 import contextlib
 import copy
+import functools
 import importlib.util
 import io
 import json
@@ -646,6 +647,76 @@ def _commit(
     return out, saved
 
 
+@REMOTE_READY
+def test_a_commit_through_the_route_publishes_and_records_the_plan_it_names(data_path):
+    """End to end through /participant/v1: a baseline answered by this
+    EMHASS's own service (make_service), then a commit of that answer, which
+    publishes it under the prefix and records it as the latest plan. Only
+    Home Assistant itself (post_data) is stood in for."""
+    from home_energy_optimizer.remote import SCHEMA_VERSION
+
+    params = _params(_conf(data_path), **GARAGE)
+    published: list = []
+
+    async def post(self, data_df, idx, entity_id, *args, **kwargs):
+        published.append((entity_id, kwargs.get("publish_prefix")))
+        return mock.MagicMock(ok=True, status_code=200), {}
+
+    horizon = {"step_minutes": 30.0, "slots": 48, "start": _now().isoformat()}
+
+    async def run():
+        saved_conf = web_server.emhass_conf
+        saved_secret = web_server.params_secrets.get("participant_token")
+        web_server.emhass_conf = _conf(data_path)
+        web_server.params_secrets["participant_token"] = "t"
+        (data_path / "params.pkl").write_bytes(pickle.dumps((None, params)))
+        auth = {"Authorization": "Bearer t", "Content-Type": "application/json"}
+        try:
+            client = web_server.app.test_client()
+            r = await client.post(
+                "/participant/v1/baseline",
+                data=json.dumps(horizon).encode(),
+                headers={**auth, "Query-Id": "q1"},
+            )
+            assert r.status_code == 200, await r.get_data()
+            answer = await r.get_json()
+            commit = {
+                "version": SCHEMA_VERSION,
+                "horizon": horizon,
+                "plan_kw": answer["plan_kw"],
+                "query_id": "q1",
+            }
+            r = await client.post(
+                "/participant/v1/commit", data=json.dumps(commit).encode(), headers=auth
+            )
+            return r.status_code, await r.get_json(), answer
+        finally:
+            web_server.emhass_conf = saved_conf
+            if saved_secret is None:
+                web_server.params_secrets.pop("participant_token", None)
+            else:
+                web_server.params_secrets["participant_token"] = saved_secret
+
+    # the saved test data, not a live Home Assistant: the real functions, from files
+    from_files = {
+        name: functools.partial(getattr(participant_api, name), get_data_from_file=True)
+        for name in ("build_session", "publish_commit")
+    }
+    with (
+        mock.patch("emhass.retrieve_hass.RetrieveHass.post_data", post),
+        mock.patch.object(web_server, "_participant_service", None),
+        mock.patch.object(participant_api, "build_session", from_files["build_session"]),
+        mock.patch.object(participant_api, "publish_commit", from_files["publish_commit"]),
+    ):
+        status, out, answer = asyncio.run(run())
+    assert status == 200 and out.get("accepted") is True, out
+    assert published and {prefix for _, prefix in published} == {"garage_"}
+    plan = plan_store.read(data_path)
+    assert plan and len(plan["plan"]) == len(answer["plan_kw"])
+    assert pd.Timestamp(plan["plan"][0]["timestamp"]) == pd.Timestamp(horizon["start"])
+    assert last_run.read(data_path)["action"] == "naive-mpc-optim"
+
+
 def test_a_commit_home_assistant_did_not_take_is_refused_and_not_recorded(data_path):
     """publish_data logs an entity Home Assistant refused and goes on; the
     commit is refused, names it, and saves and records nothing."""
@@ -912,3 +983,7 @@ def test_the_published_api_says_how_to_authenticate():
         assert path[method]["security"] == [{"participantToken": []}]
         assert "501" in path[method]["responses"]
     assert "application/json" in path["post"]["requestBody"]["content"]
+    # a commit's 429 and lock-unavailable 503 are retryable: the client is told when
+    for code in ("429", "503"):
+        assert "Retry-After" in path["post"]["responses"][code]["headers"]
+    assert "lock" in path["post"]["responses"]["503"]["description"]

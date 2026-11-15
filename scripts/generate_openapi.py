@@ -361,11 +361,17 @@ def build_spec(routes: set | None = None) -> dict:
                     "408": {"description": "The body did not arrive within 30 s"},
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
                     "413": {"description": "A body over 1 MiB"},
-                    "429": {"description": "A commit while a live optimization runs"},
+                    "429": {
+                        "description": "A commit while a live optimization runs; retry after "
+                        "the delay in Retry-After",
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
                     "501": {"description": "Needs the federated extra"},
                     "503": {
-                        "description": "No participant_token, params.pkl unreadable,"
-                        " or more than one web worker (WEB_CONCURRENCY)"
+                        "description": "No participant_token, params.pkl unreadable, more than "
+                        "one web worker (WEB_CONCURRENCY), or, for a commit, the "
+                        "live-optimization lock unavailable (retry after Retry-After)",
+                        "headers": _RETRY_AFTER_HEADER,
                     },
                 },
             },
