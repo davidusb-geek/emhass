@@ -272,8 +272,17 @@ def _house(start: pd.Timestamp):
 
 
 def _now() -> pd.Timestamp:
-    """This slot's start, in EMHASS's time zone: the remote plans from its own clock."""
-    return pd.Timestamp.now(tz=_confs()[0]["time_zone"]).floor("30min")
+    """The first slot EMHASS plans now, as EMHASS rounds it (to the nearest
+    slot, by default): the remote plans from its own clock, and refuses a
+    horizon that starts on another slot."""
+    rh = _confs()[0]
+    step = rh["optimization_time_step"]
+    return utils.get_forecast_start(
+        pd.Timestamp.now(tz="UTC"),
+        step if isinstance(step, pd.Timedelta) else pd.Timedelta(minutes=float(step)),
+        rh["time_zone"],
+        rh.get("method_ts_round", "nearest"),
+    )
 
 
 def _coordinate(house, site, dry_run=False):
@@ -635,10 +644,20 @@ def test_an_older_commit_does_not_replace_a_newer_plan(data_path):
 
 @pytest.mark.parametrize(
     "state, unit, expected",
-    [("0.5", "%", 0.005), ("55", "%", 0.55), ("0.5", None, 0.5), ("55", None, 0.55)],
+    [
+        ("0.5", "%", 0.005),
+        ("55", "%", 0.55),
+        ("1", "%", 0.01),
+        ("55", None, 0.55),
+        ("0.5", None, 0.005),
+        ("150", "%", None),
+        ("-3", "%", None),
+        ("0.55", "kWh", None),
+    ],
 )
-def test_the_battery_charge_is_read_with_its_unit(state, unit, expected):
-    """A sensor in % is a percentage even below 1 %."""
+def test_the_battery_charge_is_read_in_percent(state, unit, expected):
+    """The sensor is in percent, as EMHASS documents it: never guessed from
+    the value; another unit, or a charge outside 0-100 %, is None."""
     body = {"state": state, "attributes": {"unit_of_measurement": unit} if unit else {}}
     response = mock.MagicMock()
     response.__enter__.return_value = io.BytesIO(json.dumps(body).encode())
@@ -648,7 +667,8 @@ def test_the_battery_charge_is_read_with_its_unit(state, unit, expected):
         "long_lived_token": "t",
     }
     with mock.patch("urllib.request.urlopen", return_value=response):
-        assert participant_api.soc_now(conf, logger) == pytest.approx(expected)
+        got = participant_api.soc_now(conf, logger)
+    assert got is None if expected is None else got == pytest.approx(expected)
 
 
 def test_a_corrupt_configuration_is_reported_not_called_off(data_path):

@@ -1694,6 +1694,18 @@ def test_a_second_device_on_the_inverter_leaves_its_keys():
     assert utils.site_inverter(site) is None
 
 
+def test_a_null_efficiency_is_an_omitted_one():
+    """null says what leaving it out says, 1.0: never None into plant_conf,
+    which the default solver divides by."""
+    site = [dict(e) for e in SITE]
+    inverter = next(e for e in site if e.get("type") == "hybrid_inverter")
+    inverter.update(efficiency_export=None, efficiency_import=None)
+    assert utils.site_problem(site) is None
+    plant = {"inverter_is_hybrid": False}
+    assert utils.compile_site(site, plant, logger, battery=True)
+    assert plant["inverter_efficiency_dc_ac"] == plant["inverter_efficiency_ac_dc"] == 1.0
+
+
 def test_the_input_pipeline_compiles_the_site():
     """Set in the configuration (or a request), the site's inverter and meter
     reach the default solver's plant configuration; a request's site that
@@ -1939,3 +1951,30 @@ def test_a_cached_problem_takes_the_remote_tokens_as_configured_now():
         second = asyncio.run(build(data_path, "rotated"))
     assert second["opt"] is first["opt"], "the second run should hit the cache"
     assert second["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": "rotated"}
+
+
+def test_remote_tokens_are_masked_as_the_other_secrets(caplog):
+    """The tokens a coordinator presents never reach the log nor a
+    configuration export."""
+    sentinel = "s3ntinel-" + uuid.uuid4().hex
+
+    async def build(data_path):
+        params = await _params(data_path)
+        params["retrieve_hass_conf"]["remote_tokens"] = {"garage_token": sentinel}
+        idd = await set_input_data_dict(
+            _conf(data_path),
+            "profit",
+            orjson.dumps(params).decode(),
+            orjson.dumps(FORECASTS).decode(),
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        return params, idd
+
+    with _data_copy() as data_path, caplog.at_level(logging.DEBUG):
+        params, idd = asyncio.run(build(data_path))
+    assert idd["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": sentinel}
+    assert "Initialized Optimization with retrieve_hass_conf" in caplog.text
+    assert sentinel not in caplog.text
+    assert sentinel not in json.dumps(utils.param_to_config(params, logger), default=str)

@@ -913,8 +913,12 @@ def site_inverter(site: list, battery: bool = False) -> dict | None:
         keys["inverter_ac_output_max"] = n["max_export"]
     if n.get("max_import") is not None:
         keys["inverter_ac_input_max"] = n["max_import"]
-    keys["inverter_efficiency_dc_ac"] = n.get("efficiency_export", 1.0)
-    keys["inverter_efficiency_ac_dc"] = n.get("efficiency_import", 1.0)
+    # null is omitted: 1.0, never None into plant_conf
+    for key, plant_key in (
+        ("efficiency_export", "inverter_efficiency_dc_ac"),
+        ("efficiency_import", "inverter_efficiency_ac_dc"),
+    ):
+        keys[plant_key] = 1.0 if n.get(key) is None else n[key]
     return keys
 
 
@@ -5019,6 +5023,7 @@ def get_keys_to_mask() -> list[str]:
         "solcast_api_key",
         "solcast_rooftop_id",
         "long_lived_token",
+        "remote_tokens",
         "time_zone",
         "Latitude",
         "Longitude",

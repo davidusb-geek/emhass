@@ -64,7 +64,11 @@ async def read_params(emhass_conf: dict) -> dict | None:
 
 def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     """The battery's state of charge now (0-1), from its
-    `sensor_battery_state_of_charge` in Home Assistant, or None."""
+    `sensor_battery_state_of_charge` in Home Assistant, or None.
+
+    The sensor is in percent, as EMHASS documents it: a reading in % or with
+    no unit is divided by 100. Another unit, or a charge outside 0-100 %, is
+    None (the configured target stands in)."""
     sensor = retrieve_hass_conf.get("sensor_battery_state_of_charge")
     base, token = retrieve_hass_conf.get("hass_url"), retrieve_hass_conf.get("long_lived_token")
     if isinstance(sensor, list):
@@ -81,9 +85,14 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
         logger.warning("participant_api: could not read %s (%s)", sensor, exc)
         return None
     unit = str((state.get("attributes") or {}).get("unit_of_measurement") or "").strip()
-    if unit == "%":
-        return value / 100.0  # a percentage, even below 1 % (0.5 % is 0.005)
-    return value / 100.0 if value > 1.0 else value
+    if unit not in ("%", ""):
+        logger.warning("participant_api: %s is in %r, not %%", sensor, unit)
+        return None
+    soc = value / 100.0  # never guessed from the value: 0.5 % is 0.005
+    if not 0.0 <= soc <= 1.0:
+        logger.warning("participant_api: %s reads %s %%, outside 0-100", sensor, value)
+        return None
+    return soc
 
 
 async def build_session(

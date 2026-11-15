@@ -112,7 +112,7 @@ The usual `opt_res` columns, plus:
 | `fed_node_power_<id>` | that node's power to its parent, per timestep (W, + = up the tree) |
 | `fed_limit_price_<id>` | a limit's premium while it binds, per timestep (currency/kWh): a `site` limit's id, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
 | `fed_remote_power_<id>` | a remote solver's planned power, per timestep (W, + = drawn) |
-| `fed_remote_status_<id>` | what became of it: `committed`, `refused: ...`, `unreachable` or `unauthorized` (planned without it), `planned (dry run)` |
+| `fed_remote_status_<id>` | what became of it: `committed`, `refused: ...`, `unreachable`, `unauthorized` or `declined: ...` (planned without it; `declined` when it cannot plan this horizon, such as one starting on another slot), `planned (dry run)` |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
 
