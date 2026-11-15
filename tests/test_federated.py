@@ -459,6 +459,7 @@ def test_four_ders_on_one_site():
     assert np.allclose(res["P_hybrid_inverter"] + res["P_grid"], res["P_Load"] + garage, atol=1e-3)
 
 
+@pytest.mark.skipif(not _hybrid_ready(), reason="needs home-energy-optimizer >= 0.2.5")
 def test_a_hybrid_inverter_tied_to_the_meter_falls_back():
     """set_nodischarge_to_grid with a hybrid inverter (EMHASS: no discharge
     while exporting) is not split per device: the default MILP plans, and the
@@ -468,8 +469,7 @@ def test_a_hybrid_inverter_tied_to_the_meter_falls_back():
     site = (rh, dict(oc, set_nodischarge_to_grid=True), pc, data, pv, load, buy, sell)
     _, res = _plan(*site, optimization_backend="dantzig_wolfe")
     assert (res["backend_used"] == "cvxpy").all()
-    if _hybrid_ready():
-        assert res["backend_fallback_reason"].str.contains("set_nodischarge_to_grid").all()
+    assert res["backend_fallback_reason"].str.contains("set_nodischarge_to_grid").all()
 
 
 @needs_package

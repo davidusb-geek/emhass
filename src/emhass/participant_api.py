@@ -22,13 +22,16 @@ import json
 import logging
 import pathlib
 import pickle
+import time
 import urllib.parse
 import urllib.request
 
 import orjson
 import pandas as pd
 
+from emhass import last_run, plan_store, utils
 from emhass.command_line import (
+    _record_optim_snapshot,
     default_csv_filename,
     prepare_forecast_and_weather_data,
     publish_data,
@@ -36,17 +39,26 @@ from emhass.command_line import (
 )
 
 PARAMS_FILE = "params.pkl"
+# The longest horizon a coordinator may ask about: a week, at any step.
+MAX_HORIZON_MINUTES = 7 * 24 * 60
+
+
+class ConfigUnreadable(Exception):
+    """params.pkl is there but cannot be read: not the same as no configuration."""
 
 
 async def read_params(emhass_conf: dict) -> dict | None:
-    """The configuration EMHASS runs with (params.pkl), or None."""
+    """The configuration EMHASS runs with (params.pkl), or None if there is none.
+
+    Raises ConfigUnreadable when the file exists but cannot be read, so a
+    corrupt save is not reported as the participant API being off."""
     path = pathlib.Path(emhass_conf["data_path"]) / PARAMS_FILE
     if not path.exists():
         return None
     try:
         _, params = pickle.loads(path.read_bytes())
-    except (EOFError, pickle.UnpicklingError, UnicodeDecodeError, ValueError):
-        return None
+    except (EOFError, pickle.UnpicklingError, UnicodeDecodeError, ValueError) as exc:
+        raise ConfigUnreadable(f"{PARAMS_FILE} could not be read ({type(exc).__name__})") from exc
     return params
 
 
@@ -63,10 +75,14 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310 - Home Assistant's own URL
-            value = float(json.load(r)["state"])
+            state = json.load(r)
+        value = float(state["state"])
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in
         logger.warning("participant_api: could not read %s (%s)", sensor, exc)
         return None
+    unit = str((state.get("attributes") or {}).get("unit_of_measurement") or "").strip()
+    if unit == "%":
+        return value / 100.0  # a percentage, even below 1 % (0.5 % is 0.005)
     return value / 100.0 if value > 1.0 else value
 
 
@@ -90,6 +106,10 @@ async def build_session(
     if abs(window.step_minutes - step) > 1e-9:
         raise WindowRefused(f"this EMHASS plans {step:g}-minute slots, not {window.step_minutes:g}")
     n = window.slots
+    if n < 1 or n * step > MAX_HORIZON_MINUTES:
+        raise WindowRefused(
+            f"this EMHASS plans 1 to {int(MAX_HORIZON_MINUTES // step)} slots, not {n}"
+        )
     runtime = {
         "prediction_horizon": n,
         "pv_power_forecast": [0.0] * n,
@@ -137,11 +157,13 @@ async def build_session(
                 start.tz_convert(df.index.tz) if start.tzinfo else start.tz_localize(df.index.tz)
             )
             offset = (start - df.index[0]) / pd.Timedelta(minutes=step)
-            if abs(offset) > 1:
+            if abs(offset) > 1e-6:
+                # Relabelling the rows would plan the coordinator's slots with
+                # another slot's forecasts; the coordinator asks again next run.
                 raise WindowRefused(
-                    f"the horizon starts {offset:+.1f} slots from this EMHASS's own"
+                    f"the horizon starts {offset:+.2f} slots from this EMHASS's own; "
+                    "the coordinator and this EMHASS must agree on the slot"
                 )
-            df.index = pd.date_range(start, periods=n, freq=pd.Timedelta(minutes=step))
         soc_init = runtime.get("soc_init")
         soc_final = runtime.get("soc_final")
         return emhass_participant(
@@ -160,9 +182,28 @@ async def publish_commit(
     get_data_from_file: bool = False,
 ) -> tuple[bool, str]:
     """Run a committed plan as a run would: `res`, its own result for the
-    answer chosen, saved as the latest plan and published to Home Assistant
-    under `participant_api.publish_prefix`."""
+    answer chosen, published to Home Assistant under
+    `participant_api.publish_prefix`, then saved as the latest plan and
+    recorded for /api/v1/plan and /api/v1/last-run.
+
+    Refused while continual_publish is on (its loop would put an earlier plan
+    back) and for a plan that starts before the latest one (a late or repeated
+    commit must not replace a newer plan)."""
+    t0 = time.monotonic()
     conf = params["optim_conf"].get("participant_api") or {}
+    if params["retrieve_hass_conf"].get("continual_publish"):
+        return (
+            False,
+            "continual_publish is on: its loop would publish an earlier plan over this one",
+        )
+    latest = plan_store.read(pathlib.Path(emhass_conf["data_path"]))
+    if latest and latest.get("plan") and len(res.index):
+        latest_start = pd.Timestamp(latest["plan"][0]["timestamp"])
+        start = res.index[0]
+        if start.tzinfo is None:
+            start = start.tz_localize("UTC")
+        if start < latest_start:
+            return False, f"the plan starts at {start}, before the latest plan ({latest_start})"
     runtime = {"publish_prefix": str(conf.get("publish_prefix", ""))}
     passed = copy.deepcopy(params)
     passed["passed_data"] = runtime
@@ -178,11 +219,18 @@ async def publish_commit(
     if not idd:
         return False, "EMHASS could not build its inputs to publish"
     try:
-        res.to_csv(
-            pathlib.Path(emhass_conf["data_path"]) / default_csv_filename, index_label="timestamp"
-        )
-        out = await publish_data(idd, logger, opt_res_latest=res)
-        return out is not None, "" if out is not None else "publishing failed; see the log"
+        # save_data_to_file: publish `res` itself, never the entity files a
+        # prefix would otherwise republish.
+        out = await publish_data(idd, logger, save_data_to_file=True, opt_res_latest=res)
+        if out is None:
+            # Home Assistant has no transaction: what was published before the
+            # failure stays, until this EMHASS publishes again.
+            return False, "publishing failed, perhaps part way; see the log"
+        # The latest plan, whole, only once it is published.
+        csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
+        await utils.replace_file(csv, res.to_csv(index_label="timestamp"))
+        _record_optim_snapshot(idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger)
+        return True, ""
     finally:
         if "rh" in idd:
             await idd["rh"].close()

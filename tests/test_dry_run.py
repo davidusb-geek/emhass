@@ -1662,7 +1662,7 @@ def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):
         "maximum_power_from_grid": 9000,
     }
     with caplog.at_level("WARNING"):
-        assert utils.compile_site(SITE, plant, logger)
+        assert utils.compile_site(SITE, plant, logger, battery=True)
     assert plant == {
         "inverter_is_hybrid": True,
         "inverter_ac_output_max": 4000,
@@ -1709,6 +1709,7 @@ def test_the_input_pipeline_compiles_the_site():
                 ec, secrets, await build_config(ec, logger, ec["defaults_path"]), logger
             )
             params["optim_conf"]["site"] = SITE
+            params["optim_conf"]["set_use_battery"] = True  # SITE puts it on the inverter
             idd = await set_input_data_dict(
                 ec,
                 "profit",
@@ -1734,11 +1735,11 @@ def test_a_malformed_site_in_a_request_still_plans(dry, caplog):
     with tempfile.TemporaryDirectory() as tmp, caplog.at_level("WARNING"):
         data_path = pathlib.Path(tmp) / "data"
         shutil.copytree(root / "data", data_path)
-        res = _coordinated(data_path, {}, site=[{"nodevices": 1}], dry=dry)
-    assert isinstance(res, pd.DataFrame) and (res["optim_status"] == "Optimal").all()
-    assert (res["backend_used"] == "cvxpy").all()
-    # refused by the check, by name - the coordinator never saw it
-    assert "site[0] must be an object with an id" in caplog.text
+        res = _coordinated(data_path, {"site": [{"nodevices": 1}]}, site=None, dry=dry)
+    assert isinstance(res, pd.DataFrame) and len(res) > 0
+    # the request's site is refused by the check, by name, and the configured one kept
+    assert "site (in the request): site[0] must be an object with an id" in caplog.text
+    assert "the configured site is kept" in caplog.text
     assert "coordinator raised" not in caplog.text
     OptimizationCache.clear()
 
@@ -1771,7 +1772,7 @@ def test_site_leaves_the_keys_of_several_inverters_as_they_are(caplog):
     meter's limits still apply."""
     plant = {"number_of_inverters": 2, "inverter_ac_output_max": [5000, 3000]}
     with caplog.at_level("WARNING"):
-        assert not utils.compile_site(SITE, plant, logger)
+        assert not utils.compile_site(SITE, plant, logger, battery=True)
     assert plant == {
         "number_of_inverters": 2,
         "inverter_ac_output_max": [5000, 3000],
@@ -1809,3 +1810,132 @@ def test_several_inverters_never_reach_the_coordinator():
     with patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": called}):
         res, reason = optimization._coordinated_plan(opt)
     assert res is None and "number_of_inverters is 3" in reason
+
+
+INVERTER = {"id": "inverter", "parent": "grid", "type": "hybrid_inverter", "max_export": 4000}
+
+
+@pytest.mark.parametrize(
+    "battery_parent, emhass_battery, held",
+    [
+        ("inverter", True, True),  # on the inverter, as EMHASS's model has it
+        ("grid", True, False),  # on the meter: EMHASS's model would move it to the DC bus
+        (None, True, False),  # left out of site, so planned on the meter
+        (None, False, True),  # no battery at all: a PV-only hybrid inverter
+        ("inverter", False, False),  # site lists a battery EMHASS does not have
+    ],
+)
+def test_emhass_holds_the_inverter_only_with_the_battery_where_site_puts_it(
+    battery_parent, emhass_battery, held
+):
+    """compile_site sets EMHASS's hybrid-inverter keys only if EMHASS's model -
+    which puts its battery on the inverter's DC bus - matches site."""
+    site = [{"id": "grid"}, INVERTER, {"id": "pv", "parent": "inverter"}]
+    if battery_parent:
+        site.append({"id": "battery", "parent": battery_parent})
+    assert (utils.site_inverter(site, emhass_battery) is not None) is held
+    plant = {}
+    assert utils.compile_site(site, plant, logger, battery=emhass_battery) is held
+    assert plant.get("inverter_is_hybrid", False) is held
+
+
+@pytest.mark.parametrize("parent", [[], {}, 3, None])
+def test_a_parent_that_is_not_a_name_is_refused(parent):
+    """A parent of the wrong type is reported, not a TypeError."""
+    site = [{"id": "grid"}, {"id": "battery", "parent": parent}]
+    reason = utils.site_problem(site, from_request=True)
+    assert reason and "parent must be" in reason
+
+
+@pytest.mark.parametrize("site", [42, "grid", {"id": "grid"}])
+def test_a_site_that_is_not_a_list_still_builds_the_parameters(site):
+    """build_params gathers the remote tokens only from a list; anything else
+    is left to the site check to report."""
+    ec = _conf(root / "data")
+
+    async def build():
+        _, secrets = await build_secrets(ec, logger, no_response=True)
+        config = await build_config(ec, logger, ec["defaults_path"])
+        config["site"] = site
+        return await build_params(ec, secrets, config, logger)
+
+    params = asyncio.run(build())
+    assert "remote_tokens" not in params["retrieve_hass_conf"]
+    assert _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
+
+
+@pytest.mark.parametrize(
+    "curves, problem",
+    [
+        ({}, None),
+        ({"inverter_power_curve_dc_ac": [[0, 0], [2000, 1000]]}, "inverter_power_curve_dc_ac"),
+        ({"inverter_power_curve_ac_dc": [[0, 0], [2000, 1900]]}, "inverter_power_curve_ac_dc"),
+        ({"inverter_power_curve_dc_ac": []}, None),
+    ],
+)
+def test_a_hybrid_inverter_with_power_curves_is_the_default_solvers(curves, problem):
+    """The coordinator models a hybrid inverter by its scalar efficiencies, so
+    a curve (#746) means the default solver."""
+    reason = optimization._coordinated_plant_problem({"inverter_is_hybrid": True, **curves})
+    assert (reason is None) if problem is None else (problem in reason)
+
+
+@pytest.mark.parametrize(
+    "init, final, expected",
+    [
+        (0.8, None, (0.8, 0.8)),  # the default solver ends where it starts
+        (None, 0.3, (0.3, 0.3)),
+        (None, None, (0.5, 0.5)),  # both missing: the target
+        (0.8, 0.3, (0.8, 0.3)),
+    ],
+)
+def test_the_coordinator_gets_the_battery_endpoints_the_default_solver_uses(init, final, expected):
+    """A missing soc_init or soc_final is filled as the default solver fills
+    it, before the coordinator sees it."""
+    opt = types.SimpleNamespace(
+        optim_conf={"set_use_battery": True}, plant_conf={"battery_target_state_of_charge": 0.5}
+    )
+    kw = optimization._soc_endpoints_as_the_default_solver(
+        opt, {"soc_init": init, "soc_final": final, "debug": False}
+    )
+    assert (kw["soc_init"], kw["soc_final"]) == expected and kw["debug"] is False
+
+
+def test_an_extra_that_fails_to_load_means_the_default_solver():
+    """Not only a missing package: one whose import raises falls back too."""
+
+    class Broken(types.ModuleType):
+        def __getattr__(self, name):
+            raise RuntimeError("broken install")
+
+    opt = types.SimpleNamespace(
+        optim_conf={"optimization_backend": "dantzig_wolfe"}, plant_conf={}, logger=logger
+    )
+    broken = Broken("home_energy_optimizer.integrations.emhass")
+    with patch.dict(sys.modules, {"home_energy_optimizer.integrations.emhass": broken}):
+        res, reason = optimization._coordinated_plan(opt)
+    assert res is None and "failed to load" in reason and "broken install" in reason
+
+
+def test_a_cached_problem_takes_the_remote_tokens_as_configured_now():
+    """A rotated token reaches the coordinator on a cache hit too: the cached
+    problem keeps the retrieve_hass_conf it was built with otherwise."""
+
+    async def build(data_path, token):
+        params = await _params(data_path)
+        params["retrieve_hass_conf"]["remote_tokens"] = {"garage_token": token}
+        return await set_input_data_dict(
+            _conf(data_path),
+            "profit",
+            orjson.dumps(params).decode(),
+            orjson.dumps(FORECASTS).decode(),
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+
+    with _data_copy() as data_path:
+        first = asyncio.run(build(data_path, "old"))
+        second = asyncio.run(build(data_path, "rotated"))
+    assert second["opt"] is first["opt"], "the second run should hit the cache"
+    assert second["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": "rotated"}

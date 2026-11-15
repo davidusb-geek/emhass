@@ -198,9 +198,14 @@ def _coordinated_plan(opt, *args, **kwargs):
         reason = "the optional extra is not installed (pip install emhass[federated])"
         opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
         return None, reason
+    except Exception as exc:  # noqa: BLE001 - an installed extra that fails to load
+        reason = f"the optional extra failed to load ({type(exc).__name__}: {exc})"
+        opt.logger.error(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
     # Whatever happens in the coordinator, a plan is published: any failure
     # is logged and the default solver plans instead, live run or dry run.
     opt.fed_fallback_reason = None
+    kwargs = _soc_endpoints_as_the_default_solver(opt, kwargs)
     try:
         res = optimize(opt, *args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - the fallback is the point
@@ -214,6 +219,27 @@ def _coordinated_plan(opt, *args, **kwargs):
     return res, None
 
 
+def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
+    """soc_init and soc_final filled in as the default solver fills them: a
+    missing one from the other, and the target only when both are missing.
+    The coordinator would fill each from the target, so a run given only
+    soc_init would plan a different day. One battery only: the coordinator
+    declines more."""
+    if not opt.optim_conf.get("set_use_battery"):
+        return kwargs
+    init, final = kwargs.get("soc_init"), kwargs.get("soc_final")
+    if isinstance(init, list | tuple) or isinstance(final, list | tuple):
+        return kwargs
+    target = opt.plant_conf.get("battery_target_state_of_charge")
+    if isinstance(target, list | tuple):
+        target = target[0] if target else None
+    if init is None:
+        init = final if final is not None else target
+    if final is None:
+        final = init
+    return {**kwargs, "soc_init": init, "soc_final": final}
+
+
 def _warn_unheld_limits(opt) -> None:
     """On a fallback, say what of `site` the default solver does not hold:
     its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
@@ -223,7 +249,7 @@ def _warn_unheld_limits(opt) -> None:
     if not site or utils.site_problem(site):
         return
     kinds = [utils.site_kind(e) for e in site]
-    held = utils.site_inverter(site)
+    held = utils.site_inverter(site, bool(opt.optim_conf.get("set_use_battery")))
     if "limit" in kinds or kinds.count("node") > (1 if held else 0):
         opt.logger.warning(
             "optimization_backend: the default solver does not hold site's nodes and limits "
@@ -257,6 +283,15 @@ def _coordinated_plant_problem(plant_conf: dict) -> str | None:
         return str(exc)
     if inverters > 1:
         return f"number_of_inverters is {inverters}; the coordinator models one inverter"
+    if plant_conf.get("inverter_is_hybrid"):
+        curves = [
+            k
+            for k in ("inverter_power_curve_dc_ac", "inverter_power_curve_ac_dc")
+            if plant_conf.get(k)
+        ]
+        if curves:
+            # The coordinator models a hybrid inverter by its scalar efficiencies.
+            return f"{' and '.join(curves)}; the coordinator models efficiencies, not curves"
     return None
 
 

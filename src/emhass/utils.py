@@ -850,7 +850,7 @@ def site_problem(site, from_request: bool = False) -> str | None:
             # says where it is wired
             return f"site[{i}]: {element['id']!r} needs a parent ('grid', the main meter, or a node's id)"
         up = element["parent"]
-        if up != _SITE_ROOT and up not in nodes:
+        if not isinstance(up, str) or (up != _SITE_ROOT and up not in nodes):
             return f"site[{i}].parent must be {_SITE_ROOT!r} or a node's id"
         parent[element["id"]] = up
         unknown = [x for x in element.get("limits") or [] if x not in limits]
@@ -878,7 +878,7 @@ def site_grid(site: list) -> dict:
     return keys
 
 
-def site_inverter(site: list) -> dict | None:
+def site_inverter(site: list, battery: bool = False) -> dict | None:
     """The hybrid inverter in `site` that EMHASS's own model can hold, as the
     plant_conf keys that describe it, or None.
 
@@ -886,7 +886,10 @@ def site_inverter(site: list) -> dict | None:
     the battery on its DC side: a node of type hybrid_inverter whose parent is
     the main meter, with nothing under it but the PV and the battery, the PV
     included. Inverters otherwise (a second one, one behind a panel) are the
-    coordinator's only.
+    coordinator's only. `battery`: whether EMHASS has a battery
+    (set_use_battery). Its model puts that battery on the inverter, so the
+    inverter qualifies only if site does too - not for a battery site leaves
+    out (planned on the main meter) or wires elsewhere.
     """
     under: dict[str, set[str]] = {}
     for element in site:
@@ -900,6 +903,7 @@ def site_inverter(site: list) -> dict | None:
         and e.get("parent", _SITE_ROOT) == _SITE_ROOT
         and "pv" in under.get(e["id"], set())
         and under[e["id"]] <= {"pv", "battery"}
+        and ("battery" in under[e["id"]]) == battery
     ]
     if len(fits) != 1:
         return None
@@ -914,7 +918,9 @@ def site_inverter(site: list) -> dict | None:
     return keys
 
 
-def compile_site(site: list, plant_conf: dict, logger: logging.Logger) -> bool:
+def compile_site(
+    site: list, plant_conf: dict, logger: logging.Logger, battery: bool = False
+) -> bool:
     """Fill EMHASS's own keys in `plant_conf` from `site`: the main meter's
     limits (`site_grid`) and the hybrid inverter EMHASS's model can hold
     (`site_inverter`), so the default solver - on a fallback, or as the
@@ -922,7 +928,7 @@ def compile_site(site: list, plant_conf: dict, logger: logging.Logger) -> bool:
     disagree, with a warning. Returns whether an inverter was filled.
     """
     keys = site_grid(site)
-    inverter = site_inverter(site)
+    inverter = site_inverter(site, battery)
     try:
         inverters = validate_num_inverters(plant_conf)
     except InverterConfigError:
@@ -4307,7 +4313,7 @@ async def treat_runtimeparams(
         if problem:
             logger.error("site: %s; not used", problem)
         else:
-            compile_site(site, plant_conf, logger)
+            compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
 
     # Per-tank start-temperature override (issue #539), keyed by tank id.
     # Applied AFTER the heat_topology compile so it patches manual and
@@ -5588,7 +5594,8 @@ async def build_params(
             params["params_secrets"][vm_secret] = params_secrets.get(vm_secret)
     # The tokens site's remote solvers are reached with: only the secrets a
     # remote names (its token_secret), for the coordinator
-    for element in params["optim_conf"].get("site") or []:
+    configured_site = params["optim_conf"].get("site")
+    for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
         if isinstance(name, str) and params_secrets.get(name) is not None:

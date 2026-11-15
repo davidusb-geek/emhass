@@ -6,8 +6,11 @@ local port (remote.serve), building its model with EMHASS's own input path;
 the coordinator is another EMHASS's optimize, as a live run calls it."""
 
 import asyncio
+import contextlib
 import copy
 import importlib.util
+import io
+import json
 import pathlib
 import pickle
 import shutil
@@ -21,7 +24,7 @@ import orjson
 import pandas as pd
 import pytest
 
-from emhass import participant_api, utils, web_server
+from emhass import last_run, participant_api, plan_store, utils, web_server
 from emhass.optimization import Optimization
 from emhass.utils import (
     build_config,
@@ -514,3 +517,213 @@ def test_two_remotes_and_a_tank_share_a_panel_within_its_rating(tmp_path, monkey
     shared = res["P_water_heater"] + res["fed_remote_power_garage_emhass"]
     assert shared.max() <= 7000 + 1.0, shared.max()
     assert res["fed_remote_power_shed_emhass"].sum() * 0.5 == pytest.approx(6600.0)
+
+
+# --------------------------------------------------------------------------
+# A commit: published as the plan it is, then saved and recorded
+# --------------------------------------------------------------------------
+
+DAY = {
+    "pv_power_forecast": [0.0] * 48,
+    "load_power_forecast": [500.0] * 48,
+    "load_cost_forecast": [0.1 + (i % 6) / 20 for i in range(48)],
+    "prod_price_forecast": [0.05] * 48,
+    "prediction_horizon": 48,
+}
+
+
+def _a_plan(ec: dict, params: dict) -> pd.DataFrame:
+    """A plan for the garage, as the default solver makes it (a dry run)."""
+
+    async def run():
+        from emhass.command_line import naive_mpc_optim, set_input_data_dict
+
+        idd = await set_input_data_dict(
+            ec,
+            "profit",
+            orjson.dumps(params).decode(),
+            orjson.dumps(DAY).decode(),
+            "naive-mpc-optim",
+            logger,
+            get_data_from_file=True,
+            dry_run=True,
+        )
+        return await naive_mpc_optim(idd, logger, debug=True)
+
+    return asyncio.run(run())
+
+
+def _commit(ec: dict, params: dict, res: pd.DataFrame, published: list, ok: bool = True):
+    """publish_commit on the saved test data; `published` gets each
+    (entity_id, publish_prefix) posted to Home Assistant."""
+
+    async def post(self, data_df, idx, entity_id, *args, **kwargs):
+        published.append((entity_id, kwargs.get("publish_prefix")))
+        return mock.MagicMock(ok=True)
+
+    saved = mock.AsyncMock(return_value=pd.DataFrame({"stale": [1.0]}))
+    with (
+        mock.patch("emhass.retrieve_hass.RetrieveHass.post_data", post),
+        mock.patch("emhass.command_line._publish_from_saved_entities", saved),
+        mock.patch.object(participant_api, "publish_data", mock.AsyncMock(return_value=None))
+        if not ok
+        else contextlib.nullcontext(),
+    ):
+        out = asyncio.run(
+            participant_api.publish_commit(ec, params, res, logger, get_data_from_file=True)
+        )
+    return out, saved
+
+
+def test_a_commit_publishes_its_plan_under_the_prefix_and_records_it(data_path):
+    """The committed plan itself is published - under participant_api's
+    publish_prefix, never the entity files a prefix would otherwise republish -
+    then saved as the latest results and recorded for /api/v1/plan and
+    /api/v1/last-run."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    published: list = []
+    (ok, why), saved = _commit(ec, params, res, published)
+    assert ok, why
+    saved.assert_not_called()
+    assert published and {prefix for _, prefix in published} == {"garage_"}
+    latest = pd.read_csv(data_path / "opt_res_latest.csv", index_col="timestamp")
+    assert len(latest) == len(res)
+    plan = plan_store.read(data_path)
+    assert plan and len(plan["plan"]) == len(res)
+    assert pd.Timestamp(plan["plan"][0]["timestamp"]) == res.index[0]
+    assert last_run.read(data_path)["action"] == "naive-mpc-optim"
+
+
+def test_a_commit_that_fails_to_publish_keeps_the_latest_plan(data_path):
+    """Nothing is saved or recorded until the plan is published; the answer
+    says it may have been published part way."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    before = (data_path / "opt_res_latest.csv").read_bytes()
+    (ok, why), _ = _commit(ec, params, res, [], ok=False)
+    assert not ok and "part way" in why
+    assert (data_path / "opt_res_latest.csv").read_bytes() == before
+
+
+def test_a_commit_is_refused_while_continual_publish_runs(data_path):
+    """Its loop republishes the entity files of an earlier run, which would
+    put that plan back over the committed one."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    params["retrieve_hass_conf"]["continual_publish"] = True
+    published: list = []
+    (ok, why), _ = _commit(ec, params, _a_plan(ec, params), published)
+    assert not ok and "continual_publish" in why and not published
+
+
+def test_an_older_commit_does_not_replace_a_newer_plan(data_path):
+    """A late or repeated commit for an earlier horizon is refused once a
+    plan that starts later is in place."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    later = res.copy()
+    later.index = later.index + pd.Timedelta(hours=1)
+    plan_store.record(data_path, plan_store.serialize(later), "2026-11-15T00:00:00Z", "1.0")
+    published: list = []
+    (ok, why), _ = _commit(ec, params, res, published)
+    assert not ok and "before the latest plan" in why and not published
+
+
+@pytest.mark.parametrize(
+    "state, unit, expected",
+    [("0.5", "%", 0.005), ("55", "%", 0.55), ("0.5", None, 0.5), ("55", None, 0.55)],
+)
+def test_the_battery_charge_is_read_with_its_unit(state, unit, expected):
+    """A sensor in % is a percentage even below 1 %."""
+    body = {"state": state, "attributes": {"unit_of_measurement": unit} if unit else {}}
+    response = mock.MagicMock()
+    response.__enter__.return_value = io.BytesIO(json.dumps(body).encode())
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": "http://ha",
+        "long_lived_token": "t",
+    }
+    with mock.patch("urllib.request.urlopen", return_value=response):
+        assert participant_api.soc_now(conf, logger) == pytest.approx(expected)
+
+
+def test_a_corrupt_configuration_is_reported_not_called_off(data_path):
+    """An unreadable params.pkl is a server error, not "the API is off"."""
+    (data_path / "params.pkl").write_bytes(b"not a pickle")
+    status, body = _client_get(data_path, None, "/participant/v1/describe", token="t")
+    assert status == 503 and "could not be read" in body["detail"]
+
+
+def test_a_large_body_is_refused_before_it_is_read(data_path):
+    """Queries and commits are a few kB: a body over 1 MiB is refused (413)."""
+
+    async def post():
+        client = web_server.app.test_client()
+        body = b"x" * (web_server.PARTICIPANT_BODY_MAX + 1)
+        r = await client.post(
+            "/participant/v1/query",
+            data=body,
+            headers={"Authorization": "Bearer t", "Content-Length": str(len(body))},
+        )
+        return r.status_code
+
+    with mock.patch.object(participant_api, "read_params", mock.AsyncMock()) as read:
+        assert asyncio.run(post()) == 413
+    read.assert_not_called()
+
+
+@REMOTE_READY
+@pytest.mark.parametrize(
+    "window, problem",
+    [
+        ({"step_minutes": 30, "slots": 7 * 48 + 1}, "1 to 336 slots"),
+        ({"step_minutes": 30, "slots": 0}, "1 to 336 slots"),
+    ],
+)
+def test_a_session_refuses_a_horizon_it_cannot_plan(data_path, window, problem):
+    from home_energy_optimizer.remote import PlanWindow, WindowRefused
+
+    ec = _conf(data_path)
+    with pytest.raises(WindowRefused, match=problem):
+        asyncio.run(
+            participant_api.build_session(
+                ec, _params(ec, **GARAGE), PlanWindow(**window), logger, get_data_from_file=True
+            )
+        )
+
+
+@REMOTE_READY
+def test_a_session_refuses_slots_it_does_not_forecast(data_path):
+    """Asked about slots one step off its own, a remote refuses rather than
+    plan them with the neighbouring slots' forecasts."""
+    from home_energy_optimizer.remote import PlanWindow, WindowRefused
+
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    p = asyncio.run(
+        participant_api.build_session(
+            ec, params, PlanWindow(30, 48), logger, get_data_from_file=True
+        )
+    )
+    off = (p.data.index[0] + pd.Timedelta(minutes=30)).isoformat()  # one step after its own
+    with pytest.raises(WindowRefused, match="must agree on the slot"):
+        asyncio.run(
+            participant_api.build_session(
+                ec, params, PlanWindow(30, 48, off), logger, get_data_from_file=True
+            )
+        )
+
+
+def test_the_published_api_says_how_to_authenticate():
+    """A client generated from openapi.json sends the participant token."""
+    spec = json.loads((root / "src/emhass/static/openapi.json").read_text(encoding="utf-8"))
+    scheme = spec["components"]["securitySchemes"]["participantToken"]
+    assert scheme == {**scheme, "type": "http", "scheme": "bearer"}
+    for method in ("get", "post"):
+        assert spec["paths"]["/participant/v1/{op}"][method]["security"] == [
+            {"participantToken": []}
+        ]

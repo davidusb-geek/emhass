@@ -224,6 +224,11 @@
           "url": "https://github.com/ameetdesh/home-energy-optimizer/blob/main/src/home_energy_optimizer/schemas/participant-api.v1.json",
           "description": "participant-api.v1.json"
         },
+        "security": [
+          {
+            "participantToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Its description"
@@ -233,16 +238,24 @@
           },
           "404": {
             "description": "participant_api is not set"
+          },
+          "503": {
+            "description": "No participant_token, or params.pkl unreadable"
           }
         }
       },
       "post": {
         "summary": "baseline, query or commit (participant API, opt-in)",
-        "description": "Queries have no effect; a commit publishes the chosen plan.",
+        "description": "Queries have no effect; a commit publishes the chosen plan, saves it as the latest results and records it for /api/v1/plan.",
         "externalDocs": {
           "url": "https://github.com/ameetdesh/home-energy-optimizer/blob/main/src/home_energy_optimizer/schemas/participant-api.v1.json",
           "description": "participant-api.v1.json"
         },
+        "security": [
+          {
+            "participantToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "An answer, or whether a commit was accepted"
@@ -258,6 +271,15 @@
           },
           "409": {
             "description": "A horizon it cannot plan, or a plan it did not give"
+          },
+          "413": {
+            "description": "A body over 1 MiB"
+          },
+          "429": {
+            "description": "A commit while a live optimization runs"
+          },
+          "503": {
+            "description": "No participant_token, or params.pkl unreadable"
           }
         }
       }
@@ -2288,6 +2310,13 @@
             }
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "participantToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The participant_token secret (participant API only)"
       }
     }
   }

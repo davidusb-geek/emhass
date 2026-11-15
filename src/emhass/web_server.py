@@ -975,6 +975,7 @@ async def api_v1_plan():
 
 
 _participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
+PARTICIPANT_BODY_MAX = 1 << 20  # 1 MiB
 
 
 async def _problem(status: int, title: str, detail: str = "", retry_after: str | None = None):
@@ -999,7 +1000,13 @@ async def participant_v1(op: str):
     global _participant_service
     from emhass import participant_api
 
-    params = await participant_api.read_params(emhass_conf)
+    if (request.content_length or 0) > PARTICIPANT_BODY_MAX:
+        # A query or a commit is a few kB; refused before the body is read.
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    try:
+        params = await participant_api.read_params(emhass_conf)
+    except participant_api.ConfigUnreadable as exc:
+        return await _problem(503, "Service Unavailable", str(exc))
     if params is None or not isinstance(params["optim_conf"].get("participant_api"), dict):
         return await _problem(404, "Not Found", "the participant API is off (set participant_api)")
     token = params_secrets.get("participant_token")

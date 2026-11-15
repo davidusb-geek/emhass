@@ -325,22 +325,31 @@ def build_spec(routes: set | None = None) -> dict:
                     "presents the participant_token secret as a bearer token."
                 ),
                 "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
                 "responses": {
                     "200": {"description": "Its description"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
+                    "503": {"description": "No participant_token, or params.pkl unreadable"},
                 },
             },
             "post": {
                 "summary": "baseline, query or commit (participant API, opt-in)",
-                "description": "Queries have no effect; a commit publishes the chosen plan.",
+                "description": (
+                    "Queries have no effect; a commit publishes the chosen plan, saves it as the "
+                    "latest results and records it for /api/v1/plan."
+                ),
                 "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
                 "responses": {
                     "200": {"description": "An answer, or whether a commit was accepted"},
                     "400": {"description": "Not a query or commit of this API"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
                     "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
+                    "413": {"description": "A body over 1 MiB"},
+                    "429": {"description": "A commit while a live optimization runs"},
+                    "503": {"description": "No participant_token, or params.pkl unreadable"},
                 },
             },
         },
@@ -428,7 +437,16 @@ def build_spec(routes: set | None = None) -> dict:
             ),
         },
         "paths": paths,
-        "components": {"schemas": components},
+        "components": {
+            "schemas": components,
+            "securitySchemes": {
+                "participantToken": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "The participant_token secret (participant API only)",
+                }
+            },
+        },
     }
 
 
