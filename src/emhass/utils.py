@@ -683,6 +683,43 @@ _SITE_DEVICE = re.compile(r"^(pv|battery|water_heater|hvac|deferrable[0-9]{1,3})
 _SITE_ROOT = "grid"
 _SITE_NODE_TYPES = ("hybrid_inverter", "inverter", "panel", "breaker", "meter")
 _SITE_SOLVERS = ("emhass", "home_energy_optimizer")
+# EMHASS's own secrets: a remote's token_secret may not name one, or a saved
+# site would send it (Home Assistant's token, say) to the remote's URL.
+_SITE_RESERVED_SECRETS = frozenset(
+    {
+        "hass_url",
+        "long_lived_token",
+        "participant_token",
+        "remote_tokens",
+        "server_ip",
+        "time_zone",
+        "lat",
+        "lon",
+        "alt",
+        "latitude",
+        "longitude",
+        "altitude",
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "solar_forecast_kwp",
+        "influxdb_username",
+        "influxdb_password",
+        "victoriametrics_username",
+        "victoriametrics_password",
+    }
+)
+
+
+def site_token_secret_usable(name) -> bool:
+    """Whether `name` may be a remote solver's token_secret: a secret's name
+    (lower case, digits, _) that is not one of EMHASS's own."""
+    return (
+        isinstance(name, str)
+        and bool(_SITE_ID.match(name))
+        and name.lower() not in _SITE_RESERVED_SECRETS
+    )
+
+
 _SITE_KEYS = {
     "grid": {"id", "max_import", "max_export"},
     "node": {
@@ -769,8 +806,11 @@ def _site_element_problem(element, where: str, from_request: bool) -> str | None
         ):
             return f"{where}.solver must be {{url: http(s)://host[:port]/path, token_secret}}"
         secret = solver.get("token_secret")
-        if secret is not None and not (isinstance(secret, str) and _SITE_ID.match(secret)):
-            return f"{where}.solver.token_secret must name a secret (lower case, digits, _)"
+        if secret is not None and not site_token_secret_usable(secret):
+            return (
+                f"{where}.solver.token_secret must name a secret of its own "
+                "(lower case, digits, _), not one of EMHASS's secrets"
+            )
         if from_request:
             return f"{where}: a remote solver is accepted from the configuration only, not with a request"
     if kind == "device":
@@ -5669,7 +5709,7 @@ async def build_params(
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
-        if isinstance(name, str) and params_secrets.get(name) is not None:
+        if site_token_secret_usable(name) and params_secrets.get(name) is not None:
             params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[
                 name
             ]

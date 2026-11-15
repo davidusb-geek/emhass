@@ -22,6 +22,7 @@ import json
 import logging
 import pathlib
 import pickle
+import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -37,6 +38,7 @@ from emhass.command_line import (
     publish_data,
     set_input_data_dict,
 )
+from emhass.retrieve_hass import _SUPERVISOR_URLS
 
 PARAMS_FILE = "params.pkl"
 # The longest horizon a coordinator may ask about: a week, at any step.
@@ -57,7 +59,7 @@ async def read_params(emhass_conf: dict) -> dict | None:
         return None
     try:
         _, params = pickle.loads(path.read_bytes())
-    except (EOFError, pickle.UnpicklingError, UnicodeDecodeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - whatever a corrupt pickle raises
         raise ConfigUnreadable(f"{PARAMS_FILE} could not be read ({type(exc).__name__})") from exc
     return params
 
@@ -75,10 +77,19 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
         sensor = sensor[0] if sensor else None
     if not (isinstance(sensor, str) and sensor and base and token):
         return None
-    url = str(base).rstrip("/") + "/api/states/" + urllib.parse.quote(sensor)
+    # As RetrieveHass builds it: the Supervisor's URL already ends in /api.
+    root = str(base).rstrip("/")
+    path = "/states/" if root in _SUPERVISOR_URLS else "/api/states/"
+    url = root + path + urllib.parse.quote(sensor)
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    # ssl_no_verify, as the user set it for Home Assistant's other calls
+    context = (
+        ssl._create_unverified_context()  # noqa: S323 - the user's own setting
+        if retrieve_hass_conf.get("ssl_no_verify")
+        else None
+    )
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310 - Home Assistant's own URL
+        with urllib.request.urlopen(req, timeout=5, context=context) as r:  # noqa: S310 - Home Assistant's own URL
             state = json.load(r)
         value = float(state["state"])
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in

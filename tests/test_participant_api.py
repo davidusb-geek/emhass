@@ -828,6 +828,57 @@ def test_the_battery_charge_is_read_in_percent(state, unit, expected):
     assert got is None if expected is None else got == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    "base, no_verify, expected",
+    [
+        ("http://ha:8123/", False, "http://ha:8123/api/states/sensor.soc"),
+        ("http://supervisor/core/api", False, "http://supervisor/core/api/states/sensor.soc"),
+        ("https://ha.local", True, "https://ha.local/api/states/sensor.soc"),
+    ],
+)
+def test_the_battery_charge_is_asked_where_home_assistant_answers(base, no_verify, expected):
+    """Under the add-on hass_url is the Supervisor's, which already ends in
+    /api; ssl_no_verify holds for this call as for EMHASS's others."""
+    response = mock.MagicMock()
+    response.__enter__.return_value = io.BytesIO(b'{"state": "55", "attributes": {}}')
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": base,
+        "long_lived_token": "t",
+        "ssl_no_verify": no_verify,
+    }
+    with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+        assert participant_api.soc_now(conf, logger) == pytest.approx(0.55)
+    assert urlopen.call_args.args[0].full_url == expected
+    assert (urlopen.call_args.kwargs["context"] is not None) == no_verify
+
+
+@pytest.mark.parametrize("name", ["long_lived_token", "participant_token", "solcast_api_key"])
+def test_a_remote_may_not_be_sent_one_of_emhass_own_secrets(name):
+    """A saved site naming EMHASS's own secret as a remote's token would send
+    it to that remote's URL: the site is refused, and the secret is never
+    among the remotes' tokens."""
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "http://elsewhere.example/x", "token_secret": name},
+        },
+    ]
+    assert "not one of EMHASS's secrets" in utils.site_problem(site)
+    secrets = {"long_lived_token": "HA", "participant_token": "P", "solcast_api_key": "S"}
+
+    async def build():
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    assert "remote_tokens" not in asyncio.run(build())["retrieve_hass_conf"]
+    site[1]["solver"]["token_secret"] = "garage_token"
+    assert utils.site_problem(site) is None
+
+
 def test_a_corrupt_configuration_is_reported_not_called_off(data_path):
     """An unreadable params.pkl is a server error, not "the API is off"."""
     (data_path / "params.pkl").write_bytes(b"not a pickle")
