@@ -1023,7 +1023,13 @@ async def participant_v1(op: str):
         service = participant_api.make_service(emhass_conf, params, token, app.logger)
         _participant_service = (built_from, service)
     service = _participant_service[1]
-    body = await request.get_data()
+    # A chunked body has no Content-Length: the limit holds on what arrives.
+    received = bytearray()
+    async for chunk in request.body:
+        received.extend(chunk)
+        if len(received) > PARTICIPANT_BODY_MAX:
+            return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    body = bytes(received)
     if op == "commit" and request.method == "POST":
         # A commit ends a live run - it writes the latest results and publishes - so
         # it takes the live-optimization slot, as POST /action/<optimization> does,

@@ -227,14 +227,32 @@ async def publish_commit(
     )
     if not idd:
         return False, "EMHASS could not build its inputs to publish"
+    # publish_data logs an entity Home Assistant did not take and goes on; a
+    # commit must know, so this publish counts them.
+    rh, refused = idd["rh"], []
+    post = rh.post_data
+
+    async def post_counted(*args, **kwargs):
+        out = await post(*args, **kwargs)
+        response = out[0] if isinstance(out, tuple) and out else out
+        if response is not None and not getattr(response, "ok", True):
+            refused.append(kwargs.get("entity_id", args[2] if len(args) > 2 else "?"))
+        return out
+
+    rh.post_data = post_counted
     try:
         # save_data_to_file: publish `res` itself, never the entity files a
         # prefix would otherwise republish.
         out = await publish_data(idd, logger, save_data_to_file=True, opt_res_latest=res)
-        if out is None:
+        if out is None or refused:
             # Home Assistant has no transaction: what was published before the
             # failure stays, until this EMHASS publishes again.
-            return False, "publishing failed, perhaps part way; see the log"
+            why = (
+                f"Home Assistant did not take {', '.join(refused)}"
+                if refused
+                else "publishing failed"
+            )
+            return False, f"{why}; published perhaps part way, see the log"
         # The latest plan, whole, only once it is published.
         csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
         await utils.replace_file(csv, res.to_csv(index_label="timestamp"))

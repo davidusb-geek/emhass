@@ -562,13 +562,22 @@ def _a_plan(ec: dict, params: dict) -> pd.DataFrame:
     return asyncio.run(run())
 
 
-def _commit(ec: dict, params: dict, res: pd.DataFrame, published: list, ok: bool = True):
+def _commit(
+    ec: dict,
+    params: dict,
+    res: pd.DataFrame,
+    published: list,
+    ok: bool = True,
+    refuse: str | None = None,
+):
     """publish_commit on the saved test data; `published` gets each
-    (entity_id, publish_prefix) posted to Home Assistant."""
+    (entity_id, publish_prefix) posted to Home Assistant, which refuses (HTTP
+    500) the entities whose id contains `refuse`."""
 
     async def post(self, data_df, idx, entity_id, *args, **kwargs):
         published.append((entity_id, kwargs.get("publish_prefix")))
-        return mock.MagicMock(ok=True)
+        taken = refuse is None or refuse not in entity_id
+        return mock.MagicMock(ok=taken, status_code=200 if taken else 500), {}
 
     saved = mock.AsyncMock(return_value=pd.DataFrame({"stale": [1.0]}))
     with (
@@ -582,6 +591,30 @@ def _commit(ec: dict, params: dict, res: pd.DataFrame, published: list, ok: bool
             participant_api.publish_commit(ec, params, res, logger, get_data_from_file=True)
         )
     return out, saved
+
+
+def test_a_commit_home_assistant_did_not_take_is_refused_and_not_recorded(data_path):
+    """publish_data logs an entity Home Assistant refused and goes on; the
+    commit is refused, names it, and saves and records nothing."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    csv = data_path / "opt_res_latest.csv"
+    before = (
+        plan_store.read(data_path),
+        last_run.read(data_path),
+        csv.exists() and csv.read_bytes(),
+    )
+    published: list = []
+    (ok, why), _ = _commit(ec, params, res, published, refuse="p_deferrable0")
+    assert not ok and "did not take" in why and "p_deferrable0" in why and "part way" in why
+    assert published  # it was published as far as it went
+    after = (
+        plan_store.read(data_path),
+        last_run.read(data_path),
+        csv.exists() and csv.read_bytes(),
+    )
+    assert after == before
 
 
 def test_a_commit_publishes_its_plan_under_the_prefix_and_records_it(data_path):
@@ -694,6 +727,48 @@ def test_a_large_body_is_refused_before_it_is_read(data_path):
     with mock.patch.object(participant_api, "read_params", mock.AsyncMock()) as read:
         assert asyncio.run(post()) == 413
     read.assert_not_called()
+
+
+def test_a_chunked_large_body_is_refused_as_it_arrives(data_path):
+    """With no Content-Length (a chunked body; Quart's test client sends
+    none), the 1 MiB limit holds on the bytes received, not the header."""
+    params = _params(_conf(data_path), **GARAGE)
+    service = mock.MagicMock()
+    service.handle.return_value = (200, {})
+
+    async def post():
+        saved_conf = web_server.emhass_conf
+        saved_secret = web_server.params_secrets.get("participant_token")
+        web_server.emhass_conf = {**saved_conf, "data_path": data_path}
+        web_server.params_secrets["participant_token"] = "t"
+        (data_path / "params.pkl").write_bytes(pickle.dumps((None, params)))
+        try:
+            r = await web_server.app.test_client().post(
+                "/participant/v1/query",
+                data=b"x" * (web_server.PARTICIPANT_BODY_MAX + 1),
+                headers={"Authorization": "Bearer t"},
+            )
+            return r.status_code, r.headers.get("Content-Length")
+        finally:
+            web_server.emhass_conf = saved_conf
+            if saved_secret is None:
+                web_server.params_secrets.pop("participant_token", None)
+            else:
+                web_server.params_secrets["participant_token"] = saved_secret
+
+    package = types.ModuleType("home_energy_optimizer")
+    package.remote = types.ModuleType("home_energy_optimizer.remote")
+    with (
+        mock.patch.object(participant_api, "make_service", return_value=service),
+        mock.patch.object(web_server, "_participant_service", None),
+        mock.patch.dict(
+            sys.modules,
+            {"home_energy_optimizer": package, "home_energy_optimizer.remote": package.remote},
+        ),
+    ):
+        status, _ = asyncio.run(post())
+    assert status == 413
+    service.handle.assert_not_called()
 
 
 @REMOTE_READY
