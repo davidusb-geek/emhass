@@ -879,9 +879,7 @@ def site_grid(site: list) -> dict:
     return keys
 
 
-def site_inverter(
-    site: list, battery: bool = False, plant_conf: dict | None = None
-) -> dict | None:
+def site_inverter(site: list, battery: bool = False, plant_conf: dict | None = None) -> dict | None:
     """The hybrid inverter in `site` that EMHASS's own model can hold, as the
     plant_conf keys that describe it, or None.
 
