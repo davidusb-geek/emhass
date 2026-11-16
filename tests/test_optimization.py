@@ -5603,6 +5603,52 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"expected the capped-level warning, got: {logs.output}",
         )
 
+    def test_thermal_battery_cap_releases_a_forced_run_at_a_step_it_cannot_serve(self):
+        """A forced run pinned where `max_thermal_power` leaves less than
+        `min_power` must be released, not left to make the model infeasible.
+
+        6000 W of thermal ceiling at 10 C outdoor is cap/COP = 1217 W, below a
+        1500 W minimum, so step 0 cannot run. The min-on remainder still pins it on
+        there (the load is currently running), and before the release both the
+        solve and the relaxed retry returned Infeasible.
+        """
+        cap = 6000.0
+        min_power = 1500.0
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        self.optim_conf["def_minimum_on_time"] = [2, 0]
+        self.optim_conf["def_current_state"] = [True, False]
+        self.optim_conf["def_current_on_timesteps"] = [1, 0]
+
+        opt, _, _ = self._run_thermal_battery_cap(cap, outdoor_temps=np.zeros(48))
+        self.assertEqual(opt.optim_status, "Optimal")
+        # At 0 C cap/COP is 1704 W, above the minimum, so the forced run stands.
+        np.testing.assert_array_equal(
+            np.asarray(opt.param_running_lb[0].value) > 0, [True] + [False] * 47
+        )
+
+        warm_step = np.zeros(48)
+        warm_step[0] = 10.0
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = warm_step
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        res = opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        np.testing.assert_array_equal(
+            opt._capped_steps_below_min_power(0, 48), [True] + [False] * 47
+        )
+        self.assertFalse(
+            np.any(np.asarray(opt.param_running_lb[0].value) > 0),
+            "the forced run must end at the step the cap cannot serve",
+        )
+        self.assertEqual(float(res["P_deferrable0"][0]), 0.0)
+
     def test_thermal_battery_max_thermal_power_must_be_positive(self):
         """A non-positive `max_thermal_power` is a configuration error."""
         thermal_config = {

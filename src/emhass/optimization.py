@@ -1037,14 +1037,7 @@ class Optimization:
                             "running cannot be interrupted."
                         )
             if k < len(self.param_running_lb):
-                lb = np.asarray(self.param_running_lb[k].value, dtype=float).copy()
-                blocked_forced = np.flatnonzero(cannot_run & (lb > 0))
-                if blocked_forced.size:
-                    # The forced run ends at the first step the load cannot run.
-                    lb[blocked_forced[0] :] = 0.0
-                    self.param_running_lb[k].value = lb
-                    if k < len(self.param_already_running_sc):
-                        self.param_already_running_sc[k].value = 0.0
+                self._release_force_on_at(k, cannot_run)
             if (
                 k < len(self.param_def_current_power_active)
                 and self.param_def_current_power_active[k].value > 0
@@ -1065,6 +1058,57 @@ class Optimization:
                 int(np.sum((avail > 0.0) & (avail < 1.0))),
                 len(avail),
             )
+
+    def _release_force_on_at(self, k: int, cannot_run: np.ndarray) -> None:
+        """End a forced run at the first step the load cannot run.
+
+        A forced run (single-constant pin, min-on remainder, current-power
+        force-on) pins ``p_def_bin2[k] >= 1``. Where the load cannot run at all -
+        ``def_availability`` blocks the step, or ``max_thermal_power`` leaves a
+        ceiling below its minimum power - that pin contradicts the power bounds
+        and makes the MILP infeasible. The run ends at the first such step, and a
+        single-constant load loses its "already running" credit there, so the
+        rest of its run counts as a new block.
+        """
+        if k >= len(self.param_running_lb):
+            return
+        lb = np.asarray(self.param_running_lb[k].value, dtype=float).copy()
+        blocked_forced = np.flatnonzero(cannot_run & (lb > 0))
+        if not blocked_forced.size:
+            return
+        lb[blocked_forced[0] :] = 0.0
+        self.param_running_lb[k].value = lb
+        if k < len(self.param_already_running_sc):
+            self.param_already_running_sc[k].value = 0.0
+
+    def _capped_steps_below_min_power(self, k: int, n: int) -> np.ndarray:
+        """Steps where ``max_thermal_power`` leaves no room for the load's
+        minimum power: ``cap / COP < min_power`` makes the step impossible to run,
+        because the thermal ceiling and the electrical floor contradict each
+        other there. Empty for every load that is not capped."""
+        cap_entry = getattr(self, "_thermal_cap_by_load", {}).get(k)
+        if cap_entry is None:
+            return np.zeros(n, dtype=bool)
+        min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
+        if min_powers is None:
+            min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
+        min_power = float(min_powers[k]) if k < len(min_powers) and min_powers[k] else 0.0
+        if min_power <= 0:
+            return np.zeros(n, dtype=bool)
+        # The live parameter carries the COP a cache hit refreshed; the recorded
+        # array is the build-time fallback.
+        params = getattr(self, "param_thermal", {}).get(k)
+        cops = None
+        if params is not None and "heatpump_cops" in params:
+            cops = np.asarray(params["heatpump_cops"].value, dtype=float)
+        if cops is None or cops.size != n:
+            cops = np.asarray(cap_entry[1], dtype=float)
+            if cops.size == 1:
+                cops = np.full(n, float(cops[0]))
+        if cops.size != n:
+            # A horizon the build did not see: no reliable per-step answer.
+            return np.zeros(n, dtype=bool)
+        return float(cap_entry[0]) / np.maximum(cops, 1e-9) < min_power
 
     def _init_current_period_peak_param(self) -> None:
         """Initialize the CVXPY parameter for the peak grid import already
@@ -9394,6 +9438,13 @@ class Optimization:
         # them can re-open a step in which the load must not run.
         if def_avail_list is not None:
             self._apply_def_availability(def_avail_list)
+
+        # A max_thermal_power cap below the load's minimum power forces that step
+        # off, so a forced run pinned there would make the model infeasible -
+        # exactly as a def_availability block does. Released here, after every
+        # force-on mechanism has written its mask, and before the solve.
+        for k in getattr(self, "_thermal_cap_by_load", {}):
+            self._release_force_on_at(k, self._capped_steps_below_min_power(k, n))
 
         # Stress configs are needed by the retry path even when self.prob is
         # cached from a previous call (see #770). Start from the configs built
