@@ -4989,6 +4989,23 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
                 utils.resolve_thermal_battery_cop({"supply_temperature": bad}, outdoor, length=2)
             self.assertIn("supply_temperature", str(ctx.exception))
 
+    def test_supply_temperature_profile_accepts_numpy_scalars(self):
+        """A list built from a NumPy computation holds NumPy scalars, which are
+        numbers like their Python equivalents; the same values in an array already
+        passed through `tolist()`."""
+        outdoor = np.array([0.0, 5.0])
+        scalars = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": [np.int64(30), np.int32(31)]}, outdoor, length=2
+        )
+        floats = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": [np.float32(30.0), np.float64(31.0)]}, outdoor, length=2
+        )
+        expected = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": [30.0, 31.0]}, outdoor, length=2
+        )
+        np.testing.assert_array_equal(scalars, expected)
+        np.testing.assert_array_equal(floats, expected)
+
     def test_supply_temperature_profile_truncates_a_longer_outdoor_forecast(self):
         """`length` cuts the horizon on both sides: the profile is truncated to it,
         so the outdoor forecast driving the Carnot lift has to be cut as well."""
