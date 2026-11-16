@@ -5548,6 +5548,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         opt, _, thermal_config = self._run_thermal_battery_cap(cap, outdoor_temps=warm)
         self.assertEqual(opt.optim_status, "Optimal")
+        cached_problem = opt.prob
         cop_warm = utils.resolve_thermal_battery_cop(thermal_config, warm, length=48)
         np.testing.assert_allclose(
             opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_warm)
@@ -5565,9 +5566,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             df[opt.var_prod_price].values,
         )
         self.assertEqual(opt.optim_status, "Optimal")
+        # The second solve has to reuse the cached problem: a rebuild would create a
+        # fresh ON-level Parameter and the refresh path would go untested.
+        self.assertIs(opt.prob, cached_problem, "the cached problem must not be replaced")
         cop_cold = utils.resolve_thermal_battery_cop(thermal_config, cold, length=48)
         np.testing.assert_allclose(
             opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_cold)
+        )
+
+    def test_thermal_battery_cap_warns_when_a_cop_refresh_drops_below_min_power(self):
+        """A cache hit that lowers cap/COP under min_power forces the source off at
+        those steps, so the refresh path has to warn like the build path does."""
+        cap = 6000.0
+        min_power = 1500.0
+        cold = np.zeros(48)  # COP 3.52 -> cap/COP 1704 W, above min_power
+        warm = np.full(48, 10.0)  # COP 4.93 -> cap/COP 1217 W, below it
+
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        opt, _, _ = self._run_thermal_battery_cap(cap, outdoor_temps=cold)
+        self.assertEqual(opt.optim_status, "Optimal")
+
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = warm
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        with self.assertLogs(opt.logger, level="WARNING") as logs:
+            opt.perform_optimization(
+                df,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                prices,
+                df[opt.var_prod_price].values,
+            )
+        self.assertTrue(
+            any("max_thermal_power allows" in line for line in logs.output),
+            f"expected the capped-level warning, got: {logs.output}",
         )
 
     def test_thermal_battery_max_thermal_power_must_be_positive(self):
