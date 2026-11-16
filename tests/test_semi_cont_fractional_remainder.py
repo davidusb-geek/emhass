@@ -14,6 +14,7 @@ Synthetic and self-contained, built on the multi-battery test helper.
 import logging
 import unittest
 
+import cvxpy as cp
 import numpy as np
 import pandas as pd
 
@@ -898,6 +899,40 @@ class TestFractionalRemainder(unittest.TestCase):
                 assert_strict_on_off(self, p, allowed_partial=1, level=level)
                 if single:
                     self.assertEqual(len(runs(p)), 1)
+
+
+class TestRemainderSolverOptions(unittest.TestCase):
+    """Gurobi/CPLEX default to a 1e-5 integrality tolerance, equal to the remainder
+    resolution; it is tightened to 1e-7 only for them. No commercial solver is run."""
+
+    def test_gurobi_and_cplex_get_a_tighter_integrality_tolerance(self):
+        from emhass.optimization import REMAINDER_INTEGRALITY_TOL, Optimization
+
+        base = {"verbose": False, "cplex_params": {"timelimit": 5}}
+        gurobi = Optimization._remainder_solver_opts(cp.GUROBI, base)
+        self.assertEqual(gurobi["IntFeasTol"], REMAINDER_INTEGRALITY_TOL)
+        cplex = Optimization._remainder_solver_opts(cp.CPLEX, base)
+        self.assertEqual(cplex["cplex_params"]["mip.tolerances.integrality"], 1e-7)
+        self.assertEqual(cplex["cplex_params"]["timelimit"], 5)
+        self.assertLess(REMAINDER_INTEGRALITY_TOL, 1e-5)
+        # HiGHS is untouched and the input is never mutated.
+        self.assertEqual(Optimization._remainder_solver_opts(cp.HIGHS, base), base)
+        self.assertNotIn("IntFeasTol", base)
+        self.assertNotIn("mip.tolerances.integrality", base["cplex_params"])
+
+    def test_tolerance_is_only_applied_while_a_remainder_is_active(self):
+        from unittest import mock
+
+        for hours, expected in ((1.25, 1), (1.0, 0)):
+            with self.subTest(hours=hours):
+                opt = make()
+                with mock.patch.object(
+                    type(opt),
+                    "_remainder_solver_opts",
+                    side_effect=lambda s, o: o,
+                ) as spy:
+                    solve(opt, [hours])
+                self.assertEqual(spy.call_count, expected)
 
 
 if __name__ == "__main__":

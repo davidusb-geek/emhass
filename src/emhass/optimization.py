@@ -177,6 +177,9 @@ HEAT_PUMP_COP_MAX = 8.0
 # load and request (0.015 Wh, 18 ms for 3 kW at 30 min). Only loads with a remainder step
 # use it. See docs/advanced_math_model.md.
 FRACTIONAL_STEP_RESOLUTION = 1e-5
+# Gurobi/CPLEX integer feasibility tolerance while a remainder step is active (their default
+# 1e-5 equals the resolution above; HiGHS' 1e-6 does not need it).
+REMAINDER_INTEGRALITY_TOL = 1e-7
 
 
 def _snap_to_whole_steps(steps: float):
@@ -7042,6 +7045,9 @@ class Optimization:
             == cp.multiply(on_level, bin1) + self.param_rem_level[k] * remainder
         )
         # done[t] = 1 once the remainder step has happened by t; no full step after it.
+        # (A scalar rem_pos ordering row was benchmarked at 48/96/288 steps: same
+        # objective, 7% fewer variables, but 2-10x slower solves from the weaker big-M
+        # relaxation, so the recurrence is kept.)
         done = cp.Variable(n, nonneg=True, name=f"semi_cont_rem_done_{k}")
         constraints.append(done[0] == remainder[0])
         constraints.append(done[1:] == done[:-1] + remainder[1:])
@@ -8160,6 +8166,21 @@ class Optimization:
         """
         status_norm = str(status).lower() if status is not None else None
         return not Optimization._needs_relaxed_retry(status_norm, value, feasible_incumbent)
+
+    @staticmethod
+    def _remainder_solver_opts(selected_solver, solver_opts: dict) -> dict:
+        """Copy of ``solver_opts`` with a 1e-7 integer feasibility tolerance for the
+        solvers whose default (1e-5) equals the remainder resolution: Gurobi
+        ``IntFeasTol`` and CPLEX ``mip.tolerances.integrality``. HiGHS is unchanged."""
+        opts = dict(solver_opts)
+        if selected_solver == cp.GUROBI:
+            opts["IntFeasTol"] = REMAINDER_INTEGRALITY_TOL
+        elif selected_solver == cp.CPLEX:
+            opts["cplex_params"] = {
+                **opts.get("cplex_params", {}),
+                "mip.tolerances.integrality": REMAINDER_INTEGRALITY_TOL,
+            }
+        return opts
 
     @staticmethod
     def _dp_resolve_opts(solver_opts: dict) -> dict:
@@ -9602,6 +9623,12 @@ class Optimization:
             # non-zero default, even when exact optimality was requested.
             solver_opts["mip_rel_gap"] = float(mip_gap)
             self.logger.debug(f"MIP gap tolerance set to {mip_gap:.1%}")
+
+        # A remainder step makes integrality matter at 1e-5 steps (FRACTIONAL_STEP_RESOLUTION).
+        # Gurobi and CPLEX default to a 1e-5 integer feasibility tolerance, so tighten it
+        # for them only while a remainder is active. HiGHS keeps its own (1e-6) default.
+        if any(float(p.value or 0.0) > 0.0 for p in self.param_rem_active):
+            solver_opts = self._remainder_solver_opts(selected_solver, solver_opts)
 
         # Stage-timer breadcrumb: end of build phase, start of solve phase.
         _solve_start_perf = time.perf_counter() if stage_times is not None else 0.0
