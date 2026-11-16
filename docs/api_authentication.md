@@ -107,7 +107,7 @@ Settings (normally automatic): `EMHASS_INGRESS_PORT` (default `8099` when `SUPER
 does for add-ons; unset otherwise) and `EMHASS_INGRESS_PEERS` (default `172.30.32.2`; a comma-separated list of
 addresses or networks that **replaces** the default).
 
-This needs a Supervisor recent enough to send `X-Remote-User-Groups` and enforce `panel_admin` (not verified against specific versions; on an older one the page answers `403` and the key icon is hidden: set your own token in the add-on options instead). The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
+**Supervisor requirement.** The administrator-only token page trusts `X-Remote-User-Groups`, which only a Supervisor that adds the header *and* removes any client-supplied copy can vouch for (the version that introduced this has not been identified here, so it is not claimed). On a Supervisor without that behaviour, do not rely on the page: set `emhass_api_token` in the add-on options and leave the generated token unused. The same Supervisor behaviour is also what makes `panel_admin` effective. The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
 add-on pins the EMHASS image to its own version, so both change in one update. Do not mix them: an older add-on
 configuration (ingress on port 5000) with this image shows the login page and gives you no way to learn the token, and
 this add-on configuration with an older image has nothing listening on 8099. The `emhass-test` add-on follows the
