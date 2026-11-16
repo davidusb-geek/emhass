@@ -5647,7 +5647,30 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             np.any(np.asarray(opt.param_running_lb[0].value) > 0),
             "the forced run must end at the step the cap cannot serve",
         )
-        self.assertEqual(float(res["P_deferrable0"][0]), 0.0)
+        self.assertEqual(float(res["P_deferrable0"].iloc[0]), 0.0)
+
+    def test_thermal_battery_cap_releases_a_forced_run_on_the_first_solve(self):
+        """The capped-load registry is filled by the constraint build, which runs
+        after the per-solve parameter update, so the release has to run after the
+        build: on a process's first plan that registry does not exist yet."""
+        cap = 6000.0
+        min_power = 1500.0
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        self.optim_conf["def_minimum_on_time"] = [2, 0]
+        self.optim_conf["def_current_state"] = [True, False]
+        self.optim_conf["def_current_on_timesteps"] = [1, 0]
+
+        # Only step 0 is warm: cap/COP = 1217 W there, below the 1500 W minimum,
+        # while every cold step can still run at 1704 W.
+        warm_step = np.zeros(48)
+        warm_step[0] = 10.0
+        opt, res, _ = self._run_thermal_battery_cap(cap, outdoor_temps=warm_step)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertFalse(
+            np.any(np.asarray(opt.param_running_lb[0].value) > 0),
+            "the forced run must end at the step the cap cannot serve",
+        )
+        self.assertEqual(float(res["P_deferrable0"].iloc[0]), 0.0)
 
     def test_thermal_battery_max_thermal_power_must_be_positive_and_finite(self):
         """A non-positive or non-finite `max_thermal_power` is a configuration

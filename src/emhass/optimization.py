@@ -9444,13 +9444,6 @@ class Optimization:
         if def_avail_list is not None:
             self._apply_def_availability(def_avail_list)
 
-        # A max_thermal_power cap below the load's minimum power forces that step
-        # off, so a forced run pinned there would make the model infeasible -
-        # exactly as a def_availability block does. Released here, after every
-        # force-on mechanism has written its mask, and before the solve.
-        for k in getattr(self, "_thermal_cap_by_load", {}):
-            self._release_force_on_at(k, self._capped_steps_below_min_power(k, n))
-
         # Stress configs are needed by the retry path even when self.prob is
         # cached from a previous call (see #770). Start from the configs built
         # with the cached problem so a cached-retry rebuild keeps the stress
@@ -9560,6 +9553,14 @@ class Optimization:
             # for, so cached-retry rebuilds see them (issue #1048).
             self._batt_stress_conf = batt_stress_conf
             self._inv_stress_conf = inv_stress_conf
+
+        # A max_thermal_power cap below the load's minimum power forces that step
+        # off, so a forced run pinned there would make the model infeasible -
+        # exactly as a def_availability block does. Released after the build, which
+        # is what fills the registry, so a process's first plan is covered too, and
+        # on every cache hit before the solve.
+        for k in getattr(self, "_thermal_cap_by_load", {}):
+            self._release_force_on_at(k, self._capped_steps_below_min_power(k, n))
 
         # The battery-first import floor (#1253) reads this solve's PV, load and
         # battery power Parameters and the inverter cap the problem was built with,
