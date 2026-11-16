@@ -2217,9 +2217,7 @@ class Optimization:
                     on_level.value = np.minimum(
                         nominal,
                         float(cap_entry[0])
-                        / np.maximum(
-                            np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9
-                        ),
+                        / np.maximum(np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9),
                     )
 
                 # Thermal losses and heating demand
