@@ -1857,7 +1857,8 @@ class TestStalenessFill(unittest.TestCase):
     # -- the horizon ----------------------------------------------------------
     def test_default_horizon_is_two_and_inside_the_gap_bound(self):
         """H=2 by default (#1073), and never past the buckets the #1063 gap test
-        already bridges, so the fill cannot make a recorder gap look observed."""
+        already bridges, so the fill cannot make a recorder gap of one sensor
+        look observed."""
         h = getattr(bi_module, "STALENESS_FILL_MAX_BUCKETS", None)
         self.assertEqual(h, 2)
         self.assertLessEqual(h, bi_module.MAX_GAP_STEP_MULTIPLE - 1)
@@ -1928,6 +1929,15 @@ class TestStalenessFill(unittest.TestCase):
         self.assertFalse(out[[_P, _S]].isna().any().any())
         np.testing.assert_array_equal(out[_P].to_numpy(), [100, 200, 200, 200, 500, 600, 700])
         np.testing.assert_array_equal(out[_S].to_numpy(), [10, 20, 30, 40, 40, 40, 70])
+        # On the joint rows the estimator's gap test sees, the two silences add
+        # up to a step past the gap bound before the hold and to none after it.
+        bound = bi_module.MAX_GAP_STEP_MULTIPLE * pd.Timedelta(_STEP)
+
+        def joint_step(frame):
+            return frame[[_P, _S]].dropna().index.to_series().diff().max()
+
+        self.assertGreater(joint_step(df), bound)
+        self.assertEqual(joint_step(out), pd.Timedelta(_STEP))
 
     # -- no-op paths ----------------------------------------------------------
     def test_missing_aux_is_identity(self):
