@@ -483,15 +483,18 @@ class RetrieveHass:
         :param significant_changes_only: Retrieve significant changes only \
             using the hass restful API, defaults to False
         :type significant_changes_only: bool, optional
-        :param keep_partial_days: Only applies to the REST API path, including \
-            when a websocket-configured retrieval falls back to REST. When False \
+        :param keep_partial_days: Applies to the REST API and websocket paths, \
+            not to InfluxDB or VictoriaMetrics. On REST, including when a \
+            websocket-configured retrieval falls back to REST: when False \
             (default), a day is dropped for every variable in var_list if any one \
             variable has no data for that day, matching today's behaviour. When \
             True, a day is only dropped if every variable is missing for it; a \
             variable missing on an otherwise-kept day shows up as NaN for that \
-            stretch instead. Used by battery self-identification so one stale \
-            sensor doesn't cost other sensors days they did have data for. \
-            Defaults to False
+            stretch instead. On the websocket path, True leaves a time step with \
+            no statistics for a variable as NaN instead of filling it with the \
+            last value. Used by battery self-identification so one stale \
+            sensor doesn't cost other sensors days they did have data for, and \
+            so a stretch without data is seen as a gap. Defaults to False
         :type keep_partial_days: bool, optional
         :param hold_unchanged_tail: Only applies to the REST API path. When True, \
             the last numeric state of the final requested day is held up to the \
@@ -534,7 +537,9 @@ class RetrieveHass:
 
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
-            success = await self.get_data_websocket(days_list, var_list)
+            success = await self.get_data_websocket(
+                days_list, var_list, keep_partial_days=keep_partial_days
+            )
             if not success:
                 self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
                 # Fall back to REST API if websocket fails
@@ -1095,6 +1100,7 @@ class RetrieveHass:
         self,
         days_list: pd.date_range,
         var_list: list[str],
+        keep_partial_days: bool = False,
     ) -> bool:
         r"""
         Retrieve the actual data from hass.
@@ -1106,6 +1112,11 @@ class RetrieveHass:
             be the exact name of the sensor in Home Assistant. \
             For example: ['sensor.home_load', 'sensor.home_pv']
         :type var_list: list
+        :param keep_partial_days: When True, a time step with no statistics for a \
+            variable stays NaN instead of being filled with the last value, so a \
+            stretch without data shows up as a gap. Used by battery \
+            self-identification. Defaults to False
+        :type keep_partial_days: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -1142,7 +1153,9 @@ class RetrieveHass:
             )
 
             # Convert statistics data to DataFrame
-            self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
+            self.df_final = self._convert_statistics_to_dataframe(
+                stats_data, var_list, forward_fill=not keep_partial_days
+            )
 
             t1 = time.time()
             self.logger.info(f"Statistics data retrieval took {t1 - t0:.2f} seconds")
@@ -2789,9 +2802,16 @@ class RetrieveHass:
             return False
 
     def _convert_statistics_to_dataframe(
-        self, stats_data: dict[str, Any], var_list: list[str]
+        self, stats_data: dict[str, Any], var_list: list[str], forward_fill: bool = True
     ) -> pd.DataFrame:
-        """Convert WebSocket statistics data to DataFrame."""
+        r"""
+        Convert WebSocket statistics data to DataFrame.
+
+        :param forward_fill: Fill time steps that have no statistics with the last \
+            value (default). When False they stay NaN, so a stretch without data \
+            is kept as a gap.
+        :type forward_fill: bool, optional
+        """
         import pandas as pd
 
         # Initialize empty DataFrame
@@ -2872,8 +2892,12 @@ class RetrieveHass:
             except Exception as e:
                 self.logger.warning(f"Could not resample data to {self.freq}: {e}")
 
-            # Forward fill missing values
-            df_final = df_final.ffill()
+            # Forward fill missing values. Statistics come as one row per 5-minute
+            # period whenever the sensor had a numeric value, so a time step with
+            # no row means there was no data, not an unchanged value. Callers that
+            # need to see those stretches as gaps pass forward_fill=False.
+            if forward_fill:
+                df_final = df_final.ffill()
 
             # Set frequency for the DataFrame index
             df_final = set_df_index_freq(df_final)
