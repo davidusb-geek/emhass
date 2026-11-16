@@ -9386,8 +9386,12 @@ class Optimization:
             stage_times["optim_solve.build"] = _solve_start_perf - _build_start_perf
 
         # Solve Execution with Fallback
+        # No warm start for HiGHS: given the previous run's solution as a MIP start, it can
+        # return that start on a cache hit while reporting the new optimum's objective
+        # (#1364). The cached problem is still reused; warm_start only seeds the solver.
+        warm_start = selected_solver != cp.HIGHS
         try:
-            self.prob.solve(solver=selected_solver, warm_start=True, **solver_opts)
+            self.prob.solve(solver=selected_solver, warm_start=warm_start, **solver_opts)
         except Exception as e:
             self.logger.warning(
                 f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
