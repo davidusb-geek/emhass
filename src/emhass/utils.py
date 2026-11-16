@@ -30,6 +30,8 @@ import pytz
 import yaml
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+from emhass.coordinator.site import compile_site, site_problem
+
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
 
@@ -2806,6 +2808,14 @@ async def treat_runtimeparams(
                 # association[1] = legacy parameter name
                 # association[2] = parameter (config.json/config_defaults.json)
                 # association[3] = parameter list name if exists (not used, from legacy options.json)
+                # A request's site is checked by shape before anything reads it.
+                if runtimeparams.get("site") is not None:
+                    problem = site_problem(runtimeparams["site"])
+                    if problem:
+                        logger.error(
+                            "site (in the request): %s; the configured site is kept", problem
+                        )
+                        runtimeparams = {k: v for k, v in runtimeparams.items() if k != "site"}
                 for association in associations:
                     # Connection settings and credentials are configuration-only
                     if (
@@ -2906,6 +2916,21 @@ async def treat_runtimeparams(
                     inverter_param_name,
                     inverter_distinct_config_lists,
                     logger,
+                )
+        # A request (or saved) site that turns the plant hybrid must fill
+        # plant_conf before the curve check, which otherwise refuses a
+        # supplied curve while inverter_is_hybrid is still off.
+        site = params["optim_conf"].get("site")
+        if site:
+            problem = site_problem(site)
+            if problem:
+                logger.error("site: %s; not used", problem)
+            else:
+                compile_site(
+                    site,
+                    params["plant_conf"],
+                    logger,
+                    bool(params["optim_conf"].get("set_use_battery")),
                 )
         require_usable_inverter_config(params["plant_conf"], logger)
         inverters_checked = True
@@ -4042,6 +4067,20 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
+    # site: the house in one list, the coordinator's (optimization_backend);
+    # its main meter and hybrid inverter are EMHASS's own too - fill those
+    # keys from it, so the default solver plans the same meter and inverter.
+    # When runtimeparams were given the fill already ran before the curve
+    # check; do it here for the no-runtimeparams path (saved config only).
+    if runtimeparams is None:
+        site = optim_conf.get("site")
+        if site:
+            problem = site_problem(site)
+            if problem:
+                logger.error("site: %s; not used", problem)
+            else:
+                compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
+
     # Per-tank start-temperature override (issue #539), keyed by tank id.
     # Applied AFTER the heat_topology compile so it patches manual and
     # compiled tanks alike - the per-run analog of soc_init and
@@ -4311,6 +4350,18 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         df.drop("optim_status", axis=1, inplace=True)
     else:
         optim_status = "Status not available"
+    # Other text columns (with a coordinator backend: backend_used,
+    # backend_fallback_reason, fed_stop_reason) hold one value for the whole
+    # plan, so they go in the summary table instead of the plots.
+    text_cols = [
+        c
+        for c in df.columns
+        if not pd.api.types.is_numeric_dtype(df[c])
+        and (pd.to_numeric(df[c], errors="coerce").isna() & df[c].notna()).any()
+    ]
+    summary_text = {c: df[c].iloc[0] for c in text_cols}
+    df = df.drop(columns=text_cols)
+    cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
     df[cols_p] = df[cols_p].round().astype("Int64")
@@ -4404,6 +4455,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
     table2["optim_status"] = optim_status
+    for col, value in summary_text.items():
+        table2[col] = value
     table2 = (
         table2.to_frame(name="Value")
         .reset_index(names="Variable")
