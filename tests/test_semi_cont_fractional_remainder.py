@@ -219,8 +219,10 @@ class TestFractionalRemainder(unittest.TestCase):
         # steps: the strict solve must refuse it rather than count the remainder step
         # as a minimum on-time step.
         opt = make(def_minimum_on_time=[2])
-        solve(opt, [0.75])
+        res = solve(opt, [0.75])
         self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        # The fallback must still deliver the requested energy, not drop the load.
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 0.75, delta=1e-3)
 
         opt = make(def_minimum_on_time=[2])
         res = solve(opt, [1.25], prices=[0.05, 0.3] * 6)
@@ -235,8 +237,9 @@ class TestFractionalRemainder(unittest.TestCase):
         """A requirement shorter than the minimum on-time cannot be met by a pulse:
         the strict solve is infeasible and the existing relaxed fallback handles it."""
         opt = make(def_minimum_on_time=[2])
-        solve(opt, [0.25])
+        res = solve(opt, [0.25])
         self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 0.25, delta=1e-3)
 
     def test_minimum_off_time_gap_is_kept(self):
         opt = make(def_minimum_off_time=[2])
@@ -409,8 +412,9 @@ class TestFractionalRemainder(unittest.TestCase):
         the remainder step: 2.5 steps of energy cannot fill them, so the strict solve
         is infeasible instead of publishing a run shorter than the minimum."""
         opt = make(def_minimum_on_time=[4], def_current_state=[True], def_current_on_timesteps=[1])
-        solve(opt, [1.25])
+        res = solve(opt, [1.25])
         self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        self.assertAlmostEqual(energy_wh(res), NOMINAL * 1.25, delta=1e-3)
 
         # Enough energy for the forced full steps plus the remainder: strict again.
         opt = make(def_minimum_on_time=[4], def_current_state=[True], def_current_on_timesteps=[1])
