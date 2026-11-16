@@ -43,6 +43,7 @@ so ``S_dis / S_chg = eff_dis * eff_chg = RTE`` (capacity independent) and
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -65,6 +66,14 @@ MIN_SOC_SWING_PER_SEGMENT = 10.0  # a segment must move at least this many SoC p
 # resample buckets (dt == 3x step) are tolerated as benign recorder jitter and
 # still bridged by the trapezoid.
 MAX_GAP_STEP_MULTIPLE = 3.0
+# Staleness-aware fill (#1073), applied to the retrieved history before the
+# fit by apply_staleness_fill. Home Assistant only records a row when a state
+# changes, so a short run of empty buckets between two real readings usually
+# means the value did not change. A run of at most this many empty buckets is
+# held at the last recorded state instead of being bridged by a straight line.
+# It stays at MAX_GAP_STEP_MULTIPLE - 1 so that only silences the gap test
+# above already bridges are filled: a longer silence is still a recorder gap.
+STALENESS_FILL_MAX_BUCKETS = 2
 
 # Sufficiency floors
 MIN_DEEP_SEGMENTS = 3  # per direction, before a capacity fit is attempted
@@ -237,6 +246,161 @@ def _intercept_diag(x: np.ndarray, y: np.ndarray) -> float:
         return 0.0
     slope = vy / vx
     return float(ym - slope * xm)
+
+
+def apply_staleness_fill(
+    df: pd.DataFrame,
+    power_col: str,
+    soc_col: str,
+    last_states: Mapping | None,
+    marker_buckets: Mapping | None,
+    time_step,
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """
+    Hold short silences of the battery sensors at their last recorded state (#1073).
+
+    Home Assistant records a row only when a state changes, so a bucket of the
+    retrieved history with no row usually means "unchanged since the last
+    reading", while the estimator's trapezoid bridges it with a straight line.
+    For each of ``power_col`` and ``soc_col``, a run of buckets with no real
+    recorded state is filled with the last real state of the bucket before it,
+    and only when all of these hold:
+
+    * the run is bounded on both sides by buckets with a real recorded state of
+      that sensor (leading and trailing runs are never filled);
+    * the run is at most ``STALENESS_FILL_MAX_BUCKETS`` buckets long, counted on
+      the continuous ``time_step`` grid; a longer run is left untouched, never
+      partly filled;
+    * neither sensor of the pair recorded an ``unavailable``/``unknown`` state in
+      the run or in either bounding bucket.
+
+    The run and its fill value come from the retrieval's aux series, not from
+    ``df``, so a bucket holding only Home Assistant's synthetic start-of-day row
+    counts as part of a run, never as its bound.
+
+    :param df: The retrieved history (as handed to ``identify``).
+    :param power_col: Signed battery power column.
+    :param soc_col: State of charge column.
+    :param last_states: Per sensor, the last real recorded state of each bucket
+        (NaN where there was none), as recorded by ``RetrieveHass.get_data`` with
+        ``record_staleness=True`` in ``bucket_last_state``.
+    :param marker_buckets: Per sensor, the buckets holding an unavailable or
+        unknown row (``RetrieveHass.marker_buckets``).
+    :param time_step: The history bucket size (``optimization_time_step``).
+    :param logger: Optional logger for a debug summary.
+    :return: A copy of ``df`` with the qualifying runs filled, or ``df`` itself
+        when there is nothing to fill or the aux series are missing, empty or
+        do not sit on the frame's grid.
+    """
+    max_run = int(STALENESS_FILL_MAX_BUCKETS)
+    if max_run <= 0 or time_step is None or df is None or df.empty:
+        return df
+    if not isinstance(last_states, Mapping):
+        return df
+    cols = (power_col, soc_col)
+    if any(c not in last_states or c not in df.columns for c in cols):
+        return df
+    if not isinstance(marker_buckets, Mapping):
+        marker_buckets = {}
+    try:
+        step_ns = int(pd.Timedelta(time_step).as_unit("ns").value)
+    except (TypeError, ValueError):
+        return df
+    index = df.index
+    if (
+        step_ns <= 0
+        or not isinstance(index, pd.DatetimeIndex)
+        or index.hasnans
+        or not index.is_unique
+    ):
+        return df
+    origin_ns = int(index.as_unit("ns").asi8.min())
+
+    def grid_positions(stamps) -> np.ndarray | None:
+        """Positions of ``stamps`` on the frame's step grid, or None when off it."""
+        if not isinstance(stamps, pd.DatetimeIndex) or (stamps.tz is None) != (index.tz is None):
+            return None
+        if len(stamps) == 0:
+            return np.empty(0, dtype=np.int64)
+        offsets = stamps.as_unit("ns").asi8 - origin_ns
+        if np.any(offsets % step_ns):
+            return None
+        return offsets // step_ns
+
+    frame_pos = grid_positions(index)
+    if frame_pos is None:
+        return df
+    n_grid = int(frame_pos.max()) + 1
+    # Frame row of each grid bucket (-1 where the frame has no row for it).
+    row_at = np.full(n_grid, -1, dtype=np.int64)
+    row_at[frame_pos] = np.arange(len(index))
+
+    held: dict[str, np.ndarray] = {}
+    for col in cols:
+        series = last_states[col]
+        if not isinstance(series, pd.Series):
+            return df
+        pos = grid_positions(series.index)
+        if pos is None:
+            return df
+        values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        inside = (pos >= 0) & (pos < n_grid)
+        grid = np.full(n_grid, np.nan)
+        grid[pos[inside]] = values[inside]
+        held[col] = grid
+
+    # Unavailable/unknown rows of EITHER sensor void a run of both (rule 3).
+    marked = np.zeros(n_grid, dtype=bool)
+    for col in cols:
+        stamps = marker_buckets.get(col)
+        if stamps is None or len(stamps) == 0:
+            continue
+        pos = grid_positions(pd.DatetimeIndex(stamps))
+        if pos is None:
+            return df
+        marked[pos[(pos >= 0) & (pos < n_grid)]] = True
+    marked_before = np.concatenate(([0], np.cumsum(marked)))
+
+    out = df
+    filled: dict[str, int] = {}
+    voided = 0
+    for col in cols:
+        observed = np.flatnonzero(np.isfinite(held[col]))
+        if len(observed) < 2:
+            continue
+        left, right = observed[:-1], observed[1:]
+        missing = right - left - 1
+        short = (missing >= 1) & (missing <= max_run)
+        clean = (marked_before[right + 1] - marked_before[left]) == 0
+        voided += int(np.sum(short & ~clean))
+        keep = short & clean
+        left, missing = left[keep], missing[keep]
+        if len(left) == 0:
+            continue
+        run_id = np.repeat(np.arange(len(left)), missing)
+        step_in_run = np.arange(len(run_id)) - np.repeat(np.cumsum(missing) - missing, missing)
+        rows = row_at[np.repeat(left, missing) + step_in_run + 1]
+        # A run the frame does not hold whole is skipped, never partly filled.
+        whole = ~np.isin(run_id, run_id[rows < 0])
+        if not whole.any():
+            continue
+        if out is df:
+            out = df.copy()
+        values = out[col].to_numpy(dtype=float, copy=True)
+        values[rows[whole]] = held[col][np.repeat(left, missing)[whole]]
+        out[col] = values
+        filled[col] = int(whole.sum())
+    if logger is not None and (filled or voided):
+        logger.debug(
+            "battery_identification: held %d power and %d state of charge bucket(s) "
+            "at the last recorded state; %d short run(s) left as they were because "
+            "of unavailable/unknown markers",
+            filled.get(power_col, 0),
+            filled.get(soc_col, 0),
+            voided,
+        )
+    return out
 
 
 class BatteryIdentification:
