@@ -161,7 +161,7 @@ user's browser, another add-on or container on the same host, a local process on
 | `/api-token` | only through trusted ingress, only for a generated token, only when opened as a page (`Sec-Fetch-Mode: navigate`, so `fetch()` from another add-on's panel gets `403`), and served with `Content-Security-Policy: sandbox`, so a page that frames or opens it cannot read its text (opaque origin) | a user who opens the page can read it. Script on the shared Home Assistant origin can already drive EMHASS through ingress; treat the token as equal to EMHASS admin access |
 | Failure modes | unreadable/invalid source, short token, unwritable data folder: `503`, never open | a misconfiguration is an outage, not a breach; `/healthz` stays up |
 | Brute force | 16+ characters; failed logins wait one second; failures are logged as a count once a minute | no lockout; use a long random token |
-| Information | `/healthz` is open (status only) | readiness, uptime and the EMHASS and Python versions are visible |
+| Information | `/healthz` is open (status only) | readiness, uptime, the EMHASS and Python versions, the last run's time and status and the schema version are visible |
 
 ## Reference
 

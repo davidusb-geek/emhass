@@ -22,9 +22,9 @@ When none of them sets a token, EMHASS makes one (``secrets.token_urlsafe(32)``)
 the first time it starts and keeps it in the data folder in the file
 ``emhass_api_token`` (mode 0600, never a link). Later starts reuse that file, so
 the token survives restarts. Only the path is logged, never the token. In the
-add-on, the web UI shows it to a signed-in Home Assistant user (``/api-token``).
+add-on, the web UI shows it to a Home Assistant administrator (``/api-token``).
 ``EMHASS_API_TOKEN_AUTOGENERATE=false`` turns the generation off: with no token
-configured, requests then get 503.
+configured, requests then get 503 (trusted ingress is still served, since it needs no token).
 
 ``EMHASS_API_AUTH_DISABLED=true`` turns access control off. It is an explicit
 operator choice, logged at start-up, and it restores the unauthenticated access
