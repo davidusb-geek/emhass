@@ -20,7 +20,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import last_run, plan_store, utils
+from emhass import battery_identification, last_run, plan_store, utils
 from emhass.atomic_file import atomic_write
 from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
 from emhass.battery_identification import BatteryIdentification, apply_staleness_fill
@@ -1265,8 +1265,46 @@ def _battery_identification_last_attempt(entry) -> dict | None:
     return attempt
 
 
+def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = None) -> bool:
+    """
+    True when a retained ok record must not be served because the latest fit
+    attempt was held back by the same-source agreement gate (#1072, #1294).
+
+    The gate holds back a fresh fit above the 0.985 one-way efficiency edge
+    when its cross-check agrees, but a record in that range stored before the
+    gate existed, or fitted from a history too short for the cross-check to
+    run, would otherwise keep being served as the retained record (#1052). So
+    the record is held only when its stored ``eta_charge_symmetric`` is above
+    that same edge and its well-formed ``last_attempt`` carries
+    ``agreement_hold: true``. A record at or below the edge is served as
+    before.
+
+    ``current_pair`` (N>1 only) binds the hold to the ``(power, soc)`` pair the
+    attempt was made against, like every other N>1 read of last_attempt. The
+    N=1 cache hit is sensor-indifferent, so it passes no pair.
+
+    Anything malformed returns False and the record is served as before, so a
+    hand-edited file can never become a silent permanent suppression.
+    """
+    if not isinstance(entry, dict) or entry.get("status") != "ok":
+        return False
+    eta = entry.get("eta_charge_symmetric")
+    edge = battery_identification.SQRT_RTE_HIGH - battery_identification.AGREEMENT_EDGE_MARGIN
+    # bool is an int subclass; NaN and infinity fail the chained comparison.
+    if isinstance(eta, bool) or not isinstance(eta, (int, float)) or not edge < eta < float("inf"):
+        return False
+    attempt = _battery_identification_last_attempt(entry)
+    if attempt is None or attempt.get("agreement_hold") is not True:
+        return False
+    return current_pair is None or _battery_id_sensors_match(attempt.get("sensors"), *current_pair)
+
+
 def _record_battery_identification_failed_attempt(
-    existing: dict | None, status: str, messages: list[str], sensors: dict | None = None
+    existing: dict | None,
+    status: str,
+    messages: list[str],
+    sensors: dict | None = None,
+    agreement_hold: bool = False,
 ) -> dict:
     """
     Build the payload/slot to persist for a failed identification attempt.
@@ -1287,6 +1325,12 @@ def _record_battery_identification_failed_attempt(
     sensor_battery_state_of_charge on a cache hit), so recording sensors
     there would be dead data.
 
+    ``agreement_hold`` is the result's flag from the same-source agreement
+    gate; ``"agreement_hold": true`` is recorded in ``last_attempt`` only when
+    it is True, so every other attempt keeps the same keys as before. It is
+    what stops a retained near-ceiling record being served (see
+    :func:`_battery_id_agreement_hold`).
+
     ``existing`` must already be known to be the SAME schema shape this
     caller expects (flat v1 at N=1, a v2 container slot at N>1): this
     function only distinguishes "ok" from "not ok" within that shape, it
@@ -1303,6 +1347,8 @@ def _record_battery_identification_failed_attempt(
     }
     if sensors is not None:
         attempt["sensors"] = sensors
+    if agreement_hold is True:
+        attempt["agreement_hold"] = True
     if isinstance(existing, dict) and existing.get("status") == "ok":
         new_payload = dict(existing)
     else:
@@ -1687,6 +1733,17 @@ async def _identify_battery_impl(
                 )
                 payload = None
             if payload is not None and payload.get("status") == "ok":
+                if _battery_id_agreement_hold(payload):
+                    logger.info(
+                        "Battery identification: stored estimate (one-way efficiency %s) is "
+                        "above %.3f and the latest fit attempt was held back by the agreement "
+                        "check, so it is not served; keeping configured battery values, "
+                        "backing off until max_age.",
+                        _battery_id_safe_log_value(payload.get("eta_charge_symmetric")),
+                        battery_identification.SQRT_RTE_HIGH
+                        - battery_identification.AGREEMENT_EDGE_MARGIN,
+                    )
+                    return
                 _log_battery_identification_summary(logger, payload, plant_conf)
                 if tier == "suggest":
                     _log_battery_identification_recommendation(logger, payload, plant_conf)
@@ -1814,7 +1871,7 @@ async def _identify_battery_impl(
                 )
                 return
             new_payload = _record_battery_identification_failed_attempt(
-                existing, result.status, result.messages
+                existing, result.status, result.messages, agreement_hold=result.agreement_hold
             )
             _atomic_json_write(json_path, new_payload)
             logger.warning(
@@ -1933,6 +1990,18 @@ async def _identify_battery_impl(
                 and entry.get("status") == "ok"
                 and entry_matches_current_pair
             ):
+                if _battery_id_agreement_hold(entry, (power_list[k], soc_list[k])):
+                    logger.info(
+                        "Battery %d identification: stored estimate (one-way efficiency %s) is "
+                        "above %.3f and the latest fit attempt was held back by the agreement "
+                        "check, so it is not served; keeping configured battery values, "
+                        "backing off until max_age.",
+                        k,
+                        _battery_id_safe_log_value(entry.get("eta_charge_symmetric")),
+                        battery_identification.SQRT_RTE_HIGH
+                        - battery_identification.AGREEMENT_EDGE_MARGIN,
+                    )
+                    continue
                 _log_battery_identification_summary(logger, entry, plant_conf, k=k)
                 if tier == "suggest":
                     _log_battery_identification_recommendation(logger, entry, plant_conf, k=k)
@@ -2018,7 +2087,11 @@ async def _identify_battery_impl(
                 str(k)
             )
             failed_entry = _record_battery_identification_failed_attempt(
-                prior, result.status, result.messages, sensors={"power": power_col, "soc": soc_col}
+                prior,
+                result.status,
+                result.messages,
+                sensors={"power": power_col, "soc": soc_col},
+                agreement_hold=result.agreement_hold,
             )
             _write_battery_identification_container(json_path, logger, k, failed_entry)
             logger.warning(

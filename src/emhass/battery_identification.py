@@ -147,6 +147,10 @@ class BatteryIdentificationResult:
       a near-ceiling RTE is backed only by its same-source cross-check.
 
     Only an ``ok`` result should be written to disk or published to HA.
+
+    ``agreement_hold`` is True when the same-source agreement gate (#1072)
+    held this fit back. It is not part of :meth:`to_dict`; a failed attempt
+    records it in ``last_attempt`` instead (#1294).
     """
 
     status: str
@@ -165,6 +169,7 @@ class BatteryIdentificationResult:
     n_charge_segments: int = 0
     n_discharge_segments: int = 0
     n_equal_soc_cycles: int = 0
+    agreement_hold: bool = False
 
     @property
     def is_ok(self) -> bool:
@@ -881,6 +886,7 @@ class BatteryIdentification:
             and eta > SQRT_RTE_HIGH - AGREEMENT_EDGE_MARGIN
             and abs(rte - rte_eb) < AGREEMENT_MAX_RTE_GAP
         ):
+            result.agreement_hold = True
             _downgrade(
                 f"Round-trip efficiency {rte:.4f} (one-way sqrt {eta:.4f}) is above "
                 f"{SQRT_RTE_HIGH - AGREEMENT_EDGE_MARGIN:.3f}, near the {SQRT_RTE_HIGH} "
