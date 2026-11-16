@@ -8,6 +8,7 @@ import html
 import itertools
 import logging
 import math
+import numbers
 import os
 import pathlib
 import re
@@ -725,12 +726,13 @@ def calculate_surface_solar_gain(
 def _numeric_series(value, path: str) -> list[float]:
     """A list of finite numbers (not booleans or strings), as floats, or a
     ValueError naming ``path``. A string is rejected rather than read as a list
-    of characters."""
+    of characters. NumPy real scalars are numbers like their Python equivalents:
+    the same values in an array already pass through ``tolist()``."""
     if not isinstance(value, list | tuple):
         raise ValueError(f"{path} must be a list of numbers, got {type(value).__name__}")
     out = []
     for i, v in enumerate(value):
-        if isinstance(v, bool) or not isinstance(v, int | float):
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
             raise ValueError(f"{path}[{i}] must be a number, got {v!r}")
         try:
             f = float(v)
