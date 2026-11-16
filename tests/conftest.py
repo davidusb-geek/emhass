@@ -34,3 +34,32 @@ def _api_auth_environment(request, monkeypatch):
             monkeypatch.delenv(name, raising=False)
         return
     monkeypatch.setenv("EMHASS_API_AUTH_DISABLED", "true")
+
+
+@pytest.fixture(autouse=True)
+def _own_remote_commits(tmp_path, monkeypatch):
+    """A coordinator with remote solvers keeps a record of what it committed
+    them to in its data folder; in a test, in a folder of the test's own,
+    never in the data folder the tests share."""
+    from emhass.coordinator import backend
+
+    monkeypatch.setattr(
+        backend,
+        "_remote_commits_path",
+        lambda opt: tmp_path / "coordinator_remote_commits.json",
+        raising=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_plan_stepper_left():
+    """A participant's plan stepper runs a thread: none outlives its test (it
+    would publish into a later test's data folder)."""
+    yield
+    import sys
+
+    participant_api = sys.modules.get("emhass.participant_api")
+    if participant_api is not None:
+        for stepper in list(getattr(participant_api, "_steppers", {}).values()):
+            stepper.stop()
+        participant_api._steppers.clear()

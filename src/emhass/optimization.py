@@ -219,11 +219,25 @@ def _coordinated_plan(opt, *args, **kwargs):
         None; or None and why not, when the coordinator cannot plan this
         configuration, so the caller runs the default cvxpy solver.
     """
+    # Set by the coordinator: what its remote solvers run, for the default
+    # solver to plan around if it does not plan (reset first: EMHASS may hand
+    # the same object back next run)
+    opt.fed_running, opt.fed_remote_status, opt.fed_site_remotes = {}, {}, []
     reason = _coordinated_config_problem(opt.optim_conf) or _coordinated_plant_problem(
         opt.plant_conf
     )
     if reason:
         opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        # the remotes it last committed still run their plans: the default
+        # solver plans around them
+        try:
+            from emhass.coordinator.backend import note_running
+
+            data_opt = kwargs.get("data_opt", args[0] if args else None)
+            if data_opt is not None:
+                note_running(opt, data_opt)
+        except Exception as exc:  # noqa: BLE001 - the fallback runs regardless
+            opt.logger.warning(f"optimization_backend: the remotes' plans are not known ({exc})")
         return None, reason
     from emhass.coordinator.backend import optimize
 
@@ -242,6 +256,25 @@ def _coordinated_plan(opt, *args, **kwargs):
         reason = getattr(opt, "fed_fallback_reason", None)
         return None, str(reason) if reason else "the coordinator cannot plan this configuration"
     return res, None
+
+
+def _remotes_running_w(opt):
+    """What the coordinator's remote solvers run (W per slot), for the default
+    solver to plan around; None without any."""
+    if not getattr(opt, "fed_running", None):
+        return None
+    from emhass.coordinator.backend import fallback_load_w
+
+    return fallback_load_w(opt)
+
+
+def _remote_columns(opt) -> dict:
+    """The coordinator's remotes' statuses and powers for a fallback's results."""
+    if not (getattr(opt, "fed_running", None) or getattr(opt, "fed_site_remotes", None)):
+        return {}
+    from emhass.coordinator.backend import fallback_columns
+
+    return fallback_columns(opt)
 
 
 def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
@@ -289,13 +322,16 @@ def _warn_unheld_limits(opt) -> None:
         )
 
 
-def _with_backend(res, requested: str, fallback_reason: str | None):
+def _with_backend(res, requested: str, fallback_reason: str | None, extra=None):
     """Mark which backend made the plan in `res`: the one requested, or cvxpy
     and why. Only with a coordinator backend requested, so a default
-    configuration's results keep exactly their columns."""
+    configuration's results keep exactly their columns. `extra`: columns the
+    coordinator left for a fallback (its remotes' statuses and powers)."""
     res["backend_requested"] = requested
     res["backend_used"] = "cvxpy" if fallback_reason else requested
     res["backend_fallback_reason"] = fallback_reason or ""
+    for name, value in (extra or {}).items():
+        res[name] = value
     return res
 
 
@@ -8807,6 +8843,14 @@ class Optimization:
             if res is not None:
                 return _with_backend(res, backend, None)
             _warn_unheld_limits(self)
+            committed = _remotes_running_w(self)
+            if committed is not None:
+                # remotes run their parts already: their power is load here
+                p_load = p_load + np.asarray(committed, dtype=float)
+                self.logger.warning(
+                    "optimization_backend: the default solver plans around the power of the "
+                    "remote solvers already running their plans (counted in the load)"
+                )
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
         # Rebuild problem when forecast inputs change to ensure fresh forecasts are applied.
         if self.optim_conf.get("shared_thermal_tanks"):
@@ -10383,7 +10427,7 @@ class Optimization:
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
             if fallback_reason:
-                _with_backend(opt_tp, backend, fallback_reason)
+                _with_backend(opt_tp, backend, fallback_reason, _remote_columns(self))
 
             if stage_times is not None:
                 stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -10417,7 +10461,7 @@ class Optimization:
             p_pv_plants=p_pv_plants,
         )
         if fallback_reason:
-            _with_backend(results_df, backend, fallback_reason)
+            _with_backend(results_df, backend, fallback_reason, _remote_columns(self))
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
         return results_df
