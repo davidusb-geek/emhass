@@ -924,18 +924,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         750 Wh per step), so the per-step factor is min(availability,
         efficiency), not their product.
         """
+        # (target, availability, has slack to the real reach)
         cases = (
-            (0.44, None),
-            (0.4425, None),  # exactly the real reach
-            (0.374, [0.5] * 10),  # availability * efficiency would say 0.37125
-            (0.442, [0.97] * 10),
+            (0.44, None, True),
+            # Exactly the real reach: only the warning is checked, the solve
+            # status would lean on solver tolerance.
+            (0.4425, None, False),
+            (0.374, [0.5] * 10, True),  # availability * efficiency would say 0.37125
+            (0.442, [0.97] * 10, True),
         )
-        for target, availability in cases:
+        for target, availability, has_slack in cases:
             with self.subTest(target=target, availability=availability):
                 status, warnings_logged = self._run_soc_target_reach_case(
                     target, 0, availability=availability
                 )
-                self.assertIn(status, VALID_OPTIMAL_STATUSES)
+                if has_slack:
+                    self.assertIn(status, VALID_OPTIMAL_STATUSES)
                 self.assertEqual(warnings_logged, [])
 
     def test_intermediate_soc_target_reach_follows_charge_derating(self):
@@ -968,6 +972,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn(status, VALID_OPTIMAL_STATUSES)
                 self.assertEqual(warnings_logged, [])
+        # A threshold at soc_min gives no faster path: the SoC cannot go below
+        # it, so from 0.41 the derated rate applies throughout and three steps
+        # reach 0.41 + 3 * 0.03 = 0.50.
+        floor_plant = dict(derating, battery_minimum_state_of_charge=0.4)
+        status, warnings_logged = self._run_soc_target_reach_case(
+            0.536, 2, plant=floor_plant, soc_init=0.41
+        )
+        self.assertNotIn(status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(warnings_logged, msg="soc_target=0.536 is above the derated reach 0.50")
+        reported = float(warnings_logged[0].split("reachable SoC is ~")[1].split()[0])
+        self.assertAlmostEqual(reported, 0.50, delta=1e-3)
 
     def test_battery_soc_final_reward_factor(self):
         """Test that defining a battery_soc_final_reward_factor causes
