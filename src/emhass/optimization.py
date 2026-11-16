@@ -5359,9 +5359,14 @@ class Optimization:
         thermal_cap = self._get_load_source_config(k).get("max_thermal_power")
         if thermal_cap is not None:
             thermal_cap = float(thermal_cap)
-            if thermal_cap <= 0:
+            # A NaN cap would pass `<= 0` and then crash CVXPY when it reaches the
+            # nonneg ON-level Parameter; an infinite one would silently mean "no
+            # cap". The heat-topology compiler rejects both, so the standalone
+            # path does too.
+            if not np.isfinite(thermal_cap) or thermal_cap <= 0:
                 raise ValueError(
-                    f"Load {k}: 'max_thermal_power' must be positive, got {thermal_cap}"
+                    f"Load {k}: 'max_thermal_power' must be a positive finite number, "
+                    f"got {thermal_cap}"
                 )
             # Same form, and the same DPP-safety argument, as
             # _add_shared_thermal_tank_constraints: `heatpump_cops` is a cp.Parameter

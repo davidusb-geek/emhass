@@ -5649,8 +5649,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(float(res["P_deferrable0"][0]), 0.0)
 
-    def test_thermal_battery_max_thermal_power_must_be_positive(self):
-        """A non-positive `max_thermal_power` is a configuration error."""
+    def test_thermal_battery_max_thermal_power_must_be_positive_and_finite(self):
+        """A non-positive or non-finite `max_thermal_power` is a configuration
+        error: NaN slips past a `<= 0` test and then crashes CVXPY on the nonneg
+        ON-level Parameter, while inf would silently disable the cap."""
         thermal_config = {
             "start_temperature": 19.0,
             "supply_temperature": 35.0,
@@ -5661,9 +5663,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "max_temperatures": [22.0] * 48,
             "max_thermal_power": 0.0,
         }
-        with self.assertRaises(ValueError) as ctx:
-            self.run_thermal_battery_optimization(thermal_config, outdoor_temps=np.zeros(48))
-        self.assertIn("max_thermal_power", str(ctx.exception))
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            thermal_config["max_thermal_power"] = bad
+            with self.assertRaises(ValueError) as ctx:
+                self.run_thermal_battery_optimization(thermal_config, outdoor_temps=np.zeros(48))
+            self.assertIn("max_thermal_power", str(ctx.exception))
 
     def test_thermal_battery_infeasible_temperature_constraints(self):
         """Test optimizer handles infeasible thermal battery configuration (min_temperatures > max_temperatures)."""
