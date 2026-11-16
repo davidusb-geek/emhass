@@ -256,6 +256,8 @@ def apply_staleness_fill(
     marker_buckets: Mapping | None,
     time_step,
     logger: logging.Logger | None = None,
+    *,
+    row_counts: Mapping | None,
 ) -> pd.DataFrame:
     """
     Hold short silences of the battery sensors at their last recorded state (#1073).
@@ -273,7 +275,17 @@ def apply_staleness_fill(
       the continuous ``time_step`` grid; a longer run is left untouched, never
       partly filled;
     * neither sensor of the pair recorded an ``unavailable``/``unknown`` state in
-      the run or in either bounding bucket.
+      the run or in either bounding bucket;
+    * every bucket of the run holds a real recorded state of some other retrieved
+      sensor (the load, the other sensor of the pair), which shows the recorder
+      was running. When every sensor goes quiet at once the recorder was down,
+      and nothing says the battery held still.
+
+    Nothing is filled at all unless both sensors of the pair report faster than
+    the step: in at least a fifth of the buckets where a sensor has a reading, it
+    has two or more. A sensor polled once per step or slower never puts two
+    readings in one bucket, so its empty buckets are changes nobody sampled, not
+    an unchanged value.
 
     The run and its fill value come from the retrieval's aux series, not from
     ``df``, so a bucket holding only Home Assistant's synthetic start-of-day row
@@ -289,17 +301,24 @@ def apply_staleness_fill(
         unknown row (``RetrieveHass.marker_buckets``).
     :param time_step: The history bucket size (``optimization_time_step``).
     :param logger: Optional logger for a debug summary.
+    :param row_counts: Per sensor, the number of real readings in each bucket
+        (``RetrieveHass.bucket_row_count``). Without it the reporting rate of the
+        pair cannot be checked, so nothing is filled.
     :return: A copy of ``df`` with the qualifying runs filled, or ``df`` itself
         when there is nothing to fill or the aux series are missing, empty or
         do not sit on the frame's grid.
     """
     max_run = int(STALENESS_FILL_MAX_BUCKETS)
+    # Share of a sensor's observed buckets that must hold two or more readings.
+    # Probed for #1073: change-only packs sit at 0.40 to 1.00 for 5 to 60 minute
+    # steps, sensors polled once per step or slower at 0.00.
+    min_multi_share = 0.2
     if max_run <= 0 or time_step is None or df is None or df.empty:
         return df
-    if not isinstance(last_states, Mapping):
+    if not isinstance(last_states, Mapping) or not isinstance(row_counts, Mapping):
         return df
     cols = (power_col, soc_col)
-    if any(c not in last_states or c not in df.columns for c in cols):
+    if any(c not in last_states or c not in row_counts or c not in df.columns for c in cols):
         return df
     if not isinstance(marker_buckets, Mapping):
         marker_buckets = {}
@@ -332,23 +351,49 @@ def apply_staleness_fill(
     if frame_pos is None:
         return df
     n_grid = int(frame_pos.max()) + 1
+    # The grid is the frame's span over time_step. A time_step finer than the
+    # frame's own spacing would size it by that value instead of the history.
+    if n_grid > 2 * len(index) + 2:
+        return df
     # Frame row of each grid bucket (-1 where the frame has no row for it).
     row_at = np.full(n_grid, -1, dtype=np.int64)
     row_at[frame_pos] = np.arange(len(index))
 
-    held: dict[str, np.ndarray] = {}
-    for col in cols:
-        series = last_states[col]
+    def on_grid(series) -> np.ndarray | None:
+        """``series`` as a float array over the grid (NaN elsewhere), or None."""
         if not isinstance(series, pd.Series):
-            return df
+            return None
         pos = grid_positions(series.index)
         if pos is None:
-            return df
+            return None
         values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
         inside = (pos >= 0) & (pos < n_grid)
         grid = np.full(n_grid, np.nan)
         grid[pos[inside]] = values[inside]
+        return grid
+
+    held: dict[str, np.ndarray] = {}
+    for col in cols:
+        grid = on_grid(last_states[col])
+        counts = on_grid(row_counts[col])
+        if grid is None or counts is None:
+            return df
+        if np.sum(counts >= 2) < min_multi_share * np.sum(counts >= 1):
+            if logger is not None:
+                logger.debug(
+                    "battery_identification: a battery sensor reports no faster than "
+                    "the optimization time step, so short silences are not held"
+                )
+            return df
         held[col] = grid
+
+    # How many retrieved sensors recorded a real state in each bucket. A series
+    # that is not on the grid counts for nothing.
+    seen = np.zeros(n_grid, dtype=np.int64)
+    for key, series in last_states.items():
+        grid = held[key] if key in held else on_grid(series)
+        if grid is not None:
+            seen += np.isfinite(grid)
 
     # Unavailable/unknown rows of EITHER sensor void a run of both (rule 3).
     marked = np.zeros(n_grid, dtype=bool)
@@ -364,17 +409,22 @@ def apply_staleness_fill(
 
     out = df
     filled: dict[str, int] = {}
-    voided = 0
+    voided = unwitnessed = 0
     for col in cols:
-        observed = np.flatnonzero(np.isfinite(held[col]))
+        own = np.isfinite(held[col])
+        observed = np.flatnonzero(own)
         if len(observed) < 2:
             continue
         left, right = observed[:-1], observed[1:]
         missing = right - left - 1
         short = (missing >= 1) & (missing <= max_run)
         clean = (marked_before[right + 1] - marked_before[left]) == 0
+        # A run is witnessed when no bucket in it is empty for every other sensor.
+        blind_before = np.concatenate(([0], np.cumsum((seen - own) == 0)))
+        witnessed = (blind_before[right] - blind_before[left + 1]) == 0
         voided += int(np.sum(short & ~clean))
-        keep = short & clean
+        unwitnessed += int(np.sum(short & clean & ~witnessed))
+        keep = short & clean & witnessed
         left, missing = left[keep], missing[keep]
         if len(left) == 0:
             continue
@@ -391,14 +441,16 @@ def apply_staleness_fill(
         values[rows[whole]] = held[col][np.repeat(left, missing)[whole]]
         out[col] = values
         filled[col] = int(whole.sum())
-    if logger is not None and (filled or voided):
+    if logger is not None and (filled or voided or unwitnessed):
         logger.debug(
             "battery_identification: held %d power and %d state of charge bucket(s) "
             "at the last recorded state; %d short run(s) left as they were because "
-            "of unavailable/unknown markers",
+            "of unavailable/unknown markers, %d because no other sensor was recorded "
+            "during them",
             filled.get(power_col, 0),
             filled.get(soc_col, 0),
             voided,
+            unwitnessed,
         )
     return out
 
