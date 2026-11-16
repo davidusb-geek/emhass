@@ -60,7 +60,7 @@ browser go to `/login`). The health check stays open so container health checks 
 3. `emhass_api_token` in `secrets_emhass.yaml` (quote it: YAML can change an unquoted number).
 
 **If none is set, EMHASS generates one** the first time it starts and keeps it in the data folder, in the file
-`emhass_api_token` (mode `0600`; never a link). Later starts reuse it, so it survives restarts. The log names the file,
+`emhass_api_token` (mode `0600` on POSIX; never a link). Later starts reuse it, so it survives restarts. The log names the file,
 never the token. In the add-on the web UI shows it to you through ingress. Set `EMHASS_API_TOKEN_AUTOGENERATE=false` to
 disable generation: EMHASS then answers `503` until you configure a token.
 
@@ -99,9 +99,11 @@ Settings (normally automatic): `EMHASS_INGRESS_PORT` (default `8099` when `SUPER
 does for add-ons; unset otherwise) and `EMHASS_INGRESS_PEERS` (default `172.30.32.2`; a comma-separated list of
 addresses or networks that **replaces** the default).
 
-The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). With an
-older add-on configuration (ingress on port 5000) the panel shows the login page; log in with the token from the
-add-on option, or update the add-on.
+The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
+add-on pins the EMHASS image to its own version, so both change in one update. Do not mix them: an older add-on
+configuration (ingress on port 5000) with this image shows the login page and gives you no way to learn the token, and
+this add-on configuration with an older image has nothing listening on 8099. The `emhass-test` add-on follows the
+floating `test` image, so update both together there as well.
 
 ## Browser login
 
@@ -124,6 +126,7 @@ silently left open, and nothing silently keeps working without credentials.
 Compatibility notes:
 
 - *Dashboards and sensors that read `/api/v1/plan` or `/api/v1/last-run`* need the header too (reads are protected).
+- *Dashboards that embed `http://host:5000/`* (Home Assistant iframe or webpage cards) and live on a different site than EMHASS cannot keep the `SameSite=Strict` login cookie and stay on the login page. Embed the EMHASS panel through Home Assistant ingress instead, or call the API with the bearer header.
 - *Reverse proxies* (nginx, Traefik, Cloudflare tunnels) only need to pass the `Authorization` header through. They must not
   add credentials themselves unless you want the proxy to be the access control.
 - *Trusted networks*: if you accept the risk on a network you fully control, `EMHASS_API_AUTH_DISABLED=true` restores the old
@@ -139,14 +142,15 @@ user's browser, another add-on or container on the same host, a local process on
 
 | Area | Control | Residual risk |
 |---|---|---|
-| Routes | one `before_request` hook, default closed; only `/healthz`, `/login`, `/logout` are open; a test enumerates every route | a future route is protected automatically |
-| Token | 16+ characters; constant-time comparison; never logged, echoed or placed in runtime parameters; every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
-| No token | generated and persisted, else `503`; never open | whoever can read the data folder can read the token; it is mode `0600` |
+| Routes | one `before_request` hook, default closed; only `/healthz`, `/login`, `/logout` are open; tests enumerate every route in the URL map, unauthenticated on the API port and as a stranger on the ingress port, and pin the open list | a future route is protected automatically; on the ingress port the three open endpoints still answer anyone |
+| Token | 16+ characters; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a signed-in Home Assistant user, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
+| No token | generated and persisted (written completely or not at all, then linked into place), else `503`; never open | whoever can read the data folder can read the token. On POSIX the file is mode `0600`; **on Windows it is not restricted to its owner** (a warning is logged): set `EMHASS_API_TOKEN` there |
 | Bearer vs cookie | bearer works everywhere; cookie is for browsers | a copied cookie works until it expires or EMHASS restarts |
 | CSRF | `SameSite=Strict`; cookie and ingress requests that change something must be JSON; the existing `Sec-Fetch-Site: cross-site` refusal | none known; `SameSite` ignores ports, which is why JSON is also required |
 | Cookie scope | no `Path`: browser scopes it to the login folder | the cookie is sent to every port of the same host (a browser rule) |
 | Proxy trust | the TCP peer only; `forwarded_allow_ips` is empty and `proxy_headers=False`, so no header can change the peer | a deployment that re-enables forwarded headers lets a trusted forwarder choose the peer |
-| Ingress | separate port; peer must be the Supervisor; every other peer gets `403`; no header is read | another add-on that can forge the Supervisor's source address could reach the ingress port (needs raw-socket rights and layer-2 position on the hassio network) |
+| Ingress | separate port; peer must be the Supervisor; every other peer gets `403`; no header is read | another add-on that can forge the Supervisor's source address could reach the ingress port (needs raw-socket rights and layer-2 position on the hassio network). With `--network host` the ingress port listens on every interface of the host, so a peer that can connect as `172.30.32.2` (a Supervised host) is the only one let in |
+| `/api-token` | only through trusted ingress, only for a generated token, only when opened as a page (`Sec-Fetch-Mode: navigate`): a script in another add-on's panel, which shares Home Assistant's origin, gets `403` | a user who opens the page, or an XSS in EMHASS's own UI on the ingress origin that navigates a frame, can still read it; treat the token as equal to EMHASS admin access |
 | Failure modes | unreadable/invalid source, short token, unwritable data folder: `503`, never open | a misconfiguration is an outage, not a breach; `/healthz` stays up |
 | Brute force | 16+ characters; failed logins wait one second; failures are logged as a count once a minute | no lockout; use a long random token |
 | Information | `/healthz` is open (status only) | uptime and readiness are visible |
@@ -165,12 +169,12 @@ user's browser, another add-on or container on the same host, a local process on
 | Response | Meaning |
 |---|---|
 | `401` + `WWW-Authenticate: Bearer` | no or wrong token |
-| `403` | a cookie or ingress request that changes something was not JSON; or any request to the ingress port from a peer other than the Supervisor |
+| `403` | a cookie or ingress request that changes something was not JSON; or any request or WebSocket handshake to the ingress port from a peer other than the Supervisor (only `/healthz`, `/login` and `/logout` still answer there); or `/api-token` opened by a script |
 | `503` | access control is not usable: no token and none can be generated, or a token source is broken. Nothing ran |
 
 ## What has been verified
 
-Verified by automated tests and on the real server stack (gunicorn with the shipped configuration, two listeners):
+Verified by the automated tests in `tests/test_api_auth.py`, `tests/test_api_ingress.py` and `tests/test_api_provisioning.py` (they also check that the shipped gunicorn settings reach uvicorn as an empty trust list), and by manual checks outside CI on the shipped server stack (gunicorn with the shipped configuration, two listeners) and on the production Docker image with a probe container at `172.30.32.2` and a stranger container on the same network:
 the closed default, generation and persistence, the ingress listener and peer rule, forged headers, the proxy-header attack,
 failure modes, log hygiene, and that refused requests write nothing and publish nothing.
 **Not verified against a real Home Assistant Supervisor:** the Supervisor was emulated by a proxy that copies its documented

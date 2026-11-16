@@ -287,42 +287,97 @@ def _read_generated_waiting(path: pathlib.Path) -> str | None:
     return None
 
 
+_IS_WINDOWS = os.name == "nt"
+# An empty token file this old was left by a crash between creating and writing it; it holds no secret.
+STALE_EMPTY_S = 10.0
+
+
+def _publish_exclusively(path: pathlib.Path, token: str) -> bool:
+    """Make ``path`` hold ``token``, complete or not at all. True when this call made it, False when
+    it already existed.
+
+    The token is written and flushed to a private temporary file, which is then hard-linked to
+    ``path``: the link fails if ``path`` exists and never exposes a half-written file, even if the
+    process dies. A file system without hard links falls back to an exclusive create.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            pass  # no hard links here
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+        return True
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
     """Return ``(token, how)`` from the token file in ``data_dir``, making it when it is missing.
 
-    ``how`` is "file" or "new". The file is created exclusively with mode 0600, so two workers
-    starting together agree on one token. Raises ``ApiTokenError`` when it cannot be read or
-    written, which fails the server closed.
+    ``how`` is "file" or "new". The file appears complete or not at all and with mode 0600
+    (POSIX), so workers starting together agree on one token and a crash cannot leave a
+    half-written one. An empty file older than ``STALE_EMPTY_S`` (left by an older version
+    that crashed) is replaced. Raises ``ApiTokenError`` when it cannot be read or written, which
+    fails the server closed.
     """
     path = pathlib.Path(data_dir) / TOKEN_FILE_NAME
     existing = _read_generated_waiting(path)
     if existing is not None:
         return existing, "file"
     if path.exists():
-        raise ApiTokenError("the generated token file is empty")
+        try:
+            age = time.time() - path.stat().st_mtime
+            if age < STALE_EMPTY_S:
+                raise ApiTokenError("the generated token file is empty")
+            path.unlink()
+        except OSError:
+            raise ApiTokenError(
+                "the generated token file is empty and cannot be replaced"
+            ) from None
     token = secrets.token_urlsafe(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags, 0o600)
-    except FileExistsError:
-        again = _read_generated_waiting(path)  # another worker made it first
-        if again is None:
-            raise ApiTokenError("the generated token file is empty") from None
-        return again, "file"
+        created = _publish_exclusively(path, token)
     except OSError as e:
         raise ApiTokenError(
             f"no token is configured and one cannot be saved in the data folder ({type(e).__name__})"
         ) from None
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(token + "\n")
+    if not created:
+        again = _read_generated_waiting(path)  # another worker made it first
+        if again is None:
+            raise ApiTokenError("the generated token file is empty") from None
+        return again, "file"
     logger.warning(
-        "No %s was configured, so EMHASS generated one and saved it to %s (readable only by its "
-        "owner). Send it as 'Authorization: Bearer <token>'. In the Home Assistant add-on, open "
-        "the web UI and choose API token.",
+        "No %s was configured, so EMHASS generated one and saved it to %s. Send it as "
+        "'Authorization: Bearer <token>'. In the Home Assistant add-on, open the web UI and "
+        "choose API token.",
         SETTING_NAME,
         path,
     )
+    if _IS_WINDOWS:
+        logger.warning(
+            "On Windows the token file is not restricted to its owner. Set %s instead, or keep "
+            "the data folder private.",
+            ENV_NAME,
+        )
     return token, "new"
 
 
@@ -687,12 +742,20 @@ def session_is_valid(token: str, value: str | None, now: float | None = None) ->
     )
 
 
+def _api_port() -> int:
+    """The API port (``PORT``, as gunicorn.conf.py reads it)."""
+    try:
+        return int(os.environ.get("PORT", "5000").strip())
+    except ValueError:
+        return 5000
+
+
 def ingress_port() -> int | None:
     """The port of the ingress listener, or None when there is none.
 
     ``EMHASS_INGRESS_PORT``, else 8099 when running as a Home Assistant add-on (the Supervisor sets
     ``SUPERVISOR_TOKEN``). ``gunicorn.conf.py`` makes the same decision when it chooses what to
-    listen on; a test keeps the two in step.
+    listen on; a test keeps the two in step. Never the API port: that would refuse every API client.
     """
     value = os.environ.get(INGRESS_PORT_ENV, "").strip()
     if not value:
@@ -703,8 +766,8 @@ def ingress_port() -> int | None:
         port = int(value)
     except ValueError:
         return None
-    if str(port) == os.environ.get("PORT", "5000").strip():
-        return None  # the API port is never the ingress port: that would refuse every API client
+    if port == _api_port():
+        return None
     return port if 0 < port < 65536 else None
 
 
@@ -730,22 +793,22 @@ def _peer_is_supervisor(address: str | None) -> bool:
     return any(ip.version == net.version and ip in net for net in _ingress_networks())
 
 
-def _scope_pair(key: str):
+def _scope_pair(key: str, scope=None):
     """(host, port) from the ASGI scope, which the server fills from the socket, or None."""
-    value = request.scope.get(key)
+    value = (request.scope if scope is None else scope).get(key)
     if isinstance(value, (tuple, list)) and len(value) >= 2:
         return value[0], value[1]
     return None
 
 
-def on_ingress_port() -> bool:
-    """True when this request was accepted by the ingress listener."""
+def on_ingress_port(scope=None) -> bool:
+    """True when this request (or WebSocket handshake) was accepted by the ingress listener."""
     port = ingress_port()
-    server = _scope_pair("server")
+    server = _scope_pair("server", scope)
     return port is not None and server is not None and server[1] == port
 
 
-def is_trusted_ingress_request() -> bool:
+def is_trusted_ingress_request(scope=None) -> bool:
     """True for a request Home Assistant's ingress proxy made.
 
     Two facts must both hold: the connection was accepted by the ingress listener (the port
@@ -756,9 +819,9 @@ def is_trusted_ingress_request() -> bool:
     client that reaches a listener can set them. The server must not rewrite the peer address
     from ``X-Forwarded-For`` (``gunicorn.conf.py`` and ``main()`` switch that off).
     """
-    if not on_ingress_port():
+    if not on_ingress_port(scope):
         return False
-    peer = _scope_pair("client")
+    peer = _scope_pair("client", scope)
     return peer is not None and _peer_is_supervisor(peer[0])
 
 
@@ -968,6 +1031,13 @@ async def api_token_page():
         return _plain(
             403, "EMHASS >> The API token is shown through Home Assistant ingress only.\n"
         )
+    mode = request.headers.get("Sec-Fetch-Mode")
+    if (mode is not None and mode.lower() != "navigate") or request.headers.get(
+        "Sec-Fetch-Site", ""
+    ).lower() == "cross-site":
+        # A browser sets these and a page's script cannot change them: script in another add-on's
+        # panel (the same Home Assistant origin) must not be able to read the token with fetch().
+        return _plain(403, "EMHASS >> Open the API token as a page, not from a script.\n")
     if not token_page_available():
         return _plain(404, "EMHASS >> There is no generated API token.\n")
     response = _plain(200, current_token() + "\n")
@@ -1079,6 +1149,9 @@ async def require_api_token_websocket():
         return _unavailable()
     if auth_disabled():
         return None
+    if on_ingress_port(websocket.scope):
+        # same rule as an ordinary request: the Supervisor only, whatever else is presented
+        return None if is_trusted_ingress_request(websocket.scope) else _ingress_refused()
     token = current_token()
     if token is None:
         return _unavailable()
