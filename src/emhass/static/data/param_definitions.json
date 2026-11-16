@@ -21,7 +21,7 @@
     },
     "site": {
       "friendly_name": "Site",
-      "Description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). Every element but the main meter and the limits names its parent ('grid', the main meter, or a node). A node (any other id: an inverter, a panel, a breaker) has its parent, a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery0 or battery, deferrable0, ...) has a parent, a group (devices in one group are planned together by EMHASS's model) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"parent\": \"grid\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000}, {\"id\": \"garage\", \"parent\": \"grid\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery0\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]",
+      "Description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). Every element but the main meter and the limits names its parent ('grid', the main meter, or a node). A node (any other id: an inverter, a panel, a breaker) has its parent, a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery0 or battery, deferrable0, ...) has a parent, a group (devices in one group are planned together by EMHASS's model) and limits (limit ids). A remote solver (solver: {url, token_secret, trusted_network}, from the configuration only; its token goes over plain http:// to another machine only with trusted_network: true) is another EMHASS, or any solver serving the participant API, as one participant. A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"parent\": \"grid\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000}, {\"id\": \"garage\", \"parent\": \"grid\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery0\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]",
       "input": "object",
       "schema": {
         "type": ["array", "null"],
@@ -77,8 +77,43 @@
                 "group": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"const": "solar"}},
                 "limits": {"type": "array", "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}}
               }
+            },
+            {
+              "title": "a remote solver (from the configuration only)",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "parent", "solver"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|solar)$"}},
+                "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+                "solver": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["url"],
+                  "properties": {
+                    "url": {"type": "string", "pattern": "^https?://", "maxLength": 256},
+                    "token_secret": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+                    "trusted_network": {"type": "boolean", "default": false, "description": "Allow its token over plain http:// to another machine (a trusted home network); https:// is recommended."}
+                  }
+                },
+                "limits": {"type": "array", "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}}
+              }
             }
           ]
+        }
+      },
+      "default_value": null
+    },
+    "participant_api": {
+      "friendly_name": "Serve this EMHASS to a coordinator",
+      "Description": "Optional: serve this EMHASS's devices to a coordinator elsewhere (another EMHASS whose site names this one as a remote solver) over the participant API at /participant/v1/. Off when empty. An object: publish_prefix prefixes the sensors a committed plan is published to (so two EMHASS on one Home Assistant do not collide); key names it in the coordinator's log. Every call presents the participant_token secret.",
+      "input": "object",
+      "schema": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+          "publish_prefix": {"type": "string", "pattern": "^[a-z0-9_]{0,32}$"},
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}
         }
       },
       "default_value": null

@@ -1,7 +1,7 @@
 """API access control for the EMHASS web server (GHSA-c39q-j4r5-9xq5).
 
-Closed by default. Every request except ``/healthz``, ``/login`` and ``/logout``
-needs one of:
+Closed by default. Every request except ``/healthz``, ``/login``, ``/logout``
+and the participant API (``/participant/v1/``, below) needs one of:
 
 - an ``Authorization: Bearer <token>`` header (rest_command, curl, scripts);
 - the web UI session cookie set by ``/login``;
@@ -10,6 +10,13 @@ needs one of:
   user in.
 
 WebSocket handshakes need the bearer header (or come from trusted ingress).
+
+The participant API (``/participant/v1/``) has a token of its own,
+``participant_token``, which its route checks: a coordinator sends one
+Authorization header and must never hold this server's API token. The hook
+does not ask it for the API token, and does not answer 503 when the API token
+cannot be read, but the ingress port still refuses it: only Home Assistant's
+Supervisor talks to that port.
 
 The token is read once, by ``configure_now()`` when the web server module is
 imported (in the Gunicorn master, with preload, so every worker shares one
@@ -114,6 +121,11 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Endpoints that never need credentials.
 OPEN_ENDPOINTS = frozenset({"healthz", "api_auth_login", "api_auth_logout"})
+# Endpoints with a bearer token of their own, which their route checks: the
+# participant API's participant_token. A coordinator sends one Authorization
+# header, and must never hold this server's API token to plan with it. The
+# ingress port refuses them, as anything but Home Assistant's own requests.
+OWN_TOKEN_ENDPOINTS = frozenset({"participant_v1"})
 # Pages a browser opens directly. Without credentials they redirect to the
 # login page instead of answering 401.
 PAGE_ENDPOINTS = frozenset({"index", "configuration"})
@@ -1070,6 +1082,8 @@ async def require_api_token():
     """before_request hook. Returns None to let the request through."""
     if request.endpoint in OPEN_ENDPOINTS:
         return None
+    if request.endpoint in OWN_TOKEN_ENDPOINTS:
+        return _ingress_refused() if on_ingress_port() else None
     if _state["failed"]:
         return _unavailable()
     if auth_disabled():

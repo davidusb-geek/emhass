@@ -1,0 +1,219 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Remote participant API",
+    "version": "1.1.0-draft",
+    "x-status": "draft",
+    "summary": "What a black-box solver serves so a coordinator can plan its device(s) with the rest of the house.",
+    "description": "A participant is one device, or a group of devices its own solver plans together (a vendor's EV charger optimiser, EMHASS in another container, a heat pump's controller). The coordinator never sees its model: it asks what-if questions - 'your cheapest plan if your energy cost these prices' - and, once it has chosen, commits one plan. Queries are side-effect free; only a commit changes what the device does. The bodies are JSON Schemas beside this file: device-query.v1.json and device-answer.v1.json. The server URL is the API's base, below which /v1/describe and the rest live (an EMHASS serving its devices: http://host:5000/participant). EMHASS implements both sides: emhass.coordinator.remote.RemoteParticipant (the coordinator's) and ParticipantService (the solver's, served at /participant/v1/). Status: draft. Versioning: the major version is in every path (/v1/) and body (version: 1). Within a major version the API only grows - new optional fields, new values, new routes - and its minor version (info.version) says how far. A reader ignores fields it does not know, and treats a value it does not know as conservatively as it can (a commit state it does not know: not known). Response schemas are open to new fields for that reason; request schemas are closed, so a participant refuses what it cannot honour. What a participant serves beyond the first draft it lists in its description's features (commit_status: the commit record, idempotent commits and GET /v1/commit/{commit_id}); a coordinator sends a new optional field, or calls a new route, only to a participant that lists the feature. A change that would break a reader is a new major version, served beside this one (/v2/)."
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [
+    {"url": "https://{host}:{port}", "description": "the participant, on the local network",
+     "variables": {"host": {"default": "participant.local"}, "port": {"default": "8443"}}}
+  ],
+  "security": [{"mutualTLS": []}, {"bearer": []}],
+  "paths": {
+    "/v1/describe": {
+      "get": {
+        "operationId": "describe",
+        "summary": "What this participant is and which questions it answers.",
+        "responses": {
+          "200": {"description": "Its description.",
+                  "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Description"}}}},
+          "401": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/baseline": {
+      "post": {
+        "operationId": "baseline",
+        "summary": "A feasible plan with no price given: what it would do uncoordinated (its thermostat, its plan at the import tariff).",
+        "parameters": [{"$ref": "#/components/parameters/QueryId"}],
+        "requestBody": {"required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Horizon"}}}},
+        "responses": {
+          "200": {"description": "Its baseline plan.",
+                  "content": {"application/json": {"schema": {"$ref": "device-answer.v1.json"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "operationId": "query",
+        "summary": "Answer one what-if question. MUST NOT change what the device does or will do.",
+        "description": "price_response is the question Dantzig-Wolfe asks - typically a few dozen per plan, so answer in well under a second; its price_draw and price_supply may differ (what drawing costs and supplying is worth at the participant's connection). best_response carries the rest of the house's load (residual_kw): it is sent only to a participant that lists it among its kinds, as it reveals the household's behaviour. proximal is ADMM's step. A horizon the participant cannot plan (another slot length) is 409. A participant that cannot solve answers with a plan it can run and status 'fallback' (the coordinator then proves no bound from it), never with an error.",
+        "parameters": [{"$ref": "#/components/parameters/QueryId"}],
+        "requestBody": {"required": true,
+                        "content": {"application/json": {"schema": {"$ref": "device-query.v1.json"}}}},
+        "responses": {
+          "200": {"description": "Its answer.",
+                  "content": {"application/json": {"schema": {"$ref": "device-answer.v1.json"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/blend": {
+      "post": {
+        "operationId": "blend",
+        "summary": "Optional, for a modulating participant: its own plan for a weighted mix of plans it answered.",
+        "requestBody": {"required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Blend"}}}},
+        "responses": {
+          "200": {"description": "The mixed plan, as it would run it.",
+                  "content": {"application/json": {"schema": {"$ref": "device-answer.v1.json"}}}},
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/commit": {
+      "post": {
+        "operationId": "commit",
+        "summary": "The plan the coordinator chose: run it. The only call with an effect.",
+        "description": "Names the answer chosen by its Query-Id (query_id), which is the commit's id, and repeats its plan; the participant runs that answer as it gave it, and refuses (409) a query_id it did not answer on this horizon or a plan_kw that is not that answer's. It answers at once (202, state running) and runs the plan after; its outcome is then at GET /v1/commit/{commit_id}. A commit sent again with an id it has is never run twice: it answers that commit's record (200 once final, 202 while running), and 409 if the plan_kw differs. So a coordinator whose commit got no answer asks for its outcome, and sends it again only if the participant never had it (404).",
+        "requestBody": {"required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Commit"}}}},
+        "responses": {
+          "200": {"description": "A commit it already had, and how it ended (sent again), or one it refused at once (it runs no plans).",
+                  "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommitResult"}}}},
+          "202": {"description": "Taken: it runs now (state running). Ask GET /v1/commit/{commit_id} for its outcome.",
+                  "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommitResult"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"description": "Busy (its own optimization runs): refused, nothing was run. It may be sent again.",
+                  "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}}
+        }
+      }
+    },
+    "/v1/commit/{commit_id}": {
+      "get": {
+        "operationId": "commitStatus",
+        "summary": "What became of a commit: running, accepted, refused or partial.",
+        "description": "Records are kept at least 48 hours, and across a restart; a commit still running when the participant stopped is read back as partial.",
+        "parameters": [{"name": "commit_id", "in": "path", "required": true, "schema": {"type": "string", "maxLength": 64}}],
+        "responses": {
+          "200": {"description": "Its outcome.",
+                  "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommitResult"}}}},
+          "202": {"description": "Still running.",
+                  "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommitResult"}}}},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "QueryId": {"name": "Query-Id", "in": "header", "required": false,
+                  "description": "The coordinator's id for this answer, so a later commit can name the plan it chose.",
+                  "schema": {"type": "string", "maxLength": 64}}
+    },
+    "securitySchemes": {
+      "mutualTLS": {"type": "mutualTLS",
+                    "description": "Preferred on a local network: both ends present certificates (a Matter fabric or EEBus SHIP pairing can issue them)."},
+      "bearer": {"type": "http", "scheme": "bearer",
+                 "description": "A token the user pairs once, for participants that cannot do mutual TLS."}
+    },
+    "schemas": {
+      "Horizon": {
+        "type": "object",
+        "required": ["start", "step_minutes", "slots"],
+        "properties": {
+          "start": {"type": "string", "format": "date-time", "description": "The first slot planned. Required: a participant answers from a model built for given slots (its state of charge, its forecasts)."},
+          "step_minutes": {"type": "number", "exclusiveMinimum": 0},
+          "slots": {"type": "integer", "minimum": 1}
+        },
+        "additionalProperties": false
+      },
+      "Description": {
+        "type": "object",
+        "required": ["version", "key", "max_power_kw", "modulating", "kinds"],
+        "properties": {
+          "version": {"const": 1},
+          "key": {"type": "string", "pattern": "^[A-Za-z0-9_+.-]{1,64}$",
+                  "description": "Its name in the coordinator (a device, or devices joined by '+')."},
+          "devices": {"type": "array", "items": {"type": "string"}},
+          "max_power_kw": {"type": "number", "minimum": 0,
+                           "description": "The most it can draw or supply in one slot."},
+          "modulating": {"type": "boolean",
+                         "description": "A weighted mix of its plans runs as it is (and /v1/blend may be called)."},
+          "onoff": {"type": "boolean",
+                    "description": "Its plans are on/off schedules: fix it to one plan before re-pricing the others."},
+          "kinds": {"type": "array", "uniqueItems": true, "minItems": 1,
+                    "items": {"enum": ["price_response", "best_response", "proximal"]},
+                    "description": "The query kinds it answers; price_response is required for Dantzig-Wolfe. Listing best_response agrees to be sent the rest of the house's load."},
+          "max_slots": {"type": "integer", "minimum": 1},
+          "step_minutes": {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0},
+                           "description": "Slot lengths it supports."},
+          "state_unit": {"type": "string", "description": "The unit of its trajectory (kWh stored, degC, ...)."},
+          "solver": {"type": "string"},
+          "features": {"type": "array", "uniqueItems": true, "items": {"type": "string"},
+                       "description": "What it serves beyond the first draft of this version. commit_status: the commit record, idempotent commits and GET /v1/commit/{commit_id}. A coordinator ignores features it does not know."},
+          "active_commit": {"$ref": "#/components/schemas/CommitResult",
+                            "description": "Its latest commit and how it ended, so each run starts from what it actually did."}
+        },
+        "additionalProperties": true
+      },
+      "Blend": {
+        "type": "object",
+        "required": ["version", "weights"],
+        "properties": {
+          "version": {"const": 1},
+          "weights": {"type": "object", "minProperties": 1,
+                      "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},
+                      "description": "Query-Id -> weight; the weights sum to 1."}
+        },
+        "additionalProperties": false
+      },
+      "Commit": {
+        "type": "object",
+        "required": ["version", "horizon", "plan_kw"],
+        "properties": {
+          "version": {"const": 1},
+          "horizon": {"$ref": "#/components/schemas/Horizon"},
+          "plan_kw": {"type": "array", "items": {"type": "number"}, "minItems": 1,
+                      "description": "kW per slot, positive when drawn: the plan to run."},
+          "query_id": {"type": "string", "maxLength": 64,
+                       "description": "The query it answered, if it is one plan; absent for a blend."},
+          "local_price": {"type": "array", "items": {"type": "number"},
+                          "description": "Optional: the price its energy was coordinated at (currency/kWh per slot), for its own fast re-planning."}
+        },
+        "additionalProperties": false
+      },
+      "CommitResult": {
+        "type": "object",
+        "required": ["version", "commit_id", "state", "accepted"],
+        "properties": {
+          "version": {"const": 1},
+          "commit_id": {"type": "string", "maxLength": 64, "description": "The query_id it named."},
+          "state": {"enum": ["running", "accepted", "refused", "partial"],
+                    "description": "running: it publishes now. accepted: it runs the plan. refused: nothing was published. partial: publishing failed part way, so some of the plan may run (a coordinator keeps its part in the plan)."},
+          "accepted": {"type": ["boolean", "null"], "description": "true if accepted, false if refused, null otherwise."},
+          "reason": {"type": "string"},
+          "received": {"type": ["string", "null"], "format": "date-time"},
+          "updated": {"type": ["string", "null"], "format": "date-time"},
+          "terms": {"type": ["object", "null"], "description": "Reserved: what following the plan is worth to each side. Null in this version."},
+          "signatures": {"type": "array", "maxItems": 0, "description": "Reserved: each side's signature on this record. Empty in this version."}
+        },
+        "additionalProperties": true
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 9457 problem details.",
+        "properties": {"type": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "integer"},
+                       "detail": {"type": "string"}}
+      }
+    },
+    "responses": {
+      "Problem": {"description": "The request was refused.",
+                  "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}}
+    }
+  }
+}

@@ -1299,7 +1299,7 @@ def _schema_accepts(site) -> bool:
     openapi.json) accepts `site`: the subset of JSON Schema it uses -
     required, properties, additionalProperties, anyOf of required, and per
     value type, const, pattern, not, enum, minimum, maximum,
-    exclusiveMinimum, maxItems and items."""
+    exclusiveMinimum, maxItems, items and nested objects."""
     import json
     import pathlib
     import re
@@ -1318,6 +1318,8 @@ def _schema_accepts(site) -> bool:
         "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
         "array": lambda v: isinstance(v, list),
         "null": lambda v: v is None,
+        "boolean": lambda v: isinstance(v, bool),
+        "object": lambda v: isinstance(v, dict),
     }
 
     def value_ok(schema, v):
@@ -1339,6 +1341,8 @@ def _schema_accepts(site) -> bool:
                 return False
             if "exclusiveMinimum" in schema and v <= schema["exclusiveMinimum"]:
                 return False
+        if isinstance(v, dict) and "properties" in schema and not accepts(schema, v):
+            return False  # an object (a remote's solver): checked as an element is
         if isinstance(v, list):
             if len(v) > schema.get("maxItems", len(v)):
                 return False
@@ -1370,6 +1374,14 @@ def _schema_accepts(site) -> bool:
             {"id": "deferrable0", "parent": "grid", "group": "pool", "limits": ["feed"]},
             {"id": "battery0", "parent": "roof", "solver": "emhass"},
         ],
+        [{"id": "garage", "parent": "grid", "solver": {"url": "https://garage.lan/p"}}],
+        [
+            {
+                "id": "garage",
+                "parent": "grid",
+                "solver": {"url": "http://garage.lan:5000/p", "trusted_network": True},
+            }
+        ],
         [
             {"id": "grid", "max_import": 9000.5, "max_export": 0},
             {"id": "panel", "parent": "grid", "efficiency_import": None, "efficiency_export": 0.97},
@@ -1400,6 +1412,9 @@ def test_the_site_schema_accepts_what_the_site_check_accepts(site):
         [{"id": "panel", "parent": "grid", "efficiency_export": 1.5}],
         [{"id": "deferrable0", "parent": "grid", "limits": "feed"}],  # a list
         [{"id": "grid"}] + [{"id": f"n{k}", "parent": "grid"} for k in range(64)],  # over 64
+        [{"id": "solar", "parent": "grid", "solver": {"url": "https://g.lan/p"}}],  # a remote
+        [{"id": "pv", "parent": "grid", "solver": {"url": "https://g.lan/p"}}],
+        [{"id": "g", "parent": "grid", "solver": {"url": "https://g.lan/p", "trusted_network": 1}}],
     ],
 )
 def test_the_site_schema_refuses_what_the_site_check_refuses(site):

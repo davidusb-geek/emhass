@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/davidusb-geek/emhass/master/src/emhass/static/participant-api/device-answer.v1.json",
+  "title": "Device answer, version 1",
+  "description": "A participant's answer to a device query: its plan, the plan's private cost (everything except the electricity bill: discomfort, wear, energy left in store, a missed goal) and its state trajectory, one point longer than the plan.",
+  "type": "object",
+  "required": ["version", "plan_kw", "private_cost", "trajectory", "status"],
+  "properties": {
+    "version": {"const": 1},
+    "plan_kw": {"type": "array", "items": {"type": "number"}, "minItems": 1, "description": "kW per slot, positive when drawn from the meter"},
+    "private_cost": {"type": "number", "description": "currency"},
+    "trajectory": {"type": "array", "items": {"type": "number"}, "description": "state per point (n + 1 for n slots), in the participant's own unit"},
+    "status": {"enum": ["ok", "infeasible", "fallback"]},
+    "solver": {"type": "string", "description": "who answered, for logs"}
+  },
+  "additionalProperties": true
+}

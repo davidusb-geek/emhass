@@ -40,6 +40,12 @@ from emhass.coordinator.model import (
     SubMeter,
     hybrid_inverter,
 )
+from emhass.coordinator.remote import (
+    PlainHttpRefused,
+    PlanWindow,
+    RemoteError,
+    RemoteParticipant,
+)
 from emhass.coordinator.settlement import ledger
 from emhass.coordinator.site import _SITE_DEVICE, site_kind
 from emhass.coordinator.submeter import site_meter
@@ -95,6 +101,10 @@ OK_STATUSES = ("Optimal", "Optimal_Inaccurate", "Optimal (Relaxed)", "Optimal (I
 # EMHASS's OK statuses), but not a certified optimum - the coordinator stopped
 # on a stall, its iteration cap, or no new proposals with the bound still open.
 GAP_TOL = 1e-3
+# Seconds a remote solver has for each call before its last plan stands in
+REMOTE_TIMEOUT_S = 30.0
+# How long a remote's commit outcome is asked for before it counts as not known
+REMOTE_COMMIT_WAIT_S = 30.0
 
 
 def plan_status(upper: float, lower: float) -> str:
@@ -560,6 +570,72 @@ class EmhassParticipant:
         return self.respond(Query("price_response", self.buy, self.buy))
 
 
+def emhass_participant(
+    opt: EmhassOptimization,
+    data_opt: pd.DataFrame,
+    soc_init: float | None,
+    soc_final: float | None,
+    key: str = "emhass",
+) -> EmhassParticipant:
+    """All of an EMHASS's own devices as one participant: what an EMHASS
+    serving the participant API answers for (remote.ParticipantService). Its
+    battery (with set_use_battery) and every deferrable load, planned
+    together by its own model, its deferrable_load_groups held there.
+
+    `opt`: that EMHASS's Optimization. `data_opt`: its input DataFrame for
+    the horizon asked about (its index, the tariff its baseline plans at,
+    thermal forecasts). `soc_init`, `soc_final`: its battery's start and
+    end-of-day state of charge (fractions).
+
+    Its own grid limits (maximum_power_from_grid / maximum_power_to_grid) are
+    kept: they are its connection's - a panel's rating, no backfeed - which
+    its model holds in every plan it offers, however big its own devices are.
+    The coordinator holds only what it shares with the rest of the house.
+    """
+    oc = opt.optim_conf
+    loads = list(range(int(oc.get("number_of_deferrable_loads", 0) or 0)))
+    runtime = {
+        "def_total_hours": oc.get("operating_hours_of_each_deferrable_load"),
+        "def_total_timestep": oc.get("operating_timesteps_of_each_deferrable_load"),
+        "def_start_timestep": oc.get("start_timesteps_of_each_deferrable_load"),
+        "def_end_timestep": oc.get("end_timesteps_of_each_deferrable_load"),
+    }
+    n = len(data_opt)
+    buy = (
+        np.asarray(data_opt[opt.var_load_cost].values, dtype=float)
+        if opt.var_load_cost in data_opt
+        else np.full(n, 0.2)
+    )
+    return EmhassParticipant(
+        opt,
+        key,
+        bool(oc.get("set_use_battery")),
+        loads,
+        data_opt,
+        soc_init,
+        soc_final,
+        runtime,
+        buy,
+        reach_w=None,
+        load_groups=list(oc.get("deferrable_load_groups") or []),
+    )
+
+
+def emhass_description(p: EmhassParticipant) -> dict[str, Any]:
+    """The participant API's Description of `p` (remote.ParticipantService):
+    it answers price responses only, so no household load is sent to it."""
+    devices = (["battery"] if p.battery else []) + [f"deferrable{k}" for k in p.loads]
+    return {
+        "key": p.key,
+        "devices": devices,
+        "max_power_kw": float(p.max_power_kw),
+        "modulating": False,
+        "onoff": bool(p.onoff),
+        "kinds": ["price_response"],
+        "solver": "emhass",
+    }
+
+
 # ------------------------------------------------------------------ the call
 OLD_KEYS = ("participants", "electrical_topology", "group_limits")
 SITE_DEVICE = _SITE_DEVICE  # one vocabulary with the site check (emhass.coordinator.site)
@@ -676,11 +752,31 @@ def _site(
             )
         else:
             g["devices"].append(dev)
-    if kinds["remote"]:
-        return (
-            empty,
-            f"site: {kinds['remote'][0].get('id')!r} is a remote solver, which this version does not plan",
-        )
+    for e in kinds["remote"]:
+        # a solver on the network: one participant, its devices its own business
+        rid = str(e["id"])
+        parent = str(e.get("parent", MAIN))
+        if parent != MAIN and parent not in nodes:
+            return empty, f"site: the parent of {rid!r}, {parent!r}, is no node"
+        if rid in groups or rid in parent_of:
+            return empty, f"site: {rid!r} names two elements"
+        solver = e["solver"]
+        groups[rid] = {
+            "key": rid,
+            "devices": [rid],
+            "solver": "remote",
+            "parent": parent,
+            "config": {
+                "url": str(solver.get("url", "")),
+                "token_secret": solver.get("token_secret"),
+                "trusted_network": solver.get("trusted_network") is True,
+            },
+        }
+        parent_of[rid] = parent
+        for lim in e.get("limits") or []:
+            if lim not in limit_ids:
+                return empty, f"site: {rid!r} is tagged with {lim!r}, which is no limit"
+            tags.setdefault(lim, []).append(rid)
     for key, g in groups.items():
         if key not in g["devices"] and (
             key in nodes or key in limit_ids or key == MAIN or SITE_DEVICE.match(key)
@@ -883,6 +979,30 @@ def _linear_battery(
     )
 
 
+class _Committed:
+    """A remote that has taken its plan: planning the house again holds it
+    to that plan (interface.Participant, answering it to every query)."""
+
+    modulating = False
+    onoff = True
+
+    def __init__(self, rp: RemoteParticipant, plan: Column) -> None:
+        self.key, self.max_power_kw = rp.key, rp.max_power_kw
+        self.solves, self.solve_s = 0, 0.0
+        self._answer = Answer(
+            np.asarray(plan.power, dtype=float),
+            float(plan.cost),
+            np.asarray(plan.trajectory, dtype=float),
+            detail=plan.detail,
+        )
+
+    def respond(self, query: Query) -> Answer:  # noqa: ARG002 - the plan it runs
+        return self._answer
+
+    def baseline(self) -> Answer:
+        return self._answer
+
+
 def optimize(
     opt: EmhassOptimization,
     data_opt: pd.DataFrame,
@@ -952,7 +1072,9 @@ def optimize(
     reach_w = (
         2.0 * (float(np.max(np.abs(load_w))) + float(np.max(np.abs(pv_w))) + device_w) + 1000.0
     )
-    participants: list[EmhassParticipant] = []
+    participants: list[EmhassParticipant | RemoteParticipant | _Committed] = []
+    remotes: list[RemoteParticipant] = []
+    remote_status: dict[str, str] = {}
     targets: dict[str, float] = {}
     battery_cfg: BatteryConfig | None = None
     layout, reason = _site(oc, pc, devices)
@@ -1008,118 +1130,248 @@ def optimize(
                     load_groups=own_groups.get(key),
                 )
             )
+        elif g["solver"] == "remote":
+            # a solver on the network: asked to describe itself and plan with no
+            # price now, so one that cannot is left out of this plan, said so
+            key = g["key"]
+            tokens = (getattr(opt, "retrieve_hass_conf", None) or {}).get("remote_tokens") or {}
+            secret = g["config"].get("token_secret")
+            first = getattr(data_opt, "index", [None])[0]
+            window = PlanWindow(
+                dt * 60.0, n, first.isoformat() if hasattr(first, "isoformat") else None
+            )
+            try:
+                rp = RemoteParticipant(
+                    key,
+                    g["config"]["url"],
+                    window,
+                    token=tokens.get(secret) if secret else None,
+                    timeout=REMOTE_TIMEOUT_S,
+                    commit_wait_s=REMOTE_COMMIT_WAIT_S,
+                    trusted_network=bool(g["config"].get("trusted_network", False)),
+                )
+                rp.baseline()
+            except (RemoteError, ValueError) as exc:
+                log.warning(
+                    f"site: the remote solver {key!r} did not answer ({exc}); planned without it"
+                )
+                status = getattr(exc, "status", 0)
+                if isinstance(exc, PlainHttpRefused):
+                    remote_status[key] = f"declined: {exc}"[:200]
+                elif status in (401, 403):
+                    remote_status[key] = "unauthorized"
+                elif status == 409:  # it answered: it cannot plan this horizon
+                    remote_status[key] = f"declined: {exc}"[:200]
+                else:
+                    remote_status[key] = "unreachable"
+                continue
+            participants.append(rp)
+            remotes.append(rp)
         else:
             _decline(opt, f"unknown solver {g['solver']!r}")
             return None
 
-    submeters, set_limits = layout.submeters, layout.set_limits
-    horizon = Horizon(dt=dt, hours=n * dt)
-
-    def col(name: str, default: float) -> np.ndarray:
-        return (
-            np.asarray(data_opt[name].values, dtype=float)
-            if name in data_opt
-            else np.full(n, default)
+    def plan_house(
+        participants: Sequence[EmhassParticipant | RemoteParticipant | _Committed],
+    ) -> tuple[pd.DataFrame, DWResult] | None:
+        """The coordinator's plan for `participants` (None, declined, when it
+        cannot make one), with the results EMHASS publishes."""
+        gone = set(remote_status) - {p.key for p in participants}  # planned without
+        submeters = tuple(
+            replace(sm, members=tuple(m for m in sm.members if m not in gone))
+            for sm in layout.submeters
         )
+        set_limits = tuple(
+            sl
+            for sl in (
+                replace(sl, members=tuple(m for m in sl.members if m not in gone))
+                for sl in layout.set_limits
+            )
+            if sl.members
+        )
+        horizon = Horizon(dt=dt, hours=n * dt)
 
-    fc = Forecasts(buy=buy, sell=sell, load=load_w / 1000.0, solar=pv_w / 1000.0)
-    imp_w, exp_w = layout.grid_w or (None, None)  # the main meter's, from site, else EMHASS's keys
-    grid = GridLimits(
-        max_import_kw=float(pc.get("maximum_power_from_grid", 9000) if imp_w is None else imp_w)
-        / 1000.0,
-        max_export_kw=float(pc.get("maximum_power_to_grid", 9000) if exp_w is None else exp_w)
-        / 1000.0,
-        allow_curtailment=bool(pc.get("compute_curtailment", False)),
-    )
-    if (
-        layout.inverter == "inverter"
-        and not any(_kind(e) == "node" for e in oc.get("site") or [])
-        and any(isinstance(p, EmhassParticipant) and p.battery for p in participants)
-    ):
-        _decline(opt, "a hybrid inverter with the battery in an EMHASS participant group")
-        return None
-    site = SiteConfig(
-        horizon=horizon, battery=battery_cfg, grid=grid, submeters=submeters, set_limits=set_limits
-    )
-    try:
-        site.validate()
-    except ValueError as exc:  # a loop, a device twice, a bad rating
-        _decline(opt, f"site: {exc}")
-        return None
-    ceiling = np.maximum(pv_w - load_w, 0.0) / 1000.0 if oc.get("set_nodischarge_to_grid") else None
-    run_kw: RunOptions = (
-        RUN_DEFAULTS if participants else {}
-    )  # the battery alone: the coordinator's own defaults
-    co = DWCoordinator(
-        site, fc, participants=participants, export_ceiling=ceiling, soe_targets=targets
-    )
-    # EMHASS's own solver time limit, for each coordinator run (the plan, then
-    # the one for the saving split): past it, the best plan so far is kept
-    budget = float(oc.get("lp_solver_timeout", 45) or 45)
-    run_kw = {**run_kw, "max_seconds": budget}
-    try:
-        r = co.run(**run_kw)
-    except Exception as exc:  # a plan is always published
-        _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
-        return None
-    if not np.isfinite(float(r.upper)):
-        # no plan it found can run: past the export ceiling with nothing to curtail
-        _decline(opt, "the coordinator found no plan within the export ceiling")
-        return None
-    held = r.plan.get("battery") if battery_cfg is not None else None
-    if held is not None:
-        # The master's battery has a charge and a discharge per slot and no
-        # binary: both at once (to burn surplus it cannot export or curtail)
-        # is a plan one battery cannot run. Its net power must step its state.
-        p = np.asarray(held.power, dtype=float)
-        step = np.where(p > 0, p * battery_cfg.eta_c, p / battery_cfg.eta_d) * dt
-        if np.max(np.abs(np.diff(held.trajectory) - step), initial=0.0) > 1e-3:
-            _decline(opt, "the coordinator's battery plan charges and discharges in one slot")
+        def col(name: str, default: float) -> np.ndarray:
+            return (
+                np.asarray(data_opt[name].values, dtype=float)
+                if name in data_opt
+                else np.full(n, default)
+            )
+
+        fc = Forecasts(buy=buy, sell=sell, load=load_w / 1000.0, solar=pv_w / 1000.0)
+        imp_w, exp_w = layout.grid_w or (
+            None,
+            None,
+        )  # the main meter's, from site, else EMHASS's keys
+        grid = GridLimits(
+            max_import_kw=float(pc.get("maximum_power_from_grid", 9000) if imp_w is None else imp_w)
+            / 1000.0,
+            max_export_kw=float(pc.get("maximum_power_to_grid", 9000) if exp_w is None else exp_w)
+            / 1000.0,
+            allow_curtailment=bool(pc.get("compute_curtailment", False)),
+        )
+        if (
+            layout.inverter == "inverter"
+            and not any(_kind(e) == "node" for e in oc.get("site") or [])
+            and any(isinstance(p, EmhassParticipant) and p.battery for p in participants)
+        ):
+            _decline(opt, "a hybrid inverter with the battery in an EMHASS participant group")
             return None
-    breach = float(co.parts(r.plan)["breach_kwh"])
-    if breach > 1e-3:
-        # A grid, node or limit rating is hard in EMHASS: the default solver
-        # meets it (relaxing an on/off load if it must); the coordinator only
-        # priced it, and its on/off plans could not fit
-        _decline(opt, f"the coordinator's plan exceeds a limit by {breach:.3f} kWh")
-        return None
-
-    res = _results(
-        opt,
-        co,
-        r,
-        data_opt,
-        pv_w,
-        load_w,
-        buy,
-        sell_in,
-        soc_init,
-        devices,
-        participants,
-        site,
-        layout.inverter,
-    )
-    try:
-        # The saving split needs one more plan, the same devices with no PV
-        # (the export ceiling, PV surplus, is then zero).
-        dark = replace(fc, solar=np.zeros(n))
-        co_dark = DWCoordinator(
-            site,
-            dark,
-            participants=participants,
-            export_ceiling=None if ceiling is None else np.zeros(n),
-            soe_targets=targets,
+        site = SiteConfig(
+            horizon=horizon,
+            battery=battery_cfg,
+            grid=grid,
+            submeters=submeters,
+            set_limits=set_limits,
         )
-        for player, share in shares(co, r.plan, co_dark, co_dark.run(**run_kw).plan).items():
-            res[f"fed_share_{player}"] = share
-    except Exception as exc:  # the plan stands without its split
-        log.warning(f"optimization_backend: could not split the saving ({exc})")
-    opt.optim_status = str(res["optim_status"].iloc[0])
-    solves = sum(p.solves for p in participants)
-    log.info(
-        f"optimization_backend=dantzig_wolfe: {r.iterations} iterations, gap {r.upper - r.lower:.4f}, "
-        f"{solves} participant solves, {time.perf_counter() - t0:.2f} s"
-    )
+        try:
+            site.validate()
+        except ValueError as exc:  # a loop, a device twice, a bad rating
+            _decline(opt, f"site: {exc}")
+            return None
+        ceiling = (
+            np.maximum(pv_w - load_w, 0.0) / 1000.0 if oc.get("set_nodischarge_to_grid") else None
+        )
+        run_kw: RunOptions = (
+            RUN_DEFAULTS if participants else {}
+        )  # the battery alone: the coordinator's own defaults
+        co = DWCoordinator(
+            site, fc, participants=participants, export_ceiling=ceiling, soe_targets=targets
+        )
+        # EMHASS's own solver time limit, for each coordinator run (the plan, then
+        # the one for the saving split): past it, the best plan so far is kept
+        budget = float(oc.get("lp_solver_timeout", 45) or 45)
+        run_kw = {**run_kw, "max_seconds": budget}
+        try:
+            r = co.run(**run_kw)
+        except Exception as exc:  # a plan is always published
+            _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
+            return None
+        if not np.isfinite(float(r.upper)):
+            # no plan it found can run: past the export ceiling with nothing to curtail
+            _decline(opt, "the coordinator found no plan within the export ceiling")
+            return None
+        held = r.plan.get("battery") if battery_cfg is not None else None
+        if held is not None:
+            # The master's battery has a charge and a discharge per slot and no
+            # binary: both at once (to burn surplus it cannot export or curtail)
+            # is a plan one battery cannot run. Its net power must step its state.
+            p = np.asarray(held.power, dtype=float)
+            step = np.where(p > 0, p * battery_cfg.eta_c, p / battery_cfg.eta_d) * dt
+            if np.max(np.abs(np.diff(held.trajectory) - step), initial=0.0) > 1e-3:
+                _decline(opt, "the coordinator's battery plan charges and discharges in one slot")
+                return None
+        breach = float(co.parts(r.plan)["breach_kwh"])
+        if breach > 1e-3:
+            # A grid, node or limit rating is hard in EMHASS: the default solver
+            # meets it (relaxing an on/off load if it must); the coordinator only
+            # priced it, and its on/off plans could not fit
+            _decline(opt, f"the coordinator's plan exceeds a limit by {breach:.3f} kWh")
+            return None
+
+        res = _results(
+            opt,
+            co,
+            r,
+            data_opt,
+            pv_w,
+            load_w,
+            buy,
+            sell_in,
+            soc_init,
+            devices,
+            participants,
+            site,
+            layout.inverter,
+        )
+        try:
+            # The saving split needs one more plan, the same devices with no PV
+            # (the export ceiling, PV surplus, is then zero).
+            dark = replace(fc, solar=np.zeros(n))
+            co_dark = DWCoordinator(
+                site,
+                dark,
+                participants=participants,
+                export_ceiling=None if ceiling is None else np.zeros(n),
+                soe_targets=targets,
+            )
+            for player, share in shares(co, r.plan, co_dark, co_dark.run(**run_kw).plan).items():
+                res[f"fed_share_{player}"] = share
+        except Exception as exc:  # the plan stands without its split
+            log.warning(f"optimization_backend: could not split the saving ({exc})")
+        opt.optim_status = str(res["optim_status"].iloc[0])
+        solves = sum(p.solves for p in participants)
+        log.info(
+            f"optimization_backend=dantzig_wolfe: {r.iterations} iterations, gap {r.upper - r.lower:.4f}, "
+            f"{solves} participant solves, {time.perf_counter() - t0:.2f} s"
+        )
+        return res, r
+
+    planned = plan_house(participants)
+    if planned is None:
+        return None
+    res, r = planned
+    # Each remote runs its part of a live plan, last: once one has committed,
+    # nothing here may fail and send EMHASS to its default solver, which would
+    # plan the house again around a remote already running this plan.
+    # A remote that refuses is planned without, as one that did not answer:
+    # the house is planned again, the remotes that committed held to the plans
+    # they took, and the remotes still to ask are asked for their part of
+    # the new plan. A dry run asks nothing of anyone.
+    pending = list(remotes)
+    while pending:
+        rp = pending.pop(0)
+        if getattr(opt, "fed_dry_run", False):
+            remote_status[rp.key] = "planned (dry run)"
+            continue
+        chosen = r.plan[rp.key]
+        try:
+            ok, why = rp.commit(chosen.detail, chosen.power)
+        except Exception as exc:  # a commit that fails, however, is a refusal
+            ok, why = False, f"{type(exc).__name__}: {exc}"
+        if ok or ok is None:
+            # None: its outcome is not known (no answer in time, or published
+            # part way) and it may be running - its part stays in the plan
+            # rather than be planned around as absent
+            remote_status[rp.key] = "committed" if ok else f"uncertain: {why}"[:200]
+            if ok is None:
+                log.warning(
+                    f"site: the outcome of the remote solver {rp.key!r}'s commit is not known "
+                    f"({why}); its part is kept in the plan"
+                )
+            participants[participants.index(rp)] = _Committed(rp, chosen)
+            continue
+        log.warning(f"site: the remote solver {rp.key!r} did not take its plan ({why})")
+        remote_status[rp.key] = f"refused: {why}"[:200]
+        participants.remove(rp)
+        try:
+            again = plan_house(participants)
+        except Exception as exc:  # whatever fails here, a plan not made again
+            _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
+            again = None
+        if again is not None:
+            res, r = again
+            continue
+        if not any(v == "committed" or v.startswith("uncertain") for v in remote_status.values()):
+            return None  # nothing runs yet: EMHASS's default solver plans
+        # a remote runs its part already: the plan stands, with the refusal
+        opt.fed_fallback_reason = None
+        log.error(
+            f"site: the house could not be planned again without {rp.key!r}; "
+            "the plan published still counts its part"
+        )
+    for key, status in remote_status.items():
+        res[f"fed_remote_status_{key}"] = status
+    for rp in remotes:
+        # how its last commit ended, as it records it (a commit of an earlier
+        # run, unless this run's has just been made)
+        last = rp.active_commit
+        if last is not None:
+            res[f"fed_remote_last_commit_{rp.key}"] = (
+                f"{last['state']}: {last.get('reason', '')}"
+                if last.get("reason")
+                else last["state"]
+            )[:200]
     return res
 
 
@@ -1152,7 +1404,7 @@ def _results(
     sell_in: np.ndarray,
     soc_init: float | None,
     devices: list[str],
-    participants: Sequence[EmhassParticipant],
+    participants: Sequence[EmhassParticipant | RemoteParticipant | _Committed],
     site: SiteConfig,
     inverter: str | None = None,
 ) -> pd.DataFrame:
@@ -1192,6 +1444,10 @@ def _results(
 
     by_load, batt_detail, extra = {}, None, {}
     for p in participants:
+        if isinstance(p, (RemoteParticipant, _Committed)):
+            # its devices are its own business: their total, W (+ = drawn)
+            out[f"fed_remote_power_{p.key}"] = plan[p.key].power * 1000.0
+            continue
         res = plan[p.key].detail
         for local, k in enumerate(p.loads):
             by_load[k] = res[f"P_deferrable{local}"].values

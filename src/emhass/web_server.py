@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 import errno
 import hashlib
+import hmac
 import logging
 import os
 import pickle
@@ -263,6 +264,36 @@ async def _open_lock_slot(path: Path):
         yield slot
     finally:
         await asyncio.to_thread(slot.close)
+
+
+def _take_live_optim_slot():
+    """The live-optimization slot for a commit that runs after its request is
+    answered (participant API, 202): ("ok", release), ("busy", None) while a
+    live optimization holds it, or ("unavailable", why). `release()` frees
+    it, from the thread that ran the commit."""
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        return "unavailable", str(exc)
+    if not try_lock_file(slot):
+        slot.close()
+        return "busy", None
+
+    def release() -> None:
+        try:
+            unlock_file(slot)
+        finally:
+            slot.close()
+
+    return "ok", release
+
+
+def _web_workers() -> int:
+    """The web workers serving this EMHASS (gunicorn.conf.py's WEB_CONCURRENCY)."""
+    try:
+        return max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
 
 
 # Add custom filter for trusted HTML content
@@ -1198,6 +1229,116 @@ async def api_v1_plan():
     response = await make_response(orjson.dumps(response_body))
     response.headers["Content-Type"] = "application/json"
     response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+_participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
+PARTICIPANT_BODY_MAX = 1 << 20  # 1 MiB
+# As Quart's own BODY_TIMEOUT bounds get_data(): a body that stalls is refused.
+PARTICIPANT_BODY_TIMEOUT_S = 30.0
+
+
+async def _problem(status: int, title: str, detail: str = "", retry_after: str | None = None):
+    """An RFC 9457 problem response."""
+    body = {"type": "about:blank", "title": title, "status": status, "detail": detail}
+    response = await make_response(orjson.dumps(body), status)
+    response.headers["Content-Type"] = "application/problem+json"
+    response.headers["Cache-Control"] = "no-store"
+    if retry_after:
+        response.headers["Retry-After"] = retry_after
+    return response
+
+
+# no automatic OPTIONS answer: the hook leaves this route to its own token check,
+# so an OPTIONS request is gated as on every other route
+@app.route("/participant/v1/<path:op>", methods=["GET", "POST"], provide_automatic_options=False)
+async def participant_v1(op: str):
+    """This EMHASS's devices, served to a coordinator elsewhere: the
+    participant API (home-energy-optimizer's participant-api.v1.json) -
+    describe, baseline, query, commit. Off unless `participant_api` is set;
+    every call presents the `participant_token` secret. Only a commit has an
+    effect: the chosen plan is published, under `participant_api.publish_prefix`.
+    """
+    global _participant_service
+    from emhass import participant_api
+
+    if (request.content_length or 0) > PARTICIPANT_BODY_MAX:
+        # A query or a commit is a few kB; refused before the body is read.
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    token = params_secrets.get("participant_token")
+    if not token:
+        return await _problem(503, "Service Unavailable", "set participant_token in the secrets")
+    if len(token) < api_auth.MIN_LENGTH:
+        # as the API token: a short token is guessable, so it is not served
+        return await _problem(
+            503,
+            "Service Unavailable",
+            f"participant_token must be at least {api_auth.MIN_LENGTH} characters",
+        )
+    presented = request.headers.get("Authorization", "").encode()
+    if not hmac.compare_digest(presented, f"Bearer {token}".encode()):
+        # Before any file or body is read: a caller without the token learns
+        # nothing of the configuration and costs nothing more.
+        return await _problem(401, "Unauthorized", "present participant_token as a bearer token")
+    try:
+        params = await participant_api.read_params(emhass_conf)
+    except participant_api.ConfigUnreadable as exc:
+        return await _problem(503, "Service Unavailable", str(exc))
+    if params is None or not isinstance(params["optim_conf"].get("participant_api"), dict):
+        return await _problem(404, "Not Found", "the participant API is off (set participant_api)")
+    if _web_workers() > 1:
+        # A coordinator's answers live in one worker's memory: its commit, sent
+        # to another worker, would name an answer that worker never gave.
+        return await _problem(
+            503,
+            "Service Unavailable",
+            "the participant API needs one web worker (WEB_CONCURRENCY=1)",
+        )
+    built_from = orjson.dumps([params, token], option=orjson.OPT_SORT_KEYS, default=str)
+    if _participant_service is None or _participant_service[0] != built_from:
+        service = participant_api.make_service(
+            emhass_conf, params, token, app.logger, begin=_take_live_optim_slot
+        )
+        _participant_service = (built_from, service)
+    service = _participant_service[1]
+    # A chunked body has no Content-Length: the limit holds on what arrives,
+    # and the whole body must arrive in time.
+    received = bytearray()
+
+    async def receive() -> bool:
+        async for chunk in request.body:
+            received.extend(chunk)
+            if len(received) > PARTICIPANT_BODY_MAX:
+                return False
+        return True
+
+    try:
+        within = await asyncio.wait_for(receive(), PARTICIPANT_BODY_TIMEOUT_S)
+    except TimeoutError:
+        return await _problem(
+            408,
+            "Request Timeout",
+            f"the body did not arrive within {PARTICIPANT_BODY_TIMEOUT_S:g} s",
+        )
+    if not within:
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    body = bytes(received)
+    # A commit ends a live run - it writes the latest results and publishes - so
+    # it takes the live-optimization slot, as POST /action/<optimization> does
+    # (the service's `begin`), and is refused (429) while this EMHASS runs its
+    # own. It is answered at once (202) and runs after, holding the slot until
+    # it has; its outcome is then at GET /participant/v1/commit/<id>. Queries
+    # are not slotted: they write nothing, and belong to another EMHASS's run.
+    status, out = await asyncio.to_thread(
+        service.handle, request.method, f"/v1/{op}", dict(request.headers), body
+    )
+    response = await make_response(orjson.dumps(out), status)
+    response.headers["Content-Type"] = (
+        "application/problem+json" if status >= 400 else "application/json"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    if status in (429, 503):
+        response.headers["Retry-After"] = "2"
     return response
 
 

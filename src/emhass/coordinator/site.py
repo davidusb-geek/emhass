@@ -21,6 +21,43 @@ _SITE_SOLVERS = ("emhass",)
 # bound what a site sent with a request can make the coordinator do.
 _SITE_MAX_ELEMENTS = 64
 _SITE_MAX_ROWS = 16
+# EMHASS's own secrets: a remote's token_secret may not name one, or a saved
+# site would send it (Home Assistant's token, say) to the remote's URL.
+_SITE_RESERVED_SECRETS = frozenset(
+    {
+        "hass_url",
+        "long_lived_token",
+        "participant_token",
+        "remote_tokens",
+        "server_ip",
+        "time_zone",
+        "lat",
+        "lon",
+        "alt",
+        "latitude",
+        "longitude",
+        "altitude",
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "solar_forecast_kwp",
+        "influxdb_username",
+        "influxdb_password",
+        "victoriametrics_username",
+        "victoriametrics_password",
+    }
+)
+
+
+def site_token_secret_usable(name) -> bool:
+    """Whether `name` may be a remote solver's token_secret: a secret's name
+    (lower case, digits, _) that is not one of EMHASS's own."""
+    return (
+        isinstance(name, str)
+        and bool(_SITE_ID.match(name))
+        and name.lower() not in _SITE_RESERVED_SECRETS
+    )
+
+
 _SITE_KEYS = {
     "grid": {"id", "max_import", "max_export"},
     "node": {
@@ -34,6 +71,7 @@ _SITE_KEYS = {
     },
     "limit": {"id", "type", "max_import", "max_export"},
     "device": {"id", "parent", "solver", "group", "limits"},
+    "remote": {"id", "parent", "solver", "limits"},
 }
 
 
@@ -44,18 +82,21 @@ def _finite_number(value) -> bool:
 
 def site_kind(element: dict) -> str:
     """What a `site` element is: "grid" (the main meter), "limit" (a cap on
-    the devices tagged with it), "device" (an EMHASS device name or "pv") or
-    "node" (anything else: an inverter, a panel, a breaker, a meter)."""
+    the devices tagged with it), "remote" (a solver on the network), "device"
+    (an EMHASS device name or "pv") or "node" (anything else: an inverter, a
+    panel, a breaker, a meter)."""
     if element.get("id") == _SITE_ROOT:
         return "grid"
     if element.get("type") == "limit":
         return "limit"
+    if isinstance(element.get("solver"), dict):
+        return "remote"
     if isinstance(element.get("id"), str) and _SITE_DEVICE.match(element["id"]):
         return "device"
     return "node"
 
 
-def _site_element_problem(element, where: str) -> str | None:
+def _site_element_problem(element, where: str, from_request: bool) -> str | None:
     """Why one `site` element cannot be used as given, or None (its shape and
     types; site_problem checks how the elements refer to each other)."""
     if not isinstance(element, dict) or not isinstance(element.get("id"), str):
@@ -65,7 +106,7 @@ def _site_element_problem(element, where: str) -> str | None:
     if extra:
         allowed = ", ".join(sorted(_SITE_KEYS[kind] - {"id"}))
         return f"{where} ({kind} {element['id']!r}) may have only {allowed}, not {', '.join(sorted(extra))}"
-    if kind in ("node", "limit") and (
+    if kind in ("node", "limit", "remote") and (
         not _SITE_ID.match(element["id"]) or _SITE_DEVICE.match(element["id"])
     ):
         return f"{where}.id must be a short lower-case name (letters, digits, _), not a device's"
@@ -99,6 +140,25 @@ def _site_element_problem(element, where: str) -> str | None:
         or not all(isinstance(x, str) and _SITE_ID.match(x) for x in limits)
     ):
         return f"{where}.limits must be a list of limit ids"
+    if kind == "remote":
+        solver = element["solver"]
+        url = solver.get("url")
+        if (
+            set(solver) - {"url", "token_secret", "trusted_network"}
+            or not isinstance(solver.get("trusted_network", False), bool)
+            or not isinstance(url, str)
+            or not re.match(r"^https?://[^\s/?#]+(/[^\s?#]*)?$", url)
+            or len(url) > 256
+        ):
+            return f"{where}.solver must be {{url: http(s)://host[:port]/path, token_secret, trusted_network: true/false}}"
+        secret = solver.get("token_secret")
+        if secret is not None and not site_token_secret_usable(secret):
+            return (
+                f"{where}.solver.token_secret must name a secret of its own "
+                "(lower case, digits, _), not one of EMHASS's secrets"
+            )
+        if from_request:
+            return f"{where}: a remote solver is accepted from the configuration only, not with a request"
     if kind == "device":
         if element["id"] == "pv" and set(element) & {"solver", "group", "limits"}:
             return f"{where}: the PV is a forecast: it has a parent and nothing else (no solver, group or limits)"
@@ -112,7 +172,7 @@ def _site_element_problem(element, where: str) -> str | None:
     return None
 
 
-def site_problem(site) -> str | None:
+def site_problem(site, from_request: bool = False) -> str | None:
     """Why `site` cannot be used as given, or None.
 
     `site` is the house in one list, each element an object with an `id`:
@@ -126,12 +186,18 @@ def site_problem(site) -> str | None:
       the devices tagged with it draw together.
     - a device (pv, battery0 or battery, deferrableN): `parent`, `group`
       and `limits` (limit ids); `solver` may only be emhass, the default.
+    - a remote solver (`solver: {url, token_secret, trusted_network}`):
+      `parent`, `limits`. Its token goes over plain http:// to another
+      machine only with `trusted_network: true`.
+      From the configuration only: a site sent with a request may not name
+      one, so no request makes EMHASS call a host of its choosing.
 
     Ids are unique. Every element but the main meter and the limits has a
     `parent` - `grid` or a node - and the parents form a tree.
 
     Args:
         site: The `site` value.
+        from_request: Whether it arrived with a request (runtime parameters).
 
     Returns:
         str | None: The problem, for the log; None when it can be used.
@@ -140,7 +206,7 @@ def site_problem(site) -> str | None:
         return f"site must be a list of at most {_SITE_MAX_ELEMENTS} elements"
     ids: dict[str, str] = {}
     for i, element in enumerate(site):
-        problem = _site_element_problem(element, f"site[{i}]")
+        problem = _site_element_problem(element, f"site[{i}]", from_request)
         if problem:
             return problem
         if element["id"] in ids:
@@ -208,7 +274,7 @@ def site_inverter(site: list, battery: bool = False, plant_conf: dict | None = N
     """
     under: dict[str, set[str]] = {}
     for element in site:
-        if site_kind(element) in ("node", "device"):
+        if site_kind(element) in ("node", "device", "remote"):
             under.setdefault(element.get("parent", _SITE_ROOT), set()).add(element["id"])
     fits = [
         e
