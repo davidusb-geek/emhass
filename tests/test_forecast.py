@@ -720,6 +720,51 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             covariates["heating_degree"].to_numpy(), expected_heating.to_numpy(), atol=1e-6
         )
 
+    def test_resample_data_interpolates_when_upsampling_and_averages_when_downsampling(self):
+        """A finer step interpolates linearly between samples; a coarser one averages."""
+        index = pd.date_range("2026-01-01 00:00", periods=4, freq="30min", tz="UTC")
+        data = pd.DataFrame({"load": [0.0, 30.0, 0.0, 60.0]}, index=index)
+        finer = Forecast.resample_data(data, pd.Timedelta("10min"), pd.Timedelta("30min"))
+        self.assertEqual(len(finer), 10)  # 00:00-01:30; nothing is extrapolated past the last row
+        np.testing.assert_allclose(
+            finer["load"].to_numpy(), [0.0, 10.0, 20.0, 30.0, 20.0, 10.0, 0.0, 20.0, 40.0, 60.0]
+        )
+        coarser = Forecast.resample_data(data, pd.Timedelta("60min"), pd.Timedelta("30min"))
+        np.testing.assert_allclose(coarser["load"].to_numpy(), [15.0, 30.0])
+
+    async def test_weather_covariates_are_interpolated_onto_a_finer_5_minute_index(self):
+        """Covariates on a 5-minute index take the linearly interpolated 15-minute Open-Meteo value."""
+        from unittest.mock import patch
+
+        start = pd.Timestamp("2026-06-10 10:00", tz=self.fcst.time_zone)
+        index = pd.date_range(start, periods=13, freq="5min")
+        samples = pd.date_range(start, periods=5, freq="15min")
+        payload = {
+            "minutely_15": {
+                "time": [int(t.timestamp()) for t in samples],
+                "temperature_2m": [0.0, 30.0, 60.0, 30.0, 0.0],
+                "relative_humidity_2m": [55.0] * 5,
+                "cloud_cover": [40.0] * 5,
+                "wind_speed_10m": [10.0] * 5,
+                "shortwave_radiation": [100.0] * 5,
+                "direct_radiation": [60.0] * 5,
+                "diffuse_radiation": [40.0] * 5,
+                "precipitation": [0.0] * 5,
+            }
+        }
+        with (
+            patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload),
+            patch.object(
+                self.fcst, "_fetch_open_meteo_historical_covariates_json", return_value=None
+            ),
+        ):
+            covariates = await self.fcst.get_weather_covariates(index, ["temp_air"])
+        pd.testing.assert_index_equal(covariates.index, index)
+        np.testing.assert_allclose(
+            covariates["temp_air"].to_numpy(),
+            [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0, 0.0],
+        )
+
     async def test_get_weather_covariates_rejects_unsupported(self):
         """An unsupported covariate name raises a clear ValueError."""
         with self.assertRaises(ValueError):
@@ -1850,6 +1895,40 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                         self.assertAlmostEqual(df.loc[ts, "yhat"], value, places=6)
                     energy = sum(df.loc[ts, "yhat"] for ts in children) * (freq_min / 60.0)
                     self.assertAlmostEqual(energy, value * 0.5, places=6)
+
+    async def test_solcast_rows_use_their_own_period_not_a_fixed_or_first_row_period(self):
+        """Each Solcast row averages over its own period: a PT30M row, then a PT60M row.
+
+        The PT60M row covers its whole hour, not just the last 30 minutes, and neither row's
+        period carries over to the other. The grid starts before the first row, so a first-row
+        period longer than 30 minutes would show in the 09:00 step.
+        """
+        self._solcast_grid_setup("30min", start="09:00:00", end="11:00:00")
+
+        # Solcast sends UTC period_end values; derive them from the configured local time
+        # so the rows land on the same grid steps whatever the time zone is.
+        def period_end(local_time):
+            return self._win(local_time).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
+        payload = {
+            "forecasts": [
+                {
+                    "period_end": period_end("10:00"),
+                    "period": "PT30M",
+                    "pv_estimate": 0.2,
+                },
+                {
+                    "period_end": period_end("11:00"),
+                    "period": "PT60M",
+                    "pv_estimate": 0.4,
+                },
+            ]
+        }
+        df = await self._fetch_solcast("123456", payload)
+        pd.testing.assert_index_equal(df.index, self.fcst.forecast_dates)
+        # 09:00 is before both rows; 09:30-10:00 is the PT30M row; 10:00-11:00 is the PT60M row,
+        # split over two steps.
+        np.testing.assert_allclose(df["yhat"].to_numpy(), [0.0, 200.0, 400.0, 400.0])
 
     # D: coarser grid — a 60-min target covering two 30-min source periods is
     # their mean, and no source period is dropped. Trailing partial coverage
@@ -4321,6 +4400,64 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = bz2.decompress(compressed)
         data = cPickle.loads(data)
         return orjson.loads(data.content)
+
+    async def test_open_meteo_5_minute_grid_is_interpolated_between_15_minute_samples(self):
+        """5-minute grid points between two 15-minute Open-Meteo samples are linearly interpolated.
+
+        The first grid starts and ends on a sample, so every interior point lies between two
+        samples and none depends on how the edges are filled. The second starts and ends between
+        samples: only the points from its first to its last sample are checked for their value,
+        and the rest only for being present.
+        """
+        tmp_data_path = self._isolate_weather_cache_dir()  # the debug CSV goes to a temp dir
+        start = pd.Timestamp("2026-06-10 10:00", tz=self.fcst.time_zone)
+        samples = pd.date_range(start, periods=5, freq="15min")
+        payload = {
+            "minutely_15": {
+                "time": [int(t.timestamp()) for t in samples],
+                "temperature_2m": [0.0, 30.0, 60.0, 30.0, 0.0],
+                "relative_humidity_2m": [50.0] * 5,
+                "rain": [0.0] * 5,
+                "cloud_cover": [0.0] * 5,
+                "wind_speed_10m": [1.0] * 5,
+                "shortwave_radiation_instant": [0.0] * 5,
+                "diffuse_radiation_instant": [0.0] * 5,
+                "direct_normal_irradiance_instant": [0.0] * 5,
+            }
+        }
+        expected = pd.Series(
+            [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0, 0.0],
+            index=pd.date_range(start, periods=13, freq="5min"),
+        )
+        for name, first, count in (("on-sample", 0, 13), ("off-sample", 1, 11)):
+            with self.subTest(grid=name):
+                grid = pd.date_range(
+                    start + first * pd.Timedelta(minutes=5), periods=count, freq="5min"
+                )
+                with (
+                    unittest.mock.patch.object(self.fcst, "freq", pd.Timedelta(minutes=5)),
+                    unittest.mock.patch.object(self.fcst, "forecast_dates", grid),
+                    unittest.mock.patch.object(
+                        self.fcst,
+                        "get_cached_open_meteo_forecast_json",
+                        unittest.mock.AsyncMock(return_value=payload),
+                    ),
+                ):
+                    data = await self.fcst._get_weather_open_meteo(
+                        str(tmp_data_path / f"no-such-{name}-weather-cache.pkl"), False
+                    )
+                pd.testing.assert_index_equal(data.index, grid)
+                self.assertFalse(data.isna().any().any(), data[data.isna().any(axis=1)])
+                if first == 0:
+                    np.testing.assert_allclose(data["temp_air"].to_numpy(), expected.to_numpy())
+                else:
+                    inside = data.loc[
+                        start + pd.Timedelta(minutes=15) : start + pd.Timedelta(minutes=45)
+                    ]
+                    self.assertEqual(len(inside), 7)
+                    np.testing.assert_allclose(
+                        inside["temp_air"].to_numpy(), expected.loc[inside.index].to_numpy()
+                    )
 
     async def test_open_meteo_cold_start_retries_then_succeeds(self):
         """Cold start (no cache): a transient failure is retried, then succeeds.
