@@ -524,7 +524,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("9 entries", str(caught.exception))
         self.assertIn("10 timesteps", str(caught.exception))
 
-    async def test_deferrable_load_groups_pennywize_phase_example(self):
+    async def test_deferrable_load_groups_phase_example_end_to_end(self):
         """The #1366 example end to end (config.json -> build_params ->
         treat_runtimeparams -> optimization): a 16 A group on a charger and a roaster
         inside a 25 A phase that also feeds a plug-in battery."""

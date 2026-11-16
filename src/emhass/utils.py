@@ -7873,7 +7873,7 @@ def check_deferrable_load_groups(
     :type error_cls: type[ValueError]
     """
     groups = optim_conf.get("deferrable_load_groups")
-    if not groups:  # null, "", {} or [] always meant no groups; 0 and false now do too
+    if not groups:  # null, "", {}, [], 0 and false all mean no groups
         return
     if not isinstance(groups, list):
         raise error_cls("deferrable_load_groups must be a list of group objects")
