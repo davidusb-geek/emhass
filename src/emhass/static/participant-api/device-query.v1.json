@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/davidusb-geek/emhass/master/src/emhass/static/participant-api/device-query.v1.json",
+  "title": "Device query, version 1",
+  "description": "What a coordinator asks a participant (one device, or a group solved together): its cheapest plan when its energy is charged at the given prices, or pulled toward a target plan. Prices are currency/kWh per slot; powers are kW, positive when drawn from the meter. See docs/theory.pdf, 'The device interface'.",
+  "type": "object",
+  "required": ["version", "kind", "horizon"],
+  "properties": {
+    "version": {"const": 1},
+    "kind": {
+      "enum": ["price_response", "best_response", "proximal"],
+      "description": "price_response: Dantzig-Wolfe's query, the participant metered alone. best_response: the real tariff, metered under residual_kw. proximal: ADMM's step, no price."
+    },
+    "horizon": {
+      "type": "object",
+      "required": ["start", "step_minutes", "slots"],
+      "properties": {
+        "start": {"type": "string", "format": "date-time", "description": "The first slot planned. Required: a participant answers from a model built for given slots (its state of charge, its forecasts)."},
+        "step_minutes": {"type": "number", "exclusiveMinimum": 0},
+        "slots": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "price_draw": {"$ref": "#/$defs/series", "description": "currency/kWh for energy drawn"},
+    "price_supply": {"$ref": "#/$defs/series", "description": "currency/kWh for energy supplied"},
+    "residual_kw": {"$ref": "#/$defs/series", "description": "the rest of the house's net load, kW (best_response)"},
+    "target_kw": {"$ref": "#/$defs/series", "description": "the plan to be pulled toward, kW (proximal)"},
+    "rho": {"type": "number", "minimum": 0, "description": "weight of the pull (proximal)"}
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "price_response"}}}, "then": {"required": ["price_draw", "price_supply"]}},
+    {"if": {"properties": {"kind": {"const": "best_response"}}}, "then": {"required": ["price_draw", "price_supply", "residual_kw"]}},
+    {"if": {"properties": {"kind": {"const": "proximal"}}}, "then": {"required": ["target_kw", "rho"]}}
+  ],
+  "$defs": {"series": {"type": "array", "items": {"type": "number"}, "minItems": 1}},
+  "additionalProperties": false
+}

@@ -33,7 +33,7 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from emhass.coordinator.site import compile_site, site_problem
+from emhass.coordinator.site import compile_site, site_problem, site_token_secret_usable
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
@@ -180,6 +180,23 @@ def add_local_calendar_days(
             tz.localize(nominal_dt, is_dst=False),
         )
     return pd.Timestamp(resolved)
+
+
+def forecast_starts_near(
+    now: pd.Timestamp,
+    freq: pd.Timedelta,
+    time_zone,
+    method_ts_round: str = "nearest",
+    grace: pd.Timedelta = pd.Timedelta(minutes=2),
+) -> set[pd.Timestamp]:
+    """The first optimization steps `get_forecast_start` gives within `grace`
+    of `now`: the slot a run planned may be the one just before or after the
+    clock's, when it crossed a boundary or the clocks of two machines differ."""
+    grace = min(grace, freq / 2)
+    return {
+        get_forecast_start(t, freq, time_zone, method_ts_round)
+        for t in (now - grace, now, now + grace)
+    }
 
 
 def get_forecast_start(
@@ -2856,9 +2873,11 @@ async def treat_runtimeparams(
                 # association[1] = legacy parameter name
                 # association[2] = parameter (config.json/config_defaults.json)
                 # association[3] = parameter list name if exists (not used, from legacy options.json)
-                # A request's site is checked by shape before anything reads it.
+                # A request's site is checked by shape before anything reads it,
+                # and may not name a remote solver: no request makes EMHASS call
+                # a host of its choosing.
                 if runtimeparams.get("site") is not None:
-                    problem = site_problem(runtimeparams["site"])
+                    problem = site_problem(runtimeparams["site"], from_request=True)
                     if problem:
                         logger.error(
                             "site (in the request): %s; the configured site is kept", problem
@@ -7265,6 +7284,7 @@ def get_keys_to_mask() -> list[str]:
         "solcast_api_key",
         "solcast_rooftop_id",
         "long_lived_token",
+        "remote_tokens",
         "time_zone",
         "Latitude",
         "Longitude",
@@ -7867,6 +7887,16 @@ async def build_params(
         if params_secrets.get(vm_secret) is not None:
             params["retrieve_hass_conf"][vm_secret] = params_secrets.get(vm_secret)
             params["params_secrets"][vm_secret] = params_secrets.get(vm_secret)
+    # The tokens site's remote solvers are reached with: only the secrets a
+    # remote names (its token_secret), for the coordinator
+    configured_site = params["optim_conf"].get("site")
+    for element in configured_site if isinstance(configured_site, list) else []:
+        solver = element.get("solver") if isinstance(element, dict) else None
+        name = solver.get("token_secret") if isinstance(solver, dict) else None
+        if site_token_secret_usable(name) and params_secrets.get(name) is not None:
+            params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[
+                name
+            ]
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
