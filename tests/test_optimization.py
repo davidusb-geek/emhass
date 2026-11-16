@@ -5452,6 +5452,60 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total_heating_energy = opt_res["P_deferrable0"].sum()
         self.assertGreaterEqual(total_heating_energy, 0, "Heat pump energy must be non-negative")
 
+    def test_thermal_battery_max_thermal_power_caps_delivered_heat(self):
+        """`max_thermal_power` bounds cop * p on a standalone thermal_battery (#1324).
+
+        Before the fix the field was read only by the shared-tank builder, so a
+        thermal_battery load could deliver cop * nominal_power - here 3000 W of
+        electricity times a COP near 3.5, i.e. over 10 kW of heat from a source
+        rated at 1 kW.
+        """
+        max_thermal_power = 1000.0  # W of delivered heat
+        thermal_config = {
+            "start_temperature": 19.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 150.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "max_thermal_power": max_thermal_power,
+        }
+        outdoor_temps = np.zeros(48)
+        opt_res = self.run_thermal_battery_optimization(
+            thermal_config, outdoor_temps=outdoor_temps
+        )
+
+        cops = utils.resolve_thermal_battery_cop(thermal_config, outdoor_temps, length=48)
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        delivered_kwh = opt_res["P_deferrable0"].values * cops / 1000 * timestep_h
+        cap_kwh = max_thermal_power / 1000 * timestep_h
+
+        self.assertTrue(
+            np.all(delivered_kwh <= cap_kwh + 1e-6),
+            f"delivered heat {delivered_kwh.max():.4f} kWh/step exceeds the "
+            f"{cap_kwh:.4f} kWh/step ceiling",
+        )
+        # A cap that never binds would let this test pass for the wrong reason:
+        # the demand is far above the ceiling, so the unit has to run at it.
+        self.assertGreater(delivered_kwh.max(), 0.9 * cap_kwh)
+
+    def test_thermal_battery_max_thermal_power_must_be_positive(self):
+        """A non-positive `max_thermal_power` is a configuration error."""
+        thermal_config = {
+            "start_temperature": 19.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 150.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "max_thermal_power": 0.0,
+        }
+        with self.assertRaises(ValueError) as ctx:
+            self.run_thermal_battery_optimization(thermal_config, outdoor_temps=np.zeros(48))
+        self.assertIn("max_thermal_power", str(ctx.exception))
+
     def test_thermal_battery_infeasible_temperature_constraints(self):
         """Test optimizer handles infeasible thermal battery configuration (min_temperatures > max_temperatures)."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
