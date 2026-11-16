@@ -7,6 +7,7 @@ Synthetic and self-contained, built on the multi-battery test helper.
 """
 
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -181,6 +182,48 @@ class TestBatteryAvailability(unittest.TestCase):
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertEqual(opt.param_soc_low_required[1].value, 1.0)
         self.assertGreaterEqual(res["SOC_opt_1"].to_numpy()[5], 0.2 - 1e-4)
+
+    def test_recovery_check_counts_charge_efficiency(self):
+        """The EV is plugged in for one 30 min step. It charges at 11000 W on the
+        grid side with 0.95 efficiency, so it can store at most
+        11000 * 0.95 * 0.5 = 5225 Wh (not 5500). A 5400 Wh gap to soc_min cannot
+        be closed, so the minimum is dropped with a warning instead of the
+        problem going infeasible. Gaps inside the real reach keep it enforced,
+        including with availability below the efficiency, where the
+        availability ceiling binds (0.5 * 11000 * 0.5 = 2750 Wh).
+        """
+        one_step = [1] + [0] * (N - 1)
+        half_step = [0.5] + [0] * (N - 1)
+        # (soc_init, EV availability, low_gap Wh, recoverable)
+        cases = (
+            (0.11, one_step, 5400, False),
+            (0.115, one_step, 5100, True),
+            (0.155, half_step, 2700, True),
+        )
+        for soc_init, availability, gap, recoverable in cases:
+            with self.subTest(soc_init=soc_init, gap=gap):
+                opt = build_optimization(plant_overrides=HOUSE_AND_EV)
+                with mock.patch.object(opt.logger, "warning", wraps=opt.logger.warning) as warning:
+                    res = run(
+                        opt,
+                        soc_init=[0.5, soc_init],
+                        soc_final=[0.5, 0.2],
+                        battery_availability=[None, availability],
+                    )
+                self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                self.assertAlmostEqual(opt.param_soc_low_gap[1].value, gap, places=3)
+                warned = any(
+                    "cannot recover" in str(call.args[0])
+                    for call in warning.call_args_list
+                    if call.args
+                )
+                if recoverable:
+                    self.assertEqual(opt.param_soc_low_required[1].value, 1.0)
+                    self.assertFalse(warned)
+                    self.assertGreaterEqual(res["SOC_opt_1"].to_numpy()[0], 0.2 - 1e-4)
+                else:
+                    self.assertEqual(opt.param_soc_low_required[1].value, 0.0)
+                    self.assertTrue(warned)
 
     def test_absent_ev_below_min_soc_stays_feasible(self):
         """An EV that is not connected at all, with soc_init below soc_min,
