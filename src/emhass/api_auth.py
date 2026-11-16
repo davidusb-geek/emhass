@@ -9,7 +9,7 @@ needs one of:
   (see ``is_trusted_ingress_request``). Home Assistant has already signed that
   user in.
 
-WebSocket handshakes need the bearer header.
+WebSocket handshakes need the bearer header (or come from trusted ingress).
 
 The token is read once, by ``configure_now()`` when the web server module is
 imported (in the Gunicorn master, with preload, so every worker shares one
@@ -740,7 +740,7 @@ def log_status(logger: logging.Logger, host: str) -> None:
     if current_token() is None:
         logger.error(
             "API access control is on but no %s is available and none can be generated "
-            "(%s=false). Every request except /healthz and /login gets 503. Set %s.",
+            "(%s=false). Every request except /healthz, /logout and Home Assistant ingress gets 503. Set %s.",
             SETTING_NAME,
             AUTOGENERATE_ENV,
             ENV_NAME,

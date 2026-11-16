@@ -143,7 +143,7 @@ Add an `http request` node downstream of Step 3. Settings:
 
 - Method: `POST`
 - URL: `http://<EMHASS_HOST>:5000/action/naive-mpc-optim`
-- Headers: `Content-Type: application/json`
+- Headers: `Content-Type: application/json` and `Authorization: Bearer <token>` (the EMHASS API token, see [API authentication](../api_authentication.md))
 - Send: `as JSON`
 - Return: `parsed JSON`
 - Timeout: at least 120 000 ms (long MPC runs); in production a setup with deferrables + thermal regularly takes 90-120 s, day-ahead longer

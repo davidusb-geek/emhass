@@ -6,6 +6,7 @@ Stdlib only. Run: python scripts/generate_openapi.py
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -128,6 +129,8 @@ def _normalise_path(rule: str) -> str:
 
 def discovered_routes() -> set[tuple[str, str]]:
     """Return {(path, METHOD)} from the live Quart url_map. Normalises <x> -> {x}."""
+    # importing the web server configures API access control: never let that write a token file
+    os.environ.setdefault("EMHASS_API_TOKEN_AUTOGENERATE", "false")
     from emhass.web_server import app
 
     out: set[tuple[str, str]] = set()
