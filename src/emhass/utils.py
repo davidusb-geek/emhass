@@ -7857,7 +7857,8 @@ def check_deferrable_load_groups(
     overlap, as runtime and heat_topology groups always could, and a group with
     neither ``max_power`` nor mutual exclusion (``mutual_exclusion`` false or null)
     is accepted and adds nothing, as before. A missing or empty
-    ``deferrable_load_groups`` means no groups on both paths.
+    ``deferrable_load_groups`` (any false value, 0 included) means no groups on both
+    paths.
 
     The first fault is raised as ``error_cls``; the message names the group and
     member by position and never repeats a value from the request.
@@ -7872,7 +7873,7 @@ def check_deferrable_load_groups(
     :type error_cls: type[ValueError]
     """
     groups = optim_conf.get("deferrable_load_groups")
-    if not groups:  # null, "", {} or [] have always built as no groups
+    if not groups:  # null, "", {} or [] always meant no groups; 0 and false now do too
         return
     if not isinstance(groups, list):
         raise error_cls("deferrable_load_groups must be a list of group objects")

@@ -200,7 +200,7 @@ Example:
 
 	A battery can be a member only with `set_use_battery`, `number_of_inverters` 1 and `inverter_is_hybrid` false (an AC-coupled battery, the only layout where the battery's power in the model is on the AC side), and its group can't hold a non-electric load (`is_electric_load` false). These rules are checked on the final parameters of every run, so a runtime change to any of these settings is checked too.
 
-	A load can be in several groups, but in `config.json` in only one with `mutual_exclusion`. Things to keep in mind with a budget:
+	A load can be in several groups. In `config.json` it can be in only one group with `mutual_exclusion`. Things to keep in mind with a budget:
 	- It caps power drawn through the limit only. Nothing caps a battery discharging back through it.
 	- It caps the average over a timestep, so a load that is really on/off should be semi-continuous (`treat_deferrable_load_as_semi_cont`). The relaxed retry after a failed solve drops semi-continuity, so there the budget only holds as an average.
 	- It is a hard limit. If something forces more power into a timestep than `max_power` allows (a `def_current_power` pin, a load inside its minimum on time or already running as a single constant load, a hard `soc_target`, or a battery below its minimum state of charge), the whole optimization is infeasible. `max_power` is the room for the group's own members, so a runtime value worked out from a meter reading has to add back what they draw now.

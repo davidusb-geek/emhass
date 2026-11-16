@@ -4495,12 +4495,14 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_deferrable_load_groups_runtime_no_op_shapes_pass(self):
         """Runtime group shapes that always built as "nothing to add" still pass the
-        final check: no groups as "" or {}, a group with neither field, and a null
-        mutual_exclusion read as false (#1366)."""
+        final check: no groups as "", {}, 0 or false, a group with neither field, and a
+        null mutual_exclusion read as false (#1366)."""
         d01 = ["deferrable0", "deferrable1"]
         for groups in (
             "",
             {},
+            0,
+            False,
             [{"names": d01}],
             [{"names": d01, "max_power": 4000, "mutual_exclusion": None}],
         ):
@@ -4558,6 +4560,9 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             None,
             "",
             {},
+            # Any false value means no groups (0 and false crashed at the cache key before).
+            0,
+            False,
             [battery_group],
             [{"names": ["deferrable0", "battery0"], "max_power": 5000, "weights": {}}],
             [{"names": ["deferrable0"], "max_power": 5000, "note": "unknown keys are ignored"}],

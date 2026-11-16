@@ -3443,6 +3443,14 @@ class TestOptimizationCache(unittest.TestCase):
         )
         self.assertNotEqual(key, self._key_with_groups([{**per_step, "mutual_exclusion": True}]))
 
+    def test_cache_key_deferrable_load_groups_empty_values_mean_no_groups(self):
+        """#1366: every false value the group check reads as no groups keys like no
+        groups. Before, 0 and false raised a TypeError in the key."""
+        no_groups = self._key_with_groups([])
+        for groups in (None, "", {}, 0, False):
+            with self.subTest(groups=groups):
+                self.assertEqual(self._key_with_groups(groups), no_groups)
+
     def test_cache_key_deferrable_load_groups_odd_shapes_do_not_raise(self):
         """Unvalidated groups (a direct API caller) are keyed, never raise (#1366)."""
         for groups in (
