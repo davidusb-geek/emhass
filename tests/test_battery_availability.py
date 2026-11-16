@@ -63,6 +63,11 @@ def run(opt, **kwargs):
     return res
 
 
+def _warned(warning, text):
+    """True if a mocked logger.warning call contained text."""
+    return any(text in str(call.args[0]) for call in warning.call_args_list if call.args)
+
+
 class TestBatteryAvailability(unittest.TestCase):
     def test_default_is_unchanged(self):
         """No availability input = identical objective and schedule."""
@@ -212,11 +217,7 @@ class TestBatteryAvailability(unittest.TestCase):
                     )
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
                 self.assertAlmostEqual(opt.param_soc_low_gap[1].value, gap, places=3)
-                warned = any(
-                    "cannot recover" in str(call.args[0])
-                    for call in warning.call_args_list
-                    if call.args
-                )
+                warned = _warned(warning, "cannot recover")
                 if recoverable:
                     self.assertEqual(opt.param_soc_low_required[1].value, 1.0)
                     self.assertFalse(warned)
@@ -246,11 +247,7 @@ class TestBatteryAvailability(unittest.TestCase):
                         battery_availability=[None, three_steps],
                     )
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
-                warned = any(
-                    "cannot recover" in str(call.args[0])
-                    for call in warning.call_args_list
-                    if call.args
-                )
+                warned = _warned(warning, "cannot recover")
                 self.assertEqual(warned, not recoverable)
                 self.assertEqual(opt.param_soc_low_required[1].value, float(recoverable))
 

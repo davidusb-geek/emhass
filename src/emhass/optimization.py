@@ -2265,8 +2265,9 @@ class Optimization:
         that can start a step just below a threshold may charge faster than one
         charging flat out. The reach after each step is the best of the previous
         reach plus its own gain and every threshold between the lowest and the
-        highest SoC the step can start at, plus the gain just below it. The
-        lowest SoC falls by the discharge power limit each step but never below
+        highest SoC the step can start at, plus the gain just below it.
+
+        The lowest SoC falls by the discharge power limit each step but never below
         soc_min, or below the start when that is under soc_min (the recovery
         constraints keep it there). Other discharge limits are ignored, so the
         result can over-estimate but never under-estimates: a target above it
