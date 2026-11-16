@@ -24,7 +24,7 @@ The `perfect-optim` mode uses real measured PV production and load data from the
 Run it:
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/perfect-optim
 ```
@@ -52,7 +52,7 @@ The `dayahead-optim` mode is the real production case: forecasted PV (from `open
 Run it:
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/dayahead-optim
 ```

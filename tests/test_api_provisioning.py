@@ -69,6 +69,22 @@ class TestProvisioning(AuthSupportBase):
         self.assertEqual(len(set(results)), 1)
         self.assertEqual(self.token_file().read_text(encoding="utf-8").strip(), results[0])
 
+    async def test_a_file_another_worker_is_still_writing_is_waited_for(self):
+        self.token_file().write_text("")  # created, token not written yet
+        written = "w" * 43
+
+        def finish():
+            import time
+
+            time.sleep(0.2)
+            self.token_file().write_text(written + "\n")
+
+        thread = threading.Thread(target=finish)
+        thread.start()
+        token, how = api_auth.provision_token(self.data, self.logger)
+        thread.join()
+        self.assertEqual((token, how), (written, "file"))
+
     async def test_a_configured_token_is_used_and_nothing_is_generated(self):
         for name, setup in {
             "environment": lambda: os.environ.__setitem__(api_auth.ENV_NAME, TOKEN),

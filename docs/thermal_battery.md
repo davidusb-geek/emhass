@@ -1059,6 +1059,7 @@ rest_command:
     url: http://localhost:5000/action/naive-mpc-optim
     method: post
     headers:
+      authorization: !secret emhass_bearer
       content-type: application/json
     payload: >
       {
