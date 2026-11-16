@@ -915,7 +915,7 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
 
     async def test_n1_non_gate_failure_after_agreement_hold_keeps_the_hold(self):
-        """Pins the chosen behaviour (#1294 DECISIONS D2): the hold lasts until
+        """Pins the chosen behaviour: the hold lasts until
         a fit passes. A later failure for another reason (too few runs, say
         after a recorder purge) keeps the flag, so the retained record is still
         not served; the next passing fit ends the hold."""
