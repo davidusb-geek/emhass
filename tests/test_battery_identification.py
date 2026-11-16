@@ -1332,6 +1332,206 @@ class TestIsModelOutdatedLabel(unittest.TestCase):
         self.assertTrue(any("Battery identification model" in m for m in cm.output))
 
 
+# -- #1360: websocket statistics gaps reach the estimator ------------------------
+_WS_POWER, _WS_SOC, _WS_LOAD = "sensor.batt_power", "sensor.batt_soc", "sensor.load"
+_WS_CAPACITY_WH = 10000.0
+_WS_ETA = 0.97  # one-way, so the true round-trip efficiency is 0.9409
+
+
+def _ws_truth(seed: int, days: int = 10) -> pd.DataFrame:
+    """
+    One-minute truth for a 10 kWh pack: one charge leg (01:00-05:00 UTC) and one
+    discharge leg (17:00-21:00 UTC) a day, scaled per day, with charging stopping
+    at 95 % SoC and discharging at 8 %. This is the #1360 probe's generator with
+    the per-minute draws taken in one call (same random stream), so a seed gives
+    the same history the probe sweep used.
+    """
+    rng = np.random.default_rng(seed)
+    scale = rng.uniform(0.7, 1.0, days)
+    noise = rng.normal(0.0, 10.0, days * 1440)
+    minute = np.arange(days * 1440)
+    hour = (minute % 1440) // 60
+    day_scale = scale[minute // 1440]
+    planned = np.where(
+        (hour >= 1) & (hour < 5),
+        2000.0 * day_scale,
+        np.where((hour >= 17) & (hour < 21), -1800.0 * day_scale, 0.0),
+    )
+    power = np.empty(len(minute))
+    soc_out = np.empty(len(minute))
+    soc = 20.0
+    for i, p in enumerate(planned.tolist()):
+        if (p > 0 and soc >= 95) or (p < 0 and soc <= 8):
+            p = 0.0
+        stored = p * _WS_ETA if p > 0 else p / _WS_ETA
+        soc += stored / 60 / _WS_CAPACITY_WH * 100
+        power[i] = p
+        soc_out[i] = soc
+    idx = pd.date_range("2026-10-01", periods=len(minute), freq="1min", tz="UTC")
+    df = pd.DataFrame({_WS_POWER: power + noise, _WS_SOC: soc_out}, index=idx)
+    df[_WS_LOAD] = 500.0 + 100.0 * np.sin(minute / 240.0)
+    return df
+
+
+def _ws_statistics(df_1min: pd.DataFrame, outages: list[tuple[str, str]]) -> dict:
+    """
+    Turn one-minute truth into what the HA websocket returns for 5-minute
+    statistics, with no rows at all inside each ``(start, end)`` outage.
+    """
+    five = df_1min.resample("5min").mean()
+    keep = np.ones(len(five), dtype=bool)
+    for start, end in outages:
+        keep &= ~((five.index >= pd.Timestamp(start)) & (five.index < pd.Timestamp(end)))
+    five = five[keep]
+    starts_ms = (five.index.as_unit("ns").asi8 // 1_000_000).tolist()
+    return {
+        col: [{"start": ms, "mean": float(v)} for ms, v in zip(starts_ms, five[col], strict=True)]
+        for col in five.columns
+    }
+
+
+@unittest.skipUnless(
+    HAVE_FEATURE and HAVE_CL, "battery_identification/command_line not present (base commit)"
+)
+class TestWebsocketGapsReachIdentify(unittest.IsolatedAsyncioTestCase):
+    """
+    #1360: on the websocket path a stretch with no statistics rows has to reach
+    battery identification as a gap, as it does on REST, not as a flat line
+    forward-filled from the last bucket.
+    """
+
+    def setUp(self):
+        self.logger = logging.getLogger("test_battery_id_websocket")
+        self.retrieve_hass_conf = {
+            "historic_days_to_retrieve": 10,
+            "optimization_time_step": pd.Timedelta("30min"),
+            "sensor_power_load_no_var_loads": _WS_LOAD,
+            "sensor_power_battery": _WS_POWER,
+            "sensor_battery_state_of_charge": _WS_SOC,
+            "load_negative": False,
+            "set_zero_min": True,
+            "sensor_replace_zero": ["sensor.power_photovoltaics", "sensor.p_pv_forecast"],
+            "sensor_linear_interp": ["sensor.power_photovoltaics", _WS_LOAD],
+        }
+
+    async def _retrieve(self, stats: dict, retrieve_hass_conf: dict) -> pd.DataFrame:
+        """battery_id retrieval through the real entry point, websocket client faked."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from emhass.retrieve_hass import RetrieveHass
+
+        rh = RetrieveHass(
+            "http://ha.invalid:8123",
+            "token",
+            pd.Timedelta("30min"),
+            "UTC",
+            {"retrieve_hass_conf": {"use_websocket": True}},
+            {},
+            self.logger,
+        )
+        client = MagicMock()
+        client.get_statistics = AsyncMock(return_value=stats)
+        with (
+            patch("emhass.retrieve_hass.get_websocket_client", new=AsyncMock(return_value=client)),
+            patch.object(RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=False)),
+        ):
+            ok, df, _ = await command_line.retrieve_home_assistant_data(
+                "battery_id",
+                False,
+                retrieve_hass_conf,
+                {"set_use_pv": False},
+                rh,
+                {},
+                None,
+                self.logger,
+            )
+        self.assertTrue(ok, "websocket battery_id retrieval failed")
+        return df
+
+    def _fit(self, df: pd.DataFrame):
+        return BatteryIdentification(
+            self.logger, time_step=self.retrieve_hass_conf["optimization_time_step"]
+        ).identify(df, _WS_POWER, _WS_SOC, _WS_CAPACITY_WH)
+
+    @staticmethod
+    def _is_right(result) -> bool:
+        return (
+            result.status == "ok"
+            and abs(result.capacity_wh - _WS_CAPACITY_WH) / _WS_CAPACITY_WH <= 0.05
+            and abs(result.round_trip_efficiency - _WS_ETA**2) <= 0.03
+        )
+
+    async def test_short_outage_does_not_bias_the_fit(self):
+        """
+        Seed 1001 of the probe's "one 3 h outage" row: the outage covers the end of
+        a charge leg and the idle stretch after it. Held through the outage, the
+        last charging bucket counts as charge energy that never reached the pack,
+        and the fit comes back ok with RTE about 0.87 against a true 0.94.
+        """
+        stats = _ws_statistics(
+            _ws_truth(1001), [("2026-10-03 03:25+00:00", "2026-10-03 06:25+00:00")]
+        )
+        df = await self._retrieve(stats, dict(self.retrieve_hass_conf))
+
+        # Counterfactual: the same frame held through the outage, the way the
+        # websocket path built it before #1360, must not fit right. If it did,
+        # this scenario would no longer tell the two behaviours apart.
+        held = self._fit(df.ffill())
+        self.assertFalse(
+            self._is_right(held),
+            f"scenario no longer discriminates: held frame fits {held.status}, "
+            f"capacity {held.capacity_wh}, RTE {held.round_trip_efficiency}",
+        )
+
+        result = self._fit(df)
+        self.assertEqual(result.status, "ok", result.messages)
+        self.assertLessEqual(
+            abs(result.capacity_wh - _WS_CAPACITY_WH) / _WS_CAPACITY_WH, 0.05, result
+        )
+        self.assertLessEqual(abs(result.round_trip_efficiency - _WS_ETA**2), 0.03, result)
+
+        # The outage reaches the estimator as a gap: buckets 03:30 to 05:30 had no
+        # statistics rows. 03:00 and 06:00 each still hold some rows, so they keep a value.
+        gap = df.loc["2026-10-03 03:30+00:00":"2026-10-03 05:30+00:00", [_WS_POWER, _WS_SOC]]
+        self.assertEqual(len(gap), 5)
+        self.assertTrue(gap.isna().all().all(), gap)
+        self.assertFalse(df.drop(gap.index)[[_WS_POWER, _WS_SOC]].isna().any().any())
+
+    async def test_two_batteries_keep_their_own_gaps(self):
+        """N>1 shares one retrieval: each battery's outage stays a gap in its columns."""
+        p2, s2 = "sensor.batt2_power", "sensor.batt2_soc"
+        truth = _ws_truth(1001, days=1)
+        truth[p2] = truth[_WS_POWER] * 0.5
+        truth[s2] = truth[_WS_SOC]
+        stats = _ws_statistics(truth, [])
+        # Battery 1 drops out 02:00-03:00, battery 2 drops out 10:00-11:00.
+        for cols, start, end in (
+            ((_WS_POWER, _WS_SOC), "2026-10-01 02:00+00:00", "2026-10-01 03:00+00:00"),
+            ((p2, s2), "2026-10-01 10:00+00:00", "2026-10-01 11:00+00:00"),
+        ):
+            lo = pd.Timestamp(start).value // 1_000_000
+            hi = pd.Timestamp(end).value // 1_000_000
+            for col in cols:
+                stats[col] = [row for row in stats[col] if not lo <= row["start"] < hi]
+        conf = dict(self.retrieve_hass_conf)
+        conf["historic_days_to_retrieve"] = 1
+        conf["sensor_power_battery"] = [_WS_POWER, p2]
+        conf["sensor_battery_state_of_charge"] = [_WS_SOC, s2]
+
+        df = await self._retrieve(stats, conf)
+
+        utc = df.index.tz_convert("UTC")
+        expected = {
+            _WS_POWER: ["2026-10-01 02:00", "2026-10-01 02:30"],
+            _WS_SOC: ["2026-10-01 02:00", "2026-10-01 02:30"],
+            p2: ["2026-10-01 10:00", "2026-10-01 10:30"],
+            s2: ["2026-10-01 10:00", "2026-10-01 10:30"],
+        }
+        for col, buckets in expected.items():
+            nan_at = [ts.strftime("%Y-%m-%d %H:%M") for ts in utc[df[col].isna()]]
+            self.assertEqual(nan_at, buckets, col)
+
+
 @unittest.skipUnless(HAVE_FEATURE, "battery_identification feature not present (base commit)")
 class TestGapHandling(unittest.TestCase):
     """
