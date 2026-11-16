@@ -4915,7 +4915,6 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
             utils.resolve_thermal_battery_cop(hc, None, length=3)
         self.assertIn("outdoor_temperature_forecast", str(ctx.exception))
 
-
     def test_supply_temperature_profile_per_step(self):
         """A per-timestep supply profile prices each step at its own supply T (#1327)."""
         profile = [30.0, 35.0, 40.0, 45.0]
@@ -4931,9 +4930,7 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
     def test_supply_temperature_profile_single_value_broadcasts(self):
         """A one-element list means the same as the scalar it generalizes."""
         outdoor = np.array([0.0, 5.0, 10.0])
-        scalar = utils.resolve_thermal_battery_cop(
-            {"supply_temperature": 35.0}, outdoor, length=3
-        )
+        scalar = utils.resolve_thermal_battery_cop({"supply_temperature": 35.0}, outdoor, length=3)
         listed = utils.resolve_thermal_battery_cop(
             {"supply_temperature": [35.0]}, outdoor, length=3
         )
@@ -4982,7 +4979,6 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
             utils.resolve_thermal_battery_cop(
                 {"supply_temperature": [[30.0, 31.0], [32.0, 33.0]]}, outdoor, length=2
             )
-
 
     def test_supply_temperature_profile_rejects_strings_and_booleans(self):
         """A string or a bool is a config error, not a temperature: converted with

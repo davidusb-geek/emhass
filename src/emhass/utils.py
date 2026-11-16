@@ -564,9 +564,7 @@ def _supply_temperature_profile(values, length, outdoor_temperature_forecast) ->
         values = values.tolist()
     # _numeric_series rejects strings ("30"), booleans (True reads as 1.0), non-finite
     # values and nested entries, so a typo cannot silently price a timestep.
-    arr = np.asarray(
-        _numeric_series(values, "thermal_battery 'supply_temperature'"), dtype=float
-    )
+    arr = np.asarray(_numeric_series(values, "thermal_battery 'supply_temperature'"), dtype=float)
     target = length if length is not None else len(np.asarray(outdoor_temperature_forecast))
     if arr.size == 1:
         return np.full(target, float(arr[0]))
