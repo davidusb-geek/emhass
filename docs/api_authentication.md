@@ -14,7 +14,7 @@ Read [Migrating](#migrating-from-an-unauthenticated-install) first.
 
 | You run EMHASS as | Get your token | Use it |
 |---|---|---|
-| Home Assistant add-on | Open EMHASS in the sidebar, choose the key icon (**API token**), or set your own in the add-on **Configuration** (`emhass_api_token`) | Automations send it as a bearer header; the web UI needs nothing (Home Assistant signs you in) |
+| Home Assistant add-on | Open EMHASS in the sidebar, choose the key icon (**API token**; only Home Assistant administrators see it), or set your own in the add-on **Configuration** (`emhass_api_token`) | Automations send it as a bearer header; the web UI needs nothing (Home Assistant signs you in) |
 | Docker | `docker exec emhass-container cat /data/emhass_api_token`, or set `-e EMHASS_API_TOKEN=...` | Bearer header; browser: open `/login` |
 | Python / source | Set `EMHASS_API_TOKEN` or `emhass_api_token` in `secrets_emhass.yaml` | Same |
 
@@ -90,13 +90,14 @@ EMHASS therefore listens on two ports when it runs as an add-on:
 This follows Home Assistant's own rule for add-ons: ingress runs on a port of its own, and only connections from
 `172.30.32.2` are accepted. Ingress is recognised by **which port accepted the connection and who connected**, never by a
 header: a client that reaches a port can send any header (`X-Ingress-Path`, `X-Forwarded-For`, `X-Remote-User-*`), so
-none is believed. The servers are configured not to rewrite the peer address from `X-Forwarded-For`.
+none is used to recognise ingress. (The identity headers the Supervisor adds are read for one purpose only, the administrator-only token page below, and only after the port and peer rule has already held.)
+The servers are configured not to rewrite the peer address from `X-Forwarded-For`.
 
 **What EMHASS relies on from Home Assistant's ingress** (read from the Supervisor's `api/ingress.py` and the add-on developer documentation; not run against a live Supervisor):
 
 - The Supervisor connects from `172.30.32.2` to the add-on's `ingress_port`, and refuses a browser that has no valid ingress session.
 - With `panel_admin: true` (the default, and set explicitly in the add-on) it answers `403` unless the signed-in user is an administrator, and a request with no resolvable user is denied.
-- It adds `X-Remote-User-Id` and `X-Remote-User-Groups` after removing any copy the client sent. EMHASS reads them **only** for `/api-token`, and only on the ingress port: the page needs a user id and the group `system-admin`, so it stays administrator-only even for a configuration that set `panel_admin: false`. A request with no user identity gets `403`.
+- It adds `X-Remote-User-Id` and `X-Remote-User-Groups` after removing any copy the client sent. EMHASS reads them **only** for the `/api-token` page and for the key link on the home page, and only on the ingress port: the page needs a user id and the group `system-admin`, so it stays administrator-only even for a configuration that set `panel_admin: false`. A request with no user identity gets `403`.
 - It forwards redirects (`Location`), `Set-Cookie` and other response headers unchanged and does not follow redirects, and it serves the app under `/api/hassio_ingress/<token>/`, which the app does not see. Every URL, redirect and link EMHASS emits is therefore relative (a test scans the UI assets and the redirects), and the login cookie is set without a `Path`.
 
 A request that arrives through ingress and changes something must be JSON (the web UI always sends JSON), so a forged
@@ -106,7 +107,7 @@ Settings (normally automatic): `EMHASS_INGRESS_PORT` (default `8099` when `SUPER
 does for add-ons; unset otherwise) and `EMHASS_INGRESS_PEERS` (default `172.30.32.2`; a comma-separated list of
 addresses or networks that **replaces** the default).
 
-The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
+This needs a Supervisor recent enough to send `X-Remote-User-Groups` and enforce `panel_admin` (not verified against specific versions; on an older one the page answers `403` and the key icon is hidden: set your own token in the add-on options instead). The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
 add-on pins the EMHASS image to its own version, so both change in one update. Do not mix them: an older add-on
 configuration (ingress on port 5000) with this image shows the login page and gives you no way to learn the token, and
 this add-on configuration with an older image has nothing listening on 8099. The `emhass-test` add-on follows the
@@ -150,7 +151,7 @@ user's browser, another add-on or container on the same host, a local process on
 | Area | Control | Residual risk |
 |---|---|---|
 | Routes | one `before_request` hook, default closed; only `/healthz`, `/login`, `/logout` are open; tests enumerate every route in the URL map, unauthenticated on the API port and as a stranger on the ingress port, and pin the open list | a future route is protected automatically; on the ingress port the three open endpoints still answer anyone |
-| Token | 16+ characters; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a signed-in Home Assistant user, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
+| Token | 16+ characters; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a Home Assistant administrator through ingress, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
 | No token | generated and persisted (written to a temporary file, flushed and hard-linked into place, so it appears complete or not at all; on a file system without hard links an exclusive create is used and a crash can leave an empty file, which is replaced after 10 seconds), else `503`; never open | whoever can read the data folder can read the token. On POSIX the file is mode `0600`; **on Windows it is not restricted to its owner** (a warning is logged when it is generated): set `EMHASS_API_TOKEN` there |
 | Bearer vs cookie | bearer works everywhere; cookie is for browsers | a copied cookie works until it expires or EMHASS restarts |
 | CSRF | `SameSite=Strict`; cookie and ingress requests that change something must be JSON; the existing `Sec-Fetch-Site: cross-site` refusal | none known; `SameSite` ignores ports, which is why JSON is also required |
@@ -176,7 +177,7 @@ user's browser, another add-on or container on the same host, a local process on
 | Response | Meaning |
 |---|---|
 | `401` + `WWW-Authenticate: Bearer` | no or wrong token |
-| `403` | a cookie or ingress request that changes something was not JSON; or any request or WebSocket handshake to the ingress port from a peer other than the Supervisor (only `/healthz`, `/login` and `/logout` still answer there); or `/api-token` opened by a script |
+| `403` | a cookie or ingress request that changes something was not JSON; or any request or WebSocket handshake to the ingress port from a peer other than the Supervisor (only `/healthz`, `/login` and `/logout` still answer there); or `/api-token` opened by a script, by a user who is not an administrator, or with no user identity |
 | `503` | access control is not usable: no token and none can be generated, or a token source is broken. Nothing ran |
 
 ## What has been verified

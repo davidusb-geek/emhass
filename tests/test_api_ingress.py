@@ -422,5 +422,17 @@ class TestIngressRelativeUrls(AuthSupportBase):
         self.assertNotIn("Path=", login.headers["Set-Cookie"])
 
 
+class TestRelativeHelperDepth(AuthSupportBase):
+    async def test_a_redirect_climbs_out_of_every_path_segment(self):
+        for path, expected in (
+            ("/configuration", "login"),
+            ("/a/configuration", "../login"),
+            ("/a/b/configuration", "../../login"),
+        ):
+            with self.subTest(path=path):
+                async with web_server.app.test_request_context(path):
+                    self.assertEqual(api_auth._relative("login"), expected)
+
+
 if __name__ == "__main__":
     unittest.main()

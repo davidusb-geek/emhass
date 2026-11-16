@@ -366,6 +366,105 @@ class TestCrashSafety(AuthSupportBase):
         self.assertFalse(old.exists())
         self.assertTrue(recent.exists())
 
+    def test_a_blank_file_is_treated_like_an_empty_one(self):
+        import time
+
+        self.token_file().write_text("  \n\n")
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth.provision_token(
+                self.data, self.logger
+            )  # fresh: maybe another worker is writing
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        token, how = api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(how, "new")
+        self.assertEqual(self.token_file().read_text().strip(), token)
+
+    def test_a_file_that_is_not_a_token_is_not_overwritten(self):
+        import time
+
+        self.token_file().write_text("garbage\n")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(self.token_file().read_text(), "garbage\n")
+
+    def test_a_file_replaced_between_the_two_looks_is_not_deleted(self):
+        import time
+        import types
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        real = pathlib.Path.stat
+        calls = []
+
+        def stat(path, *args, **kwargs):
+            result = real(path, *args, **kwargs)
+            if path == self.token_file():
+                calls.append(1)
+                if len(calls) == 2:  # the second look finds a different file in its place
+                    return types.SimpleNamespace(
+                        st_ino=result.st_ino + 1, st_size=result.st_size, st_mtime=result.st_mtime
+                    )
+            return result
+
+        with patch.object(pathlib.Path, "stat", stat):
+            with self.assertRaises(api_auth.ApiTokenError):
+                api_auth._discard_stale(self.token_file())
+        self.assertTrue(self.token_file().exists())
+
+    def test_replacement_is_serialised_by_a_lock(self):
+        import time
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        lock = self.data / f".{api_auth.TOKEN_FILE_NAME}.lock"
+        lock.write_text("")  # another process is replacing it right now
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(self.token_file().read_text(), "")  # untouched
+        self.assertTrue(lock.exists())  # not ours to remove
+
+    def test_a_lock_left_by_a_killed_process_is_cleared(self):
+        import time
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        lock = self.data / f".{api_auth.TOKEN_FILE_NAME}.lock"
+        lock.write_text("")
+        os.utime(lock, (past, past))
+        token, how = api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(how, "new")
+        self.assertFalse(lock.exists())  # released afterwards
+
+    def test_two_provisioners_finding_a_stale_file_together_converge(self):
+        import time
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        results = []
+        errors = []
+
+        def start():
+            try:
+                results.append(api_auth.provision_token(self.data, self.logger)[0])
+            except api_auth.ApiTokenError as e:  # losing the lock may fail closed: never diverge
+                errors.append(str(e))
+
+        threads = [threading.Thread(target=start) for _ in range(6)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertTrue(results)
+        self.assertEqual(len(set(results)), 1, "workers ended with different tokens")
+        self.assertEqual(self.token_file().read_text().strip(), results[0])
+
 
 class TestTokenPageIsNotReadableByScript(AuthSupportBase):
     async def asyncSetUp(self):
