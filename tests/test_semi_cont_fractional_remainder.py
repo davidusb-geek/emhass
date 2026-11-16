@@ -939,5 +939,39 @@ class TestRemainderSolverOptions(unittest.TestCase):
                 self.assertEqual(spy.call_count, expected)
 
 
+class TestRemainderSolverOptionsOnReusedModel(unittest.TestCase):
+    """The solver options that reach ``Problem.solve`` follow each call's requirement
+    on one cached optimiser: fractional -> whole -> fractional (no stale tolerance).
+    A fake Gurobi is selected only to inspect the options; HiGHS does the solving."""
+
+    def test_integrality_option_follows_the_requirement_on_one_instance(self):
+        import os
+        from unittest import mock
+
+        opt = make()
+        captured = []
+        real_solve = cp.Problem.solve
+
+        def spy(problem, *args, **kwargs):
+            captured.append(dict(kwargs))
+            return real_solve(problem, solver=cp.HIGHS, verbose=False)
+
+        installed = [*cp.installed_solvers(), "GUROBI"]
+        with (
+            mock.patch.dict(os.environ, {"LP_SOLVER": "GUROBI"}),
+            mock.patch.object(cp, "installed_solvers", return_value=installed),
+            mock.patch.object(cp.Problem, "solve", spy),
+        ):
+            for hours, fractional in ((1.25, True), (1.0, False), (1.25, True), (1.5, False)):
+                with self.subTest(hours=hours):
+                    captured.clear()
+                    res = solve(opt, [hours])
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    self.assertAlmostEqual(energy_wh(res), NOMINAL * hours, delta=1e-3)
+                    self.assertTrue(captured)
+                    self.assertEqual(captured[0].get("IntFeasTol"), 1e-7 if fractional else None)
+                    self.assertIn("TimeLimit", captured[0])
+
+
 if __name__ == "__main__":
     unittest.main()
