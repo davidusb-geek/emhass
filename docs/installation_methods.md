@@ -63,14 +63,14 @@ lat: 45.83
 lon: 6.86
 alt: 4807.8
 EOT
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 
 ### Docker, things to note 
 
 - You can create a `config.json` file prior to running emhass. *(obtain an example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/master/src/emhass/data/config_defaults.json)* Alternatively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v /emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
-- If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
+- Mount a local folder on `/data` (below). Besides the EMHASS-generated data it holds the API token EMHASS generates when you set none (`/data/emhass_api_token`); without it every new container gets a new token and your automations stop working after each update. Setting `EMHASS_API_TOKEN` instead avoids the question.  
   ```bash
   #create data folder 
   mkdir -p ~/emhass/data 
@@ -79,7 +79,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /e
     
 - If you wish to set the web_server's homepage optimization diagrams to a timezone other than UTC, set `TZ` environment variable on docker run:
   ```bash
-  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```  
 
 ## Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*

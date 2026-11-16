@@ -9,12 +9,13 @@ bind = [f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"]
 _ingress = os.getenv("EMHASS_INGRESS_PORT", "").strip() or (
     "8099" if os.getenv("SUPERVISOR_TOKEN") else ""
 )
-if (
-    _ingress.isdigit()
-    and 0 < int(_ingress) < 65536
-    and _ingress != os.getenv("PORT", "5000").strip()
-):
-    bind.append(f"0.0.0.0:{_ingress}")
+try:
+    _api_port = int(os.getenv("PORT", "5000").strip())
+except ValueError:
+    _api_port = 5000
+# compared as numbers: "05000" is the API port too
+if _ingress.isdigit() and 0 < int(_ingress) < 65536 and int(_ingress) != _api_port:
+    bind.append(f"0.0.0.0:{int(_ingress)}")
 
 # Worker configuration
 workers = int(os.getenv("WEB_CONCURRENCY", 1))

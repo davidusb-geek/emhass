@@ -242,5 +242,139 @@ class TestProxyHeadersCannotForgeTheSupervisor(AuthSupportBase):
         self.assertNotIn(status, (401, 403, 503))
 
 
+class TestEveryRouteIsGated(AuthSupportBase):
+    """No route may be reachable without credentials unless it is one of the three open endpoints."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+
+    def routes(self):
+        adapter = web_server.app.url_map.bind("localhost")
+        for rule in web_server.app.url_map.iter_rules():
+            values = dict.fromkeys(rule.arguments, "x")
+            for method in sorted(rule.methods):
+                yield rule.endpoint, method, adapter.build(rule.endpoint, values, method=method)
+
+    def test_the_open_endpoints_are_exactly_these(self):
+        self.assertEqual(
+            set(api_auth.OPEN_ENDPOINTS), {"healthz", "api_auth_login", "api_auth_logout"}
+        )
+
+    async def test_nothing_else_answers_without_credentials(self):
+        seen = 0
+        for endpoint, method, path in self.routes():
+            if endpoint in api_auth.OPEN_ENDPOINTS:
+                continue
+            seen += 1
+            with self.subTest(route=f"{method} {path}"):
+                response = await self.send(method, path, json={} if method == "POST" else None)
+                self.assertIn(response.status_code, (401, 303), f"{method} {path} is not gated")
+        self.assertGreater(seen, 12)  # the enumeration really ran
+        self.mock_action.assert_not_awaited()
+
+    async def test_nothing_else_answers_a_stranger_on_the_ingress_port(self):
+        for endpoint, method, path in self.routes():
+            if endpoint in api_auth.OPEN_ENDPOINTS:
+                continue
+            with self.subTest(route=f"{method} {path}"):
+                response = await self.send(
+                    method,
+                    path,
+                    port=8099,
+                    peer=OUTSIDER,
+                    headers=BEARER,
+                    json={} if method == "POST" else None,
+                )
+                self.assertEqual(
+                    response.status_code,
+                    403,
+                    f"{method} {path} answers a stranger on the ingress port",
+                )
+
+
+class TestIngressWebSocket(AuthSupportBase):
+    async def handshake(self, port, peer, headers=None):
+        from quart.testing import WebsocketResponseError
+
+        try:
+            async with self.client.websocket(
+                "/api/v1/last-run",
+                headers=headers,
+                scope_base={"server": ("0.0.0.0", port), "client": (peer, 40000)},
+            ) as ws:
+                await ws.send("x")
+                await ws.receive()
+        except WebsocketResponseError as e:
+            return e.response.status_code
+        return 101
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+
+    async def test_a_stranger_on_the_ingress_port_is_refused_even_with_the_token(self):
+        self.assertEqual(await self.handshake(8099, OUTSIDER, BEARER), 403)
+
+    async def test_the_api_port_needs_the_bearer(self):
+        self.assertEqual(await self.handshake(5000, OUTSIDER), 401)
+        self.assertNotIn(await self.handshake(5000, OUTSIDER, BEARER), (401, 403, 503))
+        self.assertEqual(await self.handshake(5000, SUPERVISOR), 401)
+
+    async def test_the_supervisor_on_the_ingress_port_is_let_in(self):
+        self.assertNotIn(await self.handshake(8099, SUPERVISOR), (401, 403, 503))
+
+
+class TestPortsAreComparedAsNumbers(AuthSupportBase):
+    def test_a_zero_padded_api_port_is_still_the_api_port(self):
+        os.environ["PORT"] = "05000"
+        os.environ[api_auth.INGRESS_PORT_ENV] = "5000"
+        self.assertIsNone(api_auth.ingress_port())
+        self.assertEqual(runpy.run_path(str(CONF))["bind"], ["0.0.0.0:05000"])
+        os.environ["PORT"] = "not-a-number"
+        self.assertIsNone(api_auth.ingress_port())  # an unusable PORT is read as the default, 5000
+
+
+class TestServerConfigurationIsPinned(AuthSupportBase):
+    def test_the_direct_server_does_not_rewrite_the_peer_address(self):
+        import ast
+
+        source = pathlib.Path(web_server.__file__).read_text(encoding="utf-8")
+        configs = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Config"
+            and getattr(node.func.value, "id", "") == "uvicorn"
+        ]
+        self.assertTrue(configs, "main() no longer builds a uvicorn.Config")
+        for call in configs:
+            keywords = {k.arg: k.value for k in call.keywords}
+            self.assertIn("proxy_headers", keywords)
+            self.assertIs(getattr(keywords["proxy_headers"], "value", None), False)
+
+    def test_gunicorn_and_the_uvicorn_worker_end_up_trusting_no_forwarder(self):
+        pytest = __import__("pytest")
+        gunicorn_config = pytest.importorskip(
+            "gunicorn.config"
+        )  # gunicorn cannot be imported on Windows
+        from uvicorn import Config
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        conf = runpy.run_path(str(CONF))
+        cfg = gunicorn_config.Config()
+        cfg.set("forwarded_allow_ips", conf["forwarded_allow_ips"])
+        self.assertEqual(cfg.forwarded_allow_ips, [])
+        # uvicorn.workers.UvicornWorker passes exactly this to uvicorn.Config
+        loaded = Config(web_server.app, forwarded_allow_ips=cfg.forwarded_allow_ips)
+        loaded.load()
+        self.assertIsInstance(loaded.loaded_app, ProxyHeadersMiddleware)
+        self.assertEqual(loaded.loaded_app.trusted_hosts, set())
+        self.assertFalse(loaded.loaded_app.always_trust)
+
+
 if __name__ == "__main__":
     unittest.main()

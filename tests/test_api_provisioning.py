@@ -5,6 +5,7 @@ import pathlib
 import stat
 import threading
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -224,6 +225,100 @@ class TestTokenPage(AuthSupportBase):
         response = await self.send("GET", "/api-token", port=8099, peer=OUTSIDER)
         self.assertEqual(response.status_code, 403)
         self.assertNotIn(self.token, await response.get_data(as_text=True))
+
+
+class TestCrashSafety(AuthSupportBase):
+    def token_file(self) -> pathlib.Path:
+        return self.data / api_auth.TOKEN_FILE_NAME
+
+    def test_losing_the_race_to_create_the_file_uses_the_winners_token(self):
+        winner = "r" * 43
+        real_link = os.link
+
+        def link(src, dst, *args, **kwargs):
+            pathlib.Path(dst).write_text(winner + "\n")  # another worker published first
+            return real_link(src, dst, *args, **kwargs)  # now fails: the file exists
+
+        with patch.object(api_auth.os, "link", side_effect=link):
+            token, how = api_auth.provision_token(self.data, self.logger)
+        self.assertEqual((token, how), (winner, "file"))
+        self.assertEqual(self.token_file().read_text().strip(), winner)
+
+    def test_a_failure_while_writing_leaves_no_token_file_and_no_leftovers(self):
+        with patch.object(api_auth.os, "fsync", side_effect=OSError("disk full")):
+            with self.assertRaises(api_auth.ApiTokenError):
+                api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), [])
+
+    @unittest.skipUnless(POSIX, "file modes are POSIX")
+    def test_a_file_system_without_hard_links_still_gets_a_private_complete_file(self):
+        with patch.object(api_auth.os, "link", side_effect=OSError("no hard links")):
+            token, how = api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(how, "new")
+        self.assertEqual(self.token_file().read_text().strip(), token)
+        self.assertEqual(stat.S_IMODE(self.token_file().stat().st_mode), 0o600)
+        self.assertEqual([p.name for p in self.data.iterdir()], [api_auth.TOKEN_FILE_NAME])
+
+    def test_an_old_empty_file_left_by_a_crash_is_replaced(self):
+        import time
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        token, how = api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(how, "new")
+        self.assertGreaterEqual(len(token), 40)
+        self.assertEqual(self.token_file().read_text().strip(), token)
+
+    def test_a_fresh_empty_file_is_not_replaced_under_another_worker(self):
+        self.token_file().write_text("")
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(self.token_file().read_text(), "")
+
+    def test_windows_is_told_the_file_is_not_private(self):
+        with (
+            patch.object(api_auth, "_IS_WINDOWS", True),
+            self.assertLogs(self.logger, level="WARNING") as logs,
+        ):
+            api_auth.provision_token(self.data, self.logger)
+        self.assertTrue(any("not restricted to its owner" in line for line in logs.output))
+        with (
+            patch.object(api_auth, "_IS_WINDOWS", False),
+            self.assertLogs(self.logger, level="WARNING") as logs,
+        ):
+            self.token_file().unlink()
+            api_auth.provision_token(self.data, self.logger)
+        self.assertFalse(any("not restricted" in line for line in logs.output))
+
+
+class TestTokenPageIsNotReadableByScript(AuthSupportBase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await api_auth.configure(None, None, self.logger, data_dir=self.data)
+
+    async def get(self, **headers):
+        return await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR, headers=headers)
+
+    async def test_a_page_load_is_served_and_a_script_read_is_not(self):
+        token = api_auth.current_token()
+        for headers, expected in (
+            ({}, 200),  # curl, or a browser that sends no fetch metadata
+            ({"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin"}, 200),
+            ({"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none"}, 200),
+            (
+                {"Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin"},
+                403,
+            ),  # fetch() from another panel
+            ({"Sec-Fetch-Mode": "same-origin"}, 403),
+            ({"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site"}, 403),
+        ):
+            with self.subTest(headers=headers):
+                response = await self.get(**headers)
+                self.assertEqual(response.status_code, expected)
+                if expected == 403:
+                    self.assertNotIn(token, await response.get_data(as_text=True))
 
 
 if __name__ == "__main__":
