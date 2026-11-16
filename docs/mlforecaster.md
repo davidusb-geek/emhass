@@ -54,7 +54,7 @@ runtimeparams = {
 
 A correct `curl` call to launch a model fit can look like this:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
 ```
 
 As an example, the following figure shows 240 days of load power data retrieved from EMHASS that will be used for a model fit:
@@ -74,7 +74,7 @@ A quick prediction graph using the fitted model should be available in the web U
 
 Visually the prediction looks quite acceptable but we need to evaluate this further. For this, we can use the `"perform_backtest": True` option to perform a backtest evaluation using this syntax:
 ```
-curl -i -H "Content-Type:application/json" -X POST -d '{"perform_backtest": "True"}' http://localhost:5000/action/forecast-model-fit
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{"perform_backtest": "True"}' http://localhost:5000/action/forecast-model-fit
 ```
 
 The results of the backtest will be shown in the logs:
@@ -113,7 +113,7 @@ This is opt-in and backward-compatible: leave `mlforecaster_weather_features` em
 
 Enable it by listing the columns you want, for example the outside temperature plus a heating/cooling-degree thermal-demand signal:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST \
   -d '{"mlforecaster_weather_features": ["temp_air", "heating_degree", "cooling_degree"]}' \
   http://localhost:5000/action/forecast-model-fit
 ```
@@ -177,11 +177,11 @@ These results are load-dependent; gains will vary with how weather-sensitive you
 
 To obtain a prediction using a previously trained model use the `forecast-model-predict` endpoint. 
 ```
-curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-predict
 ```
 If needed pass the correct `model_type` like this:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "long_train_data"}' http://localhost:5000/action/forecast-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{"model_type": "long_train_data"}' http://localhost:5000/action/forecast-model-predict
 ```
 The resulting forecast DataFrame is shown in the web UI.
 
@@ -225,7 +225,7 @@ With a previously fitted model, you can use the `forecast-model-tune` endpoint t
 
 You can pass the same parameter you defined during the fit step, but `var_model` has to be defined at least. According to the example, the syntax will be:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
 ```
 It is possible to pass the `n_trials` parameter to define the number of trials to perform during the optimization.
 The default value for this parameter is:

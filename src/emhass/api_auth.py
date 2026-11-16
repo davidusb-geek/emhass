@@ -276,6 +276,17 @@ def _read_generated(path: pathlib.Path) -> str | None:
     return token
 
 
+def _read_generated_waiting(path: pathlib.Path) -> str | None:
+    """``_read_generated``, but an empty file is given a moment: another worker created it
+    and has not written the token yet."""
+    for _ in range(40):
+        token = _read_generated(path)
+        if token is not None or not path.exists():
+            return token
+        time.sleep(0.05)
+    return None
+
+
 def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
     """Return ``(token, how)`` from the token file in ``data_dir``, making it when it is missing.
 
@@ -284,16 +295,18 @@ def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tup
     written, which fails the server closed.
     """
     path = pathlib.Path(data_dir) / TOKEN_FILE_NAME
-    existing = _read_generated(path)
+    existing = _read_generated_waiting(path)
     if existing is not None:
         return existing, "file"
+    if path.exists():
+        raise ApiTokenError("the generated token file is empty")
     token = secrets.token_urlsafe(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags, 0o600)
     except FileExistsError:
-        again = _read_generated(path)  # another worker made it first
+        again = _read_generated_waiting(path)  # another worker made it first
         if again is None:
             raise ApiTokenError("the generated token file is empty") from None
         return again, "file"
@@ -683,11 +696,15 @@ def ingress_port() -> int | None:
     """
     value = os.environ.get(INGRESS_PORT_ENV, "").strip()
     if not value:
-        return DEFAULT_INGRESS_PORT if os.environ.get("SUPERVISOR_TOKEN") else None
+        if not os.environ.get("SUPERVISOR_TOKEN"):
+            return None
+        value = str(DEFAULT_INGRESS_PORT)
     try:
         port = int(value)
     except ValueError:
         return None
+    if str(port) == os.environ.get("PORT", "5000").strip():
+        return None  # the API port is never the ingress port: that would refuse every API client
     return port if 0 < port < 65536 else None
 
 

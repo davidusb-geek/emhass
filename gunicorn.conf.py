@@ -6,8 +6,14 @@ bind = [f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"]
 # Home Assistant add-on ingress gets a listener of its own, so ingress is recognised by the socket
 # that accepted the connection and never by a header. The add-on does not publish this port and the
 # app refuses every peer except the Supervisor on it. Same decision as emhass.api_auth.ingress_port().
-_ingress = os.getenv("EMHASS_INGRESS_PORT", "").strip() or ("8099" if os.getenv("SUPERVISOR_TOKEN") else "")
-if _ingress.isdigit() and 0 < int(_ingress) < 65536:
+_ingress = os.getenv("EMHASS_INGRESS_PORT", "").strip() or (
+    "8099" if os.getenv("SUPERVISOR_TOKEN") else ""
+)
+if (
+    _ingress.isdigit()
+    and 0 < int(_ingress) < 65536
+    and _ingress != os.getenv("PORT", "5000").strip()
+):
     bind.append(f"0.0.0.0:{_ingress}")
 
 # Worker configuration

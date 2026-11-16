@@ -11,7 +11,7 @@ This page collects the **legacy Python virtual-environment CLI** equivalents for
 REST (recommended):
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/dayahead-optim
 ```
@@ -29,7 +29,7 @@ emhass --action 'dayahead-optim' \
 REST:
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/perfect-optim
 ```
@@ -47,7 +47,7 @@ emhass --action 'perfect-optim' \
 REST:
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{"prediction_horizon": 24}' \
      http://localhost:5000/action/naive-mpc-optim
 ```
@@ -65,7 +65,7 @@ emhass --action 'naive-mpc-optim' \
 REST:
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/publish-data
 ```

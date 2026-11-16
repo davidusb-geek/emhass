@@ -169,6 +169,19 @@ class TestIngressConfiguration(AuthSupportBase):
                 self.assertEqual(bind[0], "0.0.0.0:5000")
                 self.assertEqual(bind[1:], [f"0.0.0.0:{port}"] if port else [])
 
+    def test_the_ingress_port_is_never_the_api_port(self):
+        os.environ["PORT"] = "5000"
+        os.environ[api_auth.INGRESS_PORT_ENV] = "5000"
+        self.assertIsNone(api_auth.ingress_port())
+        os.environ["SUPERVISOR_TOKEN"] = "x"
+        os.environ.pop(api_auth.INGRESS_PORT_ENV)
+        os.environ["PORT"] = "8099"  # the default ingress port taken by the API
+        self.assertIsNone(api_auth.ingress_port())
+        for name in ("PORT", "IP"):
+            os.environ.pop(name, None)
+        os.environ[api_auth.INGRESS_PORT_ENV] = "5000"
+        self.assertEqual(runpy.run_path(str(CONF))["bind"], ["0.0.0.0:5000"])
+
     def test_gunicorn_refuses_to_rewrite_the_peer_address(self):
         conf = runpy.run_path(str(CONF))
         allowed = [i.strip() for i in conf["forwarded_allow_ips"].split(",") if i.strip()]
