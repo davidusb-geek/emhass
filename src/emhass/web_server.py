@@ -1427,6 +1427,11 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         # Same as /action: a plan the inverter settings rule out is a bad request.
         _explain(str(exc))
         return not_run, 400
+    except RuntimeParamError as exc:
+        # Same as /action: a runtime value the optimizer can only check once the
+        # run's horizon is known, e.g. a deferrable_load_groups max_power list (#1366).
+        _explain(f"{exc}. Nothing was solved")
+        return not_run, 400
     finally:
         if "rh" in input_data_dict:
             await input_data_dict["rh"].close()
