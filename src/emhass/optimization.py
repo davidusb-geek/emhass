@@ -5272,6 +5272,41 @@ class Optimization:
 
         constraints.append(predicted_temp_thermal[0] == start_temperature)
 
+        # Delivered-heat ceiling (issue #1324). `max_thermal_power` is the source's
+        # rated thermal output; without this bound the only ceiling on the heat the
+        # model may inject is cop * nominal_power, so a high mild-weather COP plans
+        # more heat than the emitter can physically deliver. The field sits with the
+        # other source-side fields (`thermal_source`, legacy fallback `thermal_battery`),
+        # exactly where the shared-tank builder reads it.
+        thermal_cap = self._get_load_source_config(k).get("max_thermal_power")
+        if thermal_cap is not None:
+            thermal_cap = float(thermal_cap)
+            if thermal_cap <= 0:
+                raise ValueError(
+                    f"Load {k}: 'max_thermal_power' must be positive, got {thermal_cap}"
+                )
+            # Same form, and the same DPP-safety argument, as
+            # _add_shared_thermal_tank_constraints: `heatpump_cops` is a cp.Parameter
+            # on a parameterised load and a constant array on the fallback path, so
+            # parameter * variable <= const survives a cache hit unchanged.
+            constraints.append(cp.multiply(heatpump_cops, p_deferrable) <= thermal_cap)
+            cop_vals = np.asarray(
+                heatpump_cops.value if hasattr(heatpump_cops, "value") else heatpump_cops,
+                dtype=float,
+            )
+            on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
+            if on_level is not None:
+                # A semi-continuous member runs at p == ON_level * bin with the ON level
+                # defaulting to nominal; a binding cap would leave OFF as the only
+                # feasible state and the source would be silently abandoned. Lower the
+                # level to min(nominal, cap/COP) as the shared-tank builder does.
+                on_level.value = np.minimum(
+                    on_level.value, thermal_cap / np.maximum(cop_vals[: on_level.size], 1e-9)
+                )
+            self._warn_capped_level_below_min_power(
+                "Thermal battery load", k, cop_vals, thermal_cap, required_len
+            )
+
         # Thermal inertia: first-order low-pass filter on heat input
         tau_hours = float(hc.get("thermal_inertia_time_constant", 0.0) or 0.0)
 
@@ -5643,9 +5678,13 @@ class Optimization:
                 return
 
     def _warn_capped_level_below_min_power(
-        self, tank_id, k, cop_vals, thermal_cap, n_steps, after_dp=False
+        self, store_label, k, cop_vals, thermal_cap, n_steps, after_dp=False
     ):
         """Warn when a capped source cannot run at some steps.
+
+        `store_label` names the storage in the message ("Shared tank 'x'",
+        "Thermal battery load"): the same cap applies to a source feeding a
+        shared tank and to a standalone thermal_battery load.
 
         Where cap/COP < min_power, `cop * p <= cap` and `p >= min_power * bin` leave
         OFF as the only feasible state, whether the source is semi-continuous (its
@@ -5669,10 +5708,10 @@ class Optimization:
         counts[k] = below_min
         if below_min > 0:
             self.logger.warning(
-                "Shared tank '%s': deferrable load %s cannot run at %s/%s steps%s; its "
+                "%s: deferrable load %s cannot run at %s/%s steps%s; its "
                 "min_power (%s W) exceeds the level max_thermal_power allows "
                 "(cap/COP), so those steps are forced off.",
-                tank_id,
+                store_label,
                 k,
                 below_min,
                 n_steps,
@@ -6389,7 +6428,9 @@ class Optimization:
                 on_level.value = np.minimum(
                     on_level.value, float(thermal_cap) / np.maximum(cop_vals, 1e-9)
                 )
-            self._warn_capped_level_below_min_power(tank_id, k, cop_vals, thermal_cap, required_len)
+            self._warn_capped_level_below_min_power(
+                f"Shared tank '{tank_id}'", k, cop_vals, thermal_cap, required_len
+            )
 
         # Soft comfort constraints (issue #539): the tank's desired_temperatures
         # set a comfort target whose shortfall is penalized in the objective
@@ -6952,7 +6993,12 @@ class Optimization:
                             base, float(cap_w) / np.maximum(new_cop[: on_level.size], 1e-9)
                         )
                     self._warn_capped_level_below_min_power(
-                        e["tank_id"], hp["load_idx"], new_cop, cap_w, n, after_dp=True
+                        f"Shared tank '{e['tank_id']}'",
+                        hp["load_idx"],
+                        new_cop,
+                        cap_w,
+                        n,
+                        after_dp=True,
                     )
                 # Bound the re-solve to the range the DP priced: at most 1 C above its
                 # peak (below its trough when cooling). A per-step bound at the DP's
