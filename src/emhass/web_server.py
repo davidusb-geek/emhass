@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 import errno
 import hashlib
+import hmac
 import logging
 import os
 import pickle
@@ -245,6 +246,32 @@ def _live_optim_slot() -> Path:
     """One live optimization at a time across workers sharing a data folder."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
     return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+
+
+def _in_live_optim_slot(run):
+    """`run()` holding the live-optimization slot: ("done", its result),
+    ("busy", None) while a live optimization holds it, or ("unavailable",
+    why). Taken and released in the calling thread, so a request cancelled
+    while `run` works does not free the slot under it."""
+    try:
+        slot = open(_live_optim_slot(), "a+")
+    except OSError as exc:
+        return "unavailable", str(exc)
+    with slot:
+        if not try_lock_file(slot):
+            return "busy", None
+        try:
+            return "done", run()
+        finally:
+            unlock_file(slot)
+
+
+def _web_workers() -> int:
+    """The web workers serving this EMHASS (gunicorn.conf.py's WEB_CONCURRENCY)."""
+    try:
+        return max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
 
 
 # Add custom filter for trusted HTML content
@@ -1027,6 +1054,126 @@ async def api_v1_plan():
 
     response = await make_response(orjson.dumps(response_body))
     response.headers["Content-Type"] = "application/json"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+_participant_service: tuple[bytes, object] | None = None  # (what it was built from, the service)
+PARTICIPANT_BODY_MAX = 1 << 20  # 1 MiB
+# As Quart's own BODY_TIMEOUT bounds get_data(): a body that stalls is refused.
+PARTICIPANT_BODY_TIMEOUT_S = 30.0
+
+
+async def _problem(status: int, title: str, detail: str = "", retry_after: str | None = None):
+    """An RFC 9457 problem response."""
+    body = {"type": "about:blank", "title": title, "status": status, "detail": detail}
+    response = await make_response(orjson.dumps(body), status)
+    response.headers["Content-Type"] = "application/problem+json"
+    response.headers["Cache-Control"] = "no-store"
+    if retry_after:
+        response.headers["Retry-After"] = retry_after
+    return response
+
+
+@app.route("/participant/v1/<op>", methods=["GET", "POST"])
+async def participant_v1(op: str):
+    """This EMHASS's devices, served to a coordinator elsewhere: the
+    participant API (home-energy-optimizer's participant-api.v1.json) -
+    describe, baseline, query, commit. Off unless `participant_api` is set;
+    every call presents the `participant_token` secret. Only a commit has an
+    effect: the chosen plan is published, under `participant_api.publish_prefix`.
+    """
+    global _participant_service
+    from emhass import participant_api
+
+    if (request.content_length or 0) > PARTICIPANT_BODY_MAX:
+        # A query or a commit is a few kB; refused before the body is read.
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    try:
+        params = await participant_api.read_params(emhass_conf)
+    except participant_api.ConfigUnreadable as exc:
+        return await _problem(503, "Service Unavailable", str(exc))
+    if params is None or not isinstance(params["optim_conf"].get("participant_api"), dict):
+        return await _problem(404, "Not Found", "the participant API is off (set participant_api)")
+    token = params_secrets.get("participant_token")
+    if not token:
+        return await _problem(503, "Service Unavailable", "set participant_token in the secrets")
+    if _web_workers() > 1:
+        # A coordinator's answers live in one worker's memory: its commit, sent
+        # to another worker, would name an answer that worker never gave.
+        return await _problem(
+            503,
+            "Service Unavailable",
+            "the participant API needs one web worker (WEB_CONCURRENCY=1)",
+        )
+    presented = request.headers.get("Authorization", "").encode()
+    if not hmac.compare_digest(presented, f"Bearer {token}".encode()):
+        # Before any body is read: a caller without the token costs nothing more.
+        return await _problem(401, "Unauthorized", "present participant_token as a bearer token")
+    try:
+        import home_energy_optimizer.remote  # noqa: F401
+    except ImportError:
+        return await _problem(
+            501, "Not Implemented", "needs the federated extra (home-energy-optimizer)"
+        )
+    built_from = orjson.dumps([params, token], option=orjson.OPT_SORT_KEYS, default=str)
+    if _participant_service is None or _participant_service[0] != built_from:
+        service = participant_api.make_service(emhass_conf, params, token, app.logger)
+        _participant_service = (built_from, service)
+    service = _participant_service[1]
+    # A chunked body has no Content-Length: the limit holds on what arrives,
+    # and the whole body must arrive in time.
+    received = bytearray()
+
+    async def receive() -> bool:
+        async for chunk in request.body:
+            received.extend(chunk)
+            if len(received) > PARTICIPANT_BODY_MAX:
+                return False
+        return True
+
+    try:
+        within = await asyncio.wait_for(receive(), PARTICIPANT_BODY_TIMEOUT_S)
+    except TimeoutError:
+        return await _problem(
+            408,
+            "Request Timeout",
+            f"the body did not arrive within {PARTICIPANT_BODY_TIMEOUT_S:g} s",
+        )
+    if not within:
+        return await _problem(413, "Content Too Large", f"at most {PARTICIPANT_BODY_MAX} bytes")
+    body = bytes(received)
+    if op == "commit" and request.method == "POST":
+        # A commit ends a live run - it writes the latest results and publishes - so
+        # it takes the live-optimization slot, as POST /action/<optimization> does,
+        # and is refused (429) while this EMHASS runs its own. The coordinator then
+        # records the remote as refused. Queries are not slotted: they write
+        # nothing, and belong to another EMHASS's live run.
+        headers = dict(request.headers)
+        outcome, result = await asyncio.to_thread(
+            _in_live_optim_slot,
+            lambda: service.handle(request.method, f"/v1/{op}", headers, body),
+        )
+        if outcome == "unavailable":
+            return await _problem(
+                503,
+                "Service Unavailable",
+                f"the live optimization lock is unavailable ({result})",
+                "2",
+            )
+        if outcome == "busy":
+            return await _problem(
+                429, "Too Many Requests", "a live optimization is running; retry shortly", "2"
+            )
+        status, out = result
+    else:
+        status, out = await asyncio.to_thread(
+            service.handle, request.method, f"/v1/{op}", dict(request.headers), body
+        )
+    response = await make_response(orjson.dumps(out), status)
+    response.headers["Content-Type"] = (
+        "application/problem+json" if status >= 400 else "application/json"
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 

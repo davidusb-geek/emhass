@@ -33,6 +33,7 @@ CURATED = {
     "/api/v1/plan": {"GET"},
     "/api/v1/dry-run/{action_name}": {"POST"},
     "/healthz": {"GET"},
+    "/participant/v1/{op}": {"GET", "POST"},
 }
 
 _ATOMIC = {
@@ -83,6 +84,10 @@ def _input_to_schema(input_str: str, param: dict, scalar_default: bool = False) 
     if scalar_default and len(parts) == 2 and parts[0] == "array":
         element = {key: value for key, value in leaf.items() if key != "default"}
         schema = {"anyOf": [element, schema]}
+    if "schema" in param:
+        # The param's own JSON schema, when `input` (which drives the web UI's
+        # widget) is too coarse to describe it, e.g. a list of objects (site).
+        schema = json.loads(json.dumps(param["schema"]))
     if param.get("friendly_name"):
         schema["title"] = param["friendly_name"]
     desc = (param.get("Description") or "").strip()
@@ -158,6 +163,10 @@ _DRY_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "dry-run.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
+_PARTICIPANT_API = (
+    "https://github.com/ameetdesh/home-energy-optimizer/blob/main/"
+    "src/home_energy_optimizer/schemas/participant-api.v1.json"
+)
 _PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
@@ -305,6 +314,76 @@ def build_spec(routes: set | None = None) -> dict:
                 },
             }
         },
+        "/participant/v1/{op}": {
+            "parameters": [
+                {
+                    "name": "op",
+                    "in": "path",
+                    "required": True,
+                    "schema": {
+                        "type": "string",
+                        "enum": ["describe", "baseline", "query", "commit"],
+                    },
+                }
+            ],
+            "get": {
+                "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
+                "description": (
+                    "The participant API (draft), off unless participant_api is set; every call "
+                    "presents the participant_token secret as a bearer token."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "responses": {
+                    "200": {"description": "Its description"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "501": {"description": "Needs the federated extra"},
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
+                    },
+                },
+            },
+            "post": {
+                "summary": "baseline, query or commit (participant API, opt-in)",
+                "description": (
+                    "Queries have no effect; a commit publishes the chosen plan, saves it as the "
+                    "latest results and records it for /api/v1/plan."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "requestBody": {
+                    "required": True,
+                    "description": (
+                        "baseline and query: a horizon and prices; commit: the chosen "
+                        "answer. Bodies are participant-api.v1.json (externalDocs)."
+                    ),
+                    **json_ct({"type": "object", "additionalProperties": True}),
+                },
+                "responses": {
+                    "200": {"description": "An answer, or whether a commit was accepted"},
+                    "400": {"description": "Not a query or commit of this API"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "408": {"description": "The body did not arrive within 30 s"},
+                    "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
+                    "413": {"description": "A body over 1 MiB"},
+                    "429": {
+                        "description": "A commit while a live optimization runs; retry after "
+                        "the delay in Retry-After",
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
+                    "501": {"description": "Needs the federated extra"},
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable, more than "
+                        "one web worker (WEB_CONCURRENCY), or, for a commit, the "
+                        "live-optimization lock unavailable (retry after Retry-After)",
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
+                },
+            },
+        },
         "/api/v1/dry-run/{action_name}": {
             "post": {
                 "summary": "Solve an optimization and return the plan, writing nothing",
@@ -389,7 +468,16 @@ def build_spec(routes: set | None = None) -> dict:
             ),
         },
         "paths": paths,
-        "components": {"schemas": components},
+        "components": {
+            "schemas": components,
+            "securitySchemes": {
+                "participantToken": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "The participant_token secret (participant API only)",
+                }
+            },
+        },
     }
 
 
