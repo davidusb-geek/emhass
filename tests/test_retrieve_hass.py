@@ -2355,14 +2355,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _staleness_kwargs(rh):
-        """record_staleness where it exists; on a source without it, the test runs
-        without it and fails on its behavioural assertions instead of a TypeError."""
-        if "record_staleness" in inspect.signature(rh.get_data).parameters:
-            return {"keep_partial_days": True, "record_staleness": True}
-        return {"keep_partial_days": True}
+        """The get_data keywords for a battery_id style retrieval."""
+        return {"keep_partial_days": True, "record_staleness": True}
 
     async def test_record_staleness_records_last_real_state_and_marker_buckets(self):
-        """RED on base: nothing is recorded there."""
+        """Only the flagged retrieval records anything."""
         p, s, payloads = self._staleness_payloads()
         await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
         last = getattr(self.rh, "bucket_last_state", {})
@@ -2409,7 +2406,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(series.index.isin(self.rh.df_final.index).all())
 
     async def test_record_staleness_counts_each_reading_once(self):
-        """RED before the #1073 review fix (nothing counted). Several readings in a
+        """Several readings in a
         bucket are counted, rows sharing a timestamp (an attribute-only update)
         once, and neither the carried start-of-day row nor a marker row counts."""
         p = "sensor.batt_power"
@@ -2461,10 +2458,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         record_staleness on."""
         _, _, payloads = self._staleness_payloads()
         default = await self._rest_with_payloads(payloads)
-        kwargs = {}
-        if "record_staleness" in inspect.signature(self.rh.get_data).parameters:
-            kwargs["record_staleness"] = True
-        flagged = await self._rest_with_payloads(payloads, **kwargs)
+        flagged = await self._rest_with_payloads(payloads, record_staleness=True)
         self.assertTrue(default.equals(flagged))
 
     async def test_staleness_aux_reset_on_every_get_data(self):

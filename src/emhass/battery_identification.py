@@ -259,7 +259,7 @@ def apply_staleness_fill(
     time_step,
     logger: logging.Logger | None = None,
     *,
-    row_counts: Mapping | None,
+    row_counts: Mapping | None = None,
 ) -> pd.DataFrame:
     """
     Hold short silences of the battery sensors at their last recorded state (#1073).
@@ -280,9 +280,9 @@ def apply_staleness_fill(
       the run or in either bounding bucket;
     * every bucket of the run holds a real recorded state of some other retrieved
       sensor (the load, the other sensor of the pair, or another battery's
-      sensors), which shows the recorder
-      was running. When every sensor goes quiet at once the recorder was down,
-      and nothing says the battery held still.
+      sensors), which shows the recorder was running. When every sensor goes
+      quiet at once the recorder was down, and nothing says the battery held
+      still.
 
     Nothing is filled at all unless both sensors of the pair report faster than
     the step: in at least a fifth of the buckets where a sensor has a reading, it
@@ -401,7 +401,7 @@ def apply_staleness_fill(
         if grid is not None:
             seen += np.isfinite(grid)
 
-    # Unavailable/unknown rows of EITHER sensor void a run of both (rule 3).
+    # Unavailable/unknown rows of EITHER sensor void a run of both (the third condition above).
     marked = np.zeros(n_grid, dtype=bool)
     for col in cols:
         stamps = marker_buckets.get(col)
