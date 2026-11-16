@@ -200,6 +200,11 @@ class RetrieveHass:
         self.time_zone = time_zone
         # Buckets of the last REST retrieval where the sensor was unavailable or unknown
         self.unavailable_buckets: dict[str, pd.DatetimeIndex] = {}
+        # Per sensor, the last real recorded state of each bucket and the buckets
+        # holding an unavailable/unknown row, of the last REST retrieval made with
+        # record_staleness=True (battery identification, #1073). Empty otherwise.
+        self.bucket_last_state: dict[str, pd.Series] = {}
+        self.marker_buckets: dict[str, pd.DatetimeIndex] = {}
         if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
@@ -458,6 +463,7 @@ class RetrieveHass:
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
         hold_unchanged_tail: bool = False,
+        record_staleness: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -496,9 +502,23 @@ class RetrieveHass:
             verification cannot be established. It also records the unavailable \
             buckets in ``unavailable_buckets``; other calls do not. Defaults to False
         :type hold_unchanged_tail: bool, optional
+        :param record_staleness: Only applies to the REST API path, including \
+            when a websocket-configured retrieval falls back to REST. When True, \
+            also records, per sensor, the last real recorded state of each bucket \
+            in ``bucket_last_state`` (NaN where the bucket has none; the state row \
+            Home Assistant adds at the start of each requested day does not count) \
+            and the buckets holding an unavailable or unknown row in \
+            ``marker_buckets``. ``df_final`` is the same either way. Used by battery \
+            self-identification to hold short silences at the last recorded state. \
+            Both attributes are emptied at the start of every call. Defaults to False
+        :type record_staleness: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
+        # Only a REST retrieval asked to record them fills these (battery
+        # identification), so no other call can see a previous call's values.
+        self.bucket_last_state = {}
+        self.marker_buckets = {}
         # Use InfluxDB if configured (Prioritize over WebSocket/REST for history)
         if self.use_influxdb:
             return self.get_data_influxdb(days_list, var_list)
@@ -521,6 +541,7 @@ class RetrieveHass:
                     test_url,
                     keep_partial_days=keep_partial_days,
                     hold_unchanged_tail=hold_unchanged_tail,
+                    record_staleness=record_staleness,
                 )
             return success
 
@@ -533,6 +554,7 @@ class RetrieveHass:
             test_url,
             keep_partial_days=keep_partial_days,
             hold_unchanged_tail=hold_unchanged_tail,
+            record_staleness=record_staleness,
         )
 
     def _build_history_url(
@@ -627,10 +649,13 @@ class RetrieveHass:
         is_last_day: bool,
         hold_unchanged_tail: bool = False,
         unavailable: list | None = None,
+        staleness: list | None = None,
     ) -> pd.DataFrame | None:
         """Helper to convert raw data to a resampled DataFrame.
 
         ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
+        ``staleness`` collects the (last real state per bucket, marker buckets) pair
+        described for ``record_staleness`` in :meth:`get_data`.
         """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
@@ -662,7 +687,10 @@ class RetrieveHass:
         df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
         states = df_tp[var].sort_index()
         last_state = states.iloc[-1]
+        raw_states = df_tp[var] if staleness is not None else None
         df_tp = df_tp.resample(self.freq).mean()
+        if staleness is not None:
+            staleness.append(self._staleness_buckets(raw_states, states, df_tp.index, day))
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
             day_end = self._as_utc(day) + pd.Timedelta(days=1) - self.freq
@@ -715,6 +743,32 @@ class RetrieveHass:
         carried = last_unavailable.ffill().fillna(False).to_numpy(dtype=bool)
         buckets = resampled.index[resampled.isna().to_numpy() & carried]
         return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
+
+    def _staleness_buckets(
+        self,
+        raw_states: pd.Series,
+        states: pd.Series,
+        buckets: pd.DatetimeIndex,
+        day: pd.Timestamp,
+    ) -> tuple[pd.Series, pd.DatetimeIndex]:
+        """Last real recorded state per bucket, and the buckets with a marker row.
+
+        ``raw_states`` is in Home Assistant's row order. Its first row, when stamped
+        exactly at the requested day start, is the state Home Assistant carries into
+        the period rather than a reading taken then, so it is no real observation and
+        is left out of the last states (its marker, if any, still counts). Buckets
+        with no real numeric state are NaN.
+        """
+        real = raw_states
+        if len(raw_states) and self._as_utc(raw_states.index[0]) == self._as_utc(day):
+            real = raw_states.iloc[1:]
+        real = real.dropna().sort_index(kind="stable")
+        if real.empty:
+            last = pd.Series(np.nan, index=buckets, name=states.name)
+        else:
+            last = real.resample(self.freq, origin=buckets[0]).last().reindex(buckets)
+        has_marker = states.isna().resample(self.freq).sum().reindex(buckets, fill_value=0)
+        return last, buckets[has_marker.to_numpy() > 0]
 
     async def _fetch_live_state(
         self, session: aiohttp.ClientSession, entity_id: str, headers: dict
@@ -833,6 +887,7 @@ class RetrieveHass:
         test_url: str | None = "empty",
         keep_partial_days: bool = False,
         hold_unchanged_tail: bool = False,
+        record_staleness: bool = False,
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
@@ -859,6 +914,11 @@ class RetrieveHass:
         var_list = [var for var in var_list if var != ""]
         self.df_final = pd.DataFrame()
         self.unavailable_buckets = {}
+        self.bucket_last_state = {}
+        self.marker_buckets = {}
+        # Per sensor, the kept days' (last real state, marker buckets) pairs;
+        # only collected when record_staleness is on.
+        staleness_by_var: dict[str, list] = {}
 
         days_skipped = 0
         # Concurrent fetch: run all (day, var) HTTP requests in parallel, bounded
@@ -913,6 +973,7 @@ class RetrieveHass:
             partial_days = 0
             for day_idx, day in enumerate(days_list):
                 day_frames = []
+                day_staleness = {}
                 skip_day = False
                 missing_var = False
                 for var in var_list:
@@ -921,6 +982,7 @@ class RetrieveHass:
                     df_resampled = None
                     # Outages are only tracked for the ML opt-in; other callers skip the work.
                     unavailable: list | None = [] if hold_unchanged_tail else None
+                    staleness: list | None = [] if record_staleness else None
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
@@ -930,7 +992,10 @@ class RetrieveHass:
                             is_last_day=(day_idx == len(days_list) - 1),
                             hold_unchanged_tail=hold_unchanged_tail,
                             unavailable=unavailable,
+                            staleness=staleness,
                         )
+                    if staleness:
+                        day_staleness[var] = staleness[0]
                     if unavailable:
                         self.unavailable_buckets[var] = self.unavailable_buckets.get(
                             var, pd.DatetimeIndex([], tz="UTC")
@@ -952,6 +1017,8 @@ class RetrieveHass:
                     continue
                 if keep_partial_days and missing_var:
                     partial_days += 1
+                for var, aux in day_staleness.items():
+                    staleness_by_var.setdefault(var, []).append(aux)
                 # Merge the day's per-variable frames on their real resampled
                 # indices; a variable missing for this day (kept mode) is just
                 # absent from the day's frame, and the cross-day concat below
@@ -987,6 +1054,11 @@ class RetrieveHass:
         # entire range is listed here without a matching df_final column, so
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
+        for var, parts in staleness_by_var.items():
+            self.bucket_last_state[var] = pd.concat([last for last, _ in parts])
+            self.marker_buckets[var] = (
+                parts[0][1].append([markers for _, markers in parts[1:]]).unique().sort_values()
+            )
         return True
 
     async def get_data_websocket(
