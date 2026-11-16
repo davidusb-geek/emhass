@@ -57,6 +57,7 @@ without touching the routes.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import hmac
 import ipaddress
@@ -288,6 +289,12 @@ def _read_generated_waiting(path: pathlib.Path) -> str | None:
 
 
 _IS_WINDOWS = os.name == "nt"
+# link() errors that mean "this file system has no hard links"
+_NO_HARD_LINKS = {
+    getattr(errno, name)
+    for name in ("EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EINVAL", "EXDEV")
+    if hasattr(errno, name)
+}
 # An empty token file this old was left by a crash between creating and writing it; it holds no secret.
 STALE_EMPTY_S = 10.0
 
@@ -313,8 +320,9 @@ def _publish_exclusively(path: pathlib.Path, token: str) -> bool:
             return True
         except FileExistsError:
             return False
-        except OSError:
-            pass  # no hard links here
+        except OSError as e:
+            if e.errno not in _NO_HARD_LINKS:
+                raise  # EIO, ENOSPC and the like are failures, not a reason to use the weaker path
         try:
             fd = os.open(path, flags, 0o600)
         except FileExistsError:
@@ -327,6 +335,16 @@ def _publish_exclusively(path: pathlib.Path, token: str) -> bool:
             tmp.unlink()
         except OSError:
             pass
+
+
+def _remove_stale_temporaries(folder: pathlib.Path) -> None:
+    """Best effort: delete temporary token files a killed process left (older than an hour)."""
+    try:
+        for leftover in folder.glob(f".{TOKEN_FILE_NAME}.*.tmp"):
+            if time.time() - leftover.stat().st_mtime > 3600:
+                leftover.unlink()
+    except OSError:
+        pass
 
 
 def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
@@ -343,11 +361,21 @@ def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tup
     if existing is not None:
         return existing, "file"
     if path.exists():
+        # Empty after the wait. Look once more (another worker may just have published), and only
+        # replace the very file that was seen to be empty and old.
+        again = _read_generated(path)
+        if again is not None:
+            return again, "file"
         try:
-            age = time.time() - path.stat().st_mtime
-            if age < STALE_EMPTY_S:
+            seen = path.stat()
+            if seen.st_size != 0 or time.time() - seen.st_mtime < STALE_EMPTY_S:
                 raise ApiTokenError("the generated token file is empty")
+            now = path.stat()
+            if (now.st_ino, now.st_size) != (seen.st_ino, 0):
+                raise ApiTokenError("the generated token file changed while it was being replaced")
             path.unlink()
+        except FileNotFoundError:
+            pass  # someone else removed it first
         except OSError:
             raise ApiTokenError(
                 "the generated token file is empty and cannot be replaced"
@@ -355,6 +383,7 @@ def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tup
     token = secrets.token_urlsafe(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        _remove_stale_temporaries(path.parent)
         created = _publish_exclusively(path, token)
     except OSError as e:
         raise ApiTokenError(
@@ -1042,6 +1071,9 @@ async def api_token_page():
         return _plain(404, "EMHASS >> There is no generated API token.\n")
     response = _plain(200, current_token() + "\n")
     response.headers["Referrer-Policy"] = "no-referrer"
+    # sandbox without allow-same-origin gives the document an opaque origin: a script on this origin
+    # (another add-on's panel) that frames or opens the page cannot read its text
+    response.headers["Content-Security-Policy"] = "sandbox"
     return response
 
 
@@ -1141,7 +1173,7 @@ async def require_api_token_websocket():
     """before_websocket hook: the same rule for a WebSocket handshake.
 
     EMHASS has no WebSocket route today; this keeps a later one from being
-    open by default. Only the bearer header counts here, not the cookie: a
+    open by default. On the API port only the bearer header counts here, not the cookie: a
     handshake is not covered by the JSON rule, so a cookie would let a page on
     another port of the same host open one.
     """
