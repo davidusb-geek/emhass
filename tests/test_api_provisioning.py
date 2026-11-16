@@ -239,7 +239,17 @@ class TestCrashSafety(AuthSupportBase):
             pathlib.Path(dst).write_text(winner + "\n")  # another worker published first
             return real_link(src, dst, *args, **kwargs)  # now fails: the file exists
 
-        with patch.object(api_auth.os, "link", side_effect=link):
+        real_open = os.open
+
+        def guarded_open(path, *args, **kwargs):
+            # the exclusive-create fallback must not run when link() reported the file exists
+            assert pathlib.Path(path) != self.token_file(), "fell back to creating the final file"
+            return real_open(path, *args, **kwargs)
+
+        with (
+            patch.object(api_auth.os, "link", side_effect=link),
+            patch.object(api_auth.os, "open", side_effect=guarded_open),
+        ):
             token, how = api_auth.provision_token(self.data, self.logger)
         self.assertEqual((token, how), (winner, "file"))
         self.assertEqual(self.token_file().read_text().strip(), winner)
@@ -252,7 +262,9 @@ class TestCrashSafety(AuthSupportBase):
 
     @unittest.skipUnless(POSIX, "file modes are POSIX")
     def test_a_file_system_without_hard_links_still_gets_a_private_complete_file(self):
-        with patch.object(api_auth.os, "link", side_effect=OSError("no hard links")):
+        with patch.object(
+            api_auth.os, "link", side_effect=OSError(__import__("errno").ENOTSUP, "no hard links")
+        ):
             token, how = api_auth.provision_token(self.data, self.logger)
         self.assertEqual(how, "new")
         self.assertEqual(self.token_file().read_text().strip(), token)
@@ -291,6 +303,36 @@ class TestCrashSafety(AuthSupportBase):
             api_auth.provision_token(self.data, self.logger)
         self.assertFalse(any("not restricted" in line for line in logs.output))
 
+    def test_an_io_error_from_link_is_a_failure_not_a_reason_to_weaken(self):
+        import errno
+
+        with patch.object(api_auth.os, "link", side_effect=OSError(errno.EIO, "I/O error")):
+            with self.assertRaises(api_auth.ApiTokenError):
+                api_auth.provision_token(self.data, self.logger)
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), [])
+
+    def test_a_file_that_got_its_token_while_waiting_is_used_not_replaced(self):
+        self.token_file().write_text("")
+        got = "g" * 43
+        with (
+            patch.object(api_auth, "_read_generated_waiting", return_value=None),
+            patch.object(api_auth, "_read_generated", return_value=got),
+        ):
+            self.assertEqual(api_auth.provision_token(self.data, self.logger), (got, "file"))
+
+    def test_old_leftover_temporaries_are_removed_and_recent_ones_kept(self):
+        import time
+
+        old = self.data / f".{api_auth.TOKEN_FILE_NAME}.1.aaaa.tmp"
+        recent = self.data / f".{api_auth.TOKEN_FILE_NAME}.2.bbbb.tmp"
+        old.write_text("x")
+        recent.write_text("y")
+        past = time.time() - 7200
+        os.utime(old, (past, past))
+        api_auth.provision_token(self.data, self.logger)
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
+
 
 class TestTokenPageIsNotReadableByScript(AuthSupportBase):
     async def asyncSetUp(self):
@@ -300,6 +342,13 @@ class TestTokenPageIsNotReadableByScript(AuthSupportBase):
 
     async def get(self, **headers):
         return await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR, headers=headers)
+
+    async def test_the_page_cannot_be_read_by_a_framing_script(self):
+        response = await self.get()
+        self.assertEqual(response.status_code, 200)
+        # an opaque origin: the parent page's script cannot read a sandboxed document
+        self.assertEqual(response.headers["Content-Security-Policy"], "sandbox")
+        self.assertNotIn("allow-same-origin", response.headers["Content-Security-Policy"])
 
     async def test_a_page_load_is_served_and_a_script_read_is_not(self):
         token = api_auth.current_token()
