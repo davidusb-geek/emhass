@@ -2606,7 +2606,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
         # Mock aiohttp session.post to track calls
         with patch.object(self.rh, "_get_session") as mock_get_session:
-            mock_session = AsyncMock()
+            mock_session = MagicMock()
             mock_response = AsyncMock()
             mock_response.ok = True
             mock_response.status = 200
@@ -2614,13 +2614,22 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             mock_get_session.return_value = mock_session
 
             # Make multiple post_data calls
-            await self.rh.post_data(data_df, 0, "sensor.test1", "power", "W", "Test 1", "power")
-            await self.rh.post_data(data_df, 0, "sensor.test2", "power", "W", "Test 2", "power")
-            await self.rh.post_data(data_df, 0, "sensor.test3", "power", "W", "Test 3", "power")
+            response_1, _ = await self.rh.post_data(
+                data_df, 0, "sensor.test1", "power", "W", "Test 1", "power"
+            )
+            response_2, _ = await self.rh.post_data(
+                data_df, 0, "sensor.test2", "power", "W", "Test 2", "power"
+            )
+            response_3, _ = await self.rh.post_data(
+                data_df, 0, "sensor.test3", "power", "W", "Test 3", "power"
+            )
 
             # _get_session should have been called 3 times (once per post_data)
             # but it returns the same session each time
             self.assertEqual(mock_get_session.call_count, 3)
+            self.assertTrue(all(r.ok for r in (response_1, response_2, response_3)))
+            self.assertEqual(mock_session.post.call_count, 3)
+            self.assertEqual(mock_response.read.await_count, 3)
 
     async def test_post_scalar_sensor_numpy_values(self):
         """Test that post_scalar_sensor serialises numpy scalars (#1131)."""
