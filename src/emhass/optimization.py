@@ -660,6 +660,10 @@ class Optimization:
 
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
+        # Per-step deferrable_load_groups budgets (#1366): one Parameter per group
+        # whose runtime max_power is a list of 2 or more entries, keyed by group
+        # index and refreshed on every run (_update_deferrable_group_params).
+        self.param_group_max_power: dict[int, cp.Parameter] = {}
         # thermal_battery loads whose built problem prices a bound instead of
         # holding it hard (see _thermal_battery_bound_relief). A load enters the
         # set the first time free gains force its bound and stays in it, so a
@@ -8229,25 +8233,49 @@ class Optimization:
         p_deferrable = self.vars["p_deferrable"]
 
         for gi, group in enumerate(groups):
-            indices = [int(name.replace("deferrable", "")) for name in group["names"]]
+            members = [utils.parse_deferrable_group_member(name) for name in group["names"]]
+            indices = [idx for kind, idx in members if kind == "deferrable"]
             max_power = group.get("max_power")
             mutual_exclusion = group.get("mutual_exclusion", False)
 
-            self.logger.debug(f"Adding group {gi} constraints for deferrable loads {indices}")
+            self.logger.debug(f"Adding group {gi} constraints for group members {members}")
 
-            # Shared power budget: sum of group members <= max_power at each timestep.
-            # A semi-continuous load with a fractional remainder step counts at its ON
-            # level, not at the remainder step's average power (issue #1105).
+            # Shared power budget at each timestep (#1366):
+            #   sum_i w_i * p_deferrable_i + sum_k (c_k * charge_k + d_k * discharge_k)
+            #   <= max_power
+            # with charge_k = -p_sto_neg[k] and discharge_k = p_sto_pos[k], both >= 0
+            # and kept apart by the battery's direction binary E[k]. Validation
+            # (utils.check_deferrable_load_groups) keeps w and c in (0, 1] and d in
+            # [-c, 0]. A unit weight adds the plain term and a zero discharge weight
+            # adds nothing, so a group without weights builds the same row as before.
+            # The relaxed retry rebuilds this row on the same battery variables and
+            # the same Parameter. A semi-continuous load with a fractional remainder
+            # step counts at its ON level, not at the remainder step's average power
+            # (issue #1105); its weight scales that term the same way.
             if max_power is not None:
-                group_power_terms = []
-                for i in indices:
-                    if i in self._semi_cont_remainder and i in self._semi_cont_on_level:
-                        group_power_terms.append(
-                            cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
-                        )
-                    else:
-                        group_power_terms.append(p_deferrable[i])
-                constraints.append(sum(group_power_terms) <= max_power)
+                weights = group.get("weights") or {}
+                terms = []
+                for name, (kind, idx) in zip(group["names"], members, strict=True):
+                    if kind == "deferrable":
+                        weight = weights.get(name, 1)
+                        if idx in self._semi_cont_remainder and idx in self._semi_cont_on_level:
+                            term = cp.multiply(
+                                self._semi_cont_on_level[idx], self.vars["p_def_bin2"][idx]
+                            )
+                        else:
+                            term = p_deferrable[idx]
+                        terms.append(term if weight == 1 else weight * term)
+                        continue
+                    battery_weight = weights.get(name) or {}
+                    charge_weight = battery_weight.get("charge", 1)
+                    discharge_weight = battery_weight.get("discharge", 0)
+                    charge = -self.vars["p_sto_neg"][idx]
+                    terms.append(charge if charge_weight == 1 else charge_weight * charge)
+                    if discharge_weight != 0:
+                        terms.append(discharge_weight * self.vars["p_sto_pos"][idx])
+                group_power_sum = sum(terms)
+                limit = self.param_group_max_power.get(gi)
+                constraints.append(group_power_sum <= (max_power if limit is None else limit))
 
             # Mutual exclusion: at most one load active per timestep. This is a
             # PHYSICAL limit (one heat source cannot serve two targets at once), so
@@ -8277,6 +8305,71 @@ class Optimization:
                         constraints.append(self.vars["p_deferrable"][i] <= nominal * bin_var)
                         activity_bins.append(bin_var)
                 constraints.append(cp.sum(cp.vstack(activity_bins), axis=0) <= 1)
+
+    def _warn_deferrable_group_budgets(self) -> None:
+        """After a failed relaxed retry, point at the group budgets as a likely cause (#1366)."""
+        budget_groups = [
+            gi
+            for gi, group in enumerate(self.optim_conf.get("deferrable_load_groups") or [])
+            if group.get("max_power") is not None
+        ]
+        if budget_groups:
+            self.logger.warning(
+                "deferrable_load_groups %s set a max_power that every step must meet. Power "
+                "forced into a step (a def_current_power pin, a load inside its minimum on "
+                "time or already running as a single constant load, a hard soc_target, or a "
+                "battery below its minimum state of charge) can exceed it and make the "
+                "problem infeasible. A runtime max_power worked out from a meter reading has "
+                "to add back what the group's own members draw now.",
+                budget_groups,
+            )
+
+    def _update_deferrable_group_params(self, num_timesteps: int) -> None:
+        """Refresh the per-step deferrable_load_groups budgets for this run (#1366).
+
+        A runtime ``max_power`` list of 2 or more entries is held in a Parameter, so
+        a new list on each MPC call reuses the cached problem. A scalar or a
+        one-entry list stays a constant in the row, as before. The list must have
+        one entry per step of this run's horizon. Creating, resizing or dropping a
+        Parameter clears the built problem, so it is rebuilt against the current
+        set of Parameters.
+
+        :param num_timesteps: the number of steps in this run
+        :type num_timesteps: int
+        :raises utils.RuntimeParamError: for a list of the wrong length or with an
+            entry that is not a number of 0 or above
+        """
+        per_step = {}
+        for gi, group in enumerate(self.optim_conf.get("deferrable_load_groups") or []):
+            max_power = group.get("max_power")
+            if not isinstance(max_power, list) or len(max_power) < 2:
+                continue
+            if len(max_power) != num_timesteps:
+                raise utils.RuntimeParamError(
+                    f"deferrable_load_groups[{gi}]: 'max_power' has {len(max_power)} "
+                    f"entries, but this run has {num_timesteps} timesteps"
+                )
+            try:
+                values = np.asarray(max_power, dtype=float)
+            except (TypeError, ValueError):
+                values = None
+            if values is None or not np.all(np.isfinite(values)) or np.any(values < 0):
+                raise utils.RuntimeParamError(
+                    f"deferrable_load_groups[{gi}]: every 'max_power' entry must be a "
+                    "number of 0 or above"
+                )
+            per_step[gi] = values
+        for gi in list(self.param_group_max_power):
+            if gi not in per_step:
+                del self.param_group_max_power[gi]
+                self.prob = None
+        for gi, values in per_step.items():
+            param = self.param_group_max_power.get(gi)
+            if param is None or param.shape != (num_timesteps,):
+                param = cp.Parameter(num_timesteps, nonneg=True, name=f"group{gi}_max_power")
+                self.param_group_max_power[gi] = param
+                self.prob = None
+            param.value = values
 
     def _build_results_dataframe(
         self,
@@ -9927,6 +10020,10 @@ class Optimization:
         inv_stress_conf = self._inv_stress_conf
         batt_stress_conf = self._batt_stress_conf
 
+        # Per-step deferrable_load_groups budgets (#1366): checked against this
+        # run's horizon and refreshed before the build, also on a cached problem.
+        self._update_deferrable_group_params(len(data_opt))
+
         # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
@@ -10316,6 +10413,7 @@ class Optimization:
                         self.logger.error(
                             f"Relaxed optimization also failed with status: {prob_relaxed.status}"
                         )
+                        self._warn_deferrable_group_budgets()
                     # Use the relaxed result for this run only. self.prob keeps
                     # pointing at the clean cached problem: the relaxed solve is a
                     # one-shot rescue, never a permanent replacement (issue #1048).

@@ -4316,6 +4316,12 @@ async def treat_runtimeparams(
     # before the value reaches the OptimizationCache key or the model build.
     optim_conf = canonicalize_capacity_charge_config(optim_conf, logger)
     params["optim_conf"] = optim_conf
+    # deferrable_load_groups on the final parameters (#1366): after the runtime
+    # merge, the heat_topology compile and the load-count re-normalisation, so a
+    # runtime change to the battery or inverter settings is checked too.
+    check_deferrable_load_groups(
+        optim_conf, plant_conf, config_file=False, error_cls=RuntimeParamError
+    )
 
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
@@ -7638,6 +7644,232 @@ async def build_secrets(
     return emhass_conf, params_secrets
 
 
+_GROUP_BATTERY_NAME = re.compile(r"battery([0-9]+)")
+
+
+def parse_deferrable_group_member(name: str) -> tuple[str, int]:
+    """
+    Parse one entry of a deferrable_load_groups ``names`` list (#1366).
+
+    ``batteryK`` (ASCII digits only, 0-based) is a battery. Anything else is read
+    as a deferrable load exactly as before, ``int(name.replace("deferrable", ""))``.
+
+    :param name: the member name
+    :type name: str
+    :return: ("battery", K) or ("deferrable", N)
+    :rtype: tuple[str, int]
+    :raises ValueError: when the name is neither form
+    """
+    match = _GROUP_BATTERY_NAME.fullmatch(name)
+    if match:
+        return "battery", int(match.group(1))
+    return "deferrable", int(name.replace("deferrable", ""))
+
+
+def _is_real_number(value, allow_inf: bool = False) -> bool:
+    """True for a finite int or float (numpy scalars included), never for a bool.
+
+    With ``allow_inf``, positive infinity is accepted too.
+    """
+    if isinstance(value, bool | np.bool_) or not isinstance(
+        value, int | float | np.integer | np.floating
+    ):
+        return False
+    try:
+        return math.isfinite(value) or (allow_inf and value == math.inf)
+    except OverflowError:  # an int too large for a float
+        return False
+
+
+def _check_group_battery_weight(weight, label: str) -> None:
+    """Check a battery member's weight object; raise ValueError on the first fault."""
+    if not isinstance(weight, dict):
+        raise ValueError(f"{label} must be an object with 'charge' and 'discharge'")
+    if any(key not in ("charge", "discharge") for key in weight):
+        raise ValueError(f"{label} only takes 'charge' and 'discharge'")
+    charge = weight.get("charge", 1.0)
+    discharge = weight.get("discharge", 0.0)
+    if not _is_real_number(charge) or not 0 < charge <= 1:
+        raise ValueError(f"{label}: 'charge' must be a number above 0 and at most 1")
+    if not _is_real_number(discharge) or not -charge <= discharge <= 0:
+        raise ValueError(f"{label}: 'discharge' must be a number from minus 'charge' to 0")
+
+
+def _deferrable_group_problem(
+    gi: int,
+    group,
+    optim_conf: dict,
+    plant_conf: dict,
+    config_file: bool,
+    mutex_seen: set[int],
+) -> str | None:
+    """Return the first fault in one deferrable_load_groups entry, or None."""
+    prefix = f"deferrable_load_groups[{gi}]:"
+    if not isinstance(group, dict):
+        return f"{prefix} each group must be an object"
+    names = group.get("names", [])
+    if not isinstance(names, list) or not names:
+        return f"{prefix} 'names' must be a list with at least 1 deferrable load reference"
+    try:
+        num_def_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        num_def_loads = 0
+    members = []
+    seen = set()
+    for j, name in enumerate(names):
+        if not isinstance(name, str):
+            return f"{prefix} names[{j}] must be a string"
+        try:
+            kind, idx = parse_deferrable_group_member(name)
+        except ValueError:
+            return f"{prefix} names[{j}] is not deferrableN or batteryK"
+        if kind == "deferrable" and not 0 <= idx < num_def_loads:
+            return (
+                f"{prefix} names[{j}] refers to a deferrable load that is not configured "
+                f"(number_of_deferrable_loads is {num_def_loads})"
+            )
+        if (kind, idx) in seen:
+            return f"{prefix} names[{j}] is duplicated within the group"
+        seen.add((kind, idx))
+        members.append((kind, idx))
+    deferrables = [idx for kind, idx in members if kind == "deferrable"]
+    batteries = [idx for kind, idx in members if kind == "battery"]
+    if not deferrables:
+        return f"{prefix} 'names' must contain at least 1 deferrable load reference"
+
+    mutual_exclusion = group.get("mutual_exclusion", False)
+    if not isinstance(mutual_exclusion, bool):
+        return f"{prefix} 'mutual_exclusion' must be a boolean"
+    if batteries:
+        # A battery member puts the battery's AC power into the row: only the
+        # one non-hybrid inverter layout has it on the AC side (#1366, v1).
+        if mutual_exclusion:
+            return f"{prefix} a battery cannot be in a mutual exclusion group"
+        if not optim_conf.get("set_use_battery", False):
+            return f"{prefix} a battery member needs set_use_battery"
+        num_batteries = validate_num_batteries(plant_conf)
+        for j, (kind, idx) in enumerate(members):
+            if kind == "battery" and idx >= num_batteries:
+                return (
+                    f"{prefix} names[{j}] refers to a battery that is not configured "
+                    f"(number_of_batteries is {num_batteries})"
+                )
+        try:
+            num_inverters = validate_num_inverters(plant_conf)
+        except InverterConfigError:
+            # build_params never refuses on an inverter fault; the final check
+            # in treat_runtimeparams runs after the inverter count is refused.
+            num_inverters = None if config_file else 0
+        if num_inverters is not None and (
+            num_inverters != 1 or plant_conf.get("inverter_is_hybrid", False)
+        ):
+            return (
+                f"{prefix} a battery member needs number_of_inverters 1 "
+                "and inverter_is_hybrid false"
+            )
+        is_electric = optim_conf.get("is_electric_load")
+        if not isinstance(is_electric, list):
+            is_electric = [True] * num_def_loads
+        if any(idx < len(is_electric) and not bool(is_electric[idx]) for idx in deferrables):
+            return f"{prefix} a group with a battery cannot hold a non-electric load"
+    if config_file and mutual_exclusion:
+        for idx in deferrables:
+            if idx in mutex_seen:
+                return (
+                    f"{prefix} deferrable load {idx} is already in another mutual exclusion "
+                    "group. A load can be in at most one mutual exclusion group"
+                )
+        mutex_seen.update(deferrables)
+
+    max_power = group.get("max_power")
+    if max_power is None:
+        if not mutual_exclusion:
+            return f"{prefix} 'max_power' is required when 'mutual_exclusion' is false"
+    elif isinstance(max_power, list):
+        if config_file:
+            return (
+                f"{prefix} 'max_power' must be a number in the configuration; "
+                "a per-step list can only be passed at runtime"
+            )
+        if not max_power:
+            return f"{prefix} 'max_power' must not be an empty list"
+        if not all(_is_real_number(v) and v >= 0 for v in max_power):
+            return f"{prefix} every 'max_power' entry must be a number of 0 or above"
+    elif not _is_real_number(max_power, allow_inf=True):
+        # Infinity is kept: it has always built and solved as "no limit".
+        return f"{prefix} 'max_power' must be a number"
+    elif max_power < 0 or (config_file and max_power == 0):
+        return f"{prefix} 'max_power' must be a positive number"
+
+    weights = group.get("weights")
+    if weights is None:
+        return None
+    if not isinstance(weights, dict):
+        return f"{prefix} 'weights' must be an object keyed by member name"
+    by_name = dict(zip(names, members, strict=True))
+    for key, weight in weights.items():
+        if key not in by_name:
+            return f"{prefix} every 'weights' key must be a name listed in the group"
+        kind, idx = by_name[key]
+        member = "deferrable load" if kind == "deferrable" else "battery"
+        label = f"{prefix} the weight of {member} {idx}"
+        if kind == "battery":
+            try:
+                _check_group_battery_weight(weight, label)
+            except ValueError as err:
+                return str(err)
+        elif not _is_real_number(weight) or not 0 < weight <= 1:
+            return f"{label} must be a number above 0 and at most 1"
+    return None
+
+
+def check_deferrable_load_groups(
+    optim_conf: dict,
+    plant_conf: dict,
+    *,
+    config_file: bool,
+    error_cls: type[ValueError] = ValueError,
+) -> None:
+    """
+    Validate optim_conf["deferrable_load_groups"] (#1366).
+
+    Runs in build_params on the configuration (``config_file=True``) and at the end
+    of treat_runtimeparams on the final parameters of every run, after the runtime
+    merge and the heat_topology compile (``config_file=False``), so a runtime
+    change to the battery or inverter settings is checked against the groups too.
+
+    The configuration rules are stricter: ``max_power`` is a number above 0, and a
+    load is in at most one mutual exclusion group. On the final parameters
+    ``max_power`` may be 0 or a per-step list of numbers 0 or above (its length is
+    checked against the horizon by the optimizer), and mutual exclusion groups may
+    overlap, as runtime and heat_topology groups always could.
+
+    The first fault is raised as ``error_cls``; the message names the group and
+    member by position and never repeats a value from the request.
+
+    :param optim_conf: the optimization configuration
+    :type optim_conf: dict
+    :param plant_conf: the plant configuration
+    :type plant_conf: dict
+    :param config_file: True for the configuration rules, False for the final ones
+    :type config_file: bool
+    :param error_cls: the exception class to raise
+    :type error_cls: type[ValueError]
+    """
+    groups = optim_conf.get("deferrable_load_groups")
+    if groups is None or (isinstance(groups, list) and not groups):
+        return
+    if not isinstance(groups, list):
+        raise error_cls("deferrable_load_groups must be a list of group objects")
+    mutex_seen: set[int] = set()
+    for gi, group in enumerate(groups):
+        problem = _deferrable_group_problem(
+            gi, group, optim_conf, plant_conf, config_file, mutex_seen
+        )
+        if problem is not None:
+            raise error_cls(problem)
+
+
 async def build_params(
     emhass_conf: dict[str, pathlib.Path],
     params_secrets: dict[str, str | float],
@@ -7753,59 +7985,9 @@ async def build_params(
                 def_array_name,
                 logger,
             )
-        # Validate deferrable_load_groups
-        groups = params["optim_conf"].get("deferrable_load_groups", [])
-        if groups:
-            seen_indices = set()
-            for gi, group in enumerate(groups):
-                # Validate names
-                names = group.get("names", [])
-                if not names:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'names' must contain at least 1 deferrable load reference"
-                    )
-                indices = []
-                group_indices = set()
-                for name in names:
-                    try:
-                        idx = int(name.replace("deferrable", ""))
-                    except ValueError as err:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: could not parse index from name '{name}'"
-                        ) from err
-                    if idx < 0 or idx >= num_def_loads:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' references index {idx}, "
-                            f"but only {num_def_loads} deferrable loads are configured"
-                        )
-                    if idx in group_indices:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' is duplicated within the group"
-                        )
-                    if idx in seen_indices:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' is already in another group. "
-                            f"A deferrable load cannot belong to multiple groups"
-                        )
-                    indices.append(idx)
-                    group_indices.add(idx)
-                seen_indices.update(indices)
-
-                # Validate max_power (optional when mutual_exclusion is true)
-                max_power = group.get("max_power")
-                mutual_exclusion = group.get("mutual_exclusion", False)
-                if max_power is not None and max_power <= 0:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'max_power' must be a positive number"
-                    )
-                if not isinstance(mutual_exclusion, bool):
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'mutual_exclusion' must be a boolean"
-                    )
-                if max_power is None and not mutual_exclusion:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'max_power' is required when 'mutual_exclusion' is false"
-                    )
+        # Validate deferrable_load_groups against the configuration rules (#1366).
+        # The final parameters of every run are checked again in treat_runtimeparams.
+        check_deferrable_load_groups(params["optim_conf"], params["plant_conf"], config_file=True)
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
 

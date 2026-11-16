@@ -462,6 +462,133 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIs(opt_b, opt_a, "B must reuse A's cached problem")
         self.assertEqual(cached_b, fresh_b, "A cache hit must plan like a fresh build (#1364)")
 
+    async def _mpc_with_group_limit(self, max_power):
+        """One naive-mpc-optim run with a runtime deferrable_load_groups max_power."""
+        horizon = 10
+        runtimeparams = {
+            "prediction_horizon": horizon,
+            "pv_power_forecast": [0.0] * horizon,
+            "load_power_forecast": [300.0] * horizon,
+            "load_cost_forecast": [0.2] * horizon,
+            "prod_price_forecast": [0.0] * horizon,
+            "operating_hours_of_each_deferrable_load": [1, 0],
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "deferrable_load_groups": [
+                {"names": ["deferrable0", "deferrable1"], "max_power": max_power}
+            ],
+        }
+        params = copy.deepcopy(orjson.loads(self.params_json))
+        params["passed_data"] = runtimeparams
+        idd = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            orjson.dumps(params).decode("utf-8"),
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            "naive-mpc-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = await naive_mpc_optim(idd, logger)
+        return idd["opt"], opt_res
+
+    async def test_naive_mpc_per_step_group_limit_reuses_cached_problem(self):
+        """A new per-step max_power list on each MPC call is a cache hit: the same
+        problem object is reused and the new values bind (#1366). A scalar still keys
+        by value, as before."""
+        OptimizationCache.clear(logger)
+        self.addCleanup(OptimizationCache.clear, logger)
+        opt1, res1 = await self._mpc_with_group_limit([3000.0] * 5 + [0.0] * 5)
+        self.assertIn(opt1.optim_status, ("Optimal", "Optimal (Relaxed)"))
+        prob1 = opt1.prob
+        combined = (res1["P_deferrable0"] + res1["P_deferrable1"]).to_numpy()
+        self.assertTrue((combined[5:] <= 1e-3).all())
+        opt2, res2 = await self._mpc_with_group_limit([0.0] * 5 + [3000.0] * 5)
+        self.assertIs(opt2, opt1, "a new list of the same length must hit the cache")
+        self.assertIs(opt2.prob, prob1, "the cached problem must not be rebuilt")
+        self.assertIn(opt2.optim_status, ("Optimal", "Optimal (Relaxed)"))
+        combined = (res2["P_deferrable0"] + res2["P_deferrable1"]).to_numpy()
+        self.assertTrue((combined[:5] <= 1e-3).all())
+        self.assertGreater(combined[5:].max(), 1)
+        opt3, _ = await self._mpc_with_group_limit(3000.0)
+        self.assertIsNot(opt3, opt1)
+        opt4, _ = await self._mpc_with_group_limit(2500.0)
+        self.assertIsNot(opt4, opt3, "a scalar max_power is still keyed by value")
+
+    async def test_naive_mpc_per_step_group_limit_wrong_length(self):
+        """A per-step list that does not match the horizon is a RuntimeParamError naming
+        both lengths, so /action answers 400 (#1366)."""
+        OptimizationCache.clear(logger)
+        self.addCleanup(OptimizationCache.clear, logger)
+        with self.assertRaises(utils.RuntimeParamError) as caught:
+            await self._mpc_with_group_limit([3000.0] * 9)
+        self.assertIn("9 entries", str(caught.exception))
+        self.assertIn("10 timesteps", str(caught.exception))
+
+    async def test_deferrable_load_groups_pennywize_phase_example(self):
+        """The #1366 example end to end (config.json -> build_params ->
+        treat_runtimeparams -> optimization): a 16 A group on a charger and a roaster
+        inside a 25 A phase that also feeds a plug-in battery."""
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config.update(
+            {
+                "number_of_deferrable_loads": 2,
+                "nominal_power_of_deferrable_loads": [3000, 2400],
+                "minimum_power_of_deferrable_loads": [1400, 0],
+                "treat_deferrable_load_as_semi_cont": [False, True],
+                "set_deferrable_load_single_constant": [False, False],
+                "operating_hours_of_each_deferrable_load": [3, 1],
+                "set_use_battery": True,
+                "battery_nominal_energy_capacity": 5000,
+                "battery_charge_power_max": 2400,
+                "battery_discharge_power_max": 2400,
+                "battery_minimum_state_of_charge": 0.1,
+                "inverter_is_hybrid": False,
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": 3300},
+                    {
+                        "names": ["deferrable0", "deferrable1", "battery0"],
+                        "max_power": 5000,
+                        "weights": {"battery0": {"charge": 1.0, "discharge": 0.0}},
+                    },
+                ],
+            }
+        )
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        params["optim_conf"]["set_use_pv"] = True
+        load_cost = [0.40] * 48
+        load_cost[4:10] = [0.05] * 6
+        runtimeparams = {
+            "pv_power_forecast": [0.0] * 48,
+            "load_power_forecast": [300.0] * 48,
+            "load_cost_forecast": load_cost,
+            "prod_price_forecast": [0.0] * 48,
+            "soc_init": 0.1,
+            "soc_final": 0.9,
+        }
+        params["passed_data"] = runtimeparams
+        idd = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            orjson.dumps(params).decode("utf-8"),
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        res = await dayahead_forecast_optim(idd, logger)
+        self.assertEqual(idd["opt"].optim_status, "Optimal")
+        charger, roaster = res["P_deferrable0"], res["P_deferrable1"]
+        charge = (-res["P_batt"]).clip(lower=0)
+        self.assertLessEqual((charger + roaster).max(), 3300 + 1e-3)
+        self.assertLessEqual((charger + roaster + charge).max(), 5000 + 1e-3)
+        # 2.4 kW + 1.4 kW is over 3.3 kW, so they never share a step.
+        self.assertFalse(((charger > 1) & (roaster > 1)).any())
+        at_full = charger >= 3000 - 1e-3
+        self.assertTrue(at_full.any())
+        self.assertLessEqual(charge[at_full].max(), 2000 + 1e-3)
+        self.assertGreater(charge.max(), 1000)
+
     # Test day-ahead optimization
     async def test_webserver_get_injection_dict(self):
         costfun = "profit"
@@ -3280,6 +3407,58 @@ class TestOptimizationCache(unittest.TestCase):
         self.assertEqual(key1, key2)
         # Key should be an OptimizationCacheKey dataclass instance
         self.assertIsInstance(key1, OptimizationCacheKey)
+
+    def _key_with_groups(self, groups):
+        optim_conf = copy.deepcopy(self.optim_conf)
+        optim_conf["deferrable_load_groups"] = groups
+        return OptimizationCache._compute_cache_key(
+            optim_conf, self.plant_conf, self.costfun, self.retrieve_hass_conf, num_timesteps=48
+        )
+
+    def test_cache_key_deferrable_load_groups_shape_not_values(self):
+        """#1366: a per-step max_power list is keyed on its length, not its values, so a
+        new list each MPC call does not rebuild; what the row bakes in still misses."""
+        names = ["deferrable0", "deferrable1"]
+        per_step = {"names": names, "max_power": [5000.0] * 48}
+        key = self._key_with_groups([per_step])
+        self.assertEqual(key, self._key_with_groups([{**per_step, "max_power": [4900.0] * 48}]))
+        self.assertEqual(key, self._key_with_groups([{**per_step, "note": "phase 3"}]))
+        self.assertNotEqual(key, self._key_with_groups([{**per_step, "max_power": [5000.0] * 47}]))
+        self.assertNotEqual(
+            key, self._key_with_groups([{**per_step, "weights": {"deferrable0": 0.5}}])
+        )
+        self.assertNotEqual(
+            self._key_with_groups([{**per_step, "weights": {"deferrable0": 0.5}}]),
+            self._key_with_groups([{**per_step, "weights": {"deferrable0": 0.4}}]),
+        )
+        scalar = self._key_with_groups([{"names": names, "max_power": 5000.0}])
+        self.assertNotEqual(scalar, key)
+        self.assertNotEqual(scalar, self._key_with_groups([{"names": names, "max_power": 4900.0}]))
+        self.assertNotEqual(
+            self._key_with_groups([{"names": names, "max_power": [5000.0]}]),
+            self._key_with_groups([{"names": names, "max_power": [4900.0]}]),
+        )
+        self.assertNotEqual(
+            key, self._key_with_groups([{**per_step, "names": [*names, "battery0"]}])
+        )
+        self.assertNotEqual(key, self._key_with_groups([{**per_step, "mutual_exclusion": True}]))
+
+    def test_cache_key_deferrable_load_groups_odd_shapes_do_not_raise(self):
+        """Unvalidated groups (a direct API caller) are keyed, never raise (#1366)."""
+        for groups in (
+            "not a list",
+            [None],
+            [{"names": "deferrable0", "max_power": {"a": 1}}],
+            [
+                {
+                    "names": ["deferrable0"],
+                    "max_power": 1,
+                    "weights": {"deferrable0": {1: 2, "a": 3}},
+                }
+            ],
+        ):
+            with self.subTest(groups=groups):
+                self.assertIsInstance(self._key_with_groups(groups), OptimizationCacheKey)
 
     def test_cache_key_accepts_nominal_powers_as_array(self):
         """A numpy array of nominal powers must not be truth-tested when building the key."""

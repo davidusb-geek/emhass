@@ -4411,6 +4411,281 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             pairs, [("buffer", "house")], "extend mode must not append to stale transfers"
         )
 
+    async def _treat_with_groups(self, config_optim, runtimeparams):
+        """treat_runtimeparams on the test params with optim_conf entries set as if they
+        came from config.json (the config check is not run, so this is base-safe)."""
+        params = orjson.loads(self.params_json)
+        params["optim_conf"].update(config_optim)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtime = orjson.loads(self.runtimeparams_json)
+        runtime.update(runtimeparams)
+        return await utils.treat_runtimeparams(
+            orjson.dumps(runtime).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+    async def test_deferrable_load_groups_battery_rule_checked_on_final_params(self):
+        """A runtime flip to a hybrid inverter cannot slip a config.json battery member
+        past the v1 layout rule (#1366): the final parameters are checked."""
+        config_optim = {
+            "set_use_battery": True,
+            "deferrable_load_groups": [{"names": ["deferrable0", "battery0"], "max_power": 5000}],
+        }
+        # The same group passes without the flip.
+        await self._treat_with_groups(config_optim, {})
+        with self.assertRaises(ValueError) as caught:
+            await self._treat_with_groups(config_optim, {"inverter_is_hybrid": True})
+        self.assertIsInstance(caught.exception, utils.RuntimeParamError)
+        self.assertIn("deferrable_load_groups[0]:", str(caught.exception))
+        with self.assertRaises(utils.RuntimeParamError):
+            await self._treat_with_groups(config_optim, {"set_use_battery": False})
+
+    async def test_deferrable_load_groups_heat_topology_overlapping_mutex(self):
+        """heat_topology can compile one flow into two mutual exclusion groups; the final
+        check keeps accepting that (#1366, the config.json rule does not apply)."""
+        topology = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3500, "supply_temperature": 55},
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+                {"id": "b2", "type": "electric", "efficiency": 1.0, "nominal_power": 2000},
+            ],
+            "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 48}],
+            "flows": [
+                {"from": "hp", "to": "dhw"},
+                {"from": "booster", "to": "dhw"},
+                {"from": "b2", "to": "dhw"},
+            ],
+            "actuator_groups": [
+                {"flows": [["hp", "dhw"], ["booster", "dhw"]], "mutual_exclusion": True},
+                {"flows": [["booster", "dhw"], ["b2", "dhw"]], "mutual_exclusion": True},
+            ],
+        }
+        out = await self._treat_with_optim_conf({"heat_topology": topology})
+        groups = out["deferrable_load_groups"]
+        self.assertEqual(len(groups), 2)
+        self.assertTrue(set(groups[0]["names"]) & set(groups[1]["names"]))
+
+    async def test_deferrable_load_groups_runtime_groups_checked(self):
+        """Runtime groups get the final rules: overlapping mutual exclusion and a per-step
+        list still pass, a bad member fails early with a message (#1366)."""
+        overlapping_mutex = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+            {"names": ["deferrable1", "deferrable0"], "mutual_exclusion": True},
+            {"names": ["deferrable0", "deferrable1"], "max_power": [0.0] + [4000.0] * 47},
+        ]
+        _, _, optim_conf, _ = await self._treat_with_groups(
+            {}, {"deferrable_load_groups": overlapping_mutex}
+        )
+        self.assertEqual(optim_conf["deferrable_load_groups"], overlapping_mutex)
+        with self.assertRaises(utils.RuntimeParamError):
+            await self._treat_with_groups(
+                {},
+                {"deferrable_load_groups": [{"names": ["deferrable9"], "max_power": 5000}]},
+            )
+
+
+class TestCheckDeferrableLoadGroups(unittest.TestCase):
+    """The deferrable_load_groups rules on both paths (#1366)."""
+
+    OPTIM = {
+        "number_of_deferrable_loads": 3,
+        "set_use_battery": True,
+        "is_electric_load": [True, True, False],
+    }
+    PLANT = {"number_of_batteries": 1, "number_of_inverters": 1, "inverter_is_hybrid": False}
+
+    def _check(self, groups, config_file, optim=None, plant=None):
+        check = getattr(utils, "check_deferrable_load_groups", None)
+        self.assertIsNotNone(check, "check_deferrable_load_groups is missing")
+        optim_conf = {**self.OPTIM, **(optim or {}), "deferrable_load_groups": groups}
+        plant_conf = {**self.PLANT, **(plant or {})}
+        error_cls = ValueError if config_file else utils.RuntimeParamError
+        check(optim_conf, plant_conf, config_file=config_file, error_cls=error_cls)
+
+    def test_valid_groups(self):
+        battery_group = {
+            "names": ["deferrable0", "deferrable1", "battery0"],
+            "max_power": 5000,
+            "weights": {"deferrable0": 1 / 3, "battery0": {"charge": 1.0, "discharge": -1.0}},
+        }
+        both = [
+            [],
+            None,
+            [battery_group],
+            [{"names": ["deferrable0", "battery0"], "max_power": 5000, "weights": {}}],
+            [{"names": ["deferrable0"], "max_power": 5000, "note": "unknown keys are ignored"}],
+            [{"names": ["deferrable0"], "max_power": float("inf")}],
+            [
+                {"names": ["deferrable0", "deferrable1"], "max_power": 3300},
+                {"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000},
+            ],
+            [
+                {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+                {"names": ["deferrable1", "deferrable2"], "max_power": 2000},
+            ],
+            # Weights in a mutual-exclusion-only group are accepted and have no effect.
+            [
+                {
+                    "names": ["deferrable0", "deferrable1"],
+                    "mutual_exclusion": True,
+                    "weights": {"deferrable0": 0.5},
+                }
+            ],
+        ]
+        runtime_only = [
+            [{"names": ["deferrable0"], "max_power": 0}],
+            [{"names": ["deferrable0"], "max_power": [0]}],
+            [{"names": ["deferrable0", "battery0"], "max_power": [0, 100.5, 5000]}],
+            [
+                {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+                {"names": ["deferrable1", "deferrable2"], "mutual_exclusion": True},
+            ],
+        ]
+        for groups in both:
+            for config_file in (True, False):
+                with self.subTest(groups=groups, config_file=config_file):
+                    self._check(groups, config_file)
+        for groups in runtime_only:
+            with self.subTest(groups=groups):
+                self._check(groups, False)
+                with self.assertRaises(ValueError):
+                    self._check(groups, True)
+
+    def test_refused_groups(self):
+        d0 = "deferrable0"
+        cases = [
+            ("not a list", {"names": [d0], "max_power": 1}, {}, {}),
+            ("group not an object", [d0], {}, {}),
+            ("names not a list", [{"names": d0, "max_power": 1}], {}, {}),
+            ("names empty", [{"names": [], "max_power": 1}], {}, {}),
+            ("name not a string", [{"names": [0], "max_power": 1}], {}, {}),
+            ("unparsable name", [{"names": [d0, "pv0"], "max_power": 1}], {}, {}),
+            ("battery with underscore", [{"names": [d0, "battery_0"], "max_power": 1}], {}, {}),
+            ("load out of range", [{"names": ["deferrable3"], "max_power": 1}], {}, {}),
+            ("duplicate", [{"names": [d0, "deferrable 0"], "max_power": 1}], {}, {}),
+            ("battery only", [{"names": ["battery0"], "max_power": 1}], {}, {}),
+            (
+                "battery in mutex",
+                [{"names": [d0, "battery0"], "max_power": 1, "mutual_exclusion": True}],
+                {},
+                {},
+            ),
+            (
+                "battery off",
+                [{"names": [d0, "battery0"], "max_power": 1}],
+                {"set_use_battery": False},
+                {},
+            ),
+            ("battery out of range", [{"names": [d0, "battery1"], "max_power": 1}], {}, {}),
+            (
+                "hybrid inverter",
+                [{"names": [d0, "battery0"], "max_power": 1}],
+                {},
+                {"inverter_is_hybrid": True},
+            ),
+            (
+                "two inverters",
+                [{"names": [d0, "battery0"], "max_power": 1}],
+                {},
+                {"number_of_inverters": 2},
+            ),
+            (
+                "non-electric load with a battery",
+                [{"names": ["deferrable2", "battery0"], "max_power": 1}],
+                {},
+                {},
+            ),
+            ("mutex not a bool", [{"names": [d0], "max_power": 1, "mutual_exclusion": 1}], {}, {}),
+            ("no max_power without mutex", [{"names": [d0]}], {}, {}),
+            ("max_power bool", [{"names": [d0], "max_power": True}], {}, {}),
+            ("max_power nan", [{"names": [d0], "max_power": float("nan")}], {}, {}),
+            ("max_power -inf", [{"names": [d0], "max_power": float("-inf")}], {}, {}),
+            ("max_power string", [{"names": [d0], "max_power": "5000"}], {}, {}),
+            ("max_power negative", [{"names": [d0], "max_power": -1}], {}, {}),
+            ("list empty", [{"names": [d0], "max_power": []}], {}, {}),
+            ("list negative", [{"names": [d0], "max_power": [100, -1]}], {}, {}),
+            ("list inf", [{"names": [d0], "max_power": [100, float("inf")]}], {}, {}),
+            ("list bool", [{"names": [d0], "max_power": [100, True]}], {}, {}),
+            ("weights not an object", [{"names": [d0], "max_power": 1, "weights": [1]}], {}, {}),
+            (
+                "weight key not a member",
+                [{"names": [d0], "max_power": 1, "weights": {"deferrable1": 0.5}}],
+                {},
+                {},
+            ),
+            (
+                "weight key spelled differently",
+                [{"names": [d0], "max_power": 1, "weights": {"0": 0.5}}],
+                {},
+                {},
+            ),
+            ("load weight 0", [{"names": [d0], "max_power": 1, "weights": {d0: 0}}], {}, {}),
+            ("load weight 1.5", [{"names": [d0], "max_power": 1, "weights": {d0: 1.5}}], {}, {}),
+            ("load weight bool", [{"names": [d0], "max_power": 1, "weights": {d0: True}}], {}, {}),
+        ]
+        battery_weights = [
+            ("bare number", 1.0),
+            ("typo key", {"charge": 1.0, "dischage": -1.0}),
+            ("charge 0", {"charge": 0}),
+            ("charge above 1", {"charge": 1.2}),
+            ("discharge positive", {"discharge": 0.5}),
+            ("discharge below minus charge", {"charge": 0.5, "discharge": -0.6}),
+            ("discharge nan", {"discharge": float("nan")}),
+        ]
+        for label, weight in battery_weights:
+            cases.append(
+                (
+                    f"battery weight {label}",
+                    [{"names": [d0, "battery0"], "max_power": 1, "weights": {"battery0": weight}}],
+                    {},
+                    {},
+                )
+            )
+        for label, groups, optim, plant in cases:
+            for config_file in (True, False):
+                with self.subTest(label, config_file=config_file):
+                    with self.assertRaises(ValueError) as caught:
+                        self._check(groups, config_file, optim, plant)
+                    if not config_file:
+                        self.assertIsInstance(caught.exception, utils.RuntimeParamError)
+                    message = str(caught.exception)
+                    self.assertTrue(message.startswith("deferrable_load_groups"), message)
+                    for raw in ("pv0", "battery_0", "deferrable 0", "dischage", "5000"):
+                        self.assertNotIn(raw, message)
+
+    def test_mutex_overlap_only_refused_in_config(self):
+        groups = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+            {"names": ["deferrable1", "deferrable2"], "mutual_exclusion": True},
+        ]
+        with self.assertRaises(ValueError) as caught:
+            self._check(groups, True)
+        self.assertIn("deferrable_load_groups[1]:", str(caught.exception))
+        self._check(groups, False)
+
+    def test_config_inverter_fault_left_to_final_check(self):
+        """build_params never refuses on an inverter fault, so a battery group with an
+        unreadable inverter count passes the config check; the final check refuses it."""
+        groups = [{"names": ["deferrable0", "battery0"], "max_power": 5000}]
+        self._check(groups, True, plant={"number_of_inverters": "two"})
+        with self.assertRaises(utils.RuntimeParamError):
+            self._check(groups, False, plant={"number_of_inverters": "two"})
+
+    def test_huge_battery_index_refused_without_work(self):
+        """A battery index far above the count is refused by comparison only."""
+        for name in ("battery" + "9" * 50, "deferrable" + "9" * 50, "battery" + "9" * 5000):
+            groups = [{"names": ["deferrable0", name], "max_power": 5000}]
+            with self.subTest(digits=len(name)), self.assertRaises(ValueError) as caught:
+                self._check(groups, True)
+            self.assertNotIn("9" * 50, str(caught.exception))
+
 
 class TestHeatingDemand(unittest.TestCase):
     def test_calculate_heating_demand_basic(self):

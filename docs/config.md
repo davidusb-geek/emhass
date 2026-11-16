@@ -192,12 +192,20 @@ Example:
 	"deferrable_load_max_cost": [0, 0.65]
 	```
 	Here `deferrable0` stays mandatory and `deferrable1` is scheduled only if its full run costs less than 0.65. Defaults to `0` for every load (all loads mandatory).
-- `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
-	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
-	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its ON level (its nominal power; a thermal source may have a lower ceiling), including the fractional remainder step, not at its step-average power. In the relaxed fallback (`Optimal (Relaxed)`) the ON/OFF structure is dropped and every member counts at its relaxed power.
-	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads — the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones.
+- `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating) or a supply limit below the grid connection (e.g. a phase behind a 25 A fuse, a 16 A circuit or a subpanel). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
+	- `names`: List of the group's members: deferrable loads (e.g. `["deferrable0", "deferrable1"]`) and, for a budget, batteries (`battery0`, `battery1`, ...). A group needs at least one deferrable load.
+	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for the group's members at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its ON level (its nominal power; a thermal source may have a lower ceiling), including the fractional remainder step, not at its step-average power. In the relaxed fallback (`Optimal (Relaxed)`) the ON/OFF structure is dropped and every member counts at its relaxed power. In `config.json` it is a number above 0. At runtime it can also be 0, or a list with one value per timestep of that call's horizon (each 0 or above), for example the room left on a phase through the day. A list of the wrong length is an error stating both lengths, and a one-entry list works as a number.
+	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads: the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones. Batteries can't be in a mutual exclusion group.
+	- `weights` *(optional)*: How much of each member's power counts against `max_power`, keyed by a name listed in `names`. For a deferrable load it is a number above 0 and at most 1, default 1, so a three-phase load can count as a third on one phase's budget. For a battery it is `{"charge": c, "discharge": d}`: `c` above 0 and at most 1 (default 1) and `d` from `-c` to 0 (default 0). By default only charging counts; `"discharge": -1` lets discharging into the same supply make room for the other members.
 
-	A load cannot belong to multiple groups. Examples:
+	A battery can be a member only with `set_use_battery`, `number_of_inverters` 1 and `inverter_is_hybrid` false (an AC-coupled battery, the only layout where the battery's power in the model is on the AC side), and its group can't hold a non-electric load (`is_electric_load` false). These rules are checked on the final parameters of every run, so a runtime change to any of these settings is checked too.
+
+	A load can be in several groups, but in `config.json` in only one with `mutual_exclusion`. Things to keep in mind with a budget:
+	- It caps power drawn through the limit only. Nothing caps a battery discharging back through it.
+	- It caps the average over a timestep, so a load that is really on/off should be semi-continuous (`treat_deferrable_load_as_semi_cont`). The relaxed retry after a failed solve drops semi-continuity, so there the budget only holds as an average.
+	- It is a hard limit. If something forces more power into a timestep than `max_power` allows (a `def_current_power` pin, a load inside its minimum on time or already running as a single constant load, a hard `soc_target`, or a battery below its minimum state of charge), the whole optimization is infeasible. `max_power` is the room for the group's own members, so a runtime value worked out from a meter reading has to add back what they draw now.
+
+	Examples:
 	```json
 	"deferrable_load_groups": [
 	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500}
@@ -211,6 +219,14 @@ Example:
 	```json
 	"deferrable_load_groups": [
 	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500, "mutual_exclusion": true}
+	]
+	```
+	A 16 A circuit with two loads inside a 25 A phase that also feeds a battery:
+	```json
+	"deferrable_load_groups": [
+	  {"names": ["deferrable0", "deferrable1"], "max_power": 3300},
+	  {"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000,
+	   "weights": {"battery0": {"charge": 1.0, "discharge": 0.0}}}
 	]
 	```
 	Defaults to an empty list (no groups).
