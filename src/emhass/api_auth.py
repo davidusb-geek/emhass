@@ -347,39 +347,68 @@ def _remove_stale_temporaries(folder: pathlib.Path) -> None:
         pass
 
 
-def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
-    """Return ``(token, how)`` from the token file in ``data_dir``, making it when it is missing.
+LOCK_STALE_S = 30.0
 
-    ``how`` is "file" or "new". The file appears complete or not at all and with mode 0600
-    (POSIX), so workers starting together agree on one token and a crash cannot leave a
-    half-written one. An empty file older than ``STALE_EMPTY_S`` (left by an older version
-    that crashed) is replaced. Raises ``ApiTokenError`` when it cannot be read or written, which
-    fails the server closed.
-    """
-    path = pathlib.Path(data_dir) / TOKEN_FILE_NAME
-    existing = _read_generated_waiting(path)
-    if existing is not None:
-        return existing, "file"
-    if path.exists():
-        # Empty after the wait. Look once more (another worker may just have published), and only
-        # replace the very file that was seen to be empty and old.
-        again = _read_generated(path)
-        if again is not None:
-            return again, "file"
+
+def _acquire_replacement_lock(lock: pathlib.Path) -> bool:
+    """Take the lock that serialises replacing a stale token file. A lock left by a killed process
+    (older than ``LOCK_STALE_S``) is removed. False when it cannot be had within about two seconds."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(40):
         try:
-            seen = path.stat()
-            if seen.st_size != 0 or time.time() - seen.st_mtime < STALE_EMPTY_S:
-                raise ApiTokenError("the generated token file is empty")
-            now = path.stat()
-            if (now.st_ino, now.st_size) != (seen.st_ino, 0):
-                raise ApiTokenError("the generated token file changed while it was being replaced")
-            path.unlink()
-        except FileNotFoundError:
-            pass  # someone else removed it first
+            os.close(os.open(lock, flags, 0o600))
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > LOCK_STALE_S:
+                    lock.unlink()
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.05)
         except OSError:
+            return False
+    return False
+
+
+def _release_replacement_lock(lock: pathlib.Path) -> None:
+    try:
+        lock.unlink()
+    except OSError:
+        pass
+
+
+def _discard_stale(path: pathlib.Path) -> None:
+    """Delete a token file that holds no token, if it is old and is still the file that was seen.
+
+    Raises ``ApiTokenError`` for a file that holds something else, or one too new to be sure
+    another worker is not still writing it.
+    """
+    try:
+        seen = path.stat()
+        try:
+            blank = not path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            blank = False
+        if not blank:
+            raise ApiTokenError("the generated token file holds no usable token; delete it")
+        if time.time() - seen.st_mtime < STALE_EMPTY_S:
             raise ApiTokenError(
-                "the generated token file is empty and cannot be replaced"
-            ) from None
+                "the generated token file is blank (another worker may be writing it)"
+            )
+        now = path.stat()
+        if (now.st_ino, now.st_size) != (seen.st_ino, seen.st_size):
+            raise ApiTokenError("the generated token file changed while it was being replaced")
+        path.unlink()
+    except FileNotFoundError:
+        pass  # someone else removed it first
+    except OSError:
+        raise ApiTokenError("the generated token file is blank and cannot be replaced") from None
+
+
+def _create_token(path: pathlib.Path, logger: logging.Logger) -> tuple[str, str]:
+    """Make a token and publish it at ``path`` (see ``_publish_exclusively``); on losing the race to
+    another worker, return that worker's token."""
     token = secrets.token_urlsafe(32)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,6 +437,38 @@ def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tup
             ENV_NAME,
         )
     return token, "new"
+
+
+def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
+    """Return ``(token, how)`` from the token file in ``data_dir``, making it when it is missing.
+
+    ``how`` is "file" or "new". The file appears complete or not at all and with mode 0600
+    (POSIX), so workers starting together agree on one token and a crash cannot leave a
+    half-written one. A blank file older than ``STALE_EMPTY_S`` (left by an older version that
+    crashed, or by hand) is replaced under a lock, so workers that find it together converge on
+    one token. Raises ``ApiTokenError`` when it cannot be read or written, which fails the server
+    closed.
+    """
+    path = pathlib.Path(data_dir) / TOKEN_FILE_NAME
+    existing = _read_generated_waiting(path)
+    if existing is not None:
+        return existing, "file"
+    if not path.exists():
+        return _create_token(path, logger)
+    lock = path.with_name(f".{TOKEN_FILE_NAME}.lock")
+    if not _acquire_replacement_lock(lock):
+        again = _read_generated_waiting(path)
+        if again is not None:
+            return again, "file"
+        raise ApiTokenError("the generated token file is being replaced by another process")
+    try:
+        again = _read_generated(path)  # another worker may have finished while we waited
+        if again is not None:
+            return again, "file"
+        _discard_stale(path)
+        return _create_token(path, logger)
+    finally:
+        _release_replacement_lock(lock)
 
 
 def configure_now(
