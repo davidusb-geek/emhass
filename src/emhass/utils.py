@@ -7738,6 +7738,8 @@ def _deferrable_group_problem(
         return f"{prefix} 'names' must contain at least 1 deferrable load reference"
 
     mutual_exclusion = group.get("mutual_exclusion", False)
+    if mutual_exclusion is None and not config_file:
+        mutual_exclusion = False  # null has always read as false at runtime
     if not isinstance(mutual_exclusion, bool):
         return f"{prefix} 'mutual_exclusion' must be a boolean"
     if batteries:
@@ -7747,7 +7749,10 @@ def _deferrable_group_problem(
             return f"{prefix} a battery cannot be in a mutual exclusion group"
         if not optim_conf.get("set_use_battery", False):
             return f"{prefix} a battery member needs set_use_battery"
-        num_batteries = validate_num_batteries(plant_conf)
+        try:
+            num_batteries = validate_num_batteries(plant_conf)
+        except BatteryConfigError:
+            return f"{prefix} a battery member needs a valid number_of_batteries"
         for j, (kind, idx) in enumerate(members):
             if kind == "battery" and idx >= num_batteries:
                 return (
@@ -7767,9 +7772,10 @@ def _deferrable_group_problem(
                 f"{prefix} a battery member needs number_of_inverters 1 "
                 "and inverter_is_hybrid false"
             )
+        # A load missing from is_electric_load is electric, as in the builder.
         is_electric = optim_conf.get("is_electric_load")
         if not isinstance(is_electric, list):
-            is_electric = [True] * num_def_loads
+            is_electric = []
         if any(idx < len(is_electric) and not bool(is_electric[idx]) for idx in deferrables):
             return f"{prefix} a group with a battery cannot hold a non-electric load"
     if config_file and mutual_exclusion:
@@ -7783,7 +7789,10 @@ def _deferrable_group_problem(
 
     max_power = group.get("max_power")
     if max_power is None:
-        if not mutual_exclusion:
+        # On the final parameters a group with neither field stays the no-op it
+        # always was there (a heat_topology actuator group without
+        # max_combined_power compiles to one).
+        if config_file and not mutual_exclusion:
             return f"{prefix} 'max_power' is required when 'mutual_exclusion' is false"
     elif isinstance(max_power, list):
         if config_file:
@@ -7793,11 +7802,14 @@ def _deferrable_group_problem(
             )
         if not max_power:
             return f"{prefix} 'max_power' must not be an empty list"
-        if not all(_is_real_number(v) and v >= 0 for v in max_power):
+        # Infinity is kept, in a list as for a number: it solves as "no limit".
+        if not all(_is_real_number(v, allow_inf=True) and v >= 0 for v in max_power):
             return f"{prefix} every 'max_power' entry must be a number of 0 or above"
     elif not _is_real_number(max_power, allow_inf=True):
         # Infinity is kept: it has always built and solved as "no limit".
-        return f"{prefix} 'max_power' must be a number"
+        if config_file:
+            return f"{prefix} 'max_power' must be a number"
+        return f"{prefix} 'max_power' must be a number or a list of numbers"
     elif max_power < 0 or (config_file and max_power == 0):
         return f"{prefix} 'max_power' must be a positive number"
 
@@ -7841,8 +7853,11 @@ def check_deferrable_load_groups(
     The configuration rules are stricter: ``max_power`` is a number above 0, and a
     load is in at most one mutual exclusion group. On the final parameters
     ``max_power`` may be 0 or a per-step list of numbers 0 or above (its length is
-    checked against the horizon by the optimizer), and mutual exclusion groups may
-    overlap, as runtime and heat_topology groups always could.
+    checked against the horizon by the optimizer), mutual exclusion groups may
+    overlap, as runtime and heat_topology groups always could, and a group with
+    neither ``max_power`` nor mutual exclusion (``mutual_exclusion`` false or null)
+    is accepted and adds nothing, as before. A missing or empty
+    ``deferrable_load_groups`` means no groups on both paths.
 
     The first fault is raised as ``error_cls``; the message names the group and
     member by position and never repeats a value from the request.
@@ -7857,7 +7872,7 @@ def check_deferrable_load_groups(
     :type error_cls: type[ValueError]
     """
     groups = optim_conf.get("deferrable_load_groups")
-    if groups is None or (isinstance(groups, list) and not groups):
+    if not groups:  # null, "", {} or [] have always built as no groups
         return
     if not isinstance(groups, list):
         raise error_cls("deferrable_load_groups must be a list of group objects")

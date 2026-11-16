@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import tempfile
+import tracemalloc
 import unittest
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -4472,6 +4473,43 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(groups), 2)
         self.assertTrue(set(groups[0]["names"]) & set(groups[1]["names"]))
 
+    async def test_deferrable_load_groups_heat_topology_group_without_limit(self):
+        """An actuator group with no max_combined_power and mutual_exclusion false
+        compiles to a group that adds nothing. It ran before #1366 and still does."""
+        topology = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "nominal_power": 3500, "supply_temperature": 55},
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 48}],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+            "actuator_groups": [
+                {"flows": [["hp", "dhw"], ["booster", "dhw"]], "mutual_exclusion": False}
+            ],
+        }
+        out = await self._treat_with_optim_conf({"heat_topology": topology})
+        groups = out["deferrable_load_groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertNotIn("max_power", groups[0])
+        self.assertFalse(groups[0]["mutual_exclusion"])
+
+    async def test_deferrable_load_groups_runtime_no_op_shapes_pass(self):
+        """Runtime group shapes that always built as "nothing to add" still pass the
+        final check: no groups as "" or {}, a group with neither field, and a null
+        mutual_exclusion read as false (#1366)."""
+        d01 = ["deferrable0", "deferrable1"]
+        for groups in (
+            "",
+            {},
+            [{"names": d01}],
+            [{"names": d01, "max_power": 4000, "mutual_exclusion": None}],
+        ):
+            with self.subTest(groups=groups):
+                _, _, optim_conf, _ = await self._treat_with_groups(
+                    {}, {"deferrable_load_groups": groups}
+                )
+                self.assertEqual(optim_conf["deferrable_load_groups"], groups)
+
     async def test_deferrable_load_groups_runtime_groups_checked(self):
         """Runtime groups get the final rules: overlapping mutual exclusion and a per-step
         list still pass, a bad member fails early with a message (#1366)."""
@@ -4518,6 +4556,8 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
         both = [
             [],
             None,
+            "",
+            {},
             [battery_group],
             [{"names": ["deferrable0", "battery0"], "max_power": 5000, "weights": {}}],
             [{"names": ["deferrable0"], "max_power": 5000, "note": "unknown keys are ignored"}],
@@ -4547,6 +4587,13 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
                 {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
                 {"names": ["deferrable1", "deferrable2"], "mutual_exclusion": True},
             ],
+            # Infinity is "no limit" in a list as for a number.
+            [{"names": ["deferrable0"], "max_power": [100, float("inf")]}],
+            # Groups that add nothing were never refused at runtime: a heat_topology
+            # actuator group without max_combined_power compiles to the second one.
+            [{"names": ["deferrable0", "deferrable1"]}],
+            [{"names": ["deferrable0", "deferrable1"], "mutual_exclusion": False}],
+            [{"names": ["deferrable0"], "max_power": 5000, "mutual_exclusion": None}],
         ]
         for groups in both:
             for config_file in (True, False):
@@ -4603,7 +4650,6 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
                 {},
             ),
             ("mutex not a bool", [{"names": [d0], "max_power": 1, "mutual_exclusion": 1}], {}, {}),
-            ("no max_power without mutex", [{"names": [d0]}], {}, {}),
             ("max_power bool", [{"names": [d0], "max_power": True}], {}, {}),
             ("max_power nan", [{"names": [d0], "max_power": float("nan")}], {}, {}),
             ("max_power -inf", [{"names": [d0], "max_power": float("-inf")}], {}, {}),
@@ -4611,7 +4657,13 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             ("max_power negative", [{"names": [d0], "max_power": -1}], {}, {}),
             ("list empty", [{"names": [d0], "max_power": []}], {}, {}),
             ("list negative", [{"names": [d0], "max_power": [100, -1]}], {}, {}),
-            ("list inf", [{"names": [d0], "max_power": [100, float("inf")]}], {}, {}),
+            ("list nan", [{"names": [d0], "max_power": [100, float("nan")]}], {}, {}),
+            (
+                "battery count unreadable",
+                [{"names": [d0, "battery0"], "max_power": 1}],
+                {},
+                {"number_of_batteries": "x2x"},
+            ),
             ("list bool", [{"names": [d0], "max_power": [100, True]}], {}, {}),
             ("weights not an object", [{"names": [d0], "max_power": 1, "weights": [1]}], {}, {}),
             (
@@ -4657,7 +4709,7 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
                         self.assertIsInstance(caught.exception, utils.RuntimeParamError)
                     message = str(caught.exception)
                     self.assertTrue(message.startswith("deferrable_load_groups"), message)
-                    for raw in ("pv0", "battery_0", "deferrable 0", "dischage", "5000"):
+                    for raw in ("pv0", "battery_0", "deferrable 0", "dischage", "5000", "x2x"):
                         self.assertNotIn(raw, message)
 
     def test_mutex_overlap_only_refused_in_config(self):
@@ -4669,6 +4721,20 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             self._check(groups, True)
         self.assertIn("deferrable_load_groups[1]:", str(caught.exception))
         self._check(groups, False)
+
+    def test_missing_is_electric_load_costs_no_work(self):
+        """With no is_electric_load list, every load reads as electric without a list
+        sized by number_of_deferrable_loads being built."""
+        groups = [{"names": ["deferrable0", "battery0"], "max_power": 5000}]
+        optim = {"number_of_deferrable_loads": 10**7, "is_electric_load": None}
+        tracemalloc.start()
+        try:
+            self._check(groups, True, optim=optim)
+            self._check(groups, False, optim=optim)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 1_000_000)
 
     def test_config_inverter_fault_left_to_final_check(self):
         """build_params never refuses on an inverter fault, so a battery group with an

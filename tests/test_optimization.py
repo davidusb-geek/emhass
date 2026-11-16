@@ -11411,6 +11411,23 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertLessEqual((res["P_deferrable0"] + res["P_deferrable1"]).max(), 2500 + 1e-3)
         self.assertEqual(getattr(opt, "param_group_max_power", {}), {})
+        # A direct Optimization caller skips treat_runtimeparams: the entries are
+        # checked here too, with the same error.
+        for label, bad in (
+            ("strings", ["2500"] * 48),
+            ("bools", [True] * 48),
+            ("nested", [[1.0, 2.0]] * 48),
+            ("nan", [float("nan")] * 48),
+            ("negative", [-1.0] * 48),
+        ):
+            with self.subTest(label):
+                self.optim_conf["deferrable_load_groups"][0]["max_power"] = bad
+                opt = self.create_optimization()
+                with self.assertRaises(utils.RuntimeParamError) as caught:
+                    opt.perform_dayahead_forecast_optim(
+                        self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+                    )
+                self.assertIn("every 'max_power' entry", str(caught.exception))
 
     def test_deferrable_load_group_per_step_list_parameter(self):
         """A per-step max_power list goes into a Parameter: each step's entry binds, and
@@ -11549,6 +11566,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 [{"names": d01, "max_power": 2500}],
             ),
             "per-step list": ({}, [{"names": d01, "max_power": [3000.0] * 24 + [1500.0] * 24}]),
+            "per-step list with no-limit steps": (
+                {},
+                [{"names": d01, "max_power": [float("inf")] * 24 + [1500.0] * 24}],
+            ),
+            "no-op group (heat_topology without max_combined_power)": (
+                {},
+                [{"names": d01, "mutual_exclusion": False}],
+            ),
+            "mutual_exclusion null": (
+                {},
+                [{"names": d01, "max_power": 2500, "mutual_exclusion": None}],
+            ),
+            "groups an empty object": ({}, {}),
         }
         df = self.prepare_forecast_data()
 

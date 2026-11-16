@@ -8349,16 +8349,14 @@ class Optimization:
                     f"deferrable_load_groups[{gi}]: 'max_power' has {len(max_power)} "
                     f"entries, but this run has {num_timesteps} timesteps"
                 )
-            try:
-                values = np.asarray(max_power, dtype=float)
-            except (TypeError, ValueError):
-                values = None
-            if values is None or not np.all(np.isfinite(values)) or np.any(values < 0):
+            # Checked here too for direct Optimization callers, who skip
+            # treat_runtimeparams. Infinity means no limit at that step.
+            if not all(utils._is_real_number(v, allow_inf=True) and v >= 0 for v in max_power):
                 raise utils.RuntimeParamError(
                     f"deferrable_load_groups[{gi}]: every 'max_power' entry must be a "
                     "number of 0 or above"
                 )
-            per_step[gi] = values
+            per_step[gi] = np.asarray(max_power, dtype=float)
         for gi in list(self.param_group_max_power):
             if gi not in per_step:
                 del self.param_group_max_power[gi]
