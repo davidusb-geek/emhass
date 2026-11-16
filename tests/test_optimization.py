@@ -5452,43 +5452,123 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total_heating_energy = opt_res["P_deferrable0"].sum()
         self.assertGreaterEqual(total_heating_energy, 0, "Heat pump energy must be non-negative")
 
-    def test_thermal_battery_max_thermal_power_caps_delivered_heat(self):
-        """`max_thermal_power` bounds cop * p on a standalone thermal_battery (#1324).
+    def _run_thermal_battery_cap(self, max_thermal_power, outdoor_temps=None):
+        """One standalone thermal_battery that cannot coast on stored heat, with a
+        single cheap window in which an uncapped heat pump banks at nominal power.
 
-        Before the fix the field was read only by the shared-tank builder, so a
-        thermal_battery load could deliver cop * nominal_power - here 3000 W of
-        electricity times a COP near 3.5, i.e. over 10 kW of heat from a source
-        rated at 1 kW.
+        50 m3 of concrete is 29.33 kWh/K, so the 1 K between start and minimum holds
+        29.33 kWh while the day needs 36 kWh (0.75 kWh/step, `specific_heating_demand`
+        60 kWh/m2/yr over 100 m2): the source has to run. `max_thermal_power`
+        (W thermal, or None) caps cop * electrical.
         """
-        max_thermal_power = 1000.0  # W of delivered heat
         thermal_config = {
             "start_temperature": 19.0,
             "supply_temperature": 35.0,
             "volume": 50.0,
-            "specific_heating_demand": 150.0,
+            "specific_heating_demand": 60.0,
             "area": 100.0,
             "min_temperatures": [18.0] * 48,
-            "max_temperatures": [22.0] * 48,
-            "max_thermal_power": max_thermal_power,
+            "max_temperatures": [65.0] * 48,
         }
+        if max_thermal_power is not None:
+            thermal_config["max_thermal_power"] = max_thermal_power
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = (
+            np.zeros(48) if outdoor_temps is None else outdoor_temps
+        )
+        self.optim_conf["def_load_config"] = [{"thermal_battery": thermal_config}]
+        opt = self.create_optimization()
+        # One cheap window: at 0.01 against a 0.30 baseline the uncapped unit
+        # concentrates its banking there, well above any sane thermal cap.
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res, thermal_config
+
+    def _delivered_heat_kwh(self, res, thermal_config, outdoor_temps):
+        """cop * electrical * dt per step, in kWh of delivered heat."""
+        cops = np.asarray(
+            utils.resolve_thermal_battery_cop(thermal_config, outdoor_temps, length=48)
+        )
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        return res["P_deferrable0"].reset_index(drop=True).to_numpy() * cops / 1000 * timestep_h
+
+    def test_thermal_battery_max_thermal_power_caps_delivered_heat(self):
+        """`max_thermal_power` bounds cop * p on a standalone thermal_battery (#1324).
+
+        Before the fix the field was read only by the shared-tank builder, so a
+        thermal_battery load was free to deliver cop * nominal_power - here 3000 W of
+        electricity times a COP near 3.5, i.e. over 10 kW of heat from a source rated
+        at 1 kW.
+        """
+        cap = 1000.0  # W of delivered heat
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        cap_kwh = cap / 1000 * timestep_h
         outdoor_temps = np.zeros(48)
-        opt_res = self.run_thermal_battery_optimization(
-            thermal_config, outdoor_temps=outdoor_temps
+
+        opt0, res0, cfg0 = self._run_thermal_battery_cap(max_thermal_power=None)
+        self.assertEqual(opt0.optim_status, "Optimal")
+        delivered0 = self._delivered_heat_kwh(res0, cfg0, outdoor_temps)
+        self.assertGreater(
+            delivered0.max(),
+            cap_kwh,
+            "the uncapped run must exceed the cap somewhere, else the test is vacuous",
         )
 
-        cops = utils.resolve_thermal_battery_cop(thermal_config, outdoor_temps, length=48)
-        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
-        delivered_kwh = opt_res["P_deferrable0"].values * cops / 1000 * timestep_h
-        cap_kwh = max_thermal_power / 1000 * timestep_h
-
+        opt1, res1, cfg1 = self._run_thermal_battery_cap(max_thermal_power=cap)
+        self.assertEqual(opt1.optim_status, "Optimal")
+        delivered1 = self._delivered_heat_kwh(res1, cfg1, outdoor_temps)
         self.assertTrue(
-            np.all(delivered_kwh <= cap_kwh + 1e-6),
-            f"delivered heat {delivered_kwh.max():.4f} kWh/step exceeds the "
+            np.all(delivered1 <= cap_kwh + 1e-6),
+            f"delivered heat {delivered1.max():.4f} kWh/step exceeds the "
             f"{cap_kwh:.4f} kWh/step ceiling",
         )
-        # A cap that never binds would let this test pass for the wrong reason:
-        # the demand is far above the ceiling, so the unit has to run at it.
-        self.assertGreater(delivered_kwh.max(), 0.9 * cap_kwh)
+        # A cap that never binds would let this test pass for the wrong reason: the
+        # cheap window is where the unit wants to bank, so it has to sit at the cap.
+        self.assertGreater(delivered1.max(), 0.9 * cap_kwh)
+
+    def test_thermal_battery_cap_on_level_follows_cop_on_cache_hit(self):
+        """A cache hit re-values the COP; the ON level has to follow it.
+
+        The semi-continuous ON level is built as min(nominal, cap/COP) and rides in
+        a cp.Parameter, so a second solve on the cached problem may not keep the
+        level derived from the first COP: a higher COP shrinks cap/COP, and the
+        stale level would leave the source unable to turn on where the cap binds.
+        """
+        cap = 1000.0
+        warm = np.full(48, 10.0)  # higher COP -> lower ON level
+        cold = np.zeros(48)  # lower COP -> higher ON level
+        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+
+        opt, _, thermal_config = self._run_thermal_battery_cap(cap, outdoor_temps=warm)
+        self.assertEqual(opt.optim_status, "Optimal")
+        cop_warm = utils.resolve_thermal_battery_cop(thermal_config, warm, length=48)
+        np.testing.assert_allclose(
+            opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_warm)
+        )
+
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = cold
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        cop_cold = utils.resolve_thermal_battery_cop(thermal_config, cold, length=48)
+        np.testing.assert_allclose(
+            opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_cold)
+        )
 
     def test_thermal_battery_max_thermal_power_must_be_positive(self):
         """A non-positive `max_thermal_power` is a configuration error."""

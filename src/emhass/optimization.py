@@ -2200,6 +2200,28 @@ class Optimization:
                 heatpump_cops = utils.resolve_thermal_battery_cop(hc, outdoor_temp, length=n)
                 params["heatpump_cops"].value = np.array(heatpump_cops)
 
+                # A cache hit re-values the COP but cannot re-add constraints, so the
+                # semi-continuous ON level (built as min(nominal, cap/COP)) has to
+                # follow: a higher COP shrinks cap/COP, and keeping the old level would
+                # leave the source unable to turn on where the cap binds.
+                cap_entry = getattr(self, "_thermal_cap_by_load", {}).get(k)
+                on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
+                if cap_entry is not None and on_level is not None:
+                    nominal = np.broadcast_to(
+                        np.asarray(
+                            self.optim_conf["nominal_power_of_deferrable_loads"][k],
+                            dtype=float,
+                        ),
+                        on_level.shape,
+                    )
+                    on_level.value = np.minimum(
+                        nominal,
+                        float(cap_entry[0])
+                        / np.maximum(
+                            np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9
+                        ),
+                    )
+
                 # Thermal losses and heating demand
                 base_loss = hc.get("thermal_loss", 0.045)
                 draw_off_profile = hc.get("draw_off_demand", None)
@@ -5294,15 +5316,14 @@ class Optimization:
                 heatpump_cops.value if hasattr(heatpump_cops, "value") else heatpump_cops,
                 dtype=float,
             )
-            on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
-            if on_level is not None:
-                # A semi-continuous member runs at p == ON_level * bin with the ON level
-                # defaulting to nominal; a binding cap would leave OFF as the only
-                # feasible state and the source would be silently abandoned. Lower the
-                # level to min(nominal, cap/COP) as the shared-tank builder does.
-                on_level.value = np.minimum(
-                    on_level.value, thermal_cap / np.maximum(cop_vals[: on_level.size], 1e-9)
-                )
+            # A semi-continuous member runs at p == ON_level * bin with the ON level
+            # defaulting to nominal; a binding cap would leave OFF as the only feasible
+            # state and the source would be silently abandoned. The level has to come
+            # down to min(nominal, cap/COP) - but this builder runs before the load
+            # loop creates that Parameter, so record the cap here and let the
+            # semi-continuous block apply it. update_thermal_params re-applies it when
+            # a cache hit re-values the COP.
+            self._thermal_cap_by_load[k] = (thermal_cap, cop_vals)
             self._warn_capped_level_below_min_power(
                 "Thermal battery load", k, cop_vals, thermal_cap, required_len
             )
@@ -7096,6 +7117,11 @@ class Optimization:
         # nominal). The shared-tank builder lowers it for thermal-capped sources,
         # and the DP COP refinement re-derives it when it re-values the COP.
         self._semi_cont_on_level: dict[int, cp.Parameter] = {}
+        # Thermal cap recorded by the standalone thermal_battery builder, keyed by
+        # load: (max_thermal_power in W, COP array). The ON-level Parameter does not
+        # exist yet when that builder runs, so it is applied here and re-applied by
+        # update_thermal_params when a cache hit re-values the COP.
+        self._thermal_cap_by_load: dict[int, tuple[float, np.ndarray]] = {}
 
         # Compute shared-tank membership once. Used by the per-load loop to
         # skip loads that belong to a shared tank (handled after the loop)
@@ -7585,6 +7611,17 @@ class Optimization:
                             value=np.broadcast_to(np.asarray(nominal, dtype=float), n).copy(),
                         )
                         self._semi_cont_on_level[k] = on_level
+                        # A standalone thermal_battery with max_thermal_power: lower the
+                        # ON level to min(nominal, cap/COP) per step. With the plain
+                        # nominal, a binding cap would make OFF the only feasible state
+                        # and the source would be silently dropped.
+                        cap_entry = self._thermal_cap_by_load.get(k)
+                        if cap_entry is not None:
+                            cap_w, cap_cops = cap_entry
+                            on_level.value = np.minimum(
+                                on_level.value,
+                                float(cap_w) / np.maximum(np.asarray(cap_cops)[:n], 1e-9),
+                            )
                         constraints.append(p_deferrable[k] == cp.multiply(on_level, p_def_bin1[k]))
                         constraints.append(p_def_bin1[k] == p_def_bin2[k])
 

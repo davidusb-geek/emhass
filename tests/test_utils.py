@@ -4984,6 +4984,25 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
             )
 
 
+    def test_supply_temperature_profile_rejects_strings_and_booleans(self):
+        """A string or a bool is a config error, not a temperature: converted with
+        plain `dtype=float`, "30" would be read as 30.0 and True as 1.0."""
+        outdoor = np.array([0.0, 5.0])
+        for bad in (["30", "31"], [True, False]):
+            with self.assertRaises(ValueError) as ctx:
+                utils.resolve_thermal_battery_cop({"supply_temperature": bad}, outdoor, length=2)
+            self.assertIn("supply_temperature", str(ctx.exception))
+
+    def test_supply_temperature_profile_truncates_a_longer_outdoor_forecast(self):
+        """`length` cuts the horizon on both sides: the profile is truncated to it,
+        so the outdoor forecast driving the Carnot lift has to be cut as well."""
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        hc = {"supply_temperature": [30.0, 31.0, 32.0, 33.0, 34.0]}
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=3)
+        expected = utils.calculate_cop_heatpump(np.array([30.0, 31.0, 32.0]), 0.4, outdoor[:3])
+        np.testing.assert_array_almost_equal(cops, expected)
+
+
 class TestCalculateSurfaceSolarGain(unittest.TestCase):
     """Tests for the pool/outdoor-thermal-mass solar absorption helper."""
 

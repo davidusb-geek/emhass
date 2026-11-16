@@ -555,14 +555,18 @@ def _supply_temperature_profile(values, length, outdoor_temperature_forecast) ->
     """
     if isinstance(values, pd.Series):
         values = values.to_numpy()
-    arr = np.asarray(values, dtype=float)
-    if arr.ndim != 1:
-        raise ValueError(
-            f"thermal_battery 'supply_temperature' must be a number or a flat list, "
-            f"got shape {arr.shape}"
-        )
-    if not np.all(np.isfinite(arr)):
-        raise ValueError("thermal_battery 'supply_temperature' contains a non-finite value")
+    if isinstance(values, np.ndarray):
+        if values.ndim != 1:
+            raise ValueError(
+                f"thermal_battery 'supply_temperature' must be a number or a flat list, "
+                f"got shape {values.shape}"
+            )
+        values = values.tolist()
+    # _numeric_series rejects strings ("30"), booleans (True reads as 1.0), non-finite
+    # values and nested entries, so a typo cannot silently price a timestep.
+    arr = np.asarray(
+        _numeric_series(values, "thermal_battery 'supply_temperature'"), dtype=float
+    )
     target = length if length is not None else len(np.asarray(outdoor_temperature_forecast))
     if arr.size == 1:
         return np.full(target, float(arr[0]))
@@ -623,6 +627,11 @@ def resolve_thermal_battery_cop(
         raise ValueError(
             "resolve_thermal_battery_cop in heat-pump mode requires outdoor_temperature_forecast"
         )
+    # Cut the driving forecast to the requested horizon: a per-step supply profile is
+    # truncated to `length`, and the Carnot lift subtracts the two, so a longer
+    # forecast would broadcast (length,) against (len,) and raise.
+    if length is not None and np.ndim(outdoor_temperature_forecast) > 0:
+        outdoor_temperature_forecast = np.asarray(outdoor_temperature_forecast)[:length]
     sense = normalize_heat_cool_mode(
         hc.get("sense") or "heat", field_name="sense", context="thermal_battery"
     )
