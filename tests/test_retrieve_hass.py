@@ -2018,6 +2018,43 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self._legacy_ws_frame(stats, var_list),
         )
 
+    def test_convert_statistics_without_forward_fill_short_time_step(self):
+        """
+        C3 (#1360): with a time step under 5 minutes, each statistics row still
+        covers its own 5-minute period, so only the real holes stay NaN.
+        """
+        stats, var_list, _ = self._ws_gap_stats()
+        holes = {
+            self._WS_A: [("02:00", "04:00")],
+            self._WS_B: [("02:00", "04:00"), ("10:00", "11:00")],
+        }
+        kwargs = {}
+        if "forward_fill" in inspect.signature(self.rh._convert_statistics_to_dataframe).parameters:
+            kwargs["forward_fill"] = False
+        freq = self.rh.freq
+        try:
+            for minutes in (1, 2, 3, 4):
+                with self.subTest(minutes=minutes):
+                    self.rh.freq = pd.Timedelta(minutes=minutes)
+                    gaps = self.rh._convert_statistics_to_dataframe(stats, var_list, **kwargs)
+                    filled = self.rh._convert_statistics_to_dataframe(stats, var_list)
+                    utc = gaps.index.tz_convert("UTC")
+                    for entity_id, windows in holes.items():
+                        in_hole = np.zeros(len(utc), dtype=bool)
+                        for start, end in windows:
+                            in_hole |= (utc >= pd.Timestamp(f"2024-01-01 {start}", tz="UTC")) & (
+                                utc < pd.Timestamp(f"2024-01-01 {end}", tz="UTC")
+                            )
+                        np.testing.assert_array_equal(
+                            gaps[entity_id].isna().to_numpy(), in_hole, err_msg=entity_id
+                        )
+                        np.testing.assert_array_equal(
+                            gaps[entity_id].to_numpy()[~in_hole],
+                            filled[entity_id].to_numpy()[~in_hole],
+                        )
+        finally:
+            self.rh.freq = freq
+
     async def test_get_data_websocket_keep_partial_days_keeps_gaps(self):
         """G1 (#1360): battery_id's keep_partial_days=True reaches the websocket path."""
         stats, var_list, expected_nan = self._ws_gap_stats()
