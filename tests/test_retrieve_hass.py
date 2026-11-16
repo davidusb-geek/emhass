@@ -2596,34 +2596,72 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         await self.rh.close()
 
     async def test_session_reuse_across_post_data_calls(self):
-        """Verify successful POSTs reuse the actual HTTP session."""
+        """Verify session reuse and entity-specific HTTP publications."""
         self.rh.get_data_from_file = False
+        self.rh.hass_url = "https://example.invalid/"
+        self.rh.long_lived_token = "stage3c-test-token"
+        self.rh.ssl_verify = True
+        self.rh.publish_horizon_attributes = True
 
         data_df = pd.Series(
-            [100.0, 200.0], index=pd.date_range("2024-01-01", periods=2, freq="30min")
+            [100.0, 200.0],
+            index=pd.date_range("2024-01-01", periods=2, freq="30min"),
         )
 
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.status = 200
+        mock_response = MagicMock(ok=True, status=200)
         mock_response.read = AsyncMock(return_value=b"")
 
         mock_context = MagicMock()
         mock_context.__aenter__ = AsyncMock(return_value=mock_response)
         mock_context.__aexit__ = AsyncMock(return_value=False)
 
+        expected_payloads = []
+
         try:
-            # Only intercept HTTP transport; use the real session lookup/cache.
+            # Use the real session lookup; intercept only HTTP transport.
             with patch.object(
                 aiohttp.ClientSession, "post", return_value=mock_context
             ) as mock_post:
                 first_session = None
 
                 for number in range(1, 4):
-                    response, _ = await self.rh.post_data(
-                        data_df, 0, f"sensor.test{number}", "power", "W", f"Test {number}", "power"
+                    entity_id = f"sensor.test{number}"
+
+                    response, returned_data = await self.rh.post_data(
+                        data_df * number,
+                        0,
+                        entity_id,
+                        "power",
+                        "W",
+                        f"Test {number}",
+                        "power",
                     )
+
                     self.assertTrue(response.ok)
+                    self.assertEqual(response.status_code, 200)
+
+                    expected_payload = {
+                        "state": f"{100 * number:.2f}",
+                        "attributes": {
+                            "device_class": "power",
+                            "unit_of_measurement": "W",
+                            "friendly_name": f"Test {number}",
+                            "forecasts": [
+                                {
+                                    "date": "2024-01-01T00:00:00",
+                                    f"test{number}": f"{100 * number:.1f}",
+                                },
+                                {
+                                    "date": "2024-01-01T00:30:00",
+                                    f"test{number}": f"{200 * number:.1f}",
+                                },
+                            ],
+                            "state_class": "measurement",
+                        },
+                    }
+
+                    expected_payloads.append(expected_payload)
+                    self.assertEqual(returned_data, expected_payload)
 
                     session = self.rh._session
                     self.assertIsInstance(session, aiohttp.ClientSession)
@@ -2634,10 +2672,47 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                     else:
                         self.assertIs(session, first_session)
 
+                # Verify all requests were made, in order.
                 self.assertEqual(mock_post.call_count, 3)
+
+                for number, request in enumerate(mock_post.call_args_list, start=1):
+                    # Three distinct Home Assistant entity URLs.
+                    self.assertEqual(
+                        request.args,
+                        (f"https://example.invalid/api/states/sensor.test{number}",),
+                    )
+
+                    self.assertEqual(
+                        set(request.kwargs),
+                        {"headers", "data", "ssl"},
+                    )
+
+                    # Exact HTTP authentication and content type.
+                    self.assertEqual(
+                        request.kwargs["headers"],
+                        {
+                            "Authorization": "Bearer stage3c-test-token",
+                            "content-type": "application/json",
+                        },
+                    )
+
+                    self.assertIs(request.kwargs["ssl"], True)
+
+                    # Decode the actual HTTP payload and verify its
+                    # entity-specific state, metadata and forecast.
+                    self.assertEqual(
+                        orjson.loads(request.kwargs["data"]),
+                        expected_payloads[number - 1],
+                    )
+
                 self.assertEqual(mock_response.read.await_count, 3)
+                self.assertEqual(mock_context.__aenter__.await_count, 3)
+                self.assertEqual(mock_context.__aexit__.await_count, 3)
+
         finally:
             await self.rh.close()
+
+        self.assertIsNone(self.rh._session)
 
     async def test_post_scalar_sensor_numpy_values(self):
         """Test that post_scalar_sensor serialises numpy scalars (#1131)."""
