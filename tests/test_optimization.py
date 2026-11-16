@@ -3180,6 +3180,372 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # cover, i.e. roughly 1500 W per timestep.
         self.assertGreater(res_bf["P_grid_pos"].max(), 1000.0)
 
+    def test_battery_first_priority_stores_pv_ahead_of_a_load_above_battery_output(self):
+        """Issue #1253: a load above what PV and the battery can deliver needs some
+        grid import whatever the plan does. The battery-first penalty used to price
+        that import too whenever the battery held any charge, so the cheapest plan
+        kept the battery near empty ahead of every such load and exported the PV
+        instead of storing it. Only import the battery could have replaced is
+        penalized now: the PV is stored, the spike imports just its unavoidable
+        part, and the stored energy covers the load after it.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        horizon = 8
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        pv_w = np.zeros(n)
+        pv_w[:3] = 3000.0
+        load_w = np.full(n, 500.0)
+        load_w[:3] = 300.0
+        load_w[3] = 5000.0  # 4000 W above the 1000 W the battery can discharge
+        df["p_pv_forecast"] = pv_w
+        df["p_load_forecast"] = load_w
+        # Flat tariff, nothing paid for export: storing the PV is the only way to
+        # use it, and is strictly better than importing after the spike.
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.0
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_battery_first_priority": True,
+                "set_nocharge_from_grid": True,
+            }
+        )
+        soc_min = 0.1
+        self.plant_conf.update(
+            {
+                # Room for all the PV the plan can use (6000 W*steps of charge).
+                "battery_nominal_energy_capacity": 6000.0 * step_h / 0.8,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 2000,
+                "battery_minimum_state_of_charge": soc_min,
+                "battery_maximum_state_of_charge": 0.9,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "maximum_power_from_grid": 20000,
+            }
+        )
+        hybrid = {
+            "inverter_is_hybrid": True,
+            "compute_curtailment": True,
+            "inverter_ac_output_max": 4000,
+            "inverter_ac_input_max": 4000,
+            "inverter_efficiency_dc_ac": 1.0,
+            "inverter_efficiency_ac_dc": 1.0,
+        }
+        for label, plant in (
+            ("ac-coupled", {"inverter_is_hybrid": False, "compute_curtailment": False}),
+            ("hybrid", hybrid),
+        ):
+            with self.subTest(label):
+                self.plant_conf.update(plant)
+                self.opt = self.create_optimization()
+                res = self.opt.perform_naive_mpc_optim(
+                    df, pv, load, horizon, soc_init=soc_min, soc_final=soc_min
+                )
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                # Before the fix the battery was held near empty for the spike, so
+                # the load after it came from the grid.
+                self.assertLess(
+                    res["P_grid_pos"].iloc[4:horizon].max(),
+                    1.0,
+                    msg="the load after the spike was imported instead of stored PV",
+                )
+                # The spike imports only what the battery cannot deliver.
+                self.assertAlmostEqual(res["P_grid_pos"].iloc[3], 4000.0, delta=1.0)
+                # The PV the later load needs is stored: the battery fills from 10%
+                # to 50%.
+                self.assertGreater(res["SOC_opt"].iloc[:horizon].max(), 0.45)
+
+    def test_battery_first_priority_still_penalizes_import_the_battery_could_cover(self):
+        """Issue #1253: only the import the battery cannot replace is exempt. Here
+        the battery holds enough for one step at full power and the large load
+        comes in the cheapest step. Exempting the whole load would let the plan
+        import all of it there and keep the battery for a dearer step; the part
+        the battery can deliver must still be penalized, so it discharges into the
+        large load and imports only the shortfall.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        horizon = 6
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        df["p_pv_forecast"] = 0.0
+        load_w = np.full(n, 1000.0)
+        load_w[0] = 5000.0  # 4000 W above the 1000 W the battery can discharge
+        df["p_load_forecast"] = load_w
+        cost = np.full(n, 0.30)
+        cost[0] = 0.10
+        df["unit_load_cost"] = cost
+        df["unit_prod_price"] = 0.0
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_battery_first_priority": True,
+                "set_nocharge_from_grid": True,
+                "set_nodischarge_to_grid": True,
+                "battery_soc_final_reward_factor": 0,
+            }
+        )
+        soc_min = 0.1
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                # 0.1 of the capacity above the minimum is one step at 1000 W.
+                "battery_nominal_energy_capacity": 10000.0 * step_h,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 1000,
+                "battery_minimum_state_of_charge": soc_min,
+                "battery_maximum_state_of_charge": 0.9,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "maximum_power_from_grid": 20000,
+            }
+        )
+        self.opt = self.create_optimization()
+        res = self.opt.perform_naive_mpc_optim(
+            df, pv, load, horizon, soc_init=soc_min + 0.1, soc_final=soc_min
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # The battery delivers all but the 1% of its capacity the battery-first gate
+        # leaves as tolerance (100 W over one step here); only the rest is imported.
+        tolerance_w = 0.01 * self.plant_conf["battery_nominal_energy_capacity"] / step_h
+        self.assertAlmostEqual(res["P_grid_pos"].iloc[0], 4000.0 + tolerance_w, delta=1.0)
+
+    def test_battery_first_import_floor_is_inert_without_the_penalty(self):
+        """Issue #1253: the import floor only feeds the battery-first penalty. With
+        set_battery_first_priority off it is not part of the problem, and with no
+        battery modelled it stays zero, so neither case changes.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 3000.0
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+            }
+        )
+        self.plant_conf.update({"battery_discharge_power_max": 1000})
+        for label, use_battery, first in (
+            ("feature off", True, False),
+            ("no battery", False, True),
+        ):
+            with self.subTest(label):
+                self.optim_conf["set_use_battery"] = use_battery
+                self.optim_conf["set_battery_first_priority"] = first
+                self.opt = self.create_optimization()
+                self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                in_problem = any(
+                    param is self.opt.param_battery_first_import_floor
+                    for param in self.opt.prob.parameters()
+                )
+                self.assertFalse(in_problem)
+                if not use_battery:
+                    self.assertEqual(self.opt.param_battery_first_import_floor.value.max(), 0.0)
+
+    def test_battery_first_import_floor_bounds_what_the_plant_can_deliver(self):
+        """Issue #1253: the import exempt from the battery-first penalty is the load
+        above the most PV and battery discharge can deliver. The battery reaches
+        its discharge efficiency times its discharge limit, scaled by its
+        availability; a hybrid inverter converts PV plus that at its own efficiency
+        and caps the result at its AC output. A larger value would let the plan
+        import while charged for free, so the floor is pinned exactly.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        horizon = 6
+        pv_w = np.zeros(n)
+        pv_w[:horizon] = [0.0, 300.0, 1000.0, 0.0, 0.0, 200.0]
+        load_w = np.zeros(n)
+        load_w[:horizon] = [500.0, 1500.0, 2500.0, 3000.0, 400.0, 900.0]
+        df["p_pv_forecast"] = pv_w
+        df["p_load_forecast"] = load_w
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_battery_first_priority": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 1000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 0.9,
+                "battery_discharge_efficiency": 0.9,
+                "battery_charge_efficiency": 0.9,
+                "maximum_power_from_grid": 20000,
+            }
+        )
+        # The battery is disconnected in step 4.
+        availability = [1.0, 1.0, 1.0, 1.0, 0.0, 1.0]
+        battery = 0.9 * 1000.0 * np.asarray(availability)
+        pv_h, load_h = pv_w[:horizon], load_w[:horizon]
+        hybrid = {
+            "inverter_is_hybrid": True,
+            "compute_curtailment": True,
+            "inverter_ac_output_max": 1200,
+            "inverter_ac_input_max": 1200,
+            "inverter_efficiency_dc_ac": 0.95,
+            "inverter_efficiency_ac_dc": 0.95,
+        }
+        cases = (
+            (
+                "ac-coupled",
+                {"inverter_is_hybrid": False, "compute_curtailment": False},
+                pv_h + battery,
+            ),
+            ("hybrid", hybrid, np.minimum(1200.0, 0.95 * (pv_h + battery))),
+        )
+        for label, plant, deliverable in cases:
+            with self.subTest(label):
+                self.plant_conf.update(plant)
+                self.opt = self.create_optimization()
+                self.opt.perform_naive_mpc_optim(
+                    df,
+                    pv,
+                    load,
+                    horizon,
+                    soc_init=0.5,
+                    soc_final=0.5,
+                    battery_availability=availability,
+                )
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                np.testing.assert_allclose(
+                    self.opt.param_battery_first_import_floor.value,
+                    np.maximum(load_h - deliverable, 0.0),
+                )
+                # A second solve on the same object reuses the built problem: the
+                # floor must follow this call's forecast, not the first one's.
+                load2 = load * 1.5
+                self.opt.perform_naive_mpc_optim(
+                    df,
+                    pv,
+                    load2,
+                    horizon,
+                    soc_init=0.5,
+                    soc_final=0.5,
+                    battery_availability=availability,
+                )
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                np.testing.assert_allclose(
+                    self.opt.param_battery_first_import_floor.value,
+                    np.maximum(1.5 * load_h - deliverable, 0.0),
+                )
+
+    def test_battery_first_import_floor_is_the_minimum_import_the_model_allows(self):
+        """Issue #1253: the import exempt from the battery-first penalty must never
+        exceed the least import a step needs under the model's own constraints, or
+        the plan could import while charged for free. With a battery large and full
+        enough that its state never binds, the floor must equal that minimum
+        exactly: below it, unavoidable import is still penalized. The minimum is
+        taken from the built problem, one step at a time.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        horizon = 6
+        pv_w = np.zeros(n)
+        pv_w[:horizon] = [0.0, 400.0, 1500.0, 0.0, 2500.0, 100.0]
+        load_w = np.zeros(n)
+        load_w[:horizon] = [3000.0, 2500.0, 4200.0, 600.0, 3900.0, 1900.0]
+        df["p_pv_forecast"] = pv_w
+        df["p_load_forecast"] = load_w
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_battery_first_priority": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 100000,
+                "battery_discharge_power_max": 1000,
+                "battery_charge_power_max": 1000,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 0.9,
+                "battery_discharge_efficiency": 0.9,
+                "battery_charge_efficiency": 0.9,
+                "maximum_power_from_grid": 20000,
+            }
+        )
+        hybrid = {
+            "inverter_is_hybrid": True,
+            "compute_curtailment": True,
+            "inverter_ac_input_max": 3000,
+            "inverter_efficiency_dc_ac": 0.95,
+            "inverter_efficiency_ac_dc": 0.95,
+        }
+        cases = (
+            (
+                "ac-coupled, two batteries",
+                {
+                    "inverter_is_hybrid": False,
+                    "compute_curtailment": False,
+                    "number_of_batteries": 2,
+                },
+            ),
+            ("hybrid", {**hybrid, "inverter_ac_output_max": 3000}),
+            (
+                "hybrid, dc_ac power curve",
+                {
+                    **hybrid,
+                    "inverter_ac_output_max": 3000,
+                    "inverter_power_curve_dc_ac": [[1000, 0.9], [3000, 0.96]],
+                },
+            ),
+            (
+                "hybrid, cap from pv_inverter_model",
+                {**hybrid, "inverter_ac_output_max": None, "pv_inverter_model": [2000]},
+            ),
+        )
+        for label, plant in cases:
+            with self.subTest(label):
+                # Keys only one case sets are cleared first, so a failed case
+                # cannot leak them into the next one.
+                self.plant_conf.pop("number_of_batteries", None)
+                self.plant_conf.pop("inverter_power_curve_dc_ac", None)
+                # None drops the key: the pv_inverter_model fallback only runs when
+                # inverter_ac_output_max is absent.
+                for key, value in plant.items():
+                    if value is None:
+                        self.plant_conf.pop(key, None)
+                    else:
+                        self.plant_conf[key] = value
+                self.opt = self.create_optimization()
+                self.opt.perform_naive_mpc_optim(df, pv, load, horizon, soc_init=0.5, soc_final=0.5)
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                floor = self.opt.param_battery_first_import_floor.value
+                self.assertGreater(floor.max(), 100.0, msg="no step needs import")
+                p_grid_pos = self.opt.vars["p_grid_pos"]
+                for t in range(horizon):
+                    least = cp.Problem(cp.Minimize(p_grid_pos[t]), self.opt.prob.constraints)
+                    least.solve(solver=cp.HIGHS)
+                    self.assertAlmostEqual(floor[t], least.value, delta=0.5, msg=f"step {t}")
+
     def test_dayahead_forecast_optim_honours_soc_final(self):
         """Issue #1002: ``perform_dayahead_forecast_optim`` now accepts
         ``soc_final`` and passes it through to ``perform_optimization``.
