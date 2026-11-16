@@ -20,6 +20,7 @@ SKIP = {
     "/static/{filename}",
     "/login",
     "/logout",
+    "/api-token",
 }
 
 # path -> set of documented methods (used by both the guard and the path assembly).
@@ -376,6 +377,17 @@ def build_spec(routes: set | None = None) -> dict:
     live = {p for p, _ in routes}
     paths = {p: v for p, v in paths.items() if p in live}
 
+    # Access control (emhass.api_auth): every operation but the health check needs the token.
+    for path, item in paths.items():
+        for op in item.values():
+            if path == "/healthz":
+                op["security"] = []
+                continue
+            op.setdefault("responses", {}).setdefault(
+                "401", {"$ref": "#/components/responses/Unauthorized"}
+            )
+            op["responses"].setdefault("503", {"$ref": "#/components/responses/AuthUnavailable"})
+
     return {
         "openapi": "3.1.0",
         "info": {
@@ -385,11 +397,41 @@ def build_spec(routes: set | None = None) -> dict:
                 "Machine-readable contract for the EMHASS JSON API. `default` values are "
                 "sourced from param_definitions.json (the maintainer-declared source of "
                 "truth); runtime currently loads config_defaults.json, which is kept aligned "
-                "but not enforced in code."
+                "but not enforced in code.\n\n"
+                "Authentication: every operation except `/healthz` needs `Authorization: Bearer "
+                "<token>`, where the token is `EMHASS_API_TOKEN` or `emhass_api_token` (options.json, "
+                "secrets file), or the token EMHASS generated into `<data folder>/emhass_api_token` "
+                "when none is configured. With no usable token the server answers 503. Home Assistant "
+                "add-on users reach the web UI through ingress, which needs no token. "
+                "See docs/api_authentication.md."
             ),
         },
+        "security": [{"bearerAuth": []}],
         "paths": paths,
-        "components": {"schemas": components},
+        "components": {
+            "schemas": components,
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "The EMHASS API token, sent as `Authorization: Bearer <token>`.",
+                }
+            },
+            "responses": {
+                "Unauthorized": {
+                    "description": "No valid token. The `WWW-Authenticate: Bearer` header says how to authenticate.",
+                    "headers": {"WWW-Authenticate": {"schema": {"type": "string"}}},
+                    "content": {"text/plain": {"schema": {"type": "string"}}},
+                },
+                "AuthUnavailable": {
+                    "description": (
+                        "API access control is not usable: no token is configured and none can be "
+                        "generated, or a token source cannot be read. Nothing was run."
+                    ),
+                    "content": {"text/plain": {"schema": {"type": "string"}}},
+                },
+            },
+        },
     }
 
 

@@ -1,27 +1,40 @@
-"""Optional API authentication for the EMHASS web server.
+"""API access control for the EMHASS web server (GHSA-c39q-j4r5-9xq5).
 
-Opt-in: with no ``emhass_api_token`` configured, almost nothing changes. With
-a token configured, every request needs one of:
+Closed by default. Every request except ``/healthz``, ``/login`` and ``/logout``
+needs one of:
 
 - an ``Authorization: Bearer <token>`` header (rest_command, curl, scripts);
 - the web UI session cookie set by ``/login``;
-- a request the add-on ingress proxy sent (not decided yet, see
-  ``is_trusted_ingress_request``).
+- a request that reached the Home Assistant **ingress port** from the Supervisor
+  (see ``is_trusted_ingress_request``). Home Assistant has already signed that
+  user in.
 
-``/healthz``, ``/login`` and ``/logout`` stay open. WebSocket handshakes need
-the bearer header.
+WebSocket handshakes need the bearer header.
 
 The token is read once, by ``configure_now()`` when the web server module is
 imported (in the Gunicorn master, with preload, so every worker shares one
-snapshot), from the same places
-as the other secrets: the ``EMHASS_API_TOKEN`` environment variable, then
-``options.json`` (add-on), then ``secrets_emhass.yaml``, a later source
-replacing an earlier one as in ``build_secrets``. A source that leaves it empty
-does not replace an earlier one. The request hook looks it up on every request.
+snapshot), from the same places as the other secrets: the ``EMHASS_API_TOKEN``
+environment variable, then ``options.json`` (add-on), then
+``secrets_emhass.yaml``, a later source replacing an earlier one as in
+``build_secrets``. A source that leaves it empty does not replace an earlier one.
+
+When none of them sets a token, EMHASS makes one (``secrets.token_urlsafe(32)``)
+the first time it starts and keeps it in the data folder in the file
+``emhass_api_token`` (mode 0600, never a link). Later starts reuse that file, so
+the token survives restarts. Only the path is logged, never the token. In the
+add-on, the web UI shows it to a signed-in Home Assistant user (``/api-token``).
+``EMHASS_API_TOKEN_AUTOGENERATE=false`` turns the generation off: with no token
+configured, requests then get 503.
+
+``EMHASS_API_AUTH_DISABLED=true`` turns access control off. It is an explicit
+operator choice, logged at start-up, and it restores the unauthenticated access
+the advisory describes.
+
 If a token source is there but cannot be used (see ``read_api_token``), or the
-token is shorter than ``MIN_LENGTH``, every request except ``/healthz``
-and ``/logout`` gets a 503 rather than running unauthenticated or with a
-guessable token. Only a missing file counts as "not configured".
+token is shorter than ``MIN_LENGTH``, every request except ``/healthz`` and
+``/logout`` gets a 503 rather than running unauthenticated or with a guessable
+token. Only a missing file counts as "not configured". The request hook looks
+the token up on every request.
 
 A request authenticated only by the session cookie must send JSON when it
 changes something (any method but GET, HEAD and OPTIONS). A page on another
@@ -70,6 +83,18 @@ SESSION_MAX_AGE_S = 30 * 24 * 3600
 # bearer check is not rate limited, and a session cookie is an HMAC keyed with
 # the token, so a short token could be guessed online or offline from a cookie.
 MIN_LENGTH = 16
+# Explicit operator opt-out (read on every request, so a test or an operator can flip it).
+DISABLE_ENV = "EMHASS_API_AUTH_DISABLED"
+AUTOGENERATE_ENV = "EMHASS_API_TOKEN_AUTOGENERATE"
+TOKEN_FILE_NAME = "emhass_api_token"
+# The Home Assistant add-on ingress listener: a port of its own, so ingress is told apart by the
+# socket that accepted the connection, which a client cannot choose, and never by a header.
+INGRESS_PORT_ENV = "EMHASS_INGRESS_PORT"
+INGRESS_PEERS_ENV = "EMHASS_INGRESS_PEERS"
+DEFAULT_INGRESS_PORT = 8099
+# The Supervisor's address on the hassio network (DOCKER_IPV4_NETWORK_MASK[2]); the developer
+# documentation says an add-on must accept ingress connections from this address only.
+DEFAULT_INGRESS_PEERS = "172.30.32.2"
 # Failed attempts are logged as a count, at most once per this many seconds.
 FAILURE_LOG_INTERVAL_S = 60.0
 # Slows down guessing through the login form, one guess at a time. It does not
@@ -99,7 +124,7 @@ class ApiTokenError(Exception):
 
 # loaded: configure() ran. token: the token, or None when none is set.
 # failed: configure() could not read a token source, so requests are refused.
-_state: dict = {"loaded": False, "token": None, "failed": False}
+_state: dict = {"loaded": False, "token": None, "failed": False, "source": None}
 
 
 # Only ASCII white space around a token. str.strip() would also remove
@@ -232,28 +257,95 @@ async def load_api_token(
     return read_api_token(secrets_path, options_path, environ)
 
 
+def auth_disabled() -> bool:
+    """True when the operator switched access control off explicitly."""
+    return os.environ.get(DISABLE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _autogenerate_enabled() -> bool:
+    return os.environ.get(AUTOGENERATE_ENV, "").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _read_generated(path: pathlib.Path) -> str | None:
+    """The token kept in the data folder, or None when there is no such file."""
+    if path.is_symlink():
+        raise ApiTokenError("the generated token file is a link")
+    token = _normalise(_read_source(path))
+    if token is not None and len(token) < MIN_LENGTH:
+        raise ApiTokenError("the generated token file holds a short token")
+    return token
+
+
+def provision_token(data_dir: pathlib.Path | str, logger: logging.Logger) -> tuple[str, str]:
+    """Return ``(token, how)`` from the token file in ``data_dir``, making it when it is missing.
+
+    ``how`` is "file" or "new". The file is created exclusively with mode 0600, so two workers
+    starting together agree on one token. Raises ``ApiTokenError`` when it cannot be read or
+    written, which fails the server closed.
+    """
+    path = pathlib.Path(data_dir) / TOKEN_FILE_NAME
+    existing = _read_generated(path)
+    if existing is not None:
+        return existing, "file"
+    token = secrets.token_urlsafe(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        again = _read_generated(path)  # another worker made it first
+        if again is None:
+            raise ApiTokenError("the generated token file is empty") from None
+        return again, "file"
+    except OSError as e:
+        raise ApiTokenError(
+            f"no token is configured and one cannot be saved in the data folder ({type(e).__name__})"
+        ) from None
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token + "\n")
+    logger.warning(
+        "No %s was configured, so EMHASS generated one and saved it to %s (readable only by its "
+        "owner). Send it as 'Authorization: Bearer <token>'. In the Home Assistant add-on, open "
+        "the web UI and choose API token.",
+        SETTING_NAME,
+        path,
+    )
+    return token, "new"
+
+
 def configure_now(
     secrets_path: pathlib.Path | str | None,
     options_path: pathlib.Path | str | None,
     logger: logging.Logger,
+    data_dir: pathlib.Path | str | None = None,
 ) -> None:
     """Load the token for the request hook. Never logs the token itself.
 
-    Runs before the logging level is set, so only a failure is logged here.
-    ``log_status()`` reports the rest once logging is set up.
+    Runs before the logging level is set, so only a failure and the one-time
+    notice about a generated token are logged here. ``log_status()`` reports the rest once
+    logging is set up. With ``data_dir`` and no configured token, one is generated and kept there.
     """
     try:
         token = read_api_token(secrets_path, options_path)
+        source = "configured"
+        if token is not None and len(token) < MIN_LENGTH:
+            _fail(
+                logger,
+                f"{SETTING_NAME} is shorter than {MIN_LENGTH} characters; use a long random value",
+            )
+            return
+        if (
+            token is None
+            and data_dir is not None
+            and not auth_disabled()
+            and _autogenerate_enabled()
+        ):
+            token, source = provision_token(data_dir, logger)
+            source = "generated-new" if source == "new" else "generated"
     except Exception as e:
         _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
         return
-    if token is not None and len(token) < MIN_LENGTH:
-        _fail(
-            logger,
-            f"{SETTING_NAME} is shorter than {MIN_LENGTH} characters; use a long random value",
-        )
-        return
-    _state.update(loaded=True, token=token, failed=False)
+    _state.update(loaded=True, token=token, failed=False, source=source if token else None)
 
 
 def recheck_now(
@@ -269,7 +361,7 @@ def recheck_now(
     cannot be read (a file that was missing at import and written while EMHASS
     started up, for example).
     """
-    if _state["failed"] or _state["token"] is not None:
+    if _state["failed"] or _state["token"] is not None or auth_disabled():
         return
     try:
         token = read_api_token(secrets_path, options_path)
@@ -288,9 +380,10 @@ async def configure(
     secrets_path: pathlib.Path | str | None,
     options_path: pathlib.Path | str | None,
     logger: logging.Logger,
+    data_dir: pathlib.Path | str | None = None,
 ) -> None:
     """``configure_now`` for async callers."""
-    configure_now(secrets_path, options_path, logger)
+    configure_now(secrets_path, options_path, logger, data_dir)
 
 
 def _describe(error: Exception) -> str:
@@ -424,7 +517,7 @@ def install_log_masking() -> None:
 
 def reset() -> None:
     """Forget the loaded token. For tests."""
-    _state.update(loaded=False, token=None, failed=False)
+    _state.update(loaded=False, token=None, failed=False, source=None)
     _failures.update(count=0, since=None)
 
 
@@ -474,29 +567,35 @@ def bind_host(server_ip: str | None) -> str:
 
 
 def log_status(logger: logging.Logger, host: str) -> None:
-    """Start-up report: auth on (and a weak token), or a warning when it is off
-    and the server is reachable from the network. Never logs the token."""
+    """Start-up report of the access control state. Never logs the token."""
     if _state["failed"]:
         return  # configure() already logged the error
-    if current_token() is not None:
-        logger.info("API authentication is enabled")
-        return
-    if is_loopback(host):
-        logger.info(
-            "API authentication is off (no %s set; listening on loopback only)", SETTING_NAME
+    if auth_disabled():
+        logger.warning(
+            "API access control is OFF (%s is set). Any device that can reach this port can "
+            "change the configuration and run actions.",
+            DISABLE_ENV,
         )
         return
-    # Fixed text rather than the address, which comes from the secrets; the
-    # launch line logs the address.
-    where = "all interfaces" if host in ("0.0.0.0", "::", "[::]", "") else "a network address"
-    logger.warning(
-        "No API token is set and the web server listens on %s. Any device that can "
-        "reach this port can change the configuration and run actions. Set %s "
-        "(secrets file, add-on option or %s environment variable), or listen on "
-        "127.0.0.1 only.",
-        where,
-        SETTING_NAME,
-        ENV_NAME,
+    if current_token() is None:
+        logger.error(
+            "API access control is on but no %s is available and none can be generated "
+            "(%s=false). Every request except /healthz and /login gets 503. Set %s.",
+            SETTING_NAME,
+            AUTOGENERATE_ENV,
+            ENV_NAME,
+        )
+        return
+    how = {
+        "configured": "a configured token",
+        "generated": "a generated token kept in the data folder",
+        "generated-new": "a newly generated token kept in the data folder",
+    }.get(_state["source"], "a token")
+    port = ingress_port()
+    logger.info(
+        "API access control is on (%s)%s",
+        how,
+        f"; Home Assistant ingress is served on port {port}" if port else "",
     )
 
 
@@ -575,16 +674,75 @@ def session_is_valid(token: str, value: str | None, now: float | None = None) ->
     )
 
 
-def is_trusted_ingress_request() -> bool:
-    """Seam for the Home Assistant add-on: True for a request that came through ingress.
+def ingress_port() -> int | None:
+    """The port of the ingress listener, or None when there is none.
 
-    Not decided, so nothing is trusted and ingress users log in like anyone else.
-    ``request.remote_addr`` and headers such as ``X-Ingress-Path`` or
-    ``X-Forwarded-For`` must not be used: a client that reaches the port
-    directly can set the headers, and with forwarded-header handling switched
-    on, the address follows them.
+    ``EMHASS_INGRESS_PORT``, else 8099 when running as a Home Assistant add-on (the Supervisor sets
+    ``SUPERVISOR_TOKEN``). ``gunicorn.conf.py`` makes the same decision when it chooses what to
+    listen on; a test keeps the two in step.
     """
-    return False
+    value = os.environ.get(INGRESS_PORT_ENV, "").strip()
+    if not value:
+        return DEFAULT_INGRESS_PORT if os.environ.get("SUPERVISOR_TOKEN") else None
+    try:
+        port = int(value)
+    except ValueError:
+        return None
+    return port if 0 < port < 65536 else None
+
+
+def _ingress_networks() -> list:
+    networks = []
+    for item in os.environ.get(INGRESS_PEERS_ENV, DEFAULT_INGRESS_PEERS).split(","):
+        item = item.strip()
+        if item:
+            try:
+                networks.append(ipaddress.ip_network(item, strict=False))
+            except ValueError:
+                continue  # an entry that is not an address is ignored, which only narrows trust
+    return networks
+
+
+def _peer_is_supervisor(address: str | None) -> bool:
+    try:
+        ip = ipaddress.ip_address(address or "")
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == net.version and ip in net for net in _ingress_networks())
+
+
+def _scope_pair(key: str):
+    """(host, port) from the ASGI scope, which the server fills from the socket, or None."""
+    value = request.scope.get(key)
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        return value[0], value[1]
+    return None
+
+
+def on_ingress_port() -> bool:
+    """True when this request was accepted by the ingress listener."""
+    port = ingress_port()
+    server = _scope_pair("server")
+    return port is not None and server is not None and server[1] == port
+
+
+def is_trusted_ingress_request() -> bool:
+    """True for a request Home Assistant's ingress proxy made.
+
+    Two facts must both hold: the connection was accepted by the ingress listener (the port
+    only the Supervisor is meant to reach, and one the add-on does not publish), and its peer
+    is the Supervisor (``EMHASS_INGRESS_PEERS``, default 172.30.32.2, the address Home
+    Assistant's developer documentation says to accept ingress from). Headers such as
+    ``X-Ingress-Path``, ``X-Forwarded-For`` and ``X-Remote-User-*`` are never consulted: a
+    client that reaches a listener can set them. The server must not rewrite the peer address
+    from ``X-Forwarded-For`` (``gunicorn.conf.py`` and ``main()`` switch that off).
+    """
+    if not on_ingress_port():
+        return False
+    peer = _scope_pair("client")
+    return peer is not None and _peer_is_supervisor(peer[0])
 
 
 def _session_cookie_state(token: str) -> str:
@@ -729,16 +887,33 @@ def _login_page(status: int = 200, failed: bool = False) -> Response:
 # -- hook and routes ----------------------------------------------------------
 
 
+def _ingress_refused() -> Response:
+    return _plain(
+        403,
+        "EMHASS >> This port only accepts Home Assistant ingress. Use the API port.\n",
+    )
+
+
 async def require_api_token():
     """before_request hook. Returns None to let the request through."""
     if request.endpoint in OPEN_ENDPOINTS:
         return None
     if _state["failed"]:
         return _unavailable()
+    if auth_disabled():
+        return None
+    if on_ingress_port():
+        # The ingress listener serves Home Assistant only. Anything else that reaches it is
+        # refused whatever it carries; the Supervisor has already signed its user in.
+        if not is_trusted_ingress_request():
+            return _ingress_refused()
+        if _cookie_request_allowed():
+            return None
+        return _forbidden_cookie_post()
     token = current_token()
     if token is None:
-        return None
-    if _bearer_matches(token) or is_trusted_ingress_request():
+        return _unavailable()
+    if _bearer_matches(token):
         return None
     cookie = _session_cookie_state(token)
     if cookie == "valid":
@@ -754,6 +929,33 @@ async def require_api_token():
     ):
         return _redirect(_relative("login"))
     return _unauthorized()
+
+
+def token_page_available() -> bool:
+    """True when this request may open /api-token: it came through ingress and the token is
+    one EMHASS generated. The web UI shows its link only then."""
+    return (
+        is_trusted_ingress_request()
+        and current_token() is not None
+        and _state["source"] in ("generated", "generated-new")
+    )
+
+
+async def api_token_page():
+    """Show a generated token to a Home Assistant user who came in through ingress.
+
+    Only for ingress (Home Assistant has signed the user in) and only for a token EMHASS made
+    itself: a configured token is already known to whoever configured it. Never cached.
+    """
+    if not is_trusted_ingress_request():
+        return _plain(
+            403, "EMHASS >> The API token is shown through Home Assistant ingress only.\n"
+        )
+    if not token_page_available():
+        return _plain(404, "EMHASS >> There is no generated API token.\n")
+    response = _plain(200, current_token() + "\n")
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 async def _read_login_form() -> tuple[dict[str, list[str]], Response | None]:
@@ -792,7 +994,7 @@ async def login():
     if _state["failed"]:
         return _unavailable()
     if token is None:
-        return _redirect("./")
+        return _redirect("./") if auth_disabled() else _unavailable()
     if request.method != "POST":
         return _login_page()
     fields, refused = await _read_login_form()
@@ -805,7 +1007,9 @@ async def login():
             SESSION_COOKIE,
             make_session_value(token),
             max_age=SESSION_MAX_AGE_S,
-            path="/",
+            # No Path: the browser scopes the cookie to the folder /login was served from, so behind
+            # an ingress prefix it is not sent to the rest of the origin
+            path=None,
             httponly=True,
             samesite="Strict",
             secure=_came_over_https(),
@@ -838,7 +1042,7 @@ async def logout():
     response = _redirect("login")
     response.delete_cookie(
         SESSION_COOKIE,
-        path="/",
+        path=None,
         httponly=True,
         samesite="Strict",
         secure=_came_over_https(),
@@ -856,10 +1060,12 @@ async def require_api_token_websocket():
     """
     if _state["failed"]:
         return _unavailable()
+    if auth_disabled():
+        return None
     token = current_token()
     if token is None:
-        return None
-    if _bearer_matches(token, websocket.headers) or is_trusted_ingress_request():
+        return _unavailable()
+    if _bearer_matches(token, websocket.headers):
         return None
     if _bearer_presented(websocket.headers):
         _note_failure()
@@ -870,5 +1076,6 @@ def install(app: Quart) -> None:
     """Attach the hooks and the login routes to ``app``."""
     app.before_request(require_api_token)
     app.before_websocket(require_api_token_websocket)
+    app.add_url_rule("/api-token", "api_auth_token", api_token_page, methods=["GET"])
     app.add_url_rule("/login", "api_auth_login", login, methods=["GET", "POST"])
     app.add_url_rule("/logout", "api_auth_logout", logout, methods=["GET", "POST"])
