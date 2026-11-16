@@ -1,0 +1,233 @@
+"""Home Assistant ingress: a listener of its own, trusted only for the Supervisor's address.
+
+These tests drive the ASGI scope the server fills from the accepted socket (``server`` and ``client``).
+They do not run Home Assistant: see docs/api_authentication.md for what is and is not verified against
+a real Supervisor.
+"""
+
+import os
+import pathlib
+import runpy
+import unittest
+
+from emhass import api_auth, web_server
+
+from .api_auth_support import BEARER, OUTSIDER, SUPERVISOR, AuthSupportBase
+
+CONF = pathlib.Path(web_server.__file__).parents[2] / "gunicorn.conf.py"
+
+
+class TestIngressTrust(AuthSupportBase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+
+    async def test_the_supervisor_on_the_ingress_port_is_signed_in(self):
+        for method, path, kwargs in [
+            ("GET", "/api/v1/last-run", {}),
+            ("GET", "/configuration", {}),
+            ("POST", "/action/publish-data", {"json": {}}),
+            ("POST", "/set-config", {"json": {}}),
+        ]:
+            with self.subTest(route=f"{method} {path}"):
+                response = await self.send(method, path, port=8099, peer=SUPERVISOR, **kwargs)
+                self.assertNotIn(response.status_code, (401, 403, 503))
+
+    async def test_a_write_from_ingress_must_be_json(self):
+        # what a forged cross-site form can send; the UI always sends JSON
+        refused = await self.send(
+            "POST",
+            "/action/publish-data",
+            port=8099,
+            peer=SUPERVISOR,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=b"a=1",
+        )
+        self.assertEqual(refused.status_code, 403)
+        self.mock_action.assert_not_awaited()
+
+    async def test_anyone_else_on_the_ingress_port_is_refused_even_with_the_token(self):
+        for peer in (OUTSIDER, "127.0.0.1", "172.30.32.1", "172.30.32.3", "10.0.0.1"):
+            for headers in (None, BEARER):
+                with self.subTest(peer=peer, bearer=bool(headers)):
+                    response = await self.send(
+                        "POST",
+                        "/action/publish-data",
+                        port=8099,
+                        peer=peer,
+                        headers=headers,
+                        json={},
+                    )
+                    self.assertEqual(response.status_code, 403)
+        self.mock_action.assert_not_awaited()
+
+    async def test_the_supervisors_address_on_the_api_port_is_not_trusted(self):
+        for method, path in [
+            ("POST", "/action/publish-data"),
+            ("GET", "/configuration"),
+            ("GET", "/api/v1/plan"),
+        ]:
+            with self.subTest(route=f"{method} {path}"):
+                response = await self.send(
+                    method, path, port=5000, peer=SUPERVISOR, json={} if method == "POST" else None
+                )
+                self.assertIn(response.status_code, (401, 303))
+        self.mock_action.assert_not_awaited()
+
+    async def test_headers_never_make_a_request_trusted(self):
+        forged = {
+            "X-Ingress-Path": "/api/hassio_ingress/abc",
+            "X-Forwarded-For": SUPERVISOR,
+            "X-Real-IP": SUPERVISOR,
+            "Forwarded": f"for={SUPERVISOR}",
+            "X-Remote-User-Id": "1",
+            "X-Remote-User-Name": "admin",
+            "X-Hass-Source": "core.ingress",
+            "Host": "supervisor",
+        }
+        response = await self.send("POST", "/action/publish-data", headers=forged, json={})
+        self.assertEqual(response.status_code, 401)
+        # and on the ingress port the same headers from a stranger do not help either
+        response = await self.send(
+            "POST", "/action/publish-data", port=8099, peer=OUTSIDER, headers=forged, json={}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.mock_action.assert_not_awaited()
+
+    async def test_a_forged_scope_value_of_the_wrong_shape_is_not_trusted(self):
+        for scope in (
+            {"server": None, "client": None},
+            {"server": ("x",), "client": ()},
+            {"client": (SUPERVISOR, 1)},
+        ):
+            with self.subTest(scope=scope):
+                response = await self.client.open(
+                    "/action/publish-data", method="POST", json={}, scope_base=scope
+                )
+                self.assertEqual(response.status_code, 401)
+
+    async def test_the_health_check_stays_open_on_both_ports(self):
+        for port, peer in ((5000, OUTSIDER), (8099, OUTSIDER), (8099, SUPERVISOR)):
+            response = await self.send("GET", "/healthz", port=port, peer=peer)
+            self.assertNotIn(response.status_code, (401, 403))
+
+    async def test_the_peer_list_replaces_the_default_and_bad_entries_only_narrow(self):
+        os.environ[api_auth.INGRESS_PEERS_ENV] = (
+            "198.51.100.0/24, not-an-address, ::ffff:172.30.32.2"
+        )
+        for peer, expected in (
+            ("198.51.100.7", True),
+            (SUPERVISOR, False),  # the list replaces the default
+            ("198.51.101.7", False),
+            ("::ffff:198.51.100.9", True),
+        ):
+            with self.subTest(peer=peer):
+                response = await self.send(
+                    "POST", "/action/publish-data", port=8099, peer=peer, json={}
+                )
+                self.assertEqual(response.status_code == 200, expected)
+
+    async def test_only_the_supervisor_by_default(self):
+        self.assertEqual(api_auth.DEFAULT_INGRESS_PEERS, "172.30.32.2")
+
+
+class TestIngressConfiguration(AuthSupportBase):
+    def test_no_ingress_port_unless_configured_or_running_as_an_add_on(self):
+        self.assertIsNone(api_auth.ingress_port())
+        os.environ["SUPERVISOR_TOKEN"] = "x"
+        self.assertEqual(api_auth.ingress_port(), 8099)
+        os.environ[api_auth.INGRESS_PORT_ENV] = "9100"
+        self.assertEqual(api_auth.ingress_port(), 9100)
+        for bad in ("abc", "0", "-1", "70000", "80.5"):
+            os.environ[api_auth.INGRESS_PORT_ENV] = bad
+            self.assertIsNone(api_auth.ingress_port(), bad)
+
+    async def test_without_an_ingress_port_the_supervisor_is_nobody_special(self):
+        await self.enable()
+        for port in (5000, 8099):
+            response = await self.send(
+                "POST", "/action/publish-data", port=port, peer=SUPERVISOR, json={}
+            )
+            self.assertEqual(response.status_code, 401)
+
+    def test_gunicorn_listens_where_the_app_expects_ingress(self):
+        """gunicorn.conf.py and api_auth.ingress_port() must make the same decision."""
+        cases = [
+            ({}, None),
+            ({"SUPERVISOR_TOKEN": "x"}, 8099),
+            ({"SUPERVISOR_TOKEN": "x", "EMHASS_INGRESS_PORT": "9100"}, 9100),
+            ({"EMHASS_INGRESS_PORT": "9100"}, 9100),
+        ]
+        for env, port in cases:
+            with self.subTest(env=env):
+                for name in ("SUPERVISOR_TOKEN", "EMHASS_INGRESS_PORT", "PORT", "IP"):
+                    os.environ.pop(name, None)
+                os.environ.update(env)
+                self.assertEqual(api_auth.ingress_port(), port)
+                bind = runpy.run_path(str(CONF))["bind"]
+                self.assertEqual(bind[0], "0.0.0.0:5000")
+                self.assertEqual(bind[1:], [f"0.0.0.0:{port}"] if port else [])
+
+    def test_gunicorn_refuses_to_rewrite_the_peer_address(self):
+        conf = runpy.run_path(str(CONF))
+        allowed = [i.strip() for i in conf["forwarded_allow_ips"].split(",") if i.strip()]
+        self.assertEqual(allowed, [])
+
+
+class TestProxyHeadersCannotForgeTheSupervisor(AuthSupportBase):
+    """uvicorn's proxy-header handling would let a loopback process choose its peer address."""
+
+    async def _post(self, trusted_hosts):
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+        wrapped = ProxyHeadersMiddleware(web_server.app, trusted_hosts=trusted_hosts)
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/action/publish-data",
+            "raw_path": b"/action/publish-data",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"host", b"emhass"),
+                (b"x-forwarded-for", SUPERVISOR.encode()),
+                (b"content-type", b"application/json"),
+                (b"content-length", b"2"),
+            ],
+            "client": ("127.0.0.1", 5555),
+            "server": ("0.0.0.0", 8099),
+        }
+        sent = []
+        messages = [{"type": "http.request", "body": b"{}", "more_body": False}]
+
+        async def receive():
+            return messages.pop(0) if messages else {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        try:
+            await wrapped(scope, receive, send)
+        except Exception:  # noqa: BLE001 - a request that passes the gate may fail later on mocks
+            pass
+        return next((m["status"] for m in sent if m["type"] == "http.response.start"), None)
+
+    async def test_the_shipped_setting_leaves_the_peer_alone(self):
+        conf = runpy.run_path(str(CONF))
+        allowed = [i.strip() for i in conf["forwarded_allow_ips"].split(",") if i.strip()]
+        self.assertEqual(await self._post(allowed), 403)
+        self.mock_action.assert_not_awaited()
+
+    async def test_control_the_default_setting_would_have_let_loopback_pose_as_the_supervisor(self):
+        status = await self._post("127.0.0.1")
+        self.assertNotIn(status, (401, 403, 503))
+
+
+if __name__ == "__main__":
+    unittest.main()
