@@ -225,6 +225,35 @@ class TestBatteryAvailability(unittest.TestCase):
                     self.assertEqual(opt.param_soc_low_required[1].value, 0.0)
                     self.assertTrue(warned)
 
+    def test_recovery_check_with_derating_below_soc_min(self):
+        """Below soc_min the SoC may not fall before it recovers, so the EV
+        cannot dip under a derating threshold to charge faster. From 0.11 with
+        [[0.1, 0.2]] and three connected steps it stores at most
+        3 * 11000 * 0.2 * 0.5 = 3300 Wh, short of the 5400 Wh gap, so the
+        minimum is dropped with a warning instead of the run going infeasible.
+        From 0.17 the 1800 Wh gap fits and the minimum stays enforced.
+        """
+        plant = dict(HOUSE_AND_EV, battery_charge_power_derating=[[0.1, 0.2]])
+        three_steps = [1, 1, 1] + [0] * (N - 3)
+        for soc_init, recoverable in ((0.11, False), (0.17, True)):
+            with self.subTest(soc_init=soc_init):
+                opt = build_optimization(plant_overrides=plant)
+                with mock.patch.object(opt.logger, "warning", wraps=opt.logger.warning) as warning:
+                    run(
+                        opt,
+                        soc_init=[0.5, soc_init],
+                        soc_final=[0.5, 0.2],
+                        battery_availability=[None, three_steps],
+                    )
+                self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                warned = any(
+                    "cannot recover" in str(call.args[0])
+                    for call in warning.call_args_list
+                    if call.args
+                )
+                self.assertEqual(warned, not recoverable)
+                self.assertEqual(opt.param_soc_low_required[1].value, float(recoverable))
+
     def test_absent_ev_below_min_soc_stays_feasible(self):
         """An EV that is not connected at all, with soc_init below soc_min,
         must not make the LP infeasible (no recovery is possible)."""

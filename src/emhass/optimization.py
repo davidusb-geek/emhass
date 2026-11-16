@@ -2266,9 +2266,11 @@ class Optimization:
         charging flat out. The reach after each step is the best of the previous
         reach plus its own gain and every threshold between the lowest and the
         highest SoC the step can start at, plus the gain just below it. The
-        lowest SoC is taken from the discharge power limit alone, so the result
-        can over-estimate but never under-estimates: a target above it is out
-        of reach.
+        lowest SoC falls by the discharge power limit each step but never below
+        soc_min, or below the start when that is under soc_min (the recovery
+        constraints keep it there). Other discharge limits are ignored, so the
+        result can over-estimate but never under-estimates: a target above it
+        is out of reach.
         """
         avail = np.asarray(avail_k[:n_steps], dtype=float)
         chg_dt = float(batt_conf["charge_power_max"][k]) * self.time_step
@@ -2280,6 +2282,7 @@ class Optimization:
         cap = float(batt_conf["cap"][k])
         step_drop = float(batt_conf["discharge_power_max"][k]) * self.time_step * avail
         low = reach = float(start_wh)
+        floor_wh = min(low, float(batt_conf["soc_min"][k]) * cap)
         for gain_max, drop_max in zip(step_gain, step_drop, strict=True):
             best = reach
             fraction = 1.0
@@ -2292,7 +2295,7 @@ class Optimization:
                     best = max(best, threshold_wh + min(gain_max, chg_dt * fraction))
                 fraction = power_max
             reach = max(best, reach + min(gain_max, chg_dt * fraction))
-            low -= drop_max
+            low = max(low - drop_max, floor_wh)
         return reach
 
     def _normalize_soc_arg(
