@@ -11,7 +11,6 @@ base commit for a RED-on-base proof) the behavioural assertions fail rather
 than erroring at import.
 """
 
-import inspect
 import json
 import logging
 import os
@@ -25,9 +24,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from emhass import battery_identification as bi_module
     from emhass.battery_identification import (
         BatteryIdentification,
         BatteryIdentificationResult,
+        apply_staleness_fill,
     )
 
     HAVE_FEATURE = True
@@ -35,6 +36,8 @@ except ImportError:  # base commit without the feature
     HAVE_FEATURE = False
     BatteryIdentification = None
     BatteryIdentificationResult = None
+    apply_staleness_fill = None
+    bi_module = None
 
 
 def _make_history(
@@ -325,29 +328,6 @@ try:
     HAVE_CL = True
 except ImportError:
     HAVE_CL = False
-
-try:
-    from emhass import battery_identification as bi_module
-except ImportError:  # base commit without the feature
-    bi_module = None
-
-
-def _staleness_fill(df, *args, **kwargs):
-    """The staleness-aware fill (#1073), or no fill at all where it does not exist.
-
-    Base-safe: on a source without ``apply_staleness_fill`` the frame reaches
-    the estimator exactly as retrieved, so the tests below fail on their
-    behavioural assertions there instead of on an AttributeError.
-    """
-    fn = getattr(bi_module, "apply_staleness_fill", None)
-    if fn is None:
-        return df
-    # A keyword this build's fill does not take yet (row_counts, added in the
-    # #1073 review) is dropped, so a test of the newer guards fails on its
-    # assertion against an older build instead of on a TypeError.
-    accepted = inspect.signature(fn).parameters
-    kwargs = {k: v for k, v in kwargs.items() if k in accepted}
-    return fn(df, *args, **kwargs)
 
 
 class _FakeRH:
@@ -1699,28 +1679,23 @@ NAN = float("nan")
 
 
 class TestStalenessFill(unittest.TestCase):
-    """Staleness-aware fill of short battery sensor silences (#1073, Option A).
-
-    Base-safe: every call goes through ``_staleness_fill``, which hands the
-    frame back unchanged where ``apply_staleness_fill`` does not exist, so the
-    fill assertions fail behaviourally on the base commit.
-    """
+    """Staleness-aware fill of short battery sensor silences (#1073)."""
 
     def setUp(self):
         self.logger = logging.getLogger("test_staleness_fill")
 
     def _fill(self, df, last, markers=None, step=_STEP, counts=None):
         counts = _fast_counts(last) if counts is None else counts
-        return _staleness_fill(
+        return apply_staleness_fill(
             df, _P, _S, last, markers or {}, step, self.logger, row_counts=counts
         )
 
     def _assert_untouched(self, out, df):
         pd.testing.assert_frame_equal(out, df)
 
-    # -- R1: a short bounded silence is held at the last raw state -----------
+    # -- a short bounded silence is held at the last raw state ---------------
     def test_short_silence_held_at_last_raw_state_not_mean_or_bridge(self):
-        """RED on base. The bucket before the silence holds a transition (raw
+        """The bucket before the silence holds a transition (raw
         rows 1000 W then 3500 W, mean 2250 W); the sensor then stayed at
         3500 W for two empty buckets. The fill must write 3500 W, not the
         bucket mean and not the straight line the trapezoid draws today, and
@@ -1760,7 +1735,7 @@ class TestStalenessFill(unittest.TestCase):
         out = self._fill(df, last)
         np.testing.assert_array_equal(out[_S].to_numpy(), [10, 20, 20, 20, 50])
 
-    # -- rule 1: length, bounds, never partial --------------------------------
+    # -- length, bounds, never partial ----------------------------------------
     def test_run_of_h_plus_one_untouched(self):
         df, last, _ = _fill_case([100, 200, NAN, NAN, NAN, 600], [10, 20, 30, 40, 50, 60])
         self._assert_untouched(self._fill(df, last), df)
@@ -1806,7 +1781,7 @@ class TestStalenessFill(unittest.TestCase):
         out = self._fill(df, last)
         np.testing.assert_array_equal(out[_P].to_numpy(), [100, 100, 100, 400, 500, 600, 700, 800])
 
-    # -- rule 3: markers ------------------------------------------------------
+    # -- markers ------------------------------------------------------
     def _marker_case(self):
         # power silent at buckets 3-4 (bounds 2 and 5), soc silent at 3-4 too
         df, last, idx = _fill_case(
@@ -1918,7 +1893,7 @@ class TestStalenessFill(unittest.TestCase):
         self.assertFalse(out.equals(df), "the short silences must have been filled")
 
     def test_offset_silences_compose_with_one_member_observed(self):
-        """Intended (THREAD-1073 rule 1 note): power silent for two buckets, then
+        """Intended: power silent for two buckets, then
         SoC for the next two. Each bridged bucket keeps one really observed
         member, and neither held value is older than H buckets."""
         df, last, _ = _fill_case(
@@ -1944,32 +1919,34 @@ class TestStalenessFill(unittest.TestCase):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
         counts = _fast_counts(last)
         for aux in ({}, None, {_P: last[_P]}, {_S: last[_S]}, unittest.mock.MagicMock()):
-            self.assertIs(_staleness_fill(df, _P, _S, aux, {}, _STEP, row_counts=counts), df)
+            self.assertIs(apply_staleness_fill(df, _P, _S, aux, {}, _STEP, row_counts=counts), df)
 
     def test_no_time_step_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
         counts = _fast_counts(last)
-        self.assertIs(_staleness_fill(df, _P, _S, last, {}, None, row_counts=counts), df)
+        self.assertIs(apply_staleness_fill(df, _P, _S, last, {}, None, row_counts=counts), df)
 
     def test_misaligned_aux_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
         counts = _fast_counts(last)
         shifted = {k: v.shift(10, freq="min") for k, v in last.items()}
-        self.assertIs(_staleness_fill(df, _P, _S, shifted, {}, _STEP, row_counts=counts), df)
+        self.assertIs(apply_staleness_fill(df, _P, _S, shifted, {}, _STEP, row_counts=counts), df)
         markers = {_P: pd.DatetimeIndex([last[_P].index[0] + pd.Timedelta("7min")])}
-        self.assertIs(_staleness_fill(df, _P, _S, last, markers, _STEP, row_counts=counts), df)
+        self.assertIs(apply_staleness_fill(df, _P, _S, last, markers, _STEP, row_counts=counts), df)
         shifted_counts = {k: v.shift(10, freq="min") for k, v in counts.items()}
-        self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=shifted_counts), df)
+        self.assertIs(
+            apply_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=shifted_counts), df
+        )
 
     def test_tz_naive_frame_with_utc_aux_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30], tz=None)
         df.index = df.index.tz_localize(None)
         counts = _fast_counts(last)
-        self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
+        self.assertIs(apply_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
 
-    # -- the pair must report faster than the step (#1073 review) ------------
+    # -- the pair must report faster than the step ------------
     def test_sensor_polled_once_per_step_or_slower_is_identity(self):
-        """RED before the review fix. A power sensor polled every other step leaves
+        """Regression: A power sensor polled every other step leaves
         one empty bucket between every two readings. Those buckets are changes
         nobody sampled, not an unchanged value, so nothing of the pair is held.
         The same history from a sensor that reports faster than the step is."""
@@ -2007,11 +1984,11 @@ class TestStalenessFill(unittest.TestCase):
         df, last, _ = _fill_case([100, 200, NAN, 400], [10, 20, 30, 40])
         fast = _fast_counts(last)
         for counts in (None, {}, {_P: fast[_P]}, {_S: fast[_S]}, unittest.mock.MagicMock()):
-            self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
+            self.assertIs(apply_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
 
-    # -- a run needs another sensor's reading in every bucket (#1073 review) --
+    # -- a run needs another sensor's reading in every bucket --
     def test_recorder_outage_is_not_held(self):
-        """RED before the review fix. Every sensor, the load included, is quiet
+        """Regression: every sensor, the load included, is quiet
         for two buckets: the recorder was down, and the battery may well have
         changed meanwhile (it can go full inside the outage). Left as it was."""
         load = [500.0] * 8
@@ -2050,7 +2027,7 @@ class TestStalenessFill(unittest.TestCase):
         last[_L] = last[_L].shift(7, freq="min")
         self._assert_untouched(self._fill(df, last), df)
 
-    # -- cost follows the history, not time_step (#1073 review) --------------
+    # -- cost follows the history, not time_step --------------
     def test_time_step_finer_than_the_frame_is_identity(self):
         """The grid is the frame's span over time_step. A step far finer than the
         frame's own spacing must not size it: 1 ns would ask for about 10**13
@@ -2059,14 +2036,14 @@ class TestStalenessFill(unittest.TestCase):
         counts = _fast_counts(last)
         for step in (pd.Timedelta("1ns"), pd.Timedelta("1ms"), pd.Timedelta("1s"), 1):
             started = time.perf_counter()
-            self.assertIs(_staleness_fill(df, _P, _S, last, {}, step, row_counts=counts), df)
+            self.assertIs(apply_staleness_fill(df, _P, _S, last, {}, step, row_counts=counts), df)
             self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_degenerate_inputs_do_not_raise(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
 
         def fill(frame, aux):
-            return _staleness_fill(frame, _P, _S, aux, {}, _STEP, row_counts=_fast_counts(aux))
+            return apply_staleness_fill(frame, _P, _S, aux, {}, _STEP, row_counts=_fast_counts(aux))
 
         empty = df.iloc[0:0]
         self.assertIs(fill(empty, last), empty)
@@ -2078,7 +2055,7 @@ class TestStalenessFill(unittest.TestCase):
         pd.testing.assert_frame_equal(fill(df, empty_aux), df)
 
 
-# --- end to end through the real REST retrieval (#1073 R2) -------------------
+# --- end to end through the real REST retrieval -----------------------------
 _E2E_CAP_WH, _E2E_RTE = 10000.0, 0.9025
 _E2E_LOAD = "sensor.power_load_no_var_loads"
 _E2E_URL = "http://test.local/"
@@ -2167,7 +2144,7 @@ def _ha_history_rows(series: pd.Series, day: pd.Timestamp, entity_id: str) -> li
 
 @unittest.skipUnless(HAVE_FEATURE and HAVE_CL, "battery_identification not present")
 class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
-    """R2 (#1073): the real battery_id retrieval (``_retrieve_from_hass`` ->
+    """The real battery_id retrieval (``_retrieve_from_hass`` ->
     REST ``get_data`` -> ``prepare_data``) fed with HA-shaped history, then the
     fill, then the real estimator. The counterfactual (the same retrieved frame
     without the fill) is fitted in the same test, so it cannot false-green:
@@ -2209,7 +2186,7 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _fill(rh, df, logger):
-        return _staleness_fill(
+        return apply_staleness_fill(
             df,
             _P,
             _S,
@@ -2235,7 +2212,7 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
         series = {_P: power_rows, _S: soc_rows, _E2E_LOAD: load_rows}
         rh, df = await self._retrieve(series, days, logger)
 
-        filled = _staleness_fill(
+        filled = apply_staleness_fill(
             df,
             _P,
             _S,
@@ -2266,10 +2243,10 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertLess(abs(rte_fill), 0.02)
 
     async def test_polled_pair_is_left_as_retrieved(self):
-        """RED before the review fix. The same pack read by an integration that
+        """Regression: the same pack read by an integration that
         polls once an hour, with the default 30 minute step: one empty bucket
         between every two readings while the battery works. Holding those would
-        lag the pack by up to an hour (+15..+18% capacity in the review probes),
+        lag the pack by up to an hour (+15..+18% capacity in probes),
         so the frame reaches the fit exactly as retrieved."""
         logger = logging.getLogger("test_staleness_fill_e2e_polled")
         n_days = 8
@@ -2288,7 +2265,7 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(counts[_P].max()), 1, "one reading per bucket at most")
 
     async def test_recorder_outage_is_left_as_retrieved(self):
-        """RED before the review fix. Every day the recorder is down from 12:10 to
+        """Regression: every day the recorder is down from 12:10 to
         13:10, when the pack is near full: no row of any sensor, the load
         included, then each sensor reports its state again. The quiet bucket is
         left as retrieved, while short silences elsewhere are still held."""
@@ -2332,7 +2309,7 @@ class _FakeRHWithAux(_FakeRH):
 class TestStalenessFillWiring(unittest.IsolatedAsyncioTestCase):
     """Both identify call sites (N=1 and N>1) must hand the estimator the filled
     frame; a retrieval without aux (file mode, websocket, the existing fakes)
-    must reach it unchanged. RED on base: the frame identify receives still has
+    must reach it unchanged. The frame identify receives still has
     the silence."""
 
     def setUp(self):
