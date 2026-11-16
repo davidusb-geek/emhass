@@ -545,6 +545,35 @@ def cop_from_tank_temperature(
     return np.clip(np.asarray(cops, dtype=float), cop_bounds[0], cop_bounds[1])
 
 
+def _supply_temperature_profile(values, length, outdoor_temperature_forecast) -> np.ndarray:
+    """`supply_temperature` given as a per-timestep list, as a float array.
+
+    A single value is broadcast (so ``[30]`` and ``30`` mean the same thing).
+    A longer list is truncated to the horizon, matching how the COP array is
+    truncated; a shorter one raises instead of inventing a supply temperature
+    for the remaining steps.
+    """
+    if isinstance(values, pd.Series):
+        values = values.to_numpy()
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 1:
+        raise ValueError(
+            f"thermal_battery 'supply_temperature' must be a number or a flat list, "
+            f"got shape {arr.shape}"
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("thermal_battery 'supply_temperature' contains a non-finite value")
+    target = length if length is not None else len(np.asarray(outdoor_temperature_forecast))
+    if arr.size == 1:
+        return np.full(target, float(arr[0]))
+    if arr.size < target:
+        raise ValueError(
+            f"thermal_battery 'supply_temperature' has {arr.size} values but the horizon "
+            f"has {target} timesteps"
+        )
+    return arr[:target]
+
+
 def resolve_thermal_battery_cop(
     hc: dict,
     outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series | None,
@@ -616,6 +645,14 @@ def resolve_thermal_battery_cop(
                 "thermal_battery requires either 'efficiency' (constant-efficiency mode), "
                 "'supply_temperature' (constant heat-pump mode), or a "
                 "'heating_curve'/'cooling_curve' (weather-compensated heat-pump mode)"
+            )
+        # A per-timestep supply profile (issue #1327): the temperature the executor
+        # will actually run at each step, which no curve can express. The Carnot
+        # helper already broadcasts an array; only the length has to be pinned to
+        # the horizon here.
+        if np.ndim(supply_temperature) > 0:
+            supply_temperature = _supply_temperature_profile(
+                supply_temperature, length, outdoor_temperature_forecast
             )
     cops = calculate_cop_heatpump(
         supply_temperature=supply_temperature,
