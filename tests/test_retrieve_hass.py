@@ -2596,40 +2596,48 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         await self.rh.close()
 
     async def test_session_reuse_across_post_data_calls(self):
-        """Test that the same session is reused across multiple post_data calls."""
+        """Verify successful POSTs reuse the actual HTTP session."""
         self.rh.get_data_from_file = False
 
-        # Create test data
         data_df = pd.Series(
             [100.0, 200.0], index=pd.date_range("2024-01-01", periods=2, freq="30min")
         )
 
-        # Mock aiohttp session.post to track calls
-        with patch.object(self.rh, "_get_session") as mock_get_session:
-            mock_session = MagicMock()
-            mock_response = AsyncMock()
-            mock_response.ok = True
-            mock_response.status = 200
-            mock_session.post.return_value.__aenter__.return_value = mock_response
-            mock_get_session.return_value = mock_session
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=b"")
 
-            # Make multiple post_data calls
-            response_1, _ = await self.rh.post_data(
-                data_df, 0, "sensor.test1", "power", "W", "Test 1", "power"
-            )
-            response_2, _ = await self.rh.post_data(
-                data_df, 0, "sensor.test2", "power", "W", "Test 2", "power"
-            )
-            response_3, _ = await self.rh.post_data(
-                data_df, 0, "sensor.test3", "power", "W", "Test 3", "power"
-            )
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=False)
 
-            # _get_session should have been called 3 times (once per post_data)
-            # but it returns the same session each time
-            self.assertEqual(mock_get_session.call_count, 3)
-            self.assertTrue(all(r.ok for r in (response_1, response_2, response_3)))
-            self.assertEqual(mock_session.post.call_count, 3)
-            self.assertEqual(mock_response.read.await_count, 3)
+        try:
+            # Only intercept HTTP transport; use the real session lookup/cache.
+            with patch.object(
+                aiohttp.ClientSession, "post", return_value=mock_context
+            ) as mock_post:
+                first_session = None
+
+                for number in range(1, 4):
+                    response, _ = await self.rh.post_data(
+                        data_df, 0, f"sensor.test{number}", "power", "W", f"Test {number}", "power"
+                    )
+                    self.assertTrue(response.ok)
+
+                    session = self.rh._session
+                    self.assertIsInstance(session, aiohttp.ClientSession)
+                    self.assertFalse(session.closed)
+
+                    if first_session is None:
+                        first_session = session
+                    else:
+                        self.assertIs(session, first_session)
+
+                self.assertEqual(mock_post.call_count, 3)
+                self.assertEqual(mock_response.read.await_count, 3)
+        finally:
+            await self.rh.close()
 
     async def test_post_scalar_sensor_numpy_values(self):
         """Test that post_scalar_sensor serialises numpy scalars (#1131)."""
