@@ -71,8 +71,10 @@ MAX_GAP_STEP_MULTIPLE = 3.0
 # changes, so a short run of empty buckets between two real readings usually
 # means the value did not change. A run of at most this many empty buckets is
 # held at the last recorded state instead of being bridged by a straight line.
-# It stays at MAX_GAP_STEP_MULTIPLE - 1 so that only silences the gap test
-# above already bridges are filled: a longer silence is still a recorder gap.
+# It stays at MAX_GAP_STEP_MULTIPLE - 1 so that only silences of one sensor
+# the gap test above already bridges are filled: a longer silence of one sensor
+# is still a recorder gap. Short silences of the two sensors that follow one
+# another can add up to a gap on the joint rows; both are held.
 STALENESS_FILL_MAX_BUCKETS = 2
 
 # Sufficiency floors
@@ -277,15 +279,18 @@ def apply_staleness_fill(
     * neither sensor of the pair recorded an ``unavailable``/``unknown`` state in
       the run or in either bounding bucket;
     * every bucket of the run holds a real recorded state of some other retrieved
-      sensor (the load, the other sensor of the pair), which shows the recorder
+      sensor (the load, the other sensor of the pair, or another battery's
+      sensors), which shows the recorder
       was running. When every sensor goes quiet at once the recorder was down,
       and nothing says the battery held still.
 
     Nothing is filled at all unless both sensors of the pair report faster than
     the step: in at least a fifth of the buckets where a sensor has a reading, it
-    has two or more. A sensor polled once per step or slower never puts two
+    has two or more. A sensor polled once per step or slower rarely puts two
     readings in one bucket, so its empty buckets are changes nobody sampled, not
-    an unchanged value.
+    an unchanged value. The exception is a poll period equal to the step whose
+    poll instant sits on a bucket edge: timing jitter can then put two polls in
+    one bucket often enough to pass the check.
 
     The run and its fill value come from the retrieval's aux series, not from
     ``df``, so a bucket holding only Home Assistant's synthetic start-of-day row
@@ -311,7 +316,8 @@ def apply_staleness_fill(
     max_run = int(STALENESS_FILL_MAX_BUCKETS)
     # Share of a sensor's observed buckets that must hold two or more readings.
     # Probed for #1073: change-only packs sit at 0.40 to 1.00 for 5 to 60 minute
-    # steps, sensors polled once per step or slower at 0.00.
+    # steps, sensors polled once per step or slower at 0.00 when the poll instant
+    # is away from a bucket edge (0.21 to 0.32 with it on an edge plus jitter).
     min_multi_share = 0.2
     if max_run <= 0 or time_step is None or df is None or df.empty:
         return df
