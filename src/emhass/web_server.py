@@ -27,7 +27,7 @@ from quart import Quart, make_response, request
 from quart import logging as log
 from werkzeug.exceptions import HTTPException
 
-from emhass import last_run, plan_store
+from emhass import api_auth, last_run, plan_store
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
@@ -77,6 +77,21 @@ from emhass.utils import (
 )
 
 app = Quart(__name__)
+# Opt-in API authentication: a before_request hook plus /login and /logout.
+api_auth.install(app)
+
+
+def _api_token_sources() -> tuple[str, str]:
+    """The secrets and options files, as _setup_paths and _setup_secrets find them."""
+    return (
+        os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        os.getenv("OPTIONS_PATH", default="/data/options.json"),
+    )
+
+
+# Loaded at import: under Gunicorn with preload_app this runs once in the master,
+# so every worker, including one that starts later, shares one snapshot.
+api_auth.configure_now(*_api_token_sources(), app.logger)
 
 emhass_conf: dict[str, Path] = {}
 entity_path: Path = Path()
@@ -129,7 +144,10 @@ def _not_from_a_dry_run(record: logging.LogRecord) -> bool:
     return _dry_run_log.get() is None
 
 
-app.logger.addHandler(_DryRunLog())
+_dry_run_handler = _DryRunLog()
+app.logger.addHandler(_dry_run_handler)
+# Mask the API token by value in every log record this process makes.
+api_auth.install_log_masking()
 
 
 @app.before_request
@@ -261,15 +279,33 @@ async def before_serving():
     """Initialize EMHASS before starting to serve requests."""
     # Capture boot timestamp first, so /healthz reports it even if initialize() fails.
     app.config["boot_ts"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    # Normally loaded at import. If not (a test reset it), load it here, before
+    # initialize(), so a failure there cannot leave a configured token unenforced.
+    # If it was, check that no token appeared since the snapshot found none.
+    await _configure_api_auth()
     # Initialize the application
     try:
         await initialize()
         app.logger.info("Full initialization completed")
     except Exception as e:
-        app.logger.warning(f"Full initialization failed (this is normal in test environments): {e}")
+        # A YAML error's text quotes the offending line of the file, which can be
+        # a secret, so only its type is logged.
+        detail = type(e).__name__ if isinstance(e, yaml.YAMLError) else e
+        app.logger.warning(
+            f"Full initialization failed (this is normal in test environments): {detail}"
+        )
         app.logger.info("Continuing without WebSocket connection...")
         # The initialize() function already sets up all necessary components except WebSocket
         # So we can continue serving requests even if WebSocket connection fails
+
+
+async def _configure_api_auth() -> None:
+    """Load the API token from the same files _setup_paths and _setup_secrets use,
+    or, when the import already loaded it, recheck them."""
+    if not api_auth.is_loaded():
+        await api_auth.configure(*_api_token_sources(), app.logger)
+    else:
+        api_auth.recheck_now(*_api_token_sources(), app.logger)
 
 
 @app.after_serving
@@ -416,7 +452,9 @@ async def template_action():
     template page actions:
     Render and serve template html
     """
-    app.logger.info(" >> Sending rendered template data")
+    # No " >> " here: an action's status is read from the action log after the
+    # last line holding it, so this line would hide a failing action's errors.
+    app.logger.info("Sending rendered template data")
 
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
@@ -496,7 +534,16 @@ async def json_convert():
     """
     app.logger.info("Attempting to convert YAML to JSON")
     data = await request.get_data()
-    yaml_config = yaml.safe_load(data)
+    try:
+        yaml_config = yaml.safe_load(data)
+    except Exception as e:
+        # A YAML error's text quotes the lines around the error, which can hold
+        # a secret: the API token, in pieces the log mask cannot match. A tag
+        # such as !!bool or !!int raises KeyError or ValueError with the value
+        # lowercased or without its underscores, which the mask cannot match
+        # either. So only the type is logged, whatever the error.
+        app.logger.warning(f"Could not parse the YAML sent to /get-json ({type(e).__name__})")
+        return await make_response(["failed to Parse YAML from data"], 400)
 
     # If filed to Parse YAML
     if yaml_config is None:
@@ -699,7 +746,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     try:
         runtimeparams = await request.get_json()
         if runtimeparams:
-            logger.info("Passed runtime parameters: " + str(runtimeparams))
+            logger.info("Passed runtime parameters: " + str(api_auth.redacted(runtimeparams)))
         else:
             runtimeparams = {}
     except Exception as e:
@@ -1096,7 +1143,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
 
     if runtime:
-        app.logger.info(f"Passed runtime parameters: {runtime}")
+        app.logger.info(f"Passed runtime parameters: {api_auth.redacted(runtime)}")
     params, costfun = await _load_params(emhass_conf, app.logger)
     if params is None:
         _explain("The configuration could not be read. Nothing was run")
@@ -1563,7 +1610,10 @@ async def initialize(args: dict | None = None):
         root_path,
     ) = await _setup_paths()
     # Setup Secrets (must run BEFORE build_configuration to allow options.json to override config_path)
-    server_ip = await _setup_secrets(args, options_path)
+    try:
+        server_ip = await _setup_secrets(args, options_path)
+    finally:
+        api_auth.log_status(app.logger, api_auth.bind_host(params_secrets.get("server_ip")))
     # Build configuration (now uses potentially updated emhass_conf["config_path"] from options.json)
     config, costfun, logging_level = await _build_configuration(
         emhass_conf["config_path"],

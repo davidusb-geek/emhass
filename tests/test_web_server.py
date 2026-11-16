@@ -118,10 +118,9 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         data = await response.get_data()
         self.assertEqual(orjson.loads(data), {"converted": "config"})
-        # Test invalid YAML
-        # Expect 500 because the app currently lets YAMLError propagate
+        # Test invalid YAML: refused with 400 (test_api_auth checks the log)
         response = await self.client.post("/get-json", data=b": - invalid")
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 400)
 
     @patch("emhass.web_server.replace_file", new_callable=AsyncMock)
     @patch("emhass.web_server.aiofiles.open")
@@ -526,8 +525,9 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         await web_server.clear_file_log()
         f.write.assert_called_with("")
 
+    @patch("emhass.web_server._configure_api_auth", new_callable=AsyncMock)
     @patch("emhass.web_server.initialize")
-    async def test_before_serving(self, mock_init):
+    async def test_before_serving(self, mock_init, _mock_auth):
         # Happy path
         await web_server.before_serving()
         mock_init.assert_called_once()
@@ -1266,8 +1266,11 @@ class TestBootTs(unittest.IsolatedAsyncioTestCase):
     mutate global "emhass" logger state and leak into other tests.
     """
 
+    @patch("emhass.web_server._configure_api_auth", new_callable=AsyncMock)
     @patch("emhass.web_server.initialize", new_callable=AsyncMock)
-    async def test_before_serving_sets_boot_ts_even_if_initialize_fails(self, mock_init):
+    async def test_before_serving_sets_boot_ts_even_if_initialize_fails(
+        self, mock_init, _mock_auth
+    ):
         mock_init.side_effect = RuntimeError("init boom")
         web_server.app.config.pop("boot_ts", None)
         await web_server.before_serving()  # before_serving catches the init error and continues

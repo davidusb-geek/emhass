@@ -112,7 +112,9 @@ INVERTER_TIEBREAK_EPS = 1e-9
 # so drain-first wins at any currency/price scale) but can always fall back to
 # importing when that is the only feasible option (e.g. recharging to a terminal
 # SoC target with no PV), instead of returning infeasible. The gate confines the
-# penalty to genuinely avoidable import, so an aggressive factor is safe.
+# penalty to slots where the battery still holds charge, and the per-step import
+# floor (#1253) exempts import no schedule can avoid, such as a load above what PV
+# and the battery can deliver, so an aggressive factor is safe.
 BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 
 # Soft terminal-SoC target, the same treatment #1002 gave set_battery_first_priority.
@@ -382,6 +384,16 @@ class Optimization:
         self.param_export_ceiling = cp.Parameter(
             self.num_timesteps, nonneg=True, name="export_ceiling"
         )
+        # Grid import no schedule can avoid, per step, for the battery-first penalty
+        # (#1253): the load above the most PV and battery discharge can deliver. Set
+        # per solve by _battery_first_import_floor; zero leaves the penalty as before.
+        self.param_battery_first_import_floor = cp.Parameter(
+            self.num_timesteps, nonneg=True, name="battery_first_import_floor"
+        )
+        self.param_battery_first_import_floor.value = np.zeros(self.num_timesteps)
+        # AC output cap the one-inverter hybrid problem is built with; set by
+        # _add_hybrid_inverter_constraints and read by the import floor.
+        self._hybrid_ac_output_cap = None
         # Currency per Wh charged for missing the terminal SoC target. Set per solve
         # from the horizon's highest import tariff so the target stays dominant at any
         # price scale; a Parameter (not a baked-in constant) keeps that correct across
@@ -3774,29 +3786,14 @@ class Optimization:
         store[f"{name}_b"] = b
         return sum(w * u_k for w, u_k in zip(widths, u, strict=True))
 
-    def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
-        """Add the inverter constraints (Vectorized).
+    def _hybrid_inverter_ac_caps(self) -> tuple[float, float]:
+        """AC output and input caps (W) of the one-inverter hybrid model.
 
-        Above one inverter this hands over to ``_add_per_inverter_constraints``; the
-        rest is the one-inverter hybrid model.
+        ``inverter_ac_output_max`` / ``inverter_ac_input_max``, with the legacy
+        fallback of the output cap to the ``pv_inverter_model`` rating and of the
+        input cap to the output cap. Shared by the hybrid builder and the
+        battery-first import floor, so both read the same cap.
         """
-        if self.n_inv > 1:
-            self._add_per_inverter_constraints(constraints, inv_stress_conf)
-            return
-        if not self.plant_conf["inverter_is_hybrid"]:
-            return
-
-        # Retrieve main interface variables
-        p_hybrid_inverter = self.vars["p_hybrid_inverter"]
-        p_pv_curtailment = self.vars["p_pv_curtailment"]
-        # #610: fold every battery's power into the DC-bus balance the same
-        # way the main balance does - sum over the actual list length so the
-        # off-case single dummy entry contributes exactly zero.
-        p_sto_pos_total = sum(self.vars["p_sto_pos"])
-        p_sto_neg_total = sum(self.vars["p_sto_neg"])
-        p_pv = self.param_pv_forecast
-
-        # Determine Inverter Capacity (Configuration Logic)
         p_nom_inverter_output = self.plant_conf.get("inverter_ac_output_max", None)
         p_nom_inverter_input = self.plant_conf.get("inverter_ac_input_max", None)
 
@@ -3833,6 +3830,36 @@ class Optimization:
 
         if p_nom_inverter_input is None:
             p_nom_inverter_input = p_nom_inverter_output
+
+        return p_nom_inverter_output, p_nom_inverter_input
+
+    def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
+        """Add the inverter constraints (Vectorized).
+
+        Above one inverter this hands over to ``_add_per_inverter_constraints``; the
+        rest is the one-inverter hybrid model.
+        """
+        if self.n_inv > 1:
+            self._add_per_inverter_constraints(constraints, inv_stress_conf)
+            return
+        if not self.plant_conf["inverter_is_hybrid"]:
+            return
+
+        # Retrieve main interface variables
+        p_hybrid_inverter = self.vars["p_hybrid_inverter"]
+        p_pv_curtailment = self.vars["p_pv_curtailment"]
+        # #610: fold every battery's power into the DC-bus balance the same
+        # way the main balance does - sum over the actual list length so the
+        # off-case single dummy entry contributes exactly zero.
+        p_sto_pos_total = sum(self.vars["p_sto_pos"])
+        p_sto_neg_total = sum(self.vars["p_sto_neg"])
+        p_pv = self.param_pv_forecast
+
+        p_nom_inverter_output, p_nom_inverter_input = self._hybrid_inverter_ac_caps()
+        # The cap this problem is built with, read back by the battery-first import
+        # floor on every solve, so the pv_inverter_model fallback (which reads the CEC
+        # inverter table) runs once per build, not once per solve.
+        self._hybrid_ac_output_cap = p_nom_inverter_output
 
         # Optional exact piecewise-linear AC<->DC transfer curves (issue #746). A
         # direction with a curve ignores its scalar efficiency entirely, so the scalar
@@ -4072,10 +4099,79 @@ class Optimization:
         for spec, pv in zip(self.inverter_specs, pv_inv, strict=True):
             if pv is None:
                 continue
-            curve = spec["curve_dc_ac"]
-            ac = spec["eff_dc_ac"] * pv if curve is None else np.interp(pv, curve[1], curve[0])
-            total += np.minimum(ac, spec["cap_out"])
+            total += self._inverter_ac_reach(spec, pv)
         return total
+
+    @staticmethod
+    def _inverter_ac_reach(spec: dict, dc: np.ndarray | float) -> np.ndarray:
+        """The most AC power an inverter can deliver from ``dc`` W on its DC bus.
+
+        ``dc * eff`` for a scalar efficiency, or the highest AC power on the DC-to-AC
+        curve whose DC input does not exceed ``dc`` (DC is non-decreasing along the
+        curve, so a flat DC stretch gives its highest AC, and the value is capped at
+        the last AC point), then at the AC output cap. ``spec`` needs ``curve_dc_ac``,
+        ``eff_dc_ac`` and ``cap_out``.
+        """
+        dc = np.asarray(dc, dtype=float)
+        curve = spec["curve_dc_ac"]
+        ac = spec["eff_dc_ac"] * dc if curve is None else np.interp(dc, curve[1], curve[0])
+        return np.minimum(ac, spec["cap_out"])
+
+    def _battery_first_import_floor(self) -> np.ndarray:
+        """Grid import per step that no schedule can avoid, for the battery-first penalty (#1253).
+
+        The load above the most AC power PV and every battery at full discharge can
+        put on the bus: ``max(0, load - reach)``. Battery k reaches
+        ``eff_dis * min(discharge_power_max, availability ceiling)``, the bounds its
+        discharge has in the model. That reach goes straight to the bus on an
+        AC-coupled system, joins the PV on the DC bus of the one hybrid inverter
+        (converted, then capped at ``inverter_ac_output_max``), and above one inverter
+        joins the PV of the inverter it sits on, each inverter converted and capped on
+        its own.
+
+        Every term is an upper bound on what the plant can deliver, so the floor
+        never exceeds the import the step needs and the penalty still prices any
+        import the battery could have replaced. Deferrable loads (decision
+        variables) and limits that depend on the plan (ramp rates, the discharge
+        energy budget, a battery too empty to hold full power for the step) are
+        left out: they can only make the floor smaller than exact, never larger.
+        Reads this solve's Parameter values and the cap the hybrid builder used, so it
+        runs after the build.
+        """
+        n = self.num_timesteps
+        batt_conf = self._battery_conf_as_lists()
+        reach = [
+            batt_conf["eff_dis"][k]
+            * np.minimum(
+                float(self.param_battery_discharge_power_max[k].value),
+                np.asarray(self.param_batt_discharge_ceiling[k].value, dtype=float),
+            )
+            for k in range(self.n_batt)
+        ]
+        if self.n_inv > 1:
+            deliverable = np.zeros(n)
+            for i, spec in enumerate(self.inverter_specs):
+                if spec["shape"] == "inert":
+                    continue
+                dc = sum((reach[k] for k in spec["batteries"]), np.zeros(n))
+                if spec["has_pv"]:
+                    dc = dc + np.asarray(self.param_pv_inv[i].value, dtype=float)
+                deliverable += self._inverter_ac_reach(spec, dc)
+        else:
+            dc = np.asarray(self.param_pv_forecast.value, dtype=float) + sum(reach, np.zeros(n))
+            if self.plant_conf["inverter_is_hybrid"]:
+                curve = self._inverter_power_curve("inverter_power_curve_dc_ac", "dc_ac")
+                spec = {
+                    "curve_dc_ac": curve,
+                    "eff_dc_ac": self.plant_conf.get("inverter_efficiency_dc_ac", 1.0),
+                    # The cap the problem was built with (the floor runs after the build).
+                    "cap_out": self._hybrid_ac_output_cap,
+                }
+                deliverable = self._inverter_ac_reach(spec, dc)
+            else:
+                deliverable = dc
+        p_load = np.asarray(self.param_load_forecast.value, dtype=float)
+        return np.maximum(p_load - deliverable, 0.0)
 
     def _add_battery_constraints(self, constraints, batt_stress_conf):
         """Add all battery-related constraints (Vectorized).
@@ -4402,9 +4498,10 @@ class Optimization:
         # the import tariff. That dwarfs any realistic tariff gradient, so the
         # solver still drains the battery before importing, but it can always fall
         # back to importing when that is the only feasible option (recharging to a
-        # terminal SoC target with no PV, or a load that exceeds the battery's
-        # discharge power) instead of returning infeasible as the old hard bound
-        # `p_grid_pos <= max_from_grid * import_gate` did.
+        # terminal SoC target with no PV) instead of returning infeasible as the old
+        # hard bound `p_grid_pos <= max_from_grid * import_gate` did. Import that no
+        # schedule can avoid (a load above what PV and the batteries can deliver)
+        # is exempt from the penalty, see _battery_first_import_floor (#1253).
         #
         # #610: with N batteries there is one shared gate/penalty (not
         # per-battery), gated on AGGREGATE stored energy vs AGGREGATE minimum -
@@ -4452,10 +4549,17 @@ class Optimization:
                 aggregate_stored_energy - aggregate_min_energy - soc_tolerance_energy
                 <= aggregate_cap * (1 - import_gate)
             )
-            # battery_first_penalty >= import beyond the free (gated) allowance;
-            # nonneg, so it equals max(0, import while the fleet is charged).
+            # battery_first_penalty >= import beyond the free (gated) allowance and
+            # beyond the import no schedule can avoid in that step (#1253: a load
+            # above what PV and the batteries can deliver); nonneg, so it equals
+            # max(0, import above that floor while the fleet is charged). Without that
+            # floor the unavoidable part was penalized too, and the cheapest way out
+            # was to keep the battery near empty ahead of every such load.
             constraints.append(
-                battery_first_penalty >= p_grid_pos - cp.multiply(max_from_grid, import_gate)
+                battery_first_penalty
+                >= p_grid_pos
+                - cp.multiply(max_from_grid, import_gate)
+                - self.param_battery_first_import_floor
             )
 
     # ------------------------------------------------------------------
@@ -8371,6 +8475,9 @@ class Optimization:
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_load_cost_pos = cp.Parameter(current_n, nonneg=True, name="load_cost_pos")
             self.param_export_ceiling = cp.Parameter(current_n, nonneg=True, name="export_ceiling")
+            self.param_battery_first_import_floor = cp.Parameter(
+                current_n, nonneg=True, name="battery_first_import_floor"
+            )
             if self.n_inv > 1:
                 self.param_spill_price = cp.Parameter(current_n, nonneg=True, name="spill_price")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
@@ -9545,6 +9652,16 @@ class Optimization:
             # for, so cached-retry rebuilds see them (issue #1048).
             self._batt_stress_conf = batt_stress_conf
             self._inv_stress_conf = inv_stress_conf
+
+        # The battery-first import floor (#1253) reads this solve's PV, load and
+        # battery power Parameters and the inverter cap the problem was built with,
+        # so it is set after the build and before the solve. Only the battery-first
+        # penalty uses it; it is set whenever a battery is modelled, so a reused
+        # problem never reads a stale value.
+        if self.optim_conf["set_use_battery"]:
+            self.param_battery_first_import_floor.value = self._battery_first_import_floor()
+        else:
+            self.param_battery_first_import_floor.value = np.zeros(self.num_timesteps)
 
         # Thermal artifacts read by the extraction below. Locals so a relaxed
         # retry can swap in its own rebuilt artifacts for this run only, while
