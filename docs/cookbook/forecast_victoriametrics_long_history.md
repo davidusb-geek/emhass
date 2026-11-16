@@ -32,7 +32,7 @@ In the add-on's **Network** section set the host port for `8428/tcp` to `8428`. 
 
 With `leave_front_door_open: false`, create a dedicated Home Assistant user (for example `emhass_vm`, local user, no administrator rights needed) whose credentials both the integration and EMHASS will use. Only the Basic-auth *header* is accepted, not `?u=&p=` query parameters.
 
-Expected: `curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -u emhass_vm:<pw> http://<ha-host>:8428/api/v1/status/tsdb` returns JSON, and `401` without credentials.
+Expected: `curl -u emhass_vm:<pw> http://<ha-host>:8428/api/v1/status/tsdb` returns JSON, and `401` without credentials.
 
 ## Step 2: Point the Home Assistant influxdb integration at VictoriaMetrics
 
@@ -60,7 +60,7 @@ Keep the default measurement format (no `measurement_attr`, no extra `tags_attri
 
 A caveat that costs people hours: the `influxdb` integration is **config-entry based**, the YAML is imported once. If an InfluxDB entry already exists (Settings, Devices & services, InfluxDB) it keeps pointing at the old host, silently fails to write and logs nothing at the default log level. Delete that entry, then restart Home Assistant so the YAML is imported again. Restart once more if nothing arrives after the first restart.
 
-Expected: after the restart, `curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -u emhass_vm:<pw> "http://<ha-host>:8428/api/v1/label/entity_id/values"` lists your sensors, and `.../api/v1/query?query=W_value{entity_id="<your_load_sensor>"}` returns a fresh value.
+Expected: after the restart, `curl -u emhass_vm:<pw> "http://<ha-host>:8428/api/v1/label/entity_id/values"` lists your sensors, and `.../api/v1/query?query=W_value{entity_id="<your_load_sensor>"}` returns a fresh value.
 
 ## Step 3: Migrate the InfluxDB 1.x history (optional but recommended)
 

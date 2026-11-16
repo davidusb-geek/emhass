@@ -62,7 +62,7 @@ browser go to `/login`). The health check stays open so container health checks 
 **If none is set, EMHASS generates one** the first time it starts and keeps it in the data folder, in the file
 `emhass_api_token` (mode `0600` on POSIX; never a link). Later starts reuse it, so it survives restarts. The log names the file,
 never the token. In the add-on the web UI shows it to you through ingress. Set `EMHASS_API_TOKEN_AUTOGENERATE=false` to
-disable generation: EMHASS then answers `503` until you configure a token.
+disable generation: EMHASS then answers `503` until you configure a token (Home Assistant ingress is still served, since it needs no token).
 
 **Rules.** At least 16 characters (use a long random value, for example `openssl rand -base64 32`; URL-safe characters
 are safest). A source that exists but cannot be used (unreadable, broken YAML or JSON, a number instead of text, the key
@@ -152,7 +152,7 @@ user's browser, another add-on or container on the same host, a local process on
 |---|---|---|
 | Routes | one `before_request` hook, default closed; only `/healthz`, `/login`, `/logout` are open; tests enumerate every route in the URL map, unauthenticated on the API port and as a stranger on the ingress port, and pin the open list | a future route is protected automatically; on the ingress port the three open endpoints still answer anyone |
 | Token | 16+ characters; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a Home Assistant administrator through ingress, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
-| No token | generated and persisted (written to a temporary file, flushed and hard-linked into place, so it appears complete or not at all; on a file system without hard links an exclusive create is used and a crash can leave an empty file, which is replaced after 10 seconds), else `503`; never open | whoever can read the data folder can read the token. On POSIX the file is mode `0600`; **on Windows it is not restricted to its owner** (a warning is logged when it is generated): set `EMHASS_API_TOKEN` there |
+| No token | generated and persisted (written to a temporary file, flushed and hard-linked into place, so it appears complete or not at all; on a file system without hard links an exclusive create is used and a crash can leave an empty file, which is replaced when EMHASS next starts at least 10 seconds after the crash; a restart inside those 10 seconds answers `503` until it is restarted again), else `503`; never open | whoever can read the data folder can read the token. On POSIX the file is mode `0600`; **on Windows it is not restricted to its owner** (a warning is logged when it is generated): set `EMHASS_API_TOKEN` there |
 | Bearer vs cookie | bearer works everywhere; cookie is for browsers | a copied cookie works until it expires or EMHASS restarts |
 | CSRF | `SameSite=Strict`; cookie and ingress requests that change something must be JSON; the existing `Sec-Fetch-Site: cross-site` refusal | none known; `SameSite` ignores ports, which is why JSON is also required |
 | Cookie scope | no `Path`: browser scopes it to the login folder | the cookie is sent to every port of the same host (a browser rule) |
@@ -161,7 +161,7 @@ user's browser, another add-on or container on the same host, a local process on
 | `/api-token` | only through trusted ingress, only for a generated token, only when opened as a page (`Sec-Fetch-Mode: navigate`, so `fetch()` from another add-on's panel gets `403`), and served with `Content-Security-Policy: sandbox`, so a page that frames or opens it cannot read its text (opaque origin) | a user who opens the page can read it. Script on the shared Home Assistant origin can already drive EMHASS through ingress; treat the token as equal to EMHASS admin access |
 | Failure modes | unreadable/invalid source, short token, unwritable data folder: `503`, never open | a misconfiguration is an outage, not a breach; `/healthz` stays up |
 | Brute force | 16+ characters; failed logins wait one second; failures are logged as a count once a minute | no lockout; use a long random token |
-| Information | `/healthz` is open (status only) | uptime and readiness are visible |
+| Information | `/healthz` is open (status only) | readiness, uptime and the EMHASS and Python versions are visible |
 
 ## Reference
 

@@ -6,7 +6,7 @@
 - **The web API now requires a token (GHSA-c39q-j4r5-9xq5).** Configuration and secrets changes, optimization runs and Home Assistant publishing used to be open to anyone who could reach the port. Every request except `/healthz`, `/login` and `/logout` now needs `Authorization: Bearer <token>` (or the browser login cookie). The server is closed by default: with no token configured EMHASS generates one at first start and keeps it in the data folder (`emhass_api_token`, mode 0600), and answers `503` if it cannot. See `docs/api_authentication.md`.
 - Home Assistant add-on: ingress is served on its own port (8099) and trusted only for the Supervisor's address; the published API port always needs the token. The add-on release must declare `ingress_port: 8099` and the option `emhass_api_token`.
 - The session cookie is set without a `Path`, the servers no longer let `X-Forwarded-For` choose the peer address, and the token is masked in every log record.
-- Built on the opt-in authentication proposed in #1351 (@LesIT1).
+- Builds on the opt-in authentication merged in #1351 (@LesIT1).
 
 ### Migration (action needed)
 - Add `Authorization: Bearer <token>` to every `rest_command`, `shell_command`, `curl`, Node-RED request and script that calls the EMHASS API; calls without it get `401`. The documentation examples show the header.

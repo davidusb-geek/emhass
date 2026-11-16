@@ -162,7 +162,7 @@ return msg;
 ```
 
 Wire the output to an `http request` node: `POST http://<emhass-host>:5000/action/naive-mpc-optim`,
-send as JSON, return parsed JSON, timeout 120 s. `def_current_state` keeps EMHASS from
+send as JSON, return parsed JSON, timeout 120 s, with the header `Authorization: Bearer <token>` (the EMHASS API token, see [API authentication](../api_authentication.md)). `def_current_state` keeps EMHASS from
 charging a startup penalty for a car that is already charging; `def_current_power` forces the
 EV on at the first step (at nominal power for a semi-continuous load, at the measured power
 for a modulated one) so a charge in progress is not planned off (the
@@ -177,7 +177,7 @@ and the departure step.
 <!-- source: src/emhass/web_server.py:769 (/api/v1/plan) -->
 <!-- transport: Node-RED 3.x (tested) -->
 
-After a 200, a second `http request` node does `GET http://<emhass-host>:5000/api/v1/plan`.
+After a 200, a second `http request` node (same `Authorization` header) does `GET http://<emhass-host>:5000/api/v1/plan`.
 The response is `{status, generated_at, plan: [...]}` with one record per step and a UTC
 `timestamp` per record (see the [plan output schema](../plan_output_schema.md)). A `function`
 node with four outputs turns the first record into retained topics, so any consumer gets
