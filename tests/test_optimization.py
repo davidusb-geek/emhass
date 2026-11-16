@@ -48,6 +48,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
 
 
+def _reported_reach(message):
+    """The SoC value a soc_target reach warning reports as reachable."""
+    return float(message.split("reachable SoC is ~")[1].split()[0])
+
+
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The fixtures below are 48 half-hour steps; the real-clock grid is 46 or 50 on
@@ -914,7 +919,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     msg=f"soc_target={target} is above the real reach {reach} but no "
                     "reach warning was logged",
                 )
-                reported = float(warnings_logged[0].split("reachable SoC is ~")[1].split()[0])
+                reported = _reported_reach(warnings_logged[0])
                 self.assertAlmostEqual(reported, reach, delta=1e-3)
                 self.assertIn("battery_charge_efficiency", warnings_logged[0])
 
@@ -961,7 +966,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(
                     warnings_logged, msg=f"soc_target={target} is above the derated reach"
                 )
-                reported = float(warnings_logged[0].split("reachable SoC is ~")[1].split()[0])
+                reported = _reported_reach(warnings_logged[0])
                 self.assertAlmostEqual(reported, 0.5425, delta=1e-3)
                 self.assertIn("battery_charge_power_derating", warnings_logged[0])
         # Reachable only by starting step 1 just below the threshold.
@@ -981,7 +986,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(status, VALID_OPTIMAL_STATUSES)
         self.assertTrue(warnings_logged, msg="soc_target=0.536 is above the derated reach 0.50")
-        reported = float(warnings_logged[0].split("reachable SoC is ~")[1].split()[0])
+        reported = _reported_reach(warnings_logged[0])
         self.assertAlmostEqual(reported, 0.50, delta=1e-3)
 
     def test_battery_soc_final_reward_factor(self):
