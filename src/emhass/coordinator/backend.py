@@ -484,9 +484,11 @@ class EmhassParticipant:
     ) -> pd.DataFrame:
         """EMHASS's result for a mix of this participant's plans: every number
         mixed with the same weights, the rest taken from the heaviest plan."""
+        import pandas as pd
+
         out = details[int(np.argmax(weights))].copy()
         for c in out.columns:
-            if np.issubdtype(out[c].dtype, np.number):
+            if pd.api.types.is_numeric_dtype(out[c].dtype):  # pandas 3: text is StringDtype
                 out[c] = sum(w * d[c].values for w, d in zip(weights, details))
         return out
 
