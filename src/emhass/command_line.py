@@ -1247,7 +1247,7 @@ def _battery_identification_last_attempt(entry) -> dict | None:
     recorded failure - a dict with a truthy ``status`` and a parsable
     ``attempted_at`` - else ``None``.
 
-    Both call sites (the N=1 cache-hit branch and :func:`_battery_fit_is_stale`)
+    The backoff readers (the N=1 cache-hit branch and :func:`_battery_fit_is_stale`)
     fall through to a re-fit when this returns ``None``, so a malformed
     last_attempt (missing, not a dict, no status, unparsable attempted_at -
     e.g. a hand-edited or truncated file) can never become a permanent no-fit
@@ -1267,8 +1267,9 @@ def _battery_identification_last_attempt(entry) -> dict | None:
 
 def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = None) -> bool:
     """
-    True when a retained ok record must not be served because the latest fit
-    attempt was held back by the same-source agreement gate (#1072, #1294).
+    True when a retained ok record must not be served because a fit attempt
+    since it was stored was held back by the same-source agreement gate and
+    none has passed since (#1072, #1294).
 
     The gate holds back a fresh fit above the 0.985 one-way efficiency edge
     when its cross-check agrees, but a record in that range stored before the
@@ -1276,8 +1277,10 @@ def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = Non
     run, would otherwise keep being served as the retained record (#1052). So
     the record is held only when its stored ``eta_charge_symmetric`` is above
     that same edge and its well-formed ``last_attempt`` carries
-    ``agreement_hold: true``. A record at or below the edge is served as
-    before.
+    ``agreement_hold: true`` (the failure recorder keeps the flag through
+    later failures until a fit passes). A record at or below the edge is
+    served as before. A record above the edge is held whatever its own
+    cross-check said: newer data agreeing near the ceiling counts against it.
 
     ``current_pair`` (N>1 only) binds the hold to the ``(power, soc)`` pair the
     attempt was made against, like every other N>1 read of last_attempt. The
@@ -1326,10 +1329,11 @@ def _record_battery_identification_failed_attempt(
     there would be dead data.
 
     ``agreement_hold`` is the result's flag from the same-source agreement
-    gate; ``"agreement_hold": true`` is recorded in ``last_attempt`` only when
-    it is True, so every other attempt keeps the same keys as before. It is
-    what stops a retained near-ceiling record being served (see
-    :func:`_battery_id_agreement_hold`).
+    gate; ``"agreement_hold": true`` is recorded in ``last_attempt`` when it
+    is True, or when the retained ok record's previous well-formed
+    last_attempt already carried it for the same ``sensors``. Every other
+    attempt keeps the same keys as before. It is what stops a retained
+    near-ceiling record being served (see :func:`_battery_id_agreement_hold`).
 
     ``existing`` must already be known to be the SAME schema shape this
     caller expects (flat v1 at N=1, a v2 container slot at N>1): this
@@ -1351,6 +1355,16 @@ def _record_battery_identification_failed_attempt(
         attempt["agreement_hold"] = True
     if isinstance(existing, dict) and existing.get("status") == "ok":
         new_payload = dict(existing)
+        # A hold lasts until a fit passes (a pass replaces the record and its
+        # last_attempt), so a later failure for another reason against the
+        # same sensors keeps it rather than serving the record again.
+        previous = _battery_identification_last_attempt(existing)
+        if (
+            previous is not None
+            and previous.get("agreement_hold") is True
+            and previous.get("sensors") == sensors
+        ):
+            attempt["agreement_hold"] = True
     else:
         new_payload = {"schema_version": _BATTERY_ID_SCHEMA_VERSION_V1}
     new_payload["last_attempt"] = attempt
@@ -1736,9 +1750,9 @@ async def _identify_battery_impl(
                 if _battery_id_agreement_hold(payload):
                     logger.info(
                         "Battery identification: stored estimate (one-way efficiency %s) is "
-                        "above %.3f and the latest fit attempt was held back by the agreement "
-                        "check, so it is not served; keeping configured battery values, "
-                        "backing off until max_age.",
+                        "above %.3f and a later fit was held back by the agreement check "
+                        "with none passing since, so it is not served; keeping configured "
+                        "battery values, backing off until max_age.",
                         _battery_id_safe_log_value(payload.get("eta_charge_symmetric")),
                         battery_identification.SQRT_RTE_HIGH
                         - battery_identification.AGREEMENT_EDGE_MARGIN,
@@ -1993,9 +2007,9 @@ async def _identify_battery_impl(
                 if _battery_id_agreement_hold(entry, (power_list[k], soc_list[k])):
                     logger.info(
                         "Battery %d identification: stored estimate (one-way efficiency %s) is "
-                        "above %.3f and the latest fit attempt was held back by the agreement "
-                        "check, so it is not served; keeping configured battery values, "
-                        "backing off until max_age.",
+                        "above %.3f and a later fit was held back by the agreement check "
+                        "with none passing since, so it is not served; keeping configured "
+                        "battery values, backing off until max_age.",
                         k,
                         _battery_id_safe_log_value(entry.get("eta_charge_symmetric")),
                         battery_identification.SQRT_RTE_HIGH
