@@ -2809,7 +2809,8 @@ class RetrieveHass:
 
         :param forward_fill: Fill time steps that have no statistics with the last \
             value (default). When False they stay NaN, so a stretch without data \
-            is kept as a gap.
+            is kept as a gap. A time step shorter than the 5-minute statistics \
+            period still takes the value of the row whose period it falls in.
         :type forward_fill: bool, optional
         """
         import pandas as pd
@@ -2892,12 +2893,19 @@ class RetrieveHass:
             except Exception as e:
                 self.logger.warning(f"Could not resample data to {self.freq}: {e}")
 
-            # Forward fill missing values. Statistics come as one row per 5-minute
-            # period whenever the sensor had a numeric value, so a time step with
-            # no row means there was no data, not an unchanged value. Callers that
-            # need to see those stretches as gaps pass forward_fill=False.
+            # Forward fill missing values. Callers that need to see a stretch with
+            # no statistics as a gap pass forward_fill=False: a missing row there
+            # means no statistics were compiled for that period, not that the value
+            # stayed the same.
             if forward_fill:
                 df_final = df_final.ffill()
+            else:
+                # Each statistics row covers a 5-minute period. With a time step
+                # shorter than that, hold a row over the steps inside its own period
+                # only, so the normal 5-minute spacing is not read as a gap.
+                hold = -(-pd.Timedelta(minutes=5) // pd.Timedelta(self.freq)) - 1
+                if hold > 0:
+                    df_final = df_final.ffill(limit=hold)
 
             # Set frequency for the DataFrame index
             df_final = set_df_index_freq(df_final)
