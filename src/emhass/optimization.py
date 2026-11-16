@@ -2205,19 +2205,33 @@ class Optimization:
                 # follow: a higher COP shrinks cap/COP, and keeping the old level would
                 # leave the source unable to turn on where the cap binds.
                 cap_entry = getattr(self, "_thermal_cap_by_load", {}).get(k)
-                on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
-                if cap_entry is not None and on_level is not None:
-                    nominal = np.broadcast_to(
-                        np.asarray(
-                            self.optim_conf["nominal_power_of_deferrable_loads"][k],
-                            dtype=float,
-                        ),
-                        on_level.shape,
-                    )
-                    on_level.value = np.minimum(
-                        nominal,
-                        float(cap_entry[0])
-                        / np.maximum(np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9),
+                if cap_entry is not None:
+                    on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
+                    if on_level is not None:
+                        nominal = np.broadcast_to(
+                            np.asarray(
+                                self.optim_conf["nominal_power_of_deferrable_loads"][k],
+                                dtype=float,
+                            ),
+                            on_level.shape,
+                        )
+                        on_level.value = np.minimum(
+                            nominal,
+                            float(cap_entry[0])
+                            / np.maximum(
+                                np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9
+                            ),
+                        )
+                    # The refreshed COP can also push cap/COP under min_power, which
+                    # forces the source off at those steps: warn, exactly as the
+                    # build path and the DP refinement do.
+                    self._warn_capped_level_below_min_power(
+                        "Thermal battery load",
+                        k,
+                        heatpump_cops,
+                        cap_entry[0],
+                        n,
+                        when="after a COP refresh",
                     )
 
                 # Thermal losses and heating demand
@@ -5697,7 +5711,7 @@ class Optimization:
                 return
 
     def _warn_capped_level_below_min_power(
-        self, store_label, k, cop_vals, thermal_cap, n_steps, after_dp=False
+        self, store_label, k, cop_vals, thermal_cap, n_steps, after_dp=False, when=""
     ):
         """Warn when a capped source cannot run at some steps.
 
@@ -5710,9 +5724,10 @@ class Optimization:
         ON level is min(nominal, cap/COP)) or continuous, so the source is dropped
         at those steps. That is physically right (the unit cannot modulate below
         its floor), but it must not happen silently: warn rather than lower the
-        floor. After the DP refinement, or in the relaxed-LP rebuild, the warning
-        is repeated only when the number of affected steps changed. Returns that
-        number.
+        floor. `when` names a later re-derivation of the level ("after a COP
+        refresh"); the DP refinement (`after_dp`) and the relaxed-LP rebuild
+        repeat the warning only when the number of affected steps changed.
+        Returns that number.
         """
         cap_over_cop = float(thermal_cap) / np.maximum(np.asarray(cop_vals, dtype=float), 1e-9)
         min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
@@ -5721,7 +5736,7 @@ class Optimization:
         min_power_k = float(min_powers[k]) if k < len(min_powers) and min_powers[k] else 0.0
         below_min = int(np.count_nonzero(cap_over_cop < min_power_k)) if min_power_k > 0 else 0
         counts = self.__dict__.setdefault("_capped_below_min_counts", {})
-        repeat = after_dp or getattr(self, "_relaxed_rebuild", False)
+        repeat = after_dp or bool(when) or getattr(self, "_relaxed_rebuild", False)
         if repeat and counts.get(k) == below_min:
             return below_min
         counts[k] = below_min
@@ -5734,7 +5749,7 @@ class Optimization:
                 k,
                 below_min,
                 n_steps,
-                " after the DP COP refinement" if after_dp else "",
+                f" {when}" if when else (" after the DP COP refinement" if after_dp else ""),
                 min_power_k,
             )
         return below_min
