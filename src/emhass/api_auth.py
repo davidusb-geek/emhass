@@ -1040,11 +1040,31 @@ async def require_api_token():
     return _unauthorized()
 
 
+# The group every Home Assistant administrator is in (homeassistant.auth.const.GROUP_ID_ADMIN)
+ADMIN_GROUP = "system-admin"
+
+
+def ha_administrator_request() -> bool:
+    """True when the Supervisor says an administrator made this request.
+
+    The Supervisor adds ``X-Remote-User-Id`` and ``X-Remote-User-Groups`` to what it forwards and
+    removes any copy a client sent (``_REQUEST_HEADERS_FILTER`` in its ingress proxy). They can be
+    believed here only because ``is_trusted_ingress_request`` already restricts this port to the
+    Supervisor. A request with no user, or a user that is not an administrator, is refused, so the
+    page stays admin-only even for an add-on that sets ``panel_admin: false``.
+    """
+    if not request.headers.get("X-Remote-User-Id", "").strip():
+        return False
+    groups = [g.strip() for g in request.headers.get("X-Remote-User-Groups", "").split(",")]
+    return ADMIN_GROUP in groups
+
+
 def token_page_available() -> bool:
     """True when this request may open /api-token: it came through ingress and the token is
     one EMHASS generated. The web UI shows its link only then."""
     return (
         is_trusted_ingress_request()
+        and ha_administrator_request()
         and current_token() is not None
         and _state["source"] in ("generated", "generated-new")
     )
@@ -1067,6 +1087,10 @@ async def api_token_page():
         # A browser sets these and a page's script cannot change them: script in another add-on's
         # panel (the same Home Assistant origin) must not be able to read the token with fetch().
         return _plain(403, "EMHASS >> Open the API token as a page, not from a script.\n")
+    if not ha_administrator_request():
+        return _plain(
+            403, "EMHASS >> The API token is shown to Home Assistant administrators only.\n"
+        )
     if not token_page_available():
         return _plain(404, "EMHASS >> There is no generated API token.\n")
     response = _plain(200, current_token() + "\n")

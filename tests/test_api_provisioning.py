@@ -11,7 +11,7 @@ import yaml
 
 from emhass import api_auth
 
-from .api_auth_support import OUTSIDER, SUPERVISOR, TOKEN, AuthSupportBase
+from .api_auth_support import ADMIN, OUTSIDER, SUPERVISOR, TOKEN, AuthSupportBase
 
 POSIX = os.name == "posix"
 
@@ -200,7 +200,7 @@ class TestTokenPage(AuthSupportBase):
         self.token = api_auth.current_token()
 
     async def test_shown_through_ingress(self):
-        response = await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR)
+        response = await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR, headers=ADMIN)
         self.assertEqual(response.status_code, 200)
         self.assertEqual((await response.get_data(as_text=True)).strip(), self.token)
         self.assertIn("no-store", response.headers["Cache-Control"])
@@ -217,9 +217,42 @@ class TestTokenPage(AuthSupportBase):
         os.environ[api_auth.ENV_NAME] = TOKEN
         api_auth.reset()
         await api_auth.configure(None, None, self.logger, data_dir=self.data)
-        response = await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR)
+        response = await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR, headers=ADMIN)
         self.assertEqual(response.status_code, 404)
         self.assertNotIn(TOKEN, await response.get_data(as_text=True))
+
+    async def test_a_missing_or_non_administrator_identity_is_refused(self):
+        cases = {
+            "no identity at all": {},
+            "user id but no groups": {"X-Remote-User-Id": "u1"},
+            "groups but no user id": {"X-Remote-User-Groups": "system-admin"},
+            "a normal user": {"X-Remote-User-Id": "u1", "X-Remote-User-Groups": "system-users"},
+            "a read-only user": {
+                "X-Remote-User-Id": "u1",
+                "X-Remote-User-Groups": "system-read-only",
+            },
+            "lookalike group": {
+                "X-Remote-User-Id": "u1",
+                "X-Remote-User-Groups": "system-admins,xsystem-admin",
+            },
+            "blank user id": {"X-Remote-User-Id": " ", "X-Remote-User-Groups": "system-admin"},
+        }
+        for name, headers in cases.items():
+            with self.subTest(name):
+                response = await self.send(
+                    "GET", "/api-token", port=8099, peer=SUPERVISOR, headers=headers
+                )
+                self.assertEqual(response.status_code, 403)
+                self.assertNotIn(self.token, await response.get_data(as_text=True))
+
+    async def test_forged_administrator_headers_from_a_stranger_do_nothing(self):
+        for port in (8099, 5000):
+            response = await self.send("GET", "/api-token", port=port, peer=OUTSIDER, headers=ADMIN)
+            self.assertIn(response.status_code, (401, 403))
+            self.assertNotIn(self.token, await response.get_data(as_text=True))
+        # and the Supervisor's address on the API port is still just a client
+        response = await self.send("GET", "/api-token", port=5000, peer=SUPERVISOR, headers=ADMIN)
+        self.assertIn(response.status_code, (401, 403))
 
     async def test_not_from_a_stranger_on_the_ingress_port(self):
         response = await self.send("GET", "/api-token", port=8099, peer=OUTSIDER)
@@ -341,7 +374,9 @@ class TestTokenPageIsNotReadableByScript(AuthSupportBase):
         await api_auth.configure(None, None, self.logger, data_dir=self.data)
 
     async def get(self, **headers):
-        return await self.send("GET", "/api-token", port=8099, peer=SUPERVISOR, headers=headers)
+        return await self.send(
+            "GET", "/api-token", port=8099, peer=SUPERVISOR, headers={**ADMIN, **headers}
+        )
 
     async def test_the_page_cannot_be_read_by_a_framing_script(self):
         response = await self.get()
@@ -383,8 +418,11 @@ class TestTokenLink(AuthSupportBase):
         await api_auth.configure(None, None, self.logger, data_dir=self.data)
 
     async def test_link_only_through_ingress_for_a_generated_token(self):
-        shown = await self.send("GET", "/", port=8099, peer=SUPERVISOR)
+        shown = await self.send("GET", "/", port=8099, peer=SUPERVISOR, headers=ADMIN)
         self.assertIn('href="api-token"', await shown.get_data(as_text=True))
+        # no link for a request with no administrator identity
+        anonymous = await self.send("GET", "/", port=8099, peer=SUPERVISOR)
+        self.assertNotIn('href="api-token"', await anonymous.get_data(as_text=True))
         # never on the API port, even with the token
         token = api_auth.current_token()
         other = await self.send("GET", "/", headers={"Authorization": f"Bearer {token}"})
@@ -394,5 +432,5 @@ class TestTokenLink(AuthSupportBase):
         os.environ[api_auth.ENV_NAME] = TOKEN
         api_auth.reset()
         await api_auth.configure(None, None, self.logger, data_dir=self.data)
-        page = await self.send("GET", "/", port=8099, peer=SUPERVISOR)
+        page = await self.send("GET", "/", port=8099, peer=SUPERVISOR, headers=ADMIN)
         self.assertNotIn('href="api-token"', await page.get_data(as_text=True))

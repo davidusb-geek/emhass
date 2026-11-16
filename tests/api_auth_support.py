@@ -14,6 +14,8 @@ BEARER = {"Authorization": f"Bearer {TOKEN}"}
 SUPERVISOR = "172.30.32.2"
 # Documentation address ranges, never real hosts
 OUTSIDER = "192.0.2.10"
+# what the Supervisor adds for a Home Assistant administrator (supervisor/api/ingress.py _init_header)
+ADMIN = {"X-Remote-User-Id": "ha-user-1", "X-Remote-User-Groups": "system-admin,system-users"}
 
 
 class AuthSupportBase(unittest.IsolatedAsyncioTestCase):
