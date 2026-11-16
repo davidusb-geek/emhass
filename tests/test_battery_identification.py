@@ -11,6 +11,7 @@ base commit for a RED-on-base proof) the behavioural assertions fail rather
 than erroring at import.
 """
 
+import inspect
 import json
 import logging
 import os
@@ -341,6 +342,11 @@ def _staleness_fill(df, *args, **kwargs):
     fn = getattr(bi_module, "apply_staleness_fill", None)
     if fn is None:
         return df
+    # A keyword this build's fill does not take yet (row_counts, added in the
+    # #1073 review) is dropped, so a test of the newer guards fails on its
+    # assertion against an older build instead of on a TypeError.
+    accepted = inspect.signature(fn).parameters
+    kwargs = {k: v for k, v in kwargs.items() if k in accepted}
     return fn(df, *args, **kwargs)
 
 
@@ -1651,17 +1657,25 @@ class TestGapHandling(unittest.TestCase):
 
 
 _STEP = pd.Timedelta("30min")
-_P, _S = "sensor.batt_power", "sensor.batt_soc"
+_P, _S, _L = "sensor.batt_power", "sensor.batt_soc", "sensor.load"
 
 
-def _fill_case(power_last, soc_last, power_df=None, soc_df=None, tz="Europe/Paris"):
+def _fast_counts(last):
+    """Readings per bucket for sensors that report faster than the step: two in
+    every bucket that has a real state, none elsewhere."""
+    return {k: v.notna().astype("int64") * 2 for k, v in last.items()}
+
+
+def _fill_case(power_last, soc_last, power_df=None, soc_df=None, tz="Europe/Paris", load_last=None):
     """A frame on a 30-min grid plus the aux series the REST retrieval records for it.
 
     ``*_last`` are the per-bucket last real states (NaN = no real recorded
     state in that bucket); ``*_df`` are the frame values (bucket means; they
     default to the last states). The aux is indexed in UTC like the retrieval
     records it, while the frame is converted to a local zone like prepare_data
-    leaves it, so every test also covers the instant-based alignment.
+    leaves it, so every test also covers the instant-based alignment. The load
+    sensor has a reading in every bucket unless ``load_last`` says otherwise, so
+    by default the recorder was running throughout.
     """
     n = len(power_last)
     idx = pd.date_range("2026-03-02 00:00", periods=n, freq=_STEP, tz="UTC")
@@ -1672,9 +1686,11 @@ def _fill_case(power_last, soc_last, power_df=None, soc_df=None, tz="Europe/Pari
     )
     if tz is not None:
         df.index = df.index.tz_convert(tz)
+    load_last = [500.0] * n if load_last is None else load_last
     last = {
         _P: pd.Series(np.asarray(power_last, dtype=float), index=idx),
         _S: pd.Series(np.asarray(soc_last, dtype=float), index=idx),
+        _L: pd.Series(np.asarray(load_last, dtype=float), index=idx),
     }
     return df, last, idx
 
@@ -1693,8 +1709,11 @@ class TestStalenessFill(unittest.TestCase):
     def setUp(self):
         self.logger = logging.getLogger("test_staleness_fill")
 
-    def _fill(self, df, last, markers=None, step=_STEP):
-        return _staleness_fill(df, _P, _S, last, markers or {}, step, self.logger)
+    def _fill(self, df, last, markers=None, step=_STEP, counts=None):
+        counts = _fast_counts(last) if counts is None else counts
+        return _staleness_fill(
+            df, _P, _S, last, markers or {}, step, self.logger, row_counts=counts
+        )
 
     def _assert_untouched(self, out, df):
         pd.testing.assert_frame_equal(out, df)
@@ -1913,35 +1932,140 @@ class TestStalenessFill(unittest.TestCase):
     # -- no-op paths ----------------------------------------------------------
     def test_missing_aux_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
+        counts = _fast_counts(last)
         for aux in ({}, None, {_P: last[_P]}, {_S: last[_S]}, unittest.mock.MagicMock()):
-            self.assertIs(_staleness_fill(df, _P, _S, aux, {}, _STEP), df)
+            self.assertIs(_staleness_fill(df, _P, _S, aux, {}, _STEP, row_counts=counts), df)
 
     def test_no_time_step_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
-        self.assertIs(_staleness_fill(df, _P, _S, last, {}, None), df)
+        counts = _fast_counts(last)
+        self.assertIs(_staleness_fill(df, _P, _S, last, {}, None, row_counts=counts), df)
 
     def test_misaligned_aux_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
+        counts = _fast_counts(last)
         shifted = {k: v.shift(10, freq="min") for k, v in last.items()}
-        self.assertIs(_staleness_fill(df, _P, _S, shifted, {}, _STEP), df)
+        self.assertIs(_staleness_fill(df, _P, _S, shifted, {}, _STEP, row_counts=counts), df)
         markers = {_P: pd.DatetimeIndex([last[_P].index[0] + pd.Timedelta("7min")])}
-        self.assertIs(_staleness_fill(df, _P, _S, last, markers, _STEP), df)
+        self.assertIs(_staleness_fill(df, _P, _S, last, markers, _STEP, row_counts=counts), df)
+        shifted_counts = {k: v.shift(10, freq="min") for k, v in counts.items()}
+        self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=shifted_counts), df)
 
     def test_tz_naive_frame_with_utc_aux_is_identity(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30], tz=None)
         df.index = df.index.tz_localize(None)
-        self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP), df)
+        counts = _fast_counts(last)
+        self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
+
+    # -- the pair must report faster than the step (#1073 review) ------------
+    def test_sensor_polled_once_per_step_or_slower_is_identity(self):
+        """RED before the review fix. A power sensor polled every other step leaves
+        one empty bucket between every two readings. Those buckets are changes
+        nobody sampled, not an unchanged value, so nothing of the pair is held.
+        The same history from a sensor that reports faster than the step is."""
+        n = 24
+        power = [100.0 + 10 * i if i % 2 == 0 else NAN for i in range(n)]
+        soc = [20.0 + i for i in range(n)]
+        df, last, _ = _fill_case(power, soc)
+        polled = _fast_counts(last)
+        polled[_P] = last[_P].notna().astype("int64")  # one reading per observed bucket
+        self.assertIs(self._fill(df, last, counts=polled), df)
+        self.assertEqual(self._fill(df, last)[_P].iloc[1], 100.0)
+
+    def test_polled_soc_alone_also_stops_the_fill(self):
+        df, last, _ = _fill_case(
+            [100.0, 200.0, NAN, 400.0, 500.0, 600.0], [10.0, NAN, 30.0, NAN, 50.0, NAN]
+        )
+        polled = _fast_counts(last)
+        polled[_S] = last[_S].notna().astype("int64")
+        self.assertIs(self._fill(df, last, counts=polled), df)
+
+    def test_reporting_rate_needs_two_readings_in_a_fifth_of_observed_buckets(self):
+        df, last, _ = _fill_case(
+            [100, 200, 300, 400, NAN, 600, 700, 800, 900, 1000, 1100], list(range(11))
+        )
+        counts = _fast_counts(last)
+        power_counts = last[_P].notna().astype("int64")
+        power_counts.iloc[[0, 1]] = 2  # 2 of the 10 observed buckets
+        counts[_P] = power_counts
+        self.assertEqual(self._fill(df, last, counts=counts)[_P].iloc[4], 400.0)
+        power_counts.iloc[1] = 1  # 1 of 10
+        self.assertIs(self._fill(df, last, counts=counts), df)
+
+    def test_missing_row_counts_is_identity(self):
+        """Without the readings per bucket the reporting rate cannot be checked."""
+        df, last, _ = _fill_case([100, 200, NAN, 400], [10, 20, 30, 40])
+        fast = _fast_counts(last)
+        for counts in (None, {}, {_P: fast[_P]}, {_S: fast[_S]}, unittest.mock.MagicMock()):
+            self.assertIs(_staleness_fill(df, _P, _S, last, {}, _STEP, row_counts=counts), df)
+
+    # -- a run needs another sensor's reading in every bucket (#1073 review) --
+    def test_recorder_outage_is_not_held(self):
+        """RED before the review fix. Every sensor, the load included, is quiet
+        for two buckets: the recorder was down, and the battery may well have
+        changed meanwhile (it can go full inside the outage). Left as it was."""
+        load = [500.0] * 8
+        load[3] = load[4] = NAN
+        df, last, _ = _fill_case(
+            [100, 200, 300, NAN, NAN, 600, 700, 800],
+            [10, 20, 30, NAN, NAN, 60, 70, 80],
+            load_last=load,
+        )
+        self._assert_untouched(self._fill(df, last), df)
+
+    def test_every_bucket_of_a_run_needs_a_witness(self):
+        load = [500.0] * 8
+        load[4] = NAN
+        df, last, _ = _fill_case(
+            [100, 200, 300, NAN, NAN, 600, 700, 800],
+            [10, 20, 30, NAN, NAN, 60, 70, 80],
+            load_last=load,
+        )
+        self._assert_untouched(self._fill(df, last), df)
+
+    def test_partner_reading_witnesses_a_run(self):
+        """Only the power sensor is quiet. The state of charge readings show the
+        recorder was running, so the power run is held with no load reading."""
+        load = [500.0] * 6
+        load[2] = load[3] = NAN
+        df, last, _ = _fill_case(
+            [100, 200, NAN, NAN, 500, 600], [10, 20, 30, 40, 50, 60], load_last=load
+        )
+        np.testing.assert_array_equal(self._fill(df, last)[_P].to_numpy()[2:4], [200, 200])
+
+    def test_witness_off_the_grid_counts_for_nothing(self):
+        df, last, _ = _fill_case(
+            [100, 200, 300, NAN, NAN, 600, 700, 800], [10, 20, 30, NAN, NAN, 60, 70, 80]
+        )
+        last[_L] = last[_L].shift(7, freq="min")
+        self._assert_untouched(self._fill(df, last), df)
+
+    # -- cost follows the history, not time_step (#1073 review) --------------
+    def test_time_step_finer_than_the_frame_is_identity(self):
+        """The grid is the frame's span over time_step. A step far finer than the
+        frame's own spacing must not size it: 1 ns would ask for about 10**13
+        buckets on this four-row frame."""
+        df, last, _ = _fill_case([100, 200, NAN, 400], [10, 20, 30, 40])
+        counts = _fast_counts(last)
+        for step in (pd.Timedelta("1ns"), pd.Timedelta("1ms"), pd.Timedelta("1s"), 1):
+            started = time.perf_counter()
+            self.assertIs(_staleness_fill(df, _P, _S, last, {}, step, row_counts=counts), df)
+            self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_degenerate_inputs_do_not_raise(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
+
+        def fill(frame, aux):
+            return _staleness_fill(frame, _P, _S, aux, {}, _STEP, row_counts=_fast_counts(aux))
+
         empty = df.iloc[0:0]
-        self.assertIs(_staleness_fill(empty, _P, _S, last, {}, _STEP), empty)
+        self.assertIs(fill(empty, last), empty)
         one = df.iloc[0:1]
-        pd.testing.assert_frame_equal(_staleness_fill(one, _P, _S, last, {}, _STEP), one)
+        pd.testing.assert_frame_equal(fill(one, last), one)
         all_nan = {k: v * np.nan for k, v in last.items()}
-        pd.testing.assert_frame_equal(_staleness_fill(df, _P, _S, all_nan, {}, _STEP), df)
+        pd.testing.assert_frame_equal(fill(df, all_nan), df)
         empty_aux = {k: v.iloc[0:0] for k, v in last.items()}
-        pd.testing.assert_frame_equal(_staleness_fill(df, _P, _S, empty_aux, {}, _STEP), df)
+        pd.testing.assert_frame_equal(fill(df, empty_aux), df)
 
 
 # --- end to end through the real REST retrieval (#1073 R2) -------------------
@@ -1950,14 +2074,10 @@ _E2E_LOAD = "sensor.power_load_no_var_loads"
 _E2E_URL = "http://test.local/"
 
 
-def _change_only_pack(n_days: int, seed: int = 42, quant_w: float = 100.0, quant_soc: float = 1.0):
-    """Deterministic 1-min truth for a 10 kWh pack with RTE 0.9025, recorded the
-    way a clean change-only Home Assistant sensor records it.
-
-    Overnight base-load discharge plateaus, a solar charge (ramp, plateau,
-    taper) and evening discharge plateaus each day; a row is written only when
-    the quantized value changes, so plateaus leave empty buckets between rows.
-    """
+def _pack_truth(n_days: int, seed: int = 42):
+    """Deterministic 1-min truth (index, power W, SoC %) for a 10 kWh pack with RTE
+    0.9025: overnight base-load discharge plateaus, a solar charge (ramp,
+    plateau, taper) and evening discharge plateaus each day."""
     rng = np.random.default_rng(seed)
     minutes = n_days * 24 * 60
     idx = pd.date_range("2026-07-01", periods=minutes, freq="1min", tz="UTC")
@@ -1991,6 +2111,14 @@ def _change_only_pack(n_days: int, seed: int = 42, quant_w: float = 100.0, quant
             p[i] = 0.0  # full or empty: the battery idles
             s_new = s
         soc[i] = s = s_new
+    return idx, p, soc
+
+
+def _change_only_pack(n_days: int, seed: int = 42, quant_w: float = 100.0, quant_soc: float = 1.0):
+    """The :func:`_pack_truth` pack recorded the way a clean change-only Home
+    Assistant sensor records it: a row is written only when the quantized value
+    changes, so plateaus leave empty buckets between rows."""
+    idx, p, soc = _pack_truth(n_days, seed)
 
     def change_only(values, quant):
         q = np.round(values / quant) * quant
@@ -2035,17 +2163,12 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
     without the fill) is fitted in the same test, so it cannot false-green:
     on a source without the fill both fits are the same and the test fails."""
 
-    async def test_fill_shrinks_change_only_bias_through_real_rest_retrieval(self):
+    @staticmethod
+    async def _retrieve(series, days, logger):
+        """The real battery_id retrieval over HA-shaped history of ``series``."""
         from tests.aioresponses_compat import aioresponses
 
-        logger = logging.getLogger("test_staleness_fill_e2e")
-        n_days = 26
-        idx, power_rows, soc_rows = _change_only_pack(n_days)
-        load_rows = pd.Series(500.0, index=idx[::60])
-        days = pd.date_range(idx[0], periods=n_days, freq="D")
-        series = {_P: power_rows, _S: soc_rows, _E2E_LOAD: load_rows}
         retrieve_hass_conf = {
-            "historic_days_to_retrieve": n_days,
             "optimization_time_step": _STEP,
             "sensor_power_load_no_var_loads": _E2E_LOAD,
             "sensor_power_battery": _P,
@@ -2055,6 +2178,7 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
             "sensor_replace_zero": [],
             "sensor_linear_interp": [],
         }
+        retrieve_hass_conf["historic_days_to_retrieve"] = len(days)
         rh = command_line.RetrieveHass(_E2E_URL, "token", _STEP, "UTC", None, {}, logger)
         with (
             aioresponses() as mocked,
@@ -2070,7 +2194,36 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
             success, df, _ = await command_line.retrieve_home_assistant_data(
                 "battery_id", False, retrieve_hass_conf, {}, rh, {}, "", logger
             )
-        self.assertTrue(success)
+        assert success
+        return rh, df
+
+    @staticmethod
+    def _fill(rh, df, logger):
+        return _staleness_fill(
+            df,
+            _P,
+            _S,
+            getattr(rh, "bucket_last_state", {}),
+            getattr(rh, "marker_buckets", {}),
+            _STEP,
+            logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
+        )
+
+    @staticmethod
+    def _dense_load(idx):
+        """A house load meter: a new reading every five minutes."""
+        stamps = idx[::5]
+        return pd.Series(500.0 + np.arange(len(stamps)) % 37, index=stamps)
+
+    async def test_fill_shrinks_change_only_bias_through_real_rest_retrieval(self):
+        logger = logging.getLogger("test_staleness_fill_e2e")
+        n_days = 26
+        idx, power_rows, soc_rows = _change_only_pack(n_days)
+        load_rows = pd.Series(500.0, index=idx[::60])
+        days = pd.date_range(idx[0], periods=n_days, freq="D")
+        series = {_P: power_rows, _S: soc_rows, _E2E_LOAD: load_rows}
+        rh, df = await self._retrieve(series, days, logger)
 
         filled = _staleness_fill(
             df,
@@ -2080,6 +2233,7 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
             getattr(rh, "marker_buckets", {}),
             _STEP,
             logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
         )
 
         def errors(frame):
@@ -2101,6 +2255,56 @@ class TestStalenessFillEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertLess(abs(cap_fill), 1.0)
         self.assertLess(abs(rte_fill), 0.02)
 
+    async def test_polled_pair_is_left_as_retrieved(self):
+        """RED before the review fix. The same pack read by an integration that
+        polls once an hour, with the default 30 minute step: one empty bucket
+        between every two readings while the battery works. Holding those would
+        lag the pack by up to an hour (+15..+18% capacity in the review probes),
+        so the frame reaches the fit exactly as retrieved."""
+        logger = logging.getLogger("test_staleness_fill_e2e_polled")
+        n_days = 8
+        idx, p, soc = _pack_truth(n_days)
+        polled = idx[59::60] + pd.Timedelta(seconds=7)
+
+        def readings(values, quant):
+            q = pd.Series(np.round(values[59::60] / quant) * quant, index=polled)
+            return q[q.diff().ne(0)]  # HA writes a row only on a change
+
+        series = {_P: readings(p, 100.0), _S: readings(soc, 1.0), _E2E_LOAD: self._dense_load(idx)}
+        days = pd.date_range(idx[0], periods=n_days, freq="D")
+        rh, df = await self._retrieve(series, days, logger)
+        pd.testing.assert_frame_equal(self._fill(rh, df, logger), df)
+        counts = getattr(rh, "bucket_row_count", {})
+        self.assertEqual(int(counts[_P].max()), 1, "one reading per bucket at most")
+
+    async def test_recorder_outage_is_left_as_retrieved(self):
+        """RED before the review fix. Every day the recorder is down from 12:10 to
+        13:10, when the pack is near full: no row of any sensor, the load
+        included, then each sensor reports its state again. The quiet bucket is
+        left as retrieved, while short silences elsewhere are still held."""
+        logger = logging.getLogger("test_staleness_fill_e2e_outage")
+        n_days = 8
+        idx, power_rows, soc_rows = _change_only_pack(n_days)
+        series = {_P: power_rows, _S: soc_rows, _E2E_LOAD: self._dense_load(idx)}
+        quiet = []
+        for day in range(n_days):
+            down = idx[0] + pd.Timedelta(days=day, hours=12, minutes=10)
+            up = down + pd.Timedelta(hours=1)
+            for key, rows in series.items():
+                revived = rows.asof(up)
+                rows = rows[(rows.index < down) | (rows.index >= up)]
+                if not np.isnan(revived):
+                    rows.loc[up] = revived
+                series[key] = rows.sort_index()
+            quiet.append(down + pd.Timedelta(minutes=20))  # the 12:30 bucket
+        days = pd.date_range(idx[0], periods=n_days, freq="D")
+        rh, df = await self._retrieve(series, days, logger)
+        filled = self._fill(rh, df, logger)
+        quiet = pd.DatetimeIndex(quiet).tz_convert(df.index.tz)
+        self.assertTrue(df.loc[quiet, [_P, _S]].isna().all().all(), "fixture: nothing recorded")
+        pd.testing.assert_frame_equal(filled.loc[quiet], df.loc[quiet])
+        self.assertFalse(filled.equals(df), "short silences elsewhere must still be held")
+
 
 class _FakeRHWithAux(_FakeRH):
     """A retrieval that recorded the staleness aux series (REST, battery_id)."""
@@ -2108,6 +2312,7 @@ class _FakeRHWithAux(_FakeRH):
     def __init__(self, bucket_last_state, marker_buckets=None):
         super().__init__()
         self.bucket_last_state = bucket_last_state
+        self.bucket_row_count = _fast_counts(bucket_last_state)
         self.marker_buckets = marker_buckets or {}
 
 

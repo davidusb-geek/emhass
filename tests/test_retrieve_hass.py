@@ -2392,9 +2392,57 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ls[t("05:00")], 40.0)
         self.assertTrue(np.isnan(ls[t("00:00", "2024-01-02")]))
         self.assertEqual(len(markers[s]), 0)
+        # Real readings per bucket: the carried row and marker rows do not count.
+        counts = getattr(self.rh, "bucket_row_count", {})
+        self.assertIn(p, counts)
+        cp = counts[p]
+        self.assertTrue(cp.index.equals(lp.index))
+        self.assertEqual(cp[t("00:00")], 0)
+        self.assertEqual(cp[t("00:30")], 1)
+        self.assertEqual(cp[t("01:00")], 1)
+        self.assertEqual(cp[t("01:30")], 0)
+        self.assertEqual(cp[t("00:00", "2024-01-02")], 0)
+        self.assertEqual(cp[t("00:30", "2024-01-02")], 1)
+        self.assertEqual(int(counts[s].sum()), 3)
         # The aux sits on df_final's grid (UTC), like the frame it describes.
         for series in last.values():
             self.assertTrue(series.index.isin(self.rh.df_final.index).all())
+
+    async def test_record_staleness_counts_each_reading_once(self):
+        """RED before the #1073 review fix (nothing counted). Several readings in a
+        bucket are counted, rows sharing a timestamp (an attribute-only update)
+        once, and neither the carried start-of-day row nor a marker row counts."""
+        p = "sensor.batt_power"
+        payloads = {
+            ("2024-01-01", p): self._ha_rows(
+                p,
+                [
+                    ("2024-01-01T00:00:00+00:00", "500"),
+                    ("2024-01-01T00:05:00+00:00", "600"),
+                    ("2024-01-01T00:10:00+00:00", "650"),
+                    ("2024-01-01T00:10:00+00:00", "650"),
+                    ("2024-01-01T00:20:00+00:00", "unavailable"),
+                    ("2024-01-01T00:40:00+00:00", "700"),
+                    ("2024-01-01T23:40:00+00:00", "800"),
+                ],
+            ),
+            ("2024-01-02", p): self._ha_rows(
+                p,
+                [
+                    ("2024-01-02T00:00:00+00:00", "800"),
+                    ("2024-01-02T00:35:00+00:00", "900"),
+                    ("2024-01-02T23:40:00+00:00", "950"),
+                ],
+            ),
+        }
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        counts = getattr(self.rh, "bucket_row_count", {}).get(p)
+        self.assertIsNotNone(counts)
+        self.assertEqual(counts[pd.Timestamp("2024-01-01 00:00", tz="UTC")], 2)
+        self.assertEqual(counts[pd.Timestamp("2024-01-01 00:30", tz="UTC")], 1)
+        self.assertEqual(counts[pd.Timestamp("2024-01-02 00:00", tz="UTC")], 0)
+        self.assertEqual(counts[pd.Timestamp("2024-01-02 00:30", tz="UTC")], 1)
+        self.assertEqual(int(counts.sum()), 6)
 
     async def test_record_staleness_does_not_change_df_final(self):
         """The flag only records aux: df_final is identical with and without it,
@@ -2404,6 +2452,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         without = await self._rest_with_payloads(payloads, keep_partial_days=True)
         pd.testing.assert_frame_equal(with_flag, without)
         self.assertEqual(getattr(self.rh, "bucket_last_state", {}), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", {}), {})
         self.assertEqual(getattr(self.rh, "marker_buckets", {}), {})
 
     async def test_default_retrieval_byte_identical_with_and_without_record_staleness(self):
@@ -2435,6 +2484,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.rh.use_websocket = False
         self.assertTrue(ok)
         self.assertEqual(getattr(self.rh, "bucket_last_state", {}), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", {}), {})
         self.assertEqual(getattr(self.rh, "marker_buckets", {}), {})
 
     async def test_retrieve_from_hass_record_staleness_plumbing(self):
@@ -2492,6 +2542,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.rh.use_websocket = False
         self.assertTrue(ok)
         self.assertEqual(getattr(self.rh, "bucket_last_state", None), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", None), {})
         self.assertEqual(getattr(self.rh, "marker_buckets", None), {})
 
     @patch("aiofiles.open")

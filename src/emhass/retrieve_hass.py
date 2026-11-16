@@ -200,10 +200,12 @@ class RetrieveHass:
         self.time_zone = time_zone
         # Buckets of the last REST retrieval where the sensor was unavailable or unknown
         self.unavailable_buckets: dict[str, pd.DatetimeIndex] = {}
-        # Per sensor, the last real recorded state of each bucket and the buckets
-        # holding an unavailable/unknown row, of the last REST retrieval made with
-        # record_staleness=True (battery identification, #1073). Empty otherwise.
+        # Per sensor, the last real recorded state and the number of real readings
+        # of each bucket, and the buckets holding an unavailable/unknown row, of the
+        # last REST retrieval made with record_staleness=True (battery
+        # identification, #1073). Empty otherwise.
         self.bucket_last_state: dict[str, pd.Series] = {}
+        self.bucket_row_count: dict[str, pd.Series] = {}
         self.marker_buckets: dict[str, pd.DatetimeIndex] = {}
         if (params is None) or (params == "null"):
             self.params = {}
@@ -506,11 +508,12 @@ class RetrieveHass:
             when a websocket-configured retrieval falls back to REST. When True, \
             also records, per sensor, the last real recorded state of each bucket \
             in ``bucket_last_state`` (NaN where the bucket has none; the state row \
-            Home Assistant adds at the start of each requested day does not count) \
-            and the buckets holding an unavailable or unknown row in \
+            Home Assistant adds at the start of each requested day does not count), \
+            the number of real readings in each bucket in ``bucket_row_count`` and \
+            the buckets holding an unavailable or unknown row in \
             ``marker_buckets``. ``df_final`` is the same either way. Used by battery \
             self-identification to hold short silences at the last recorded state. \
-            Both attributes are emptied at the start of every call. Defaults to False
+            All three attributes are emptied at the start of every call. Defaults to False
         :type record_staleness: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
@@ -518,6 +521,7 @@ class RetrieveHass:
         # Only a REST retrieval asked to record them fills these (battery
         # identification), so no other call can see a previous call's values.
         self.bucket_last_state = {}
+        self.bucket_row_count = {}
         self.marker_buckets = {}
         # Use InfluxDB if configured (Prioritize over WebSocket/REST for history)
         if self.use_influxdb:
@@ -654,8 +658,9 @@ class RetrieveHass:
         """Helper to convert raw data to a resampled DataFrame.
 
         ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
-        ``staleness`` collects the (last real state per bucket, marker buckets) pair
-        described for ``record_staleness`` in :meth:`get_data`.
+        ``staleness`` collects the (last real state per bucket, real readings per
+        bucket, marker buckets) triple described for ``record_staleness`` in
+        :meth:`get_data`.
         """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
@@ -750,14 +755,16 @@ class RetrieveHass:
         states: pd.Series,
         buckets: pd.DatetimeIndex,
         day: pd.Timestamp,
-    ) -> tuple[pd.Series, pd.DatetimeIndex]:
-        """Last real recorded state per bucket, and the buckets with a marker row.
+    ) -> tuple[pd.Series, pd.Series, pd.DatetimeIndex]:
+        """Last real recorded state and number of real readings per bucket, and the
+        buckets with a marker row.
 
         ``raw_states`` is in Home Assistant's row order. Its first row, when stamped
         exactly at the requested day start, is the state Home Assistant carries into
         the period rather than a reading taken then, so it is no real observation and
-        is left out of the last states (its marker, if any, still counts). Buckets
-        with no real numeric state are NaN.
+        is left out of the last states and the counts (its marker, if any, still
+        counts). Buckets with no real numeric state are NaN, with a count of 0. Rows
+        sharing a timestamp (an attribute-only update) count as one reading.
         """
         real = raw_states
         if len(raw_states) and self._as_utc(raw_states.index[0]) == self._as_utc(day):
@@ -765,10 +772,18 @@ class RetrieveHass:
         real = real.dropna().sort_index(kind="stable")
         if real.empty:
             last = pd.Series(np.nan, index=buckets, name=states.name)
+            count = pd.Series(0, index=buckets, name=states.name, dtype="int64")
         else:
             last = real.resample(self.freq, origin=buckets[0]).last().reindex(buckets)
+            readings = pd.Series(1, index=real.index.unique(), name=states.name, dtype="int64")
+            count = (
+                readings.resample(self.freq, origin=buckets[0])
+                .sum()
+                .reindex(buckets, fill_value=0)
+                .astype("int64")
+            )
         has_marker = states.isna().resample(self.freq).sum().reindex(buckets, fill_value=0)
-        return last, buckets[has_marker.to_numpy() > 0]
+        return last, count, buckets[has_marker.to_numpy() > 0]
 
     async def _fetch_live_state(
         self, session: aiohttp.ClientSession, entity_id: str, headers: dict
@@ -915,8 +930,9 @@ class RetrieveHass:
         self.df_final = pd.DataFrame()
         self.unavailable_buckets = {}
         self.bucket_last_state = {}
+        self.bucket_row_count = {}
         self.marker_buckets = {}
-        # Per sensor, the kept days' (last real state, marker buckets) pairs;
+        # Per sensor, the kept days' (last real state, readings, marker buckets);
         # only collected when record_staleness is on.
         staleness_by_var: dict[str, list] = {}
 
@@ -1055,9 +1071,10 @@ class RetrieveHass:
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
         for var, parts in staleness_by_var.items():
-            self.bucket_last_state[var] = pd.concat([last for last, _ in parts])
+            self.bucket_last_state[var] = pd.concat([last for last, _, _ in parts])
+            self.bucket_row_count[var] = pd.concat([count for _, count, _ in parts])
             self.marker_buckets[var] = (
-                parts[0][1].append([markers for _, markers in parts[1:]]).unique().sort_values()
+                parts[0][2].append([markers for _, _, markers in parts[1:]]).unique().sort_values()
             )
         return True
 

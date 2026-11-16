@@ -1753,6 +1753,7 @@ async def _identify_battery_impl(
             getattr(rh, "marker_buckets", {}),
             retrieve_hass_conf.get("optimization_time_step"),
             logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
         )
         result = BatteryIdentification(
             logger, time_step=retrieve_hass_conf.get("optimization_time_step")
@@ -1969,6 +1970,7 @@ async def _identify_battery_impl(
             getattr(rh, "marker_buckets", {}),
             retrieve_hass_conf.get("optimization_time_step"),
             logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
         )
         result = BatteryIdentification(
             logger, time_step=retrieve_hass_conf.get("optimization_time_step")
