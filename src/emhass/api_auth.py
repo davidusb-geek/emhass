@@ -388,6 +388,8 @@ def _discard_stale(path: pathlib.Path) -> None:
         seen = path.stat()
         try:
             blank = not path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            raise  # gone already: handled below as "someone else removed it"
         except (OSError, UnicodeDecodeError):
             blank = False
         if not blank:

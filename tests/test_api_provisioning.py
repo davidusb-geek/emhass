@@ -415,6 +415,33 @@ class TestCrashSafety(AuthSupportBase):
                 api_auth._discard_stale(self.token_file())
         self.assertTrue(self.token_file().exists())
 
+    def test_non_blank_text_is_never_discarded(self):
+        import time
+
+        self.token_file().write_text("something else entirely\n")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        with self.assertRaises(api_auth.ApiTokenError):
+            api_auth._discard_stale(self.token_file())
+        self.assertEqual(self.token_file().read_text(), "something else entirely\n")
+
+    def test_a_file_that_vanishes_while_being_looked_at_is_not_an_error(self):
+        import time
+
+        self.token_file().write_text("")
+        past = time.time() - 3600
+        os.utime(self.token_file(), (past, past))
+        real = pathlib.Path.read_text
+
+        def vanish(path, *args, **kwargs):
+            if path == self.token_file():
+                path.unlink()
+            return real(path, *args, **kwargs)
+
+        with patch.object(pathlib.Path, "read_text", vanish):
+            api_auth._discard_stale(self.token_file())  # does not raise
+        self.assertFalse(self.token_file().exists())
+
     def test_replacement_is_serialised_by_a_lock(self):
         import time
 
