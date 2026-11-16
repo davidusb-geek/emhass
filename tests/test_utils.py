@@ -4916,6 +4916,74 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
         self.assertIn("outdoor_temperature_forecast", str(ctx.exception))
 
 
+    def test_supply_temperature_profile_per_step(self):
+        """A per-timestep supply profile prices each step at its own supply T (#1327)."""
+        profile = [30.0, 35.0, 40.0, 45.0]
+        outdoor = np.array([0.0, 0.0, 0.0, 0.0])
+        hc = {"supply_temperature": profile, "carnot_efficiency": 0.4}
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=4)
+        expected = utils.calculate_cop_heatpump(np.array(profile), 0.4, outdoor)
+        np.testing.assert_array_almost_equal(cops, expected)
+        # At a fixed outdoor temperature a hotter supply is a larger lift, so the
+        # COP has to fall as the profile rises.
+        self.assertTrue(np.all(np.diff(cops) < 0))
+
+    def test_supply_temperature_profile_single_value_broadcasts(self):
+        """A one-element list means the same as the scalar it generalizes."""
+        outdoor = np.array([0.0, 5.0, 10.0])
+        scalar = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": 35.0}, outdoor, length=3
+        )
+        listed = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": [35.0]}, outdoor, length=3
+        )
+        np.testing.assert_array_almost_equal(scalar, listed)
+
+    def test_supply_temperature_profile_accepts_pandas_series(self):
+        """A Series is accepted and means the same as the equivalent list."""
+        outdoor = np.array([0.0, 5.0, 10.0])
+        as_series = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": pd.Series([30.0, 32.0, 34.0])}, outdoor, length=3
+        )
+        as_list = utils.resolve_thermal_battery_cop(
+            {"supply_temperature": [30.0, 32.0, 34.0]}, outdoor, length=3
+        )
+        np.testing.assert_array_almost_equal(as_series, as_list)
+
+    def test_supply_temperature_profile_longer_than_horizon_is_truncated(self):
+        """A profile longer than the horizon is truncated, like the COP array."""
+        outdoor = np.array([0.0, 5.0])
+        hc = {"supply_temperature": [30.0, 31.0, 32.0, 33.0]}
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=2)
+        expected = utils.calculate_cop_heatpump(np.array([30.0, 31.0]), 0.4, outdoor)
+        np.testing.assert_array_almost_equal(cops, expected)
+
+    def test_supply_temperature_profile_shorter_than_horizon_raises(self):
+        """A too-short profile raises instead of inventing the missing temperatures."""
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0])
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(
+                {"supply_temperature": [30.0, 31.0]}, outdoor, length=4
+            )
+        self.assertIn("supply_temperature", str(ctx.exception))
+
+    def test_supply_temperature_profile_rejects_non_finite(self):
+        """A NaN in the profile is a configuration error, not a COP of NaN."""
+        outdoor = np.array([0.0, 5.0])
+        with self.assertRaises(ValueError):
+            utils.resolve_thermal_battery_cop(
+                {"supply_temperature": [30.0, float("nan")]}, outdoor, length=2
+            )
+
+    def test_supply_temperature_profile_rejects_nested_list(self):
+        """A nested list is rejected rather than silently flattened."""
+        outdoor = np.array([0.0, 5.0])
+        with self.assertRaises(ValueError):
+            utils.resolve_thermal_battery_cop(
+                {"supply_temperature": [[30.0, 31.0], [32.0, 33.0]]}, outdoor, length=2
+            )
+
+
 class TestCalculateSurfaceSolarGain(unittest.TestCase):
     """Tests for the pool/outdoor-thermal-mass solar absorption helper."""
 
