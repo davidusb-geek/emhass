@@ -92,6 +92,13 @@ This follows Home Assistant's own rule for add-ons: ingress runs on a port of it
 header: a client that reaches a port can send any header (`X-Ingress-Path`, `X-Forwarded-For`, `X-Remote-User-*`), so
 none is believed. The servers are configured not to rewrite the peer address from `X-Forwarded-For`.
 
+**What EMHASS relies on from Home Assistant's ingress** (read from the Supervisor's `api/ingress.py` and the add-on developer documentation; not run against a live Supervisor):
+
+- The Supervisor connects from `172.30.32.2` to the add-on's `ingress_port`, and refuses a browser that has no valid ingress session.
+- With `panel_admin: true` (the default, and set explicitly in the add-on) it answers `403` unless the signed-in user is an administrator, and a request with no resolvable user is denied.
+- It adds `X-Remote-User-Id` and `X-Remote-User-Groups` after removing any copy the client sent. EMHASS reads them **only** for `/api-token`, and only on the ingress port: the page needs a user id and the group `system-admin`, so it stays administrator-only even for a configuration that set `panel_admin: false`. A request with no user identity gets `403`.
+- It forwards redirects (`Location`), `Set-Cookie` and other response headers unchanged and does not follow redirects, and it serves the app under `/api/hassio_ingress/<token>/`, which the app does not see. Every URL, redirect and link EMHASS emits is therefore relative (a test scans the UI assets and the redirects), and the login cookie is set without a `Path`.
+
 A request that arrives through ingress and changes something must be JSON (the web UI always sends JSON), so a forged
 cross-site form post is refused.
 

@@ -12,7 +12,7 @@ import unittest
 
 from emhass import api_auth, web_server
 
-from .api_auth_support import BEARER, OUTSIDER, SUPERVISOR, AuthSupportBase
+from .api_auth_support import BEARER, OUTSIDER, SUPERVISOR, TOKEN, AuthSupportBase
 
 CONF = pathlib.Path(web_server.__file__).parents[2] / "gunicorn.conf.py"
 
@@ -374,6 +374,52 @@ class TestServerConfigurationIsPinned(AuthSupportBase):
         self.assertIsInstance(loaded.loaded_app, ProxyHeadersMiddleware)
         self.assertEqual(loaded.loaded_app.trusted_hosts, set())
         self.assertFalse(loaded.loaded_app.always_trust)
+
+
+class TestIngressRelativeUrls(AuthSupportBase):
+    """Behind ingress the app is served under /api/hassio_ingress/<token>/, which it does not see:
+    every URL it emits must be relative, or it leaves the app and lands on Home Assistant."""
+
+    ABSOLUTE = None
+
+    def test_no_ui_asset_refers_to_an_absolute_app_path(self):
+        import re
+
+        root = pathlib.Path(web_server.__file__).parent
+        pattern = re.compile(
+            r"""(?:fetch\(|href\s*=|src\s*=|action\s*=|location(?:\.href)?\s*=)\s*["'`]/(?!/)"""
+        )
+        offenders = []
+        for path in [
+            *root.glob("static/*.js"),
+            *root.glob("static/*.html"),
+            *root.glob("templates/*.html"),
+        ]:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    offenders.append(f"{path.name}:{number}: {line.strip()[:80]}")
+        self.assertEqual(offenders, [])
+
+    async def test_redirects_and_cookies_are_relative_and_unscoped(self):
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+        # the browser-facing redirect on the API port, from a path with a prefix-like depth
+        for path in ("/configuration",):
+            response = await self.send("GET", path, headers={"Accept": "text/html"})
+            self.assertEqual(response.status_code, 303)
+            self.assertFalse(
+                response.headers["Location"].startswith(("/", "http")), response.headers["Location"]
+            )
+        login = await self.send(
+            "POST",
+            "/login",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=f"token={TOKEN}".encode(),
+        )
+        self.assertFalse(
+            login.headers["Location"].startswith(("/", "http")), login.headers["Location"]
+        )
+        self.assertNotIn("Path=", login.headers["Set-Cookie"])
 
 
 if __name__ == "__main__":
