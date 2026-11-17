@@ -386,6 +386,69 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
                 await self._treat({"costfun": value}, "perfect-optim")
             self.assertIn("costfun", str(ctx.exception))
 
+    async def test_model_predict_publish_is_true_or_false(self):
+        for value, expected in ((True, True), ("true", True), ("False", False), (False, False)):
+            with self.subTest(value=value):
+                params, *_ = await self._treat({"model_predict_publish": value}, "dayahead-optim")
+                params = params if isinstance(params, dict) else orjson.loads(params)
+                self.assertIs(params["passed_data"]["model_predict_publish"], expected)
+        # The parser's error would quote the value capitalized: a mixed-case
+        # secret sent here by mistake, changed so the log mask cannot match it.
+        secret = "9Bcdefghij0123456789KLMNOPQRSTUVWXYZ_-abcde"
+        for value in (secret, "yes", "1 +"):
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeParamError) as ctx:
+                    await self._treat({"model_predict_publish": value}, "dayahead-optim")
+                self.assertEqual(str(ctx.exception), "model_predict_publish must be true or false")
+                self.assertIsNone(ctx.exception.__cause__)
+                self.assertTrue(ctx.exception.__suppress_context__)
+
+    async def test_bad_def_current_state_is_not_quoted(self):
+        with self.assertLogs(logger, level="WARNING") as logs:
+            await self._treat({"def_current_state": "[Hidden_Value_0123456789"}, "dayahead-optim")
+        text = "\n".join(logs.output)
+        self.assertIn("def_current_state", text)
+        self.assertIn("24 characters", text)
+        self.assertNotIn("hidden", text.lower())
+
+    async def test_bad_per_load_numbers_are_not_quoted(self):
+        for name in (
+            "def_current_on_timesteps",
+            "def_current_off_timesteps",
+            "def_current_power",
+            "def_current_operating_timesteps",
+        ):
+            for value in ("[Hidden_Value_0123456789", "Hidden_Value_0123456789", ["Hidden_Value"]):
+                with self.subTest(name=name, value=value):
+                    with self.assertLogs(logger, level="DEBUG") as logs:
+                        logger.debug("start")
+                        with self.assertRaises(RuntimeParamError) as ctx:
+                            await self._treat({name: value}, "dayahead-optim")
+                    self.assertEqual(
+                        str(ctx.exception), f"{name} must be a number or a list of numbers"
+                    )
+                    self.assertIsNone(ctx.exception.__cause__)
+                    self.assertNotIn("hidden", "\n".join(logs.output).lower())
+
+    async def test_per_load_numbers_still_parse(self):
+        for name, cast in (("def_current_on_timesteps", int), ("def_current_power", float)):
+            for value, expected in (("[1, 2]", [1, 2]), ([1, 2], [1, 2]), (3, [3]), ("3", [3])):
+                with self.subTest(name=name, value=value):
+                    params, *_ = await self._treat({name: value}, "dayahead-optim")
+                    params = params if isinstance(params, dict) else orjson.loads(params)
+                    got = params["optim_conf"][name]
+                    self.assertEqual(got[: len(expected)], [cast(v) for v in expected])
+                    self.assertTrue(all(isinstance(v, cast) for v in got))
+
+    async def test_per_load_list_does_not_need_the_load_count(self):
+        # A runtime nominal_power_of_deferrable_loads can arrive as one number.
+        params, *_ = await self._treat(
+            {"nominal_power_of_deferrable_loads": 3000, "def_current_power": [1, 2]},
+            "dayahead-optim",
+        )
+        params = params if isinstance(params, dict) else orjson.loads(params)
+        self.assertEqual(params["optim_conf"]["def_current_power"], [1.0, 2.0])
+
     async def test_saved_costfun_and_model_type_are_checked_too(self):
         # A value stored in the configuration gets the same check as a runtime one
         for key, value, conf in (

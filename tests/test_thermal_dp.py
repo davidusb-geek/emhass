@@ -547,3 +547,70 @@ def test_dp_heat_pump_stops_at_its_max_supply_temperature():
     backed = solve_thermal_dp(np.full(24, 0.10), 5.0, params, tank_start=40.0)
     assert backed.tank_trajectory.max() >= 59.5
     assert backed.backup_input_per_step.sum() > 0.0
+
+
+def test_dp_returned_dispatch_balances_per_step_heat_loss_and_cop():
+    """Audit the *returned* DP trajectory against independent thermodynamics.
+
+    The reference uses each step's outdoor temperature for COP and ambient for
+    standby loss; it does not call the DP's internal arrays/helpers or assert an
+    arbitrary temperature schedule. Positive external demand precludes free-gain
+    shedding, so heat input and required energy must agree at every step.
+    """
+    dt = 0.25  # not the DP default (0.5 h): the time step must be forwarded
+    outdoor = np.array([5.0, 13.0, 9.0, 17.0, 6.0, 14.0])
+    ambient = np.array([12.0, 14.0, 10.0, 16.0, 12.0, 15.0])
+    demand = np.array([8.0, 9.0, 8.0, 9.0, 8.0, 9.0])
+    price = np.array([0.26, 0.13, 0.27, 0.11, 0.18, 0.31])
+    params = ThermalDPParams(
+        heat_capacity=2.0,
+        loss_coeff=0.04,
+        min_temp=40.0,
+        max_temp=42.0,
+        grid_step=0.5,
+        ambient_temperature=ambient,
+        hp_max_power=5.0,
+        backup_max_power=0.0,
+        demand_kw=demand,
+    )
+    result = solve_thermal_dp(price, outdoor, params, time_step=dt, tank_start=41.0)
+    assert not result.meta["infeasible"]
+    assert np.isfinite(result.total_cost)
+
+    temp = result.tank_trajectory
+    assert len(temp) == len(price) + 1
+    assert temp.min() >= params.min_temp - 1e-8
+    assert temp.max() <= params.max_temp + 1e-8
+    assert result.hp_electric_per_step.sum() > 0
+    np.testing.assert_allclose(result.backup_input_per_step, 0.0, atol=1e-8)
+
+    # Independent heat-pump COP at the achieved end-of-step supply temperature.
+    supply = temp[1:] + params.hx_approach
+    lift = supply - outdoor
+    assert np.all(lift > 0)
+    cop = np.clip(
+        params.carnot_efficiency * (supply + 273.15) / lift,
+        *params.cop_bounds,
+    )
+    heat_supplied_kwh = result.hp_electric_per_step * cop * dt
+    heat_required_kwh = (
+        params.heat_capacity * np.diff(temp)
+        + demand * dt
+        + params.loss_coeff * (temp[:-1] - ambient) * dt
+    )
+    assert np.all(heat_required_kwh > 0), "fixture must not allow free-gain shedding"
+    np.testing.assert_allclose(
+        heat_supplied_kwh,
+        heat_required_kwh,
+        rtol=0.0,
+        atol=1e-8,
+        err_msg="DP dispatch must fund every change in stored energy and standing loss",
+    )
+    assert result.hp_electric_per_step.max() <= params.hp_max_power + 1e-8
+    np.testing.assert_allclose(
+        result.total_cost,
+        float(np.sum(result.hp_electric_per_step * price * dt)),
+        rtol=0.0,
+        atol=1e-8,
+        err_msg="DP energy cost must match its returned electrical dispatch",
+    )

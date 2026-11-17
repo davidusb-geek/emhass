@@ -12,7 +12,15 @@ from pathlib import Path
 # HTML/UI + framework routes excluded from the JSON-API contract.
 # `/static/{filename}` is Quart's auto-registered asset endpoint (not an API surface);
 # the others are the browser config/landing/template pages.
-SKIP = {"/", "/index", "/template", "/configuration", "/static/{filename}"}
+SKIP = {
+    "/",
+    "/index",
+    "/template",
+    "/configuration",
+    "/static/{filename}",
+    "/login",
+    "/logout",
+}
 
 # path -> set of documented methods (used by both the guard and the path assembly).
 CURATED = {
