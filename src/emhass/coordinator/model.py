@@ -330,6 +330,8 @@ class SiteConfig:
         names: set[str] = {MAIN}
         for c in self.connections:
             c.validate()
+            if c.name == RESERVED_BUS or c.name.startswith(RESERVED_SET_PREFIX):
+                raise ValueError(f"{c.name!r} is a reserved name")
             if c.name in names:
                 raise ValueError(f"two nodes or connections are named {c.name!r}")
             names.add(c.name)
