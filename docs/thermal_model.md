@@ -97,6 +97,7 @@ rest_command:
     method: post
     timeout: 300
     headers:
+      authorization: !secret emhass_bearer
       content-type: application/json
     payload: >
       {#- The comfort window is decided per step from the local clock time of that step, so it
@@ -153,7 +154,7 @@ For the data publish command we need to provide the information about which defe
 In the previous example with just one thermal load, the working example for a publish command will be:
 ```
 shell_command:
-  publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
+  publish_data: 'curl -H "Authorization: Bearer YOUR_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
 ```
 
 Or the equivalent using the `rest_command` integration:
@@ -164,6 +165,7 @@ rest_command:
     method: post
     timeout: 300
     headers:
+      authorization: !secret emhass_bearer
       content-type: application/json
     payload: >
       {

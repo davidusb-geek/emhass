@@ -6,6 +6,10 @@ For Home Assistant OS and HA Supervised users, A [EMHASS app repository](https:/
 
 You can find the app with the installation instructions here: [https://github.com/davidusb-geek/emhass-app](https://github.com/davidusb-geek/emhass-add-on)
 
+```{important}
+The EMHASS API requires a token. Open EMHASS from the Home Assistant sidebar and choose the key icon (**API token**) to read the token EMHASS generated, or set your own in the app **Configuration** (`emhass_api_token`). Home Assistant signs you in to the web UI through ingress; automations that call the API on port 5000 must send `Authorization: Bearer <token>`. See [API authentication](api_authentication.md).
+```
+
 These architectures are supported: `amd64` and `aarch64` (currently `armv7` and `armhf` are not supported).
 
 ```{note} 
@@ -21,7 +25,11 @@ To install first pull the latest image:
 # pull Docker image
 docker pull ghcr.io/davidusb-geek/emhass:latest
 # run Docker image, mounting the dir storing config.json and secrets_emhass.yaml from host
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+```
+
+```{important}
+The web API requires a token. If you do not set `EMHASS_API_TOKEN` (or `emhass_api_token` in `secrets_emhass.yaml`), EMHASS generates one at first start and keeps it in `/data/emhass_api_token`, so keep `-v /emhass/data:/data`. Read it with `docker exec emhass-container cat /data/emhass_api_token` and send it as `Authorization: Bearer <token>`. See [API authentication](api_authentication.md).
 ```
 
 ```{note} 
@@ -39,7 +47,7 @@ cd emhass
 # may need to set architecture tag (docker build --build-arg TARGETARCH=amd64 -t emhass-local .)
 docker build -t emhass-local . 
 # run built Docker image, mounting config.json and secrets_emhass.yaml from host
-docker run --rm -it -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
+docker run --rm -it -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
 ```
 
 Before running the docker container, make sure you have a designated folder for emhass on your host device and a `secrets_emhass.yaml` file. You can get a example of the secrets file from [`secrets_emhass(example).yaml`](https://github.com/davidusb-geek/emhass/blob/master/secrets_emhass(example).yaml) file on this repository.
@@ -55,14 +63,14 @@ lat: 45.83
 lon: 6.86
 alt: 4807.8
 EOT
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 
 ### Docker, things to note 
 
 - You can create a `config.json` file prior to running emhass. *(obtain an example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/master/src/emhass/data/config_defaults.json)* Alternatively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v /emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
-- If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
+- Mount a local folder on `/data` (below). Besides the EMHASS-generated data it holds the API token EMHASS generates when you set none (`/data/emhass_api_token`); without it every new container gets a new token and your automations stop working after each update. Setting `EMHASS_API_TOKEN` instead avoids the question.  
   ```bash
   #create data folder 
   mkdir -p ~/emhass/data 
@@ -71,7 +79,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /e
     
 - If you wish to set the web_server's homepage optimization diagrams to a timezone other than UTC, set `TZ` environment variable on docker run:
   ```bash
-  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```  
 
 ## Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*

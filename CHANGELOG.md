@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.18.10 - 2026-11-17
+
+### Security
+- **The web API now requires a token** Configuration and secrets changes, optimization runs and Home Assistant publishing used to be open to anyone who could reach the port. Every request except `/healthz`, `/login` and `/logout` now needs `Authorization: Bearer <token>` (or the browser login cookie). The server is closed by default: with no token configured EMHASS generates one at first start and keeps it in the data folder (`emhass_api_token`, mode 0600), and answers `503` if it cannot. See `docs/api_authentication.md`.
+- Home Assistant add-on: ingress is served on its own port (8099) and trusted only for the Supervisor's address; the published API port always needs the token. The add-on release must declare `ingress_port: 8099` and the option `emhass_api_token`.
+- The session cookie is set without a `Path`, the servers no longer let `X-Forwarded-For` choose the peer address, and the token is masked in every log record.
+- Builds on the opt-in authentication merged in #1351 (@LesIT1).
+
+### Migration (action needed)
+- Add `Authorization: Bearer <token>` to every `rest_command`, `shell_command`, `curl`, Node-RED request and script that calls the EMHASS API; calls without it get `401`. The documentation examples show the header.
+- Docker: keep `-v <host>/data:/data` (or set `EMHASS_API_TOKEN`), otherwise a container started with `--rm` generates a new token on every start.
+- Read-only routes (`/api/v1/plan`, `/api/v1/last-run`, the web pages) need the token as well.
+- `EMHASS_API_AUTH_DISABLED=true` restores the old unauthenticated behaviour on a network you fully control; it is logged at every start.
+
+### Improvement
+- test: fix false-positive HTTP session reuse test (Stage 3C) (@MMicieli)
+- chore(deps): remove redundant dependencies and macOS CI preinstall (Stage 3B) (@MMicieli)
+- test: make ML forecaster fixtures deterministic (Stage 3A) (@MMicieli)
+- test: cover forecast interpolation, resampling and Solcast row periods (stage 2F) (@MMicieli)
+- feat: opt-in API token authentication for the web server (@LesIT1)
+- test: add thermal heat-balance and DP dispatch invariants (Stage 2E) (@MMicieli)
+- test: verify deferrable-load min ON/OFF state invariants (Stage 2D) (@MMicieli)
+
+### Documentation
+- docs(cookbook): align the test notes of the custom PV forecast recipe (@JustAnotherPU)
+
+### Fix
+- fix: battery-first no longer penalizes import the battery cannot replace (#1253) (@LesIT1)
+- fix: honour fractional operating hours of a semi-continuous load with one remainder step (#1105) (@MMicieli)
+
 ## 0.18.9 - 2026-11-14
 
 Version 0.18.9 delivers critical web API security hardening alongside major functional upgrades, including full multi-inverter optimization and UI support, per-step availability masks for deferrable loads and heat sources, expanded Python 3.12–3.14 compatibility, and numerous reliability fixes across forecasting, thermal modeling, and atomic configuration saving. Many thanks to @LesIT1, @MMicieli, @thorstenhornung1, @JustAnotherPU, and @snauwaertc for their outstanding work, testing, and documentation contributions that made this release possible.

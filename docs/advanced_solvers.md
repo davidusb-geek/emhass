@@ -59,6 +59,7 @@ Assuming your license file is at `/home/user/gurobi.lic`:
 docker run -d \
   --name emhass \
   -p 5000:5000 \
+  -v /home/user/data:/data \                           <-- Keep the data folder (it holds the API token EMHASS generates)
   -v /home/user/config_emhass.json:/app/config_emhass.json \
   -v /home/user/gurobi.lic:/opt/gurobi/gurobi.lic \  <-- Mount License
   -e GRB_LICENSE_FILE=/opt/gurobi/gurobi.lic \       <-- Tell Gurobi where it is
