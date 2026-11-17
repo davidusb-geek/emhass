@@ -115,6 +115,7 @@ rest_command:
     method: POST
     timeout: 120
     headers:
+      authorization: !secret emhass_bearer
       content-type: application/json
     payload: >
       {

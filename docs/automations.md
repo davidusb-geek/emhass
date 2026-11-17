@@ -4,13 +4,18 @@ To automate EMHASS with Home Assistant, we will need to define some shell comman
 In the next few paragraphs, we are going to consider the `dayahead-optim` optimization strategy, which is also the first that was implemented, and we will also cover how to publish the optimization  results.  
 Additional optimization strategies were developed later, that can be used in combination with/replace the `dayahead-optim` strategy, such as MPC, or to expand the functionalities such as the Machine Learning method to predict your household consumption. Each of them has some specificities and features and will be considered in dedicated sections.
 
+```{note}
+Every call to the EMHASS API needs the API token: `Authorization: Bearer <token>`. The examples below show the
+header. See [API authentication](api_authentication.md) for where to find the token and how to migrate existing automations.
+```
+
 ## Dayahead Optimization - Method 1) Add-on and docker standalone
 
 We can use the `shell_command` integration in `configuration.yaml`:
 ```yaml
 shell_command:
-  dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
-  publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
+  dayahead_optim: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
+  publish_data: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
 An alternative that will be useful when passing data at runtime (see dedicated section), we can use the the `rest_command` instead:
 ```yaml
@@ -18,6 +23,7 @@ rest_command:
   url: http://127.0.0.1:5000/action/dayahead-optim
   method: POST
   headers:
+    authorization: !secret emhass_bearer
     content-type: application/json
   payload: >-
     {}

@@ -18,7 +18,7 @@ You must follow these steps to make EMHASS work properly:
 
 4) Launch the optimization and check the results. 
     - This can be done manually using the buttons in the web UI
-    - Or with a `curl` command like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
+    - Or with a `curl` command like this: `curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
 5) If you’re satisfied with the optimization results then you can set the optimization and data publish task commands in an automation. 
     - You can read more about this in the [Usage Guide](usage_guide) section.

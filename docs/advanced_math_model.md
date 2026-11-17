@@ -264,7 +264,7 @@ To enable this, add the following parameters to your `config.json` (or `optim_co
 
 Example usage using `runtimeparams`:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
     "inverter_stress_cost": 0.5,
     "prediction_horizon": 24
 }' http://localhost:5000/action/naive-mpc-optim
@@ -289,7 +289,7 @@ where $c_{surplus}$ is `battery_soc_surplus_cost`, $SOC_{thr}$ is `battery_soc_s
 
 Example usage using `runtimeparams`:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
     "battery_soc_surplus_threshold": 0.85,
     "battery_soc_surplus_cost": 0.1,
     "prediction_horizon": 24
@@ -568,11 +568,11 @@ In a practical use case, the values for `soc_init` and `soc_final` for each MPC 
 A correct call for an MPC optimization should look like this:
 
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
 ```
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 For a more readable option we can use the `rest_command` integration:
@@ -581,6 +581,7 @@ rest_command:
   url: http://127.0.0.1:5000/action/naive-mpc-optim
   method: POST
   headers:
+    authorization: !secret emhass_bearer
     content-type: application/json
   payload: >-
     {
@@ -606,7 +607,7 @@ Either in the Home Assistant add-on config screen:
 
 Either as runtime parameter:
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, 'operating_hours_of_each_deferrable_load':[4,2],'start_timesteps_of_each_deferrable_load':[4,0],'end_timesteps_of_each_deferrable_load':[27,23]}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, 'operating_hours_of_each_deferrable_load':[4,2],'start_timesteps_of_each_deferrable_load':[4,0],'end_timesteps_of_each_deferrable_load':[27,23]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 Please note that the proposed deferrable load time windows will be submitted to a validation step & can be automatically corrected.
