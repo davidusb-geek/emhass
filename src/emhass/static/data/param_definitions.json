@@ -41,7 +41,7 @@
               "additionalProperties": false,
               "required": ["id", "parent"],
               "properties": {
-                "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3})$"}},
+                "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|ac|solar)$"}},
                 "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
                 "type": {"type": "string", "enum": ["hybrid_inverter", "inverter", "panel", "breaker", "meter"]},
                 "max_import": {"type": "number", "minimum": 0},
@@ -55,7 +55,15 @@
               "type": "object",
               "additionalProperties": false,
               "required": ["id", "type"],
-              "properties": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}, "type": {"const": "limit"}, "max_import": {"type": "number", "minimum": 0}, "max_export": {"type": "number", "minimum": 0}}
+              "anyOf": [{"required": ["max_import"]}, {"required": ["max_export"]}],
+              "properties": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|solar)$"}}, "type": {"const": "limit"}, "max_import": {"type": "number", "minimum": 0}, "max_export": {"type": "number", "minimum": 0}}
+            },
+            {
+              "title": "the PV",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "parent"],
+              "properties": {"id": {"const": "pv"}, "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}}
             },
             {
               "title": "a device",
@@ -63,10 +71,10 @@
               "additionalProperties": false,
               "required": ["id", "parent"],
               "properties": {
-                "id": {"type": "string", "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3})$"},
+                "id": {"type": "string", "pattern": "^(battery[0-9]?|deferrable[0-9]{1,3})$"},
                 "parent": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
                 "solver": {"type": "string", "enum": ["emhass"], "default": "emhass"},
-                "group": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+                "group": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": {"const": "solar"}},
                 "limits": {"type": "array", "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}}
               }
             }

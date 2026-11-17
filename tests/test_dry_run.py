@@ -1964,6 +1964,9 @@ def test_a_hybrid_inverter_with_power_curves_is_the_default_solvers(curves, prob
         (None, 0.3, (0.3, 0.3)),
         (None, None, (0.5, 0.5)),  # both missing: the target
         (0.8, 0.3, (0.8, 0.3)),
+        ([0.8], None, (0.8, 0.8)),  # one battery's, as a one-element list
+        ([0.8], [0.3], (0.8, 0.3)),
+        ([0.8, 0.6], None, ([0.8, 0.6], None)),  # more batteries: left to decline
     ],
 )
 def test_the_coordinator_gets_the_battery_endpoints_the_default_solver_uses(init, final, expected):

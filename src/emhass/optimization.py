@@ -253,6 +253,12 @@ def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
     if not opt.optim_conf.get("set_use_battery"):
         return kwargs
     init, final = kwargs.get("soc_init"), kwargs.get("soc_final")
+    # one battery's endpoints as a one-element list, as the default solver
+    # takes them; a longer list is left for the coordinator to decline
+    if isinstance(init, list | tuple) and len(init) == 1:
+        init = init[0]
+    if isinstance(final, list | tuple) and len(final) == 1:
+        final = final[0]
     if isinstance(init, list | tuple) or isinstance(final, list | tuple):
         return kwargs
     target = opt.plant_conf.get("battery_target_state_of_charge")

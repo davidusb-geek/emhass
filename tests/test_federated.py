@@ -1292,3 +1292,86 @@ def test_the_baseline_bills_add_up_under_an_export_ceiling(monkeypatch):
     out = settlement.ledger(co, plan, co_dark, plan_dark)
     before = sum(r["bill_before"] for r in out["rows"])
     assert before == pytest.approx(out["totals"]["house_bill_before"])
+
+
+def _schema_accepts(site) -> bool:
+    """Whether the site schema in param_definitions.json (and so
+    openapi.json) accepts `site`: the subset of JSON Schema it uses -
+    required, properties, additionalProperties, const, pattern, not, enum, and
+    anyOf of required."""
+    import json
+    import pathlib
+    import re
+
+    defs = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "src/emhass/static/data/param_definitions.json"
+        ).read_text()
+    )
+    alternatives = defs["Local"]["site"]["schema"]["items"]["anyOf"]
+
+    def string_ok(schema, v):
+        if "const" in schema:
+            return v == schema["const"]
+        if "pattern" in schema and not re.search(schema["pattern"], v):
+            return False
+        return not ("not" in schema and string_ok(schema["not"], v))
+
+    def accepts(alt, e):
+        props = alt["properties"]
+        if any(k not in e for k in alt.get("required", [])) or set(e) - set(props):
+            return False
+        if "anyOf" in alt and not any(all(k in e for k in a["required"]) for a in alt["anyOf"]):
+            return False
+        for k, v in e.items():
+            p = props[k]
+            if isinstance(v, str) and not string_ok(p, v):
+                return False
+            if "enum" in p and v not in p["enum"]:
+                return False
+        return True
+
+    return all(any(accepts(alt, e) for alt in alternatives) for e in site)
+
+
+@pytest.mark.parametrize(
+    "site",
+    [
+        [{"id": "grid", "max_import": 9000}, {"id": "pv", "parent": "grid"}],
+        [
+            {"id": "roof", "parent": "grid", "type": "inverter", "max_export": 5000},
+            {"id": "pv", "parent": "roof"},
+            {"id": "feed", "type": "limit", "max_export": 3000},
+            {"id": "deferrable0", "parent": "grid", "group": "pool", "limits": ["feed"]},
+            {"id": "battery0", "parent": "roof", "solver": "emhass"},
+        ],
+    ],
+)
+def test_the_site_schema_accepts_what_the_site_check_accepts(site):
+    from emhass.coordinator import site as site_mod
+
+    assert site_mod.site_problem(site) is None and _schema_accepts(site)
+
+
+@pytest.mark.parametrize(
+    "site",
+    [
+        [{"id": "grid", "parent": "grid"}],  # the main meter has no parent
+        [{"id": "ac", "parent": "grid"}],  # reserved for the main bus's total
+        [{"id": "solar", "parent": "grid"}],  # reserved for the ledger's PV
+        [{"id": "pv", "type": "limit", "max_import": 1000}],  # a device's name
+        [{"id": "grid", "type": "limit", "max_import": 1000}],
+        [{"id": "feed", "type": "limit"}],  # no cap
+        [{"id": "pv", "parent": "grid", "solver": "emhass"}],  # the PV is a forecast
+        [{"id": "pv", "parent": "grid", "group": "g"}],
+        [{"id": "deferrable0", "parent": "grid", "group": "solar"}],
+    ],
+)
+def test_the_site_schema_refuses_what_the_site_check_refuses(site):
+    """The schema does not accept an element the site check refuses: a
+    client that keeps to it does not have its site ignored at run time."""
+    from emhass.coordinator import site as site_mod
+
+    assert site_mod.site_problem(site) is not None
+    assert not _schema_accepts(site)
