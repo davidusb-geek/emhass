@@ -840,17 +840,19 @@ def test_settlement_prices_the_export_delivered_under_the_ceiling():
     whole."""
     from emhass.coordinator import settlement
     from emhass.coordinator.master import DWCoordinator
+    from emhass.coordinator.submeter import site_meter
 
     seen = []
     run = DWCoordinator.run
 
     def keep(self, **kwargs):
-        seen.append(self)
-        return run(self, **kwargs)
+        r = run(self, **kwargs)
+        seen.append((self, r.plan))
+        return r
 
     with mock.patch.object(DWCoordinator, "run", keep):
         _, res = _coordinated(pc_update={"compute_curtailment": True})
-    co = seen[0]
+    (co, plan), (co_dark, plan_dark) = seen[0], seen[1]
     assert co.fc.export_ceiling is not None
     n = len(co.fc.buy)
     surplus = np.flatnonzero(co.fc.export_ceiling > 0.5)
@@ -869,6 +871,23 @@ def test_settlement_prices_the_export_delivered_under_the_ceiling():
         co, settlement._slots(co.fc, idx), {k: v[idx] for k, v in x.items()}
     )
     assert np.allclose(sub, priced[idx])
+    # The ledger's bill after, for a plan with that export past the ceiling,
+    # is the bill on the export delivered
+    import dataclasses
+
+    b = plan["battery"]
+    # half a kW more export where there is PV to curtail for it
+    extra = np.where(co.fc.solar > 1.0, -0.5, 0.0)
+    pushed = {**plan, "battery": dataclasses.replace(b, power=b.power + extra)}
+    flows = site_meter(co.cfg, co.fc, {k: c.power for k, c in pushed.items()})
+    assert np.any(-flows.net > co.fc.export_ceiling + 1e-6)
+    z = co._delivered(flows)
+    assert z is not None
+    delivered_bill = float(
+        np.sum((np.maximum(z, 0.0) * co.fc.buy - np.maximum(-z, 0.0) * co.fc.sell) * co.dt)
+    )
+    totals = settlement.ledger(co, pushed, co_dark, plan_dark)["totals"]
+    assert totals["house_bill_after"] == pytest.approx(delivered_bill)
 
 
 def test_the_objective_breakdown_totals_the_score():
@@ -899,3 +918,32 @@ def test_the_objective_breakdown_totals_the_score():
     plan = {**r.plan, "battery": pushed}
     assert np.isfinite(co.score(plan))
     assert co.parts(plan)["total"] == pytest.approx(co.score(plan))
+
+
+def test_a_plan_past_the_ceiling_with_nothing_to_curtail_scores_infinite_and_is_declined():
+    """The scoring path itself: the battery exporting at night, past the
+    export ceiling (the PV surplus, zero then) with no PV to curtail, scores
+    infinite; the coordinator's plan replaced by it is declined and the
+    default solver plans."""
+    import dataclasses
+
+    from emhass.coordinator.master import DWCoordinator
+
+    run = DWCoordinator.run
+    scored = []
+
+    def night_export(self, **kwargs):
+        r = run(self, **kwargs)
+        if scored:  # the saving split's run: as it was
+            return r
+        b = r.plan["battery"]
+        night = self.export_ceiling <= 1e-9
+        plan = {**r.plan, "battery": dataclasses.replace(b, power=np.where(night, -1.0, b.power))}
+        scored.append(self.score(plan))
+        return dataclasses.replace(r, plan=plan, upper=scored[0])
+
+    with mock.patch.object(DWCoordinator, "run", night_export):
+        _, res = _coordinated()
+    assert scored and scored[0] == np.inf
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("within the export ceiling").all()
