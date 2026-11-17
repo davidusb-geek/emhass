@@ -258,11 +258,17 @@ async def study_case(optim: dict, action: str, runtime: dict, backend: str, gap:
             get_data_from_file=True,
             dry_run=True,
         )
-        run = dayahead_forecast_optim if action == "dayahead-optim" else naive_mpc_optim
-        res = await run(idd, LOGGER)
+        if not idd:  # its inputs could not be prepared: nothing to compare
+            return float("nan"), time.perf_counter() - t0, None
+        try:
+            run = dayahead_forecast_optim if action == "dayahead-optim" else naive_mpc_optim
+            res = await run(idd, LOGGER)
+        finally:
+            await idd["rh"].close()  # the Home Assistant session it opened
         seconds = time.perf_counter() - t0
-    start = res.index[0] if res is not None and len(res) else None
-    return _objective(idd["opt"], capture, backend, res), seconds, start
+    if not isinstance(res, pd.DataFrame) or not len(res):  # the action planned nothing
+        return float("nan"), seconds, None
+    return _objective(idd["opt"], capture, backend, res), seconds, res.index[0]
 
 
 # ---------------------------------------------------------- synthetic days

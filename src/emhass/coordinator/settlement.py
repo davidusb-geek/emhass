@@ -217,9 +217,12 @@ def _bus_prices(
     whose gradient is the same just inside both ends is one linear piece and
     adds its gradient times its length. Any other cell is halved, up to
     `depth` times; a cell still not one piece is then a sliver around a kink,
-    and adds its midpoint gradient. Every cell's contribution is corrected to
-    its exact change in the bill, so the prices times the moves add up to the
-    bill's change exactly. With one total, this is `_path_prices`' secant.
+    and adds its midpoint gradient. A cell is one piece only if its gradient
+    also explains its exact change in the bill: two kinks inside a cell can
+    leave the same gradient at both ends. Every cell's contribution is
+    corrected to its exact change in the bill, so the prices times the moves
+    add up to the bill's change exactly. With one total, this is
+    `_path_prices`' secant.
     """
     buses = list(x0)
     n = co.n
@@ -256,7 +259,12 @@ def _bus_prices(
             break
         w = R - L
         gl, gr = grad(T, L + 1e-3 * w), grad(T, R - 1e-3 * w)
-        one = np.all(np.abs(gl - gr) <= 1e-7 * (1.0 + np.abs(gl) + np.abs(gr)), axis=0)
+        dc_all = cost(T, point(T, R)) - cost(T, point(T, L))
+        dd_all = np.array([d[b][T] for b in buses])
+        moved_by = np.sum(gl * dd_all, axis=0) * w
+        one = np.all(np.abs(gl - gr) <= 1e-7 * (1.0 + np.abs(gl) + np.abs(gr)), axis=0) & (
+            np.abs(dc_all - moved_by) <= 1e-7 * (1.0 + np.abs(dc_all) + np.abs(moved_by))
+        )
         if level == depth or len(T) > 64 * n:  # slivers (the cap only guards against a runaway)
             one = np.ones_like(one)
             gl = grad(T, 0.5 * (L + R))
@@ -265,8 +273,7 @@ def _bus_prices(
             # the bill (the gradients are central differences, exact on a
             # linear piece only up to rounding), so the totals add up exactly.
             Ti, wi, gi = T[one], w[one], gl[:, one]
-            dc = cost(Ti, point(Ti, R[one])) - cost(Ti, point(Ti, L[one]))
-            dd = np.array([d[b][Ti] for b in buses])
+            dc, dd = dc_all[one], dd_all[:, one]
             rest = dc - np.sum(gi * dd, axis=0) * wi
             big = np.argmax(np.abs(dd), axis=0)
             at = np.arange(len(Ti))
@@ -418,7 +425,13 @@ def ledger(
         }
     else:
         z_dark = fc.load + sum(base[k][0] for k in keys)
-        q0 = _path_prices(co, np.zeros_like(z_dark), z_dark, _tariff_cost)
+        # as bill_dark prices it: no PV, so an export ceiling of zero
+        q0 = _path_prices(
+            co,
+            np.zeros_like(z_dark),
+            z_dark,
+            lambda c, z: _tariff_cost_at(c, nopv, _under_ceiling(nopv, z)),
+        )
         q_of = dict.fromkeys(x_base, q0)
 
     rows = []

@@ -69,6 +69,10 @@ def _site_element_problem(element, where: str) -> str | None:
         not _SITE_ID.match(element["id"]) or _SITE_DEVICE.match(element["id"])
     ):
         return f"{where}.id must be a short lower-case name (letters, digits, _), not a device's"
+    if element["id"] == "solar":
+        # the saving split's player for the PV: a device or group of that
+        # name would take its place in the ledger
+        return f"{where}.id 'solar' is reserved"
     if kind == "node" and element["id"] == "ac":
         # the coordinator's saving split keeps the main bus's own total as "ac"
         return f"{where}.id 'ac' is reserved"
@@ -103,6 +107,8 @@ def _site_element_problem(element, where: str) -> str | None:
         group = element.get("group")
         if group is not None and not (isinstance(group, str) and _SITE_ID.match(group)):
             return f"{where}.group must be a short lower-case name (letters, digits, _)"
+        if group == "solar":
+            return f"{where}.group 'solar' is reserved"
     return None
 
 
