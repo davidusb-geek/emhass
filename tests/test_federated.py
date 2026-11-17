@@ -1310,7 +1310,8 @@ def _schema_accepts(site) -> bool:
             / "src/emhass/static/data/param_definitions.json"
         ).read_text(encoding="utf-8")
     )
-    alternatives = defs["Local"]["site"]["schema"]["items"]["anyOf"]
+    schema = defs["Local"]["site"]["schema"]
+    alternatives = schema["items"]["anyOf"]
 
     kinds = {
         "string": lambda v: isinstance(v, str),
@@ -1353,6 +1354,8 @@ def _schema_accepts(site) -> bool:
             return False
         return all(value_ok(props[k], v) for k, v in e.items())
 
+    if not value_ok({k: v for k, v in schema.items() if k != "items"}, site):
+        return False  # the list itself: its type and maxItems
     return all(any(accepts(alt, e) for alt in alternatives) for e in site)
 
 
@@ -1396,6 +1399,7 @@ def test_the_site_schema_accepts_what_the_site_check_accepts(site):
         [{"id": "grid", "max_import": -1}],
         [{"id": "panel", "parent": "grid", "efficiency_export": 1.5}],
         [{"id": "deferrable0", "parent": "grid", "limits": "feed"}],  # a list
+        [{"id": "grid"}] + [{"id": f"n{k}", "parent": "grid"} for k in range(64)],  # over 64
     ],
 )
 def test_the_site_schema_refuses_what_the_site_check_refuses(site):
