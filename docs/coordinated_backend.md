@@ -66,6 +66,15 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
 - more than one inverter (`number_of_inverters`), and the runtime `battery_availability`, `battery_discharge_energy_max`, `def_availability` and per-plant PV split (`p_pv_plants`): the coordinator does not model them yet
+- per-slot grid limits (`maximum_power_from_grid` / `maximum_power_to_grid` as a list), a thermal load with `internal_gains_factor` (its heat demand follows the house's load), and a further battery named in `site` (`battery1`, ...)
+
+EMHASS's grid, node and limit ratings are hard. The coordinator prices them, and when its on/off plans cannot fit under one, it does not publish a plan past it: the default solver plans, relaxing a load if it must, and `backend_fallback_reason` says which limit.
+
+The battery is held in the coordinator's own LP when its model is just its limits and efficiencies. With a penalty or reward on its state of charge, a start outside its SoC window, or a negative import price (where only EMHASS's charge-or-discharge binary stops it charging and discharging at once), EMHASS's own model plans it instead, as a participant.
+
+A load that is on/off at a level - semi-continuous, one block, a power sequence (a list in `nominal_power_of_deferrable_loads`) or a minimum power - is planned as one of its own plans, never a mix of them.
+
+Each coordinator run stops iterating after EMHASS's `lp_solver_timeout` and keeps its best plan so far (`fed_stop_reason: time limit`). `site` has at most 64 elements and 16 nodes and limits together, which bounds what a `site` sent with a request can cost.
 
 `set_nodischarge_to_grid` is supported (without a hybrid inverter): the coordinator caps export at the PV surplus, as EMHASS does.
 

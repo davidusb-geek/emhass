@@ -82,8 +82,8 @@ class _NormalEquations:
     """Assembles M = A diag(d) A^T from triplets, fast for our column mix.
 
     With `border` rows given (the meter and convexity rows of the master),
-    the remaining rows split into independent blocks - one per battery, one
-    for the tank - that touch each other only through the border. M is then
+    the remaining rows split into independent blocks - one per battery - that
+    touch each other only through the border. M is then
     block-arrow shaped and is solved by eliminating each block separately and
     factoring the small border Schur complement: about 100x cheaper than a
     dense factorisation for a 6-battery, 48 h master.
@@ -184,7 +184,7 @@ class _NormalEquations:
 # normal equations are too ill-conditioned for 1e-8, and the gap can level off
 # near 1e-5 with residuals at 1e-9 - an answer that matches HiGHS to 2e-5
 # relative. The DW loop itself stops at a relative gap of 1e-3, so failing such
-# an answer (and falling back to ADMM) would be the worse outcome.
+# an answer (and the plan with it) would be the worse outcome.
 ACCEPT = 1e-4
 
 

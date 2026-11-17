@@ -461,3 +461,275 @@ def test_a_participant_answers_the_same_query_the_same_way():
     hp.respond(Query("price_response", cheap_first, cheap_first))
     again = hp.respond(Query("price_response", buy, buy))
     np.testing.assert_allclose(again.plan_kw, first.plan_kw, atol=1e-6)
+
+
+# --------------------------------------------------------------------------
+# Review findings (#1362): what the coordinator plans, and what it declines
+# --------------------------------------------------------------------------
+
+
+def _coordinated(site=None, pc_update=None, **options):
+    """The test site, coordinated, with optim_conf `options` and plant_conf
+    `pc_update`; returns (Optimization, opt_res)."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    pc = {**pc, **(pc_update or {})}
+    if site is not None:
+        options["site"] = site
+    return _plan(
+        rh, oc, pc, data, pv, load, buy, sell, optimization_backend="dantzig_wolfe", **options
+    )
+
+
+@pytest.mark.parametrize(
+    "load",
+    [
+        {"nominal_power_of_deferrable_loads": [3000, [750, 750, 500, 500]]},  # a sequence
+        {"minimum_power_of_deferrable_loads": [0, 400]},  # a minimum power
+    ],
+)
+def test_a_load_with_a_binary_is_never_blended(load):
+    """A sequence load or one with a minimum power has a binary in EMHASS's
+    model: a mix of its plans is no plan it can run, so its participant is
+    on/off and never modulating, even when it is not semi-continuous."""
+    from emhass.coordinator.backend import EmhassParticipant
+
+    rh, oc, pc, data, pv, load_w, buy, sell = _site()
+    oc = {**oc, "set_use_battery": False, "treat_deferrable_load_as_semi_cont": [False, False]}
+    oc.update(load)
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    p = EmhassParticipant(opt, "deferrable1", False, [1], data, None, None, {}, buy)
+    assert not p.modulating and p.onoff
+    plain = EmhassParticipant(
+        Optimization(
+            rh,
+            {
+                **oc,
+                "nominal_power_of_deferrable_loads": [3000, 750],
+                "minimum_power_of_deferrable_loads": [0, 0],
+            },
+            pc,
+            "unit_load_cost",
+            "unit_prod_price",
+            "profit",
+            emhass_conf,
+            logger,
+        ),
+        "deferrable1",
+        False,
+        [1],
+        data,
+        None,
+        None,
+        {},
+        buy,
+    )
+    assert plain.modulating and not plain.onoff
+
+
+def test_a_sequence_load_runs_its_sequence():
+    """The reviewer's case: a sequence load under a shared limit is planned as
+    its sequence, at its own powers, not a blend of shifted copies."""
+    sequence = [750, 750, 500, 500]
+    _, res = _coordinated(
+        site=[
+            {"id": "l1", "type": "limit", "max_import": 3400},
+            {"id": "deferrable0", "parent": "grid", "limits": ["l1"]},
+            {"id": "deferrable1", "parent": "grid", "limits": ["l1"]},
+        ],
+        set_use_battery=False,
+        nominal_power_of_deferrable_loads=[3000, sequence],
+        treat_deferrable_load_as_semi_cont=[True, False],
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    powers = set(np.round(res["P_deferrable1"].values, 3))
+    assert powers <= {0.0, 750.0, 500.0}, powers
+
+
+def test_a_plan_that_breaks_a_hard_limit_is_declined():
+    """maximum_power_from_grid is hard in EMHASS: when the on/off loads cannot
+    fit under it, the default solver plans (relaxing a load), never a
+    coordinated plan past the fuse."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    pc = {**pc, "maximum_power_from_grid": 2500}
+    site = (rh, {**oc, "set_use_battery": False}, pc, data, pv * 0, load, buy, sell)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("exceeds a limit").all()
+    assert res["P_grid_pos"].max() <= 2500 + 1e-3
+
+
+def test_a_relaxed_participant_is_read_from_the_problem_it_published():
+    """1.25 h at 30-minute steps cannot be met by a semi-continuous load, so
+    EMHASS relaxes its model; the participant's cost is that solve's, finite,
+    not the failed solve's."""
+    opt, res = _coordinated(
+        set_use_battery=False, operating_hours_of_each_deferrable_load=[1.25, 2]
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert np.isfinite(res["fed_lower_bound"].iloc[0] + res["fed_gap"].iloc[0])
+
+
+def test_a_further_battery_in_site_is_declined_by_name():
+    """site may name battery1 (#1032's convention), but EMHASS plans one
+    battery here: the default solver plans, saying so, rather than the limit
+    on it being dropped."""
+    _, res = _coordinated(
+        site=[
+            {"id": "l1", "type": "limit", "max_import": 500},
+            {"id": "battery1", "parent": "grid", "limits": ["l1"]},
+        ]
+    )
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("battery1").all()
+
+
+def test_battery0_is_the_battery():
+    """battery0 and battery are one battery: a limit on battery0 holds."""
+    _, res = _coordinated(
+        site=[
+            {"id": "l1", "type": "limit", "max_import": 500},
+            {"id": "battery0", "parent": "grid", "limits": ["l1"]},
+        ],
+        set_nodischarge_to_grid=False,
+    )
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (-res["P_batt"]).max() <= 500 + 1e-3
+
+
+def test_the_master_holds_the_battery_only_where_its_model_is_linear():
+    """The master holds EMHASS's battery as LP variables only when that is its
+    whole model; otherwise EMHASS's own model plans it, as a participant."""
+    from emhass.coordinator.backend import _linear_battery
+
+    rh, oc, pc = _confs()
+    oc = {**oc, "set_use_battery": True}
+    lo, hi = pc["battery_minimum_state_of_charge"], pc["battery_maximum_state_of_charge"]
+    buy = np.full(4, 0.2)
+    assert _linear_battery(oc, pc, (lo + hi) / 2, buy)
+    # a reward on the final state of charge, which the master does not price
+    assert not _linear_battery({**oc, "battery_soc_final_reward_factor": 2.0}, pc, lo, buy)
+    # starting outside the window: EMHASS's model recovers from there
+    assert not _linear_battery(oc, pc, min(hi + 0.05, 1.0), buy)
+    # a negative import price: without EMHASS's binary the LP would charge and
+    # discharge at once, to be paid for the loss
+    assert not _linear_battery(oc, pc, lo, np.array([0.2, -0.1, 0.2, 0.2]))
+
+
+def test_a_negative_price_keeps_the_battery_consistent():
+    """With a negative import price the battery is EMHASS's own model: its
+    published power and state of charge agree in every slot."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    buy = buy.copy()
+    buy[10:14] = -0.05
+    sell = np.minimum(sell, buy)
+    data = data.assign(unit_load_cost=buy, unit_prod_price=sell)
+    opt, res = _plan(rh, oc, pc, data, pv, load, buy, sell, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    cap = pc["battery_nominal_energy_capacity"]
+    eta_c, eta_d = pc["battery_charge_efficiency"], pc["battery_discharge_efficiency"]
+    soc = np.concatenate([[0.5], res["SOC_opt"].values])
+    p = res["P_batt"].values  # + discharging
+    expected = np.where(p < 0, -p * eta_c, -p / eta_d) * 0.5 / cap
+    assert np.allclose(np.diff(soc), expected, atol=1e-4)
+
+
+def test_a_non_electric_load_is_not_drawn_from_the_meter():
+    """A load EMHASS keeps off the electrical balance (gas, say) is not added
+    to the coordinator's draw: the meter balances without it."""
+    _, res = _coordinated(is_electric_load=[True, False])
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    supplied = res["P_PV"] + res["P_batt"] + res["P_grid"]
+    assert np.allclose(supplied, res["P_Load"] + res["P_deferrable0"], atol=1e-3)
+
+
+def test_what_the_coordinator_cannot_split_yet_is_declined_by_name():
+    """Per-slot grid limits, and a thermal load whose gains follow the house's
+    load (a price response sets that load to zero)."""
+    from emhass.coordinator.backend import unsupported
+
+    rh, oc, pc = _confs()
+    assert "as a list" in unsupported(
+        oc, {**pc, "maximum_power_from_grid": [9000] * 24 + [2000] * 24}, "profit", {}
+    )
+    gains = [{"thermal_battery": {"internal_gains_factor": 0.5}}, {}]
+    assert "internal_gains_factor" in unsupported(
+        {**oc, "def_load_config": gains}, pc, "profit", {}
+    )
+    assert unsupported(oc, pc, "profit", {}) is None
+
+
+def test_a_zero_export_cap_is_planned_and_held():
+    """No export at all is a cap the coordinator holds, not a reason to fall
+    back."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    pc = {**pc, "maximum_power_to_grid": 0}
+    site = (rh, oc, pc, data, pv * 0, load, buy, sell)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe", set_nodischarge_to_grid=False)
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert res["P_grid_neg"].min() >= -1e-3
+
+
+def test_a_lossy_node_is_planned_within_its_draw():
+    """A node that draws 1 / efficiency from its parent: the master's bounds
+    are sized for what reaches the meter through it."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    site_list = [
+        {"id": "lossy", "parent": "grid", "type": "meter", "efficiency_import": 0.25},
+        {"id": "deferrable0", "parent": "lossy"},
+    ]
+    oc = {**oc, "set_use_battery": False}
+    pc = {**pc, "maximum_power_from_grid": 30000}
+    site = (rh, oc, pc, data, pv * 0, load * 0, buy, sell)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe", site=site_list)
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert res["P_deferrable0"].sum() * 0.5 == pytest.approx(3000.0 * 4, rel=1e-6)
+    assert np.allclose(res["P_grid"], res["P_deferrable0"] / 0.25 + res["P_deferrable1"], atol=1e-2)
+
+
+def test_the_coordinator_stops_at_its_time_limit():
+    """Past its time budget (EMHASS's lp_solver_timeout) the coordinator stops
+    iterating, and the best plan from what it has stands, said so."""
+    from emhass.coordinator.master import DWCoordinator
+
+    run = DWCoordinator.run
+
+    def hurried(self, **kwargs):
+        return run(self, **{**kwargs, "max_seconds": 0.0})
+
+    with mock.patch.object(DWCoordinator, "run", hurried):
+        _, res = _coordinated()
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (res["fed_stop_reason"] == "time limit").all()
+
+
+def test_a_cheaper_plan_with_the_same_power_replaces_the_dearer():
+    """Two plans with the same power: the pool keeps the cheaper, so recovery
+    never picks a dearer one for no reason."""
+    from emhass.coordinator.master import Column, Device
+
+    dev = Device("p", "participant", cfg=None)
+    power = np.array([1.0, 0.0])
+    assert dev.add(Column(power, np.zeros(3), 10.0, "baseline"))
+    assert not dev.add(Column(power.copy(), np.zeros(3), 12.0, "price"))
+    assert dev.add(Column(power.copy(), np.ones(3), 0.0, "price"))
+    assert len(dev.columns) == 1 and dev.columns[0].cost == 0.0
+    assert np.all(dev.columns[0].trajectory == 1.0)
+
+
+def test_delivered_export_is_priced_under_the_export_ceiling():
+    """The saving split prices what is delivered: export past the ceiling is
+    curtailed PV, as the plan's own score and results take it."""
+    from emhass.coordinator.model import Forecasts
+    from emhass.coordinator.settlement import _under_ceiling
+
+    fc = Forecasts(
+        buy=np.ones(2),
+        sell=np.ones(2),
+        load=np.zeros(2),
+        solar=np.ones(2),
+        export_ceiling=np.array([1.0, 0.0]),
+    )
+    assert np.allclose(_under_ceiling(fc, np.array([-2.0, -1.0])), [-1.0, 0.0])
+    assert np.allclose(_under_ceiling(fc, np.array([3.0, 0.5])), [3.0, 0.5])

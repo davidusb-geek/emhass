@@ -3983,6 +3983,15 @@ async def treat_runtimeparams(
     # so the saved configuration is validated and refused here when the block above
     # did not already do so.
     if not inverters_checked:
+        # site first: its meter and hybrid inverter fill EMHASS's own keys, which
+        # the check below then validates, as the request path does (above)
+        site = optim_conf.get("site")
+        if site:
+            problem = site_problem(site)
+            if problem:
+                logger.error("site: %s; not used", problem)
+            else:
+                compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
         require_usable_inverter_config(plant_conf, logger)
     # The same for the battery count: the CLI merges --params into plant_conf, and
     # without --runtimeparams the runtime block above, which checks it, does not run.
@@ -4066,20 +4075,6 @@ async def treat_runtimeparams(
             type(heat_topology).__name__,
             heat_topology,
         )
-
-    # site: the house in one list, the coordinator's (optimization_backend);
-    # its main meter and hybrid inverter are EMHASS's own too - fill those
-    # keys from it, so the default solver plans the same meter and inverter.
-    # When runtimeparams were given the fill already ran before the curve
-    # check; do it here for the no-runtimeparams path (saved config only).
-    if runtimeparams is None:
-        site = optim_conf.get("site")
-        if site:
-            problem = site_problem(site)
-            if problem:
-                logger.error("site: %s; not used", problem)
-            else:
-                compile_site(site, plant_conf, logger, bool(optim_conf.get("set_use_battery")))
 
     # Per-tank start-temperature override (issue #539), keyed by tank id.
     # Applied AFTER the heat_topology compile so it patches manual and

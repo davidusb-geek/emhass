@@ -99,21 +99,16 @@ class GridLimits:
 
     These are a COUPLING constraint: they bind the sum of every device's power
     plus the inflexible load, so no per-device plan can enforce one on its own.
-    The coordinators price them instead, at `breach_price` per kWh beyond the
-    limit: Dantzig-Wolfe in its master LP, ADMM in the grid connection's step
-    (and each device where it re-plans against the others).
-
-    A plan that exceeds a limit is not cut back afterwards: the exceedance
-    stays in the plan, is reported, and is charged at `breach_price`, so its
-    impact can be seen. Clipping a setpoint to the measured headroom is
-    opt-in (policy.clamp, /api/setpoint). `enforce` is not used.
+    The master prices them instead, at `breach_price` per kWh beyond the
+    limit, and the backend declines a plan that still breaches one (the
+    default solver then plans). `enforce` is not used.
     """
 
     max_import_kw: float | None = None
     max_export_kw: float | None = None
     # Throwing PV away is the only way to respect an export cap once storage is
     # full - without it a cap is unenforceable, because surplus has nowhere to
-    # go and no price can make it disappear (docs/NOTES.md section 1).
+    # go and no price can make it disappear.
     # Curtailment is also the right answer to a negative export price: being
     # paid to stop generating beats paying to generate.
     allow_curtailment: bool = True
@@ -137,8 +132,8 @@ class GridLimits:
     def validate(self) -> None:
         for name in ("max_import_kw", "max_export_kw"):
             v = getattr(self, name)
-            if v is not None and v <= 0:
-                raise ValueError(f"{name} must be positive or None, got {v}")
+            if v is not None and v < 0:
+                raise ValueError(f"{name} must be >= 0 or None, got {v}")
         if self.breach_price_multiplier < 0:
             raise ValueError("breach_price_multiplier must be >= 0")
         if self.breach_price is not None and self.breach_price < 0:
@@ -162,8 +157,7 @@ class SubMeter:
     row at the sub-meter (its "bus") and the connection's flows to the house,
     so every member device is priced at the sub-meter's own price (that row's
     dual) instead of the meter's. Where the connection is not at a limit the
-    two differ only by the conversion efficiency; where it is, they separate
-    (docs/theory.tex, "Sub-meters and local prices").
+    two differ only by the conversion efficiency; where it is, they separate.
 
     Signs follow the devices: a member's power is positive when it draws. The
     connection's limits are AC-side, in kW: `max_export_kw` from the bus to
@@ -297,15 +291,11 @@ class SiteConfig:
 
     horizon: Horizon = field(default_factory=Horizon)
     battery: BatteryConfig | None = field(default_factory=BatteryConfig)
-    # Additional batteries beyond `battery`. evcc sends one BatteryConfig per
-    # stationary battery AND one per loadpoint (core/site_optimizer.go:532,564),
-    # so anyone with a charger has at least two. `battery` stays the first one
-    # rather than being folded into a list, so single-battery call sites and
-    # `result.devices["battery"]` keep working unchanged.
+    # Further batteries beyond `battery` (keys battery1, ...); EMHASS's backend
+    # declines more than one for now (#1032).
     batteries: tuple[BatteryConfig, ...] = ()
     grid: GridLimits = field(default_factory=GridLimits)
-    # The site's electrical tree (docs/theory.tex, "Sub-meters and local
-    # prices"): nodes behind their own connection (a hybrid inverter, a panel,
+    # The site's electrical tree: nodes behind their own connection (a hybrid inverter, a panel,
     # a breaker), nesting to any depth; further grid connections with their
     # own tariffs; and limits on sets of devices. A device or PV array sits in
     # at most one node or connection; the rest are on the main meter.
@@ -407,6 +397,9 @@ class Forecasts:
     # Tariffs of further grid connections (SiteConfig.connections), by name:
     # (buy, sell), currency/kWh.
     tariffs: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
+    # A hard per-slot cap on export at the main meter, kW (set_nodischarge_to_grid:
+    # the PV surplus); export past it is curtailed PV. None: no such cap.
+    export_ceiling: np.ndarray | None = None
 
     def validate(self, horizon: Horizon) -> None:
         n = horizon.steps

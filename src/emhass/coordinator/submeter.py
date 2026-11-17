@@ -113,7 +113,7 @@ class MeterFlows(NamedTuple):
     ac: dict[str, np.ndarray]  # node -> its power to its parent, kW (+ = to the parent)
     bus: dict[str, np.ndarray]  # node -> what its bus sends, bus-side kW (+ = to the parent)
     raw: np.ndarray  # the main meter before its own curtailment (an export cap,
-    # a negative export price): what a device DP takes as dp_load
+    # a negative export price): the rest of the house a participant meets
     ac_raw: dict[str, np.ndarray]  # `ac` before the roots' own curtailment
     nets: dict[str, np.ndarray]  # root -> its meter after curtailment (MAIN's is `net`)
     raws: dict[str, np.ndarray]  # root -> its meter before its own curtailment
@@ -341,8 +341,7 @@ submeter_penalty = beyond_main
 class DeviceView(NamedTuple):
     """What a device meets, the others held at their plans: its Bus (its
     chain of nodes up to its grid connection; None on a connection's own
-    bus), the rest of that connection's meter (kW, the dp_load a device DP
-    takes), and that connection's name, tariff and limits."""
+    bus), the rest of that connection's meter (kW, its `dp_load`), and that connection's name, tariff and limits."""
 
     bus: Bus | None
     dp_load: np.ndarray

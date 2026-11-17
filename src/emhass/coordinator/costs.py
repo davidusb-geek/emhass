@@ -103,10 +103,9 @@ def grid_penalty(
     practice decides on the eighth decimal place of a breach that is
     infeasible either way.
 
-    This does NOT enforce anything. The coordinators steer by pricing the
-    limit the same way (Dantzig-Wolfe's master, ADMM's grid connection), and
-    anything safety-critical is clamped outside the solver entirely
-    (policy.clamp). This term scores a finished plan; it does not produce one.
+    This does NOT enforce anything: the master prices the limit the same way,
+    and the backend declines a plan that still breaches one, so the default
+    solver plans. This term scores a finished plan; it does not produce one.
     """
     if not cfg.grid.active:
         return 0.0
@@ -123,9 +122,8 @@ def battery_terminal_penalty(
 ) -> float:
     """Cost of ending the horizon with less energy than you started with.
 
-    In linear mode this bills the net depletion at the terminal price, which is
-    what stops a plan from looking cheap simply by emptying the battery. In
-    quadratic mode it reproduces the POC's pull toward a target SoC.
+    It bills the net depletion at the terminal price, which is what stops a
+    plan from looking cheap simply by emptying the battery.
 
     Accepts either a single trajectory (battery 0, the common case) or a
     key -> trajectory mapping, in which case every battery is charged.
@@ -173,10 +171,9 @@ def total_objective(
 def terminal_price(cfg: BatteryConfig, buy: np.ndarray) -> float:
     """Value of a kWh left in the battery at the horizon edge.
 
-    Defaults to the cheapest import price on the horizon - the same choice
-    evcc's optimizer documents as "end of forecast commercial value". It is a
-    lower bound on what that energy can save you, so it never encourages
-    hoarding beyond what the prices justify.
+    Defaults to the cheapest import price on the horizon: a lower bound on
+    what that energy can save, so it never encourages hoarding beyond what
+    the prices justify.
     """
     if cfg.terminal_price is not None:
         return float(cfg.terminal_price)

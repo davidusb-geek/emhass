@@ -8299,7 +8299,7 @@ class Optimization:
         pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
-        # Opt-in coordinator backend (optional extra): the devices are planned as separate
+        # Opt-in coordinator backend (emhass.coordinator): the devices are planned as separate
         # participants. None means it cannot plan this configuration, so cvxpy runs below.
         backend = self.optim_conf.get("optimization_backend", "cvxpy")
         fallback_reason = None
@@ -9762,6 +9762,9 @@ class Optimization:
         # Fix for Status Case: Map "optimal" -> "Optimal"
         status_raw = solved_prob.status
         self.optim_status = status_raw.title() if status_raw else "Failure"
+        # The objective of the problem whose plan is published: after a relaxed
+        # retry or an accepted DP re-solve that is not self.prob (#1048).
+        self.solved_value = solved_prob.value
 
         # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
         if solved_prob.value is None or solved_prob.status not in [

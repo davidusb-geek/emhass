@@ -25,7 +25,7 @@
       "input": "object",
       "schema": {
         "type": ["array", "null"],
-        "maxItems": 128,
+        "maxItems": 64,
         "items": {
           "anyOf": [
             {
@@ -46,8 +46,8 @@
                 "type": {"type": "string", "enum": ["hybrid_inverter", "inverter", "panel", "breaker", "meter"]},
                 "max_import": {"type": "number", "minimum": 0},
                 "max_export": {"type": "number", "minimum": 0},
-                "efficiency_import": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
-                "efficiency_export": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+                "efficiency_import": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1},
+                "efficiency_export": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1}
               }
             },
             {

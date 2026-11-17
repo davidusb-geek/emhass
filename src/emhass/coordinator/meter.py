@@ -48,8 +48,8 @@ def bus_flow(
     Sending is capped at `export_cap`; PV beyond it is clipped (free) up to
     `clip_cap`, and anything still over is sent anyway, as a breach. Taking
     beyond `import_cap` is a breach too. The house sees eta_export x sent, or
-    taken / eta_import. submeter.meter_from_draws and the battery DP both use
-    this, so they cannot disagree.
+    taken / eta_import. submeter.meter_from_draws and the master's prices both
+    rest on this, so they cannot disagree.
     """
     draw = np.asarray(draw, dtype=float)
     surplus = np.maximum(-draw, 0.0)
