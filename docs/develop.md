@@ -137,7 +137,9 @@ Lastly, you can run all the unittests by heading to the [`Testing`](https://code
 
 With Docker, you can test the production EMHASS environment for both Docker and Add-on methods.
 
-Depending on the method you wish to test, the `docker run` command will require different passed arguments to function. See following examples:
+Depending on the method you wish to test, the `docker run` command will require different passed arguments to function. See following examples.
+
+The web server requires an API token (see [API authentication](api_authentication.md)). For a throw-away development container set `-e EMHASS_API_TOKEN=a-long-development-token` and send it as `Authorization: Bearer <token>`, or, on a network you fully control, `-e EMHASS_API_AUTH_DISABLED=true`. The test suite sets the opt-out for the older web tests in `tests/conftest.py`; `tests/test_api_auth.py`, `tests/test_api_ingress.py` and `tests/test_api_provisioning.py` test the real behaviour.
 
 _Note: Make sure your terminal is in the root `emhass` repository directory before running the docker build._
 
@@ -260,17 +262,17 @@ docker run --rm -it -p 5000:5000 --name emhass-test -v $(pwd)/data/heating_predi
 ```
 ```bash
 # run actions one-by-one, on a separate terminal
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/perfect-optim
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/dayahead-optim
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-fit
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-predict
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-tune
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-calibration
-curl -i -H 'Content-Type:application/json' -X POST -d '{"p10":[80,80,80],"p50":[100,100,100],"actual":[70,90,90],"target_shortfall_rate":0.10}' http://localhost:5000/action/pv-bias-calibration
-curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
-curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/perfect-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/dayahead-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-fit
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-tune
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-calibration
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"p10":[80,80,80],"p50":[100,100,100],"actual":[70,90,90],"target_shortfall_rate":0.10}' http://localhost:5000/action/pv-bias-calibration
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 
 ```bash
