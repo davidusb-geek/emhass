@@ -85,6 +85,8 @@ rest_command:
     url: http://localhost:5000/action/naive-mpc-optim  # your EMHASS URL
     method: POST
     content_type: application/json
+    headers:
+      authorization: !secret emhass_bearer
     payload: >-
       {%- set step_min = 30 -%}
       {%- set horizon_h = 24 -%}

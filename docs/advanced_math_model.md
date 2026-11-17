@@ -144,6 +144,26 @@ Some other special linear constraints are defined. A constraint is introduced to
 
 Constraints are also used to define semi-continuous variables. Semi-continuous variables are variables that must take a value between their minimum and maximum or zero.
 
+#### Fractional operating hours of a semi-continuous load
+
+A semi-continuous deferrable load is ON at its nominal power $P_{nom}$ or OFF. With `operating_hours_of_each_deferrable_load` $= T$ and an optimization timestep $\Delta_t$, the load needs $N = T/\Delta_t = f + r$ steps, with $f$ a whole number and $0 \leq r < 1$. When $r > 0$, whole steps alone cannot deliver $P_{nom}T$ exactly, so one *remainder step* is allowed. Per timestep $t$ there are two binaries, $b^{full}_t \leq b^{on}_t$, and $\rho_t = b^{on}_t - b^{full}_t$:
+
+$$
+P_t = P_{nom}\,b^{full}_t + r\,P_{nom}\,\rho_t, \qquad \sum_t \rho_t \leq 1, \qquad \sum_t P_t \Delta_t = P_{nom}\,T
+$$
+
+so the only solution is $f$ full steps plus one step at $r P_{nom}$. Startups, minimum ON and OFF time, and mutual exclusion use $b^{on}$, a minimum ON time counts full steps only, and a shared `max_power` is checked at $P_{nom}$ (the ON level), not at the step average. No full step follows the remainder step, because `def_current_operating_timesteps` counts completed steps and must see the remainder step last. For a whole number of steps $\rho = 0$ and the model is the previous strict ON/OFF one. Without this, the equality had no strict solution and the solve fell back to `Optimal (Relaxed)`, which drops the semi-continuous and single-constant constraints of every load.
+
+**Numerical bound.** HiGHS accepts a binary within $10^{-6}$ of an integer, and a remainder of about $10^{-8}$ steps or less made the strict solve numerically infeasible. A requirement within $10^{-5}$ steps of a whole number is therefore taken as that number, and a positive requirement below $10^{-5}$ steps is raised to $10^{-5}$ steps (it is never dropped and never promoted to a full step). The energy error is at most $10^{-5} P_{nom}\Delta_t$ per load and request: 0.015 Wh for 3 kW at 30 minutes, 0.22 Wh for 22 kW at 60 minutes. The $10^{-5}$ value was checked on HiGHS 1.10.0 and 1.16.0. Gurobi and CPLEX (`LP_SOLVER`) default to an integrality tolerance of about $10^{-5}$, which leaves no margin. While a load has an active remainder step, EMHASS therefore sets it to $10^{-7}$ for them (Gurobi `IntFeasTol`, CPLEX `mip.tolerances.integrality`); whole-step solves and HiGHS keep their defaults. This option selection is unit-tested, but the formulation has not been run with Gurobi or CPLEX, so that tolerance is unvalidated on those solvers. The remainder is deliberately exact energy rather than a runtime rounded up to a whole step, as agreed on issue #1105.
+
+**What a plan step means.** $r P_{nom}$ is the average over the step. Hardware that can only switch must be ON at $P_{nom}$ for the fraction $r$ of the step, so while ON it draws $P_{nom}$, not $r P_{nom}$: grid-import, inverter and other instantaneous limits are modelled on the step average and must be enforced independently by the controller. The model counts the whole step as ON (startups, minimum ON and OFF time), so run the ON fraction at the start of the step, contiguous with a preceding ON step; running it later in the step creates an off/on cycle the model never saw. Running it for the whole step delivers more than requested. The grid and inverter limits are also averages over the step, so a switch-only load at $P_{nom}$ for part of the step can exceed them for that part. A remainder of $10^{-5}$ steps is 18 ms at 30 minutes: it is a valid plan but not an actuation an on/off device can execute, so use a requirement that is a whole number of steps if that matters. A smaller `optimization_time_step` bounds the remainder by the shorter step, but its ON time is $T \bmod \Delta_t$ for the new $\Delta_t$: not necessarily shorter, and 0 only when $\Delta_t$ divides $T$ (the 18 ms remainder above stays 18 ms at any step that divides the whole part).
+
+**Minimum ON time and solve time.** A minimum ON time counts full steps only, so while the load is OFF a remaining requirement with fewer full steps than the minimum cannot be met, the strict solve is infeasible and every load falls back to `Optimal (Relaxed)` on each call: for such loads use whole steps, or treat a remaining requirement below one step as met. A fractional requirement is solved as a strict MILP with an extra binary per step, which is harder than the same load with a whole number of steps (and than the relaxed fallback it replaces): in a 96-step test with four semi-continuous loads, a battery and minimum ON/OFF times it took 112 s to prove optimality against 22 s for whole hours, so on long horizons the solve may end as `Optimal (Incumbent)` at `lp_solver_timeout`.
+
+**Published states.** `publish_deferrable_load_states` labels a step `off` at or below max(1 % of $P_{nom}$, 1 W), `on` at or above 99 % of $P_{nom}$ and `variable` in between. A remainder step labelled `off` or `on` therefore differs from the plan by at most 1 % of one step's energy (for $P_{nom} \geq 100$ W), and no label says for how long inside the step the load runs. The labels cannot guarantee accurate partial-step execution: count a step as scheduled when its planned power is above 0, and take the partial runtime from the power.
+
+**Rolling MPC and failed actuation.** The plan is an intention, not a measurement. `def_current_operating_timesteps` counts the remainder step as one whole step, so if the requirement changes after it ran, or if a switch failed or ran for a different time, pass the *remaining* hours computed from the energy actually delivered (new total minus delivered energy divided by $P_{nom}$) and leave the step counter at 0 for that load. Measure the delivered energy at the load; integrating the published power is only an estimate valid when execution follows the plan. EMHASS keeps no state between calls, so a stale plan is simply replaced by the next call. Treat a remaining requirement below $10^{-5}$ steps as 0: any positive value, including meter noise, becomes a must-run remainder step of at least $10^{-5}$ steps.
+
 A final set of constraints is used to define the behavior of the battery. Notably:
 - Ensure that maximum charge and discharge powers are not exceeded.
 - Minimum and maximum state of charge values are not exceeded.
@@ -244,7 +264,7 @@ To enable this, add the following parameters to your `config.json` (or `optim_co
 
 Example usage using `runtimeparams`:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
     "inverter_stress_cost": 0.5,
     "prediction_horizon": 24
 }' http://localhost:5000/action/naive-mpc-optim
@@ -269,7 +289,7 @@ where $c_{surplus}$ is `battery_soc_surplus_cost`, $SOC_{thr}$ is `battery_soc_s
 
 Example usage using `runtimeparams`:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
     "battery_soc_surplus_threshold": 0.85,
     "battery_soc_surplus_cost": 0.1,
     "prediction_horizon": 24
@@ -548,11 +568,11 @@ In a practical use case, the values for `soc_init` and `soc_final` for each MPC 
 A correct call for an MPC optimization should look like this:
 
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
 ```
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 For a more readable option we can use the `rest_command` integration:
@@ -561,6 +581,7 @@ rest_command:
   url: http://127.0.0.1:5000/action/naive-mpc-optim
   method: POST
   headers:
+    authorization: !secret emhass_bearer
     content-type: application/json
   payload: >-
     {
@@ -586,7 +607,7 @@ Either in the Home Assistant add-on config screen:
 
 Either as runtime parameter:
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, 'operating_hours_of_each_deferrable_load':[4,2],'start_timesteps_of_each_deferrable_load':[4,0],'end_timesteps_of_each_deferrable_load':[27,23]}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, 'operating_hours_of_each_deferrable_load':[4,2],'start_timesteps_of_each_deferrable_load':[4,0],'end_timesteps_of_each_deferrable_load':[27,23]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 Please note that the proposed deferrable load time windows will be submitted to a validation step & can be automatically corrected.
