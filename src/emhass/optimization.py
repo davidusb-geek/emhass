@@ -8776,11 +8776,16 @@ class Optimization:
         # Under self-consumption grid import costs SELF_CONSUMPTION_BIGM times the tariff,
         # so the miss is scaled by the same factor to stay above the import it would save.
         penalty_scale = SELF_CONSUMPTION_BIGM if self.costfun == "self-consumption" else 1.0
+        # The tariff these terminal-SoC coefficients scale with: the one given,
+        # unless a caller pins them to another (the coordinated backend, whose
+        # queries change the price but must not change the battery's objective).
+        soc_tariff = getattr(self, "soc_final_reference_tariff", None)
+        soc_tariff = unit_load_cost if soc_tariff is None else soc_tariff
         self.param_soc_final_penalty.value = (
             0.001
             * SOC_FINAL_DEVIATION_PENALTY_FACTOR
             * penalty_scale
-            * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
+            * max(float(np.max(np.maximum(np.asarray(soc_tariff, dtype=float), 0.0))), 1e-3)
         )
         # If soc_final_reward_factor is defined, missing the final SOC
         # with more energy is rewarded by the purchase cost of the
@@ -8789,13 +8794,13 @@ class Optimization:
         reward_factor = self.optim_conf.get("battery_soc_final_reward_factor", 0.0)
         if reward_factor > 0.0:
             self.param_soc_final_reward.value = (
-                0.001 * reward_factor * float(np.asarray(unit_load_cost, dtype=float)[-1])
+                0.001 * reward_factor * float(np.asarray(soc_tariff, dtype=float)[-1])
             )
         else:
             self.param_soc_final_reward.value = (
                 -0.001
                 * SOC_FINAL_DEVIATION_PENALTY_FACTOR
-                * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
+                * max(float(np.max(np.maximum(np.asarray(soc_tariff, dtype=float), 0.0))), 1e-3)
             )
         self.param_prod_price.value = unit_prod_price
         if self.n_inv > 1:

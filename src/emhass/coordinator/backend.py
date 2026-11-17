@@ -349,6 +349,11 @@ class EmhassParticipant:
         # MPC needs when the horizon moves on; here every solve is the same
         # horizon at other prices, so only a configured q_input_initial applies.
         self.opt._persist_q_input = _hold_q_input
+        # EMHASS scales its terminal-SoC penalty with the highest import price
+        # it is given: that is the battery's own objective, so it is pinned to
+        # this participant's own tariff, not the query's - the plan then
+        # minimises the objective its answer reports.
+        self.opt.soc_final_reference_tariff = np.asarray(buy, dtype=float)
         self.data = data_opt
         self.n, self.dt = len(data_opt), float(opt.time_step)
         self.soc_init, self.soc_final = soc_init, soc_final
@@ -484,8 +489,6 @@ class EmhassParticipant:
             raise RuntimeError(f"participant {self.key}: no finite objective ({value})")
         private = -float(value) - bill
         if self.battery:
-            private += self._soc_miss_at_own_tariff(buy)
-        if self.battery:
             s0 = (
                 self.soc_init
                 if self.soc_init is not None
@@ -496,35 +499,6 @@ class EmhassParticipant:
             traj = np.concatenate([[0.0], np.cumsum(plan_kw) * self.dt])
         self._good = Answer(plan_kw, private, traj, status="ok", detail=res)
         return self._good
-
-    def _soc_miss_at_own_tariff(self, buy: np.ndarray) -> float:
-        """The change in private cost from pricing the battery's final-SoC miss
-        at this participant's own tariff, not the queried one.
-
-        EMHASS scales its penalty on missing the final SoC (and on exceeding
-        it, without a reward factor, which the backend declines) by the highest
-        import price it is given. That is part of the battery's own objective,
-        so it must not move with the coordinator's query: the term EMHASS
-        priced at the query is taken out and put back at `self.buy`. The miss
-        itself is the solve's, and is zero whenever the target is reachable
-        (the penalty sits far above any import price)."""
-        under = self.opt.vars.get("soc_final_under") or []
-        over = self.opt.vars.get("soc_final_over") or []
-        if not under or any(v.value is None for v in (*under, *over)):
-            return 0.0
-        miss_under = float(sum(float(np.sum(v.value)) for v in under))
-        miss_over = float(sum(float(np.sum(v.value)) for v in over))
-        if miss_under <= 1e-9 and miss_over <= 1e-9:
-            return 0.0
-        penalty = float(self.opt.param_soc_final_penalty.value or 0.0)
-        reward = float(self.opt.param_soc_final_reward.value or 0.0)
-        # what the objective held, as a cost: penalty * under - reward * over
-        at_query = penalty * miss_under - reward * miss_over
-
-        def scale(prices: np.ndarray) -> float:
-            return max(float(np.max(np.maximum(np.asarray(prices, dtype=float), 0.0))), 1e-3)
-
-        return at_query * (scale(self.buy) / scale(buy) - 1.0)
 
     def respond(self, q: Query) -> Answer:
         """Answer a coordinator's query (interface.Participant). A query equal
