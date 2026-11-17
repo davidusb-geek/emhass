@@ -119,7 +119,7 @@ Each participant is first reimbursed its change in private cost (comfort, stored
 A coordinator outside EMHASS can ask EMHASS for its plan at trial prices without replacing or disturbing the live plan: send the action's body to `/api/v1/dry-run/<action>`. It works with either backend. See [Dry run](dry_run.md).
 
 ```bash
-curl -X POST http://localhost:5000/api/v1/dry-run/naive-mpc-optim -H 'Content-Type: application/json' \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -X POST http://localhost:5000/api/v1/dry-run/naive-mpc-optim -H 'Content-Type: application/json' \
   -d '{"load_cost_forecast": [...], "prod_price_forecast": [...]}'
 ```
 
