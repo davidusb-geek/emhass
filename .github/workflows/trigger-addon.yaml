@@ -1,0 +1,17 @@
+name: Trigger Add-on Repository Update
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch to emhass-add-on
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.ADDON_REPO_PAT }}
+          repository: davidusb-geek/emhass-add-on
+          event-type: new-emhass-image
+          client-payload: '{"tag": "${{ github.event.release.tag_name }}"}'
