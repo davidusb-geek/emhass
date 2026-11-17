@@ -999,21 +999,28 @@ class DWCoordinator:
     def evaluate(self, powers: dict[str, np.ndarray], trajs: dict[str, np.ndarray]) -> float:
         """Score a plan exactly as coordinate() scores its rounds."""
         flows = site_meter(self.cfg, self.fc, powers)
-        net, curtail = flows.net, flows.curtail
-        if self.export_ceiling is not None:
-            # A hard cap: what is exported past it must be curtailed PV, as the
-            # master would; a plan that cannot is not runnable.
-            over = np.maximum(-net - self.export_ceiling, 0.0)
-            if np.any(over > 1e-6):
-                if not (
-                    self.cfg.grid.allow_curtailment
-                    and np.all(over <= self.fc.solar - curtail + 1e-6)
-                ):
-                    return np.inf
-                net = net + over
+        net = self._delivered(flows)
+        if net is None:
+            return np.inf
         return extended_objective(self.cfg, self.fc, net, trajs) + beyond_main(
             self.cfg, self.fc, flows
         )
+
+    def _delivered(self, flows) -> np.ndarray | None:
+        """The main meter's flow as it runs under the export ceiling: what is
+        exported past it must be curtailed PV, as the master would. None when
+        it cannot be - the plan is not runnable."""
+        net, curtail = flows.net, flows.curtail
+        if self.export_ceiling is None:
+            return net
+        over = np.maximum(-net - self.export_ceiling, 0.0)
+        if np.any(over > 1e-6):
+            if not (
+                self.cfg.grid.allow_curtailment and np.all(over <= self.fc.solar - curtail + 1e-6)
+            ):
+                return None
+            net = net + over
+        return net
 
     def participants_cost(self, plan: dict[str, Column]) -> float:
         """The sum of the participants' private costs (currency) in `plan`
@@ -1114,9 +1121,16 @@ class DWCoordinator:
         return plan
 
     def parts(self, plan: dict[str, Column]) -> dict:
-        """The objective of a plan, term by term - what `evaluate` sums."""
+        """The objective of a plan, term by term - what `score` sums, on the
+        flow delivered under the export ceiling (an unrunnable plan totals
+        infinity)."""
         flows = site_meter(self.cfg, self.fc, {k: c.power for k, c in plan.items()})
-        net = flows.net
+        net = self._delivered(flows)
+        if net is None:
+            net = flows.net
+            unrunnable = True
+        else:
+            unrunnable = False
         trajs = {k: c.trajectory for k, c in plan.items()}
         fc, dt = self.fc, self.dt
         bill = float(
@@ -1137,7 +1151,7 @@ class DWCoordinator:
             "breach": breach,
             "battery_terminal": batt,
             "participants": part,
-            "total": bill + breach + batt + part,
+            "total": np.inf if unrunnable else bill + breach + batt + part,
             "breach_kwh": float(np.sum(breach_energy(self.cfg, net)) + np.sum(flows.breach_kwh)),
             "peak_import": float(net.max()),
             "peak_export": float(-net.min()),

@@ -736,3 +736,166 @@ def test_delivered_export_is_priced_under_the_export_ceiling():
     )
     assert np.allclose(_under_ceiling(fc, np.array([-2.0, -1.0])), [-1.0, 0.0])
     assert np.allclose(_under_ceiling(fc, np.array([3.0, 0.5])), [3.0, 0.5])
+
+
+def _battery_steps_agree(res, pc, soc0, step_h=0.5):
+    """Whether the published P_batt (+ discharging) steps SOC_opt from `soc0`
+    as one battery would, in every slot."""
+    cap = pc["battery_nominal_energy_capacity"]
+    eta_c, eta_d = pc["battery_charge_efficiency"], pc["battery_discharge_efficiency"]
+    soc = np.concatenate([[soc0], res["SOC_opt"].values])
+    p = res["P_batt"].values
+    expected = np.where(p < 0, -p * eta_c, -p / eta_d) * step_h / cap
+    return np.allclose(np.diff(soc), expected, atol=1e-4)
+
+
+def test_a_battery_starting_above_its_window_keeps_its_charge():
+    """Starting at 95% with a 90% maximum: EMHASS's own model plans the
+    battery (the master's would clamp it to 90%), so the plan starts at 95%
+    and every step follows from P_batt - no energy lost before any power."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = {**oc, "optimization_backend": "dantzig_wolfe"}
+    pc = {**pc, "battery_maximum_state_of_charge": 0.9}
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    res = opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.95, soc_final=0.5)
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert _battery_steps_agree(res, pc, 0.95)
+
+
+def test_a_battery_plan_that_cycles_is_never_published():
+    """CodeRabbit's case at positive prices: a full battery, no export and no
+    curtailment, with PV to spare. The master's battery (no charge-or-
+    discharge binary) charges and discharges at once to burn the surplus;
+    that plan is declined by name, never published."""
+    from emhass.coordinator import backend
+
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = {**oc, "optimization_backend": "dantzig_wolfe", "set_nodischarge_to_grid": False}
+    pc = {
+        **pc,
+        "maximum_power_to_grid": 0,
+        "compute_curtailment": False,
+        "battery_maximum_state_of_charge": 0.9,
+        "battery_charge_efficiency": 0.9,
+        "battery_discharge_efficiency": 0.9,
+    }
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    assert backend.optimize(opt, data, pv, load, buy, sell, soc_init=0.9, soc_final=0.9) is None
+    assert "charges and discharges" in opt.fed_fallback_reason
+
+
+def test_the_cycle_check_declines_a_battery_plan_that_does_not_step():
+    """The check itself: a battery plan whose net power does not step its
+    state (charge and discharge at once) is declined, and the default
+    solver plans."""
+    import dataclasses
+
+    from emhass.coordinator.master import DWCoordinator
+
+    run = DWCoordinator.run
+
+    def cycling(self, **kwargs):
+        r = run(self, **kwargs)
+        b = r.plan["battery"]
+        flat = dataclasses.replace(b, trajectory=np.full_like(b.trajectory, b.trajectory[0]))
+        flat.power = np.where(np.arange(len(b.power)) == 3, 0.5, b.power)
+        return dataclasses.replace(r, plan={**r.plan, "battery": flat})
+
+    with mock.patch.object(DWCoordinator, "run", cycling):
+        _, res = _coordinated()
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("charges and discharges").all()
+
+
+def test_a_plan_that_cannot_run_under_the_export_ceiling_is_declined():
+    """A recovered plan that scores infinite - past the export ceiling with no
+    PV left to curtail - is never published: the default solver plans and
+    says why."""
+    import dataclasses
+
+    from emhass.coordinator.master import DWCoordinator
+
+    run = DWCoordinator.run
+    calls = []
+
+    def unrunnable(self, **kwargs):
+        r = run(self, **kwargs)
+        calls.append(r)
+        return dataclasses.replace(r, upper=np.inf) if len(calls) == 1 else r
+
+    with mock.patch.object(DWCoordinator, "run", unrunnable):
+        _, res = _coordinated()
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("within the export ceiling").all()
+
+
+def test_settlement_prices_the_export_delivered_under_the_ceiling():
+    """The saving split's slot cost prices what is delivered: a battery that
+    would export past the ceiling is priced at the ceiling (the rest is
+    curtailed PV), and a subset of slots is priced as those slots of the
+    whole."""
+    from emhass.coordinator import settlement
+    from emhass.coordinator.master import DWCoordinator
+
+    seen = []
+    run = DWCoordinator.run
+
+    def keep(self, **kwargs):
+        seen.append(self)
+        return run(self, **kwargs)
+
+    with mock.patch.object(DWCoordinator, "run", keep):
+        _, res = _coordinated(pc_update={"compute_curtailment": True})
+    co = seen[0]
+    assert co.fc.export_ceiling is not None
+    n = len(co.fc.buy)
+    surplus = np.flatnonzero(co.fc.export_ceiling > 0.5)
+    assert len(surplus), "the test day needs PV to spare"
+    discharge = np.zeros(n)
+    discharge[surplus] = -2.0  # kW, + = drawn: the battery exporting on top of the PV
+    x = settlement._draws(co, co.fc, {"battery": discharge})
+    priced = settlement._slot_cost(co, co.fc, x)
+    t = surplus[0]
+    raw = settlement.meter_from_draws(co.cfg, co.fc, *settlement._split(x)).net[t]
+    assert -raw > co.fc.export_ceiling[t] + 1e-6  # past the ceiling before it applies
+    delivered = -co.fc.export_ceiling[t] * co.fc.sell[t] * co.dt
+    assert priced[t] == pytest.approx(delivered)
+    idx = np.array([t, 0, t])
+    sub = settlement._slot_cost(
+        co, settlement._slots(co.fc, idx), {k: v[idx] for k, v in x.items()}
+    )
+    assert np.allclose(sub, priced[idx])
+
+
+def test_the_objective_breakdown_totals_the_score():
+    """`parts()` reports the plan on the flow delivered under the export
+    ceiling, as `score()` does, so its total is the plan's score."""
+    from emhass.coordinator.master import DWCoordinator
+
+    seen = []
+    run = DWCoordinator.run
+
+    def keep(self, **kwargs):
+        r = run(self, **kwargs)
+        seen.append((self, r))
+        return r
+
+    with mock.patch.object(DWCoordinator, "run", keep):
+        _coordinated(pc_update={"compute_curtailment": True})
+    import dataclasses
+
+    co, r = seen[0]
+    assert co.export_ceiling is not None
+    assert co.parts(r.plan)["total"] == pytest.approx(co.score(r.plan))
+    # a plan exporting past the ceiling where PV can be curtailed: the
+    # breakdown prices the delivered export, as the score does
+    b = r.plan["battery"]
+    surplus = co.export_ceiling > 0.5
+    pushed = dataclasses.replace(b, power=np.where(surplus, -1.0, b.power))
+    plan = {**r.plan, "battery": pushed}
+    assert np.isfinite(co.score(plan))
+    assert co.parts(plan)["total"] == pytest.approx(co.score(plan))
