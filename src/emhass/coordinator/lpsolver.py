@@ -213,6 +213,19 @@ def linprog(
     if not np.all(np.isfinite(lb)):
         raise ValueError("lower bounds must be finite")
     fixed = ub - lb <= 1e-12
+    if fixed.all():
+        # nothing left to solve: x is its bounds, feasible if it meets A x = b
+        x = lb.copy()
+        residual = b - np.bincount(rows, weights=vals * x[cols], minlength=m)
+        ok = bool(np.all(np.abs(residual) <= 1e-9 * (1.0 + np.abs(b))))
+        return LPResult(
+            x,
+            float(c @ x),
+            np.zeros(m),
+            0 if ok else 2,
+            0,
+            "optimal (every variable fixed)" if ok else "infeasible (every variable fixed)",
+        )
     if fixed.any():
         b = b - np.bincount(rows, weights=vals * np.where(fixed, lb, 0.0)[cols], minlength=m)
         keep = ~fixed

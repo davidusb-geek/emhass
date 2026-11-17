@@ -31,7 +31,7 @@ import numpy as np
 
 from emhass.coordinator.costs import apply_curtailment, breach_price
 from emhass.coordinator.master import Column, Device, DWCoordinator
-from emhass.coordinator.model import Forecasts, SiteConfig
+from emhass.coordinator.model import RESERVED_BUS, RESERVED_SET_PREFIX, Forecasts, SiteConfig
 from emhass.coordinator.submeter import (
     MAIN,
     ac_solar,
@@ -41,8 +41,8 @@ from emhass.coordinator.submeter import (
     tariff,
 )
 
-AC = "ac"  # the main meter's own bus, beside each node's and further connection's (by name)
-SET = "set:"  # a set limit's members' total, beside the buses (types.SetLimit)
+AC = RESERVED_BUS  # the main meter's own bus, beside each node's and further connection's
+SET = RESERVED_SET_PREFIX  # a set limit's members' total, beside the buses (model.SetLimit)
 
 # A plan entry as callers hand it in: a coordinator Column, or a
 # (power kW, trajectory[, private cost]) tuple.

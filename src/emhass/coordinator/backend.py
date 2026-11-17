@@ -214,6 +214,21 @@ def unsupported(
         if float(thermal.get("internal_gains_factor", 0) or 0) > 0:
             # its heat demand reads the house's load, which a price response sets to zero
             return "internal_gains_factor (a thermal load's gains follow the house's load)"
+        if (
+            float(thermal.get("thermal_inertia_time_constant", 0) or 0) > 0
+            and "q_input_initial" not in thermal
+        ):
+            # the default solver carries its heat input from one run to the next
+            # (a cached problem); a participant starts each run afresh
+            return "thermal_inertia_time_constant without q_input_initial (heat input carried between runs)"
+    if any(v is False for v in oc.get("is_electric_load") or []):
+        # its commodity is priced at the queried price in EMHASS's model: a
+        # query would change its own cost, not only the electricity's
+        return "a non-electric load (is_electric_load: false)"
+    if oc.get("set_use_battery") and float(oc.get("battery_soc_final_reward_factor", 0) or 0) > 0:
+        # EMHASS prices the reward at the last import price: a query would
+        # change the battery's own objective, not only its bill
+        return "battery_soc_final_reward_factor (the reward follows the import price)"
     if oc.get("heat_topology") or oc.get("shared_thermal_tanks"):
         return "heat_topology or shared thermal tanks"
     if any(v is not None for v in (oc.get("cost_forecast_per_deferrable_load") or [])):
@@ -359,6 +374,7 @@ class EmhassParticipant:
         # discharge binary per slot). A mix of such plans runs as it is, so the
         # coordinator may keep one (see blend).
         min_power = oc.get("minimum_power_of_deferrable_loads") or []
+        cfgs = list(oc.get("def_load_config") or []) + [{}] * len(loads)
         runtime_min = (runtime.get("min_power_of_deferrable_loads") or []) if runtime else []
 
         def binary(k: int) -> bool:
@@ -372,6 +388,8 @@ class EmhassParticipant:
                 or isinstance(oc["nominal_power_of_deferrable_loads"][k], list)
                 or float((min_power[k] if k < len(min_power) else 0) or 0) > 0
                 or float((runtime_min[local] if local < len(runtime_min) else 0) or 0) > 0
+                or (cfgs[k] or {}).get("thermal_battery", {}).get("overshoot_temperature")
+                is not None
             )
 
         self.modulating = (

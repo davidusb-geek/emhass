@@ -243,6 +243,10 @@ def hybrid_inverter(
 
 
 MAIN = "grid"  # the main meter's name in the site's tree
+# Names the saving split uses for its own totals (settlement.AC, settlement.SET):
+# no node or connection may take them.
+RESERVED_BUS = "ac"
+RESERVED_SET_PREFIX = "set:"
 
 
 @dataclass(frozen=True)
@@ -334,6 +338,9 @@ class SiteConfig:
             seen |= set(c.members)
         for sm in self.submeters:
             sm.validate()
+            if sm.name == RESERVED_BUS or sm.name.startswith(RESERVED_SET_PREFIX):
+                # the saving split keys its totals by these
+                raise ValueError(f"{sm.name!r} is a reserved name")
             if sm.name in names:
                 raise ValueError(f"two nodes or connections are named {sm.name!r}")
             names.add(sm.name)
@@ -413,6 +420,8 @@ class Forecasts:
             )
         ]
         series += [(f"pv_arrays[{k!r}]", v) for k, v in self.pv_arrays.items()]
+        if self.export_ceiling is not None:
+            series.append(("export_ceiling", self.export_ceiling))
         for k, (b, s_) in self.tariffs.items():
             series += [(f"tariffs[{k!r}] buy", b), (f"tariffs[{k!r}] sell", s_)]
         for name, arr in series:

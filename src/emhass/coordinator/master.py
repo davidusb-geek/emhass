@@ -229,15 +229,17 @@ class DWCoordinator:
         )
         # the saving split reads it from the forecasts, slot for slot
         self.fc = replace(self.fc, export_ceiling=self.export_ceiling)
+        self.fc.validate(cfg.horizon)  # the ceiling too: its length, finite
         self.soe_targets = dict(soe_targets or {})
         keys = {d.key for d in self.devices} | {k for k, _ in self.lp_batts}
         pv_keys = set(fc.pv_keys)
-        for name, members in (
-            [(sm.name, sm.members) for sm in cfg.submeters]
-            + [(c.name, c.members) for c in cfg.connections]
-            + [(lim.name, lim.members) for lim in cfg.set_limits]
+        for name, members, allowed in (
+            [(sm.name, sm.members, keys | pv_keys) for sm in cfg.submeters]
+            + [(c.name, c.members, keys | pv_keys) for c in cfg.connections]
+            # a set limit holds devices: its row sums their powers, not PV
+            + [(lim.name, lim.members, keys) for lim in cfg.set_limits]
         ):
-            unknown = set(members) - keys - pv_keys
+            unknown = set(members) - allowed
             if unknown:
                 raise ValueError(f"{name!r}: no device {sorted(unknown)}")
         # The master's coupling rows, n each: every bus (the roots, then the
@@ -1015,9 +1017,10 @@ class DWCoordinator:
             return net
         over = np.maximum(-net - self.export_ceiling, 0.0)
         if np.any(over > 1e-6):
-            if not (
-                self.cfg.grid.allow_curtailment and np.all(over <= self.fc.solar - curtail + 1e-6)
-            ):
+            # Only PV on the main meter's own bus can be curtailed here without
+            # changing a node's flow; PV behind a node is that node's.
+            spare = np.maximum(pv_on(self.fc, self.topo, MAIN) - curtail, 0.0)
+            if not (self.cfg.grid.allow_curtailment and np.all(over <= spare + 1e-6)):
                 return None
             net = net + over
         return net

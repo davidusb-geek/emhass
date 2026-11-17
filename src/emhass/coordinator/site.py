@@ -69,6 +69,9 @@ def _site_element_problem(element, where: str) -> str | None:
         not _SITE_ID.match(element["id"]) or _SITE_DEVICE.match(element["id"])
     ):
         return f"{where}.id must be a short lower-case name (letters, digits, _), not a device's"
+    if kind == "node" and element["id"] == "ac":
+        # the coordinator's saving split keeps the main bus's own total as "ac"
+        return f"{where}.id 'ac' is reserved"
     if (
         kind == "node"
         and element.get("type") is not None
@@ -235,6 +238,11 @@ def site_inverter(site: list, battery: bool = False, plant_conf: dict | None = N
             eff = plant_conf.get(plant_key)
             if isinstance(eff, list | tuple):
                 eff = eff[0] if len(eff) == 1 else None
+            if isinstance(eff, str):  # a number as text, as the plant's own keys allow
+                try:
+                    eff = float(eff)
+                except ValueError:
+                    eff = None
             if n.get(site_key) is None and _finite_number(eff) and 0 < eff <= 1:
                 n[site_key] = eff
     keys = {"inverter_is_hybrid": True}
