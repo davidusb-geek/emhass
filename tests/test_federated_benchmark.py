@@ -38,7 +38,8 @@ def test_a_coordinated_run_that_fell_back_is_not_compared(capsys):
     capture.result = types.SimpleNamespace(upper=1.0)  # the coordinator had planned
     cost = bench._objective(None, capture, "dantzig_wolfe", _res("cvxpy", "a limit, 0.2 kWh"))
     assert cost != cost  # NaN
-    assert "not compared" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "not compared" in out and "a limit, 0.2 kWh" in out
     assert bench._objective(None, capture, "dantzig_wolfe", _res("dantzig_wolfe")) == 1.0
     rows = [bench._row("a", (1.0, 0.1), (1.0, 0.2)), bench._row("b", (1.0, 0.1), (cost, 0.2))]
     bench._summary("Runs", rows)
