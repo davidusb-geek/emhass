@@ -543,8 +543,12 @@ def test_a_sequence_load_runs_its_sequence():
         treat_deferrable_load_as_semi_cont=[True, False],
     )
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
-    powers = set(np.round(res["P_deferrable1"].values, 3))
-    assert powers <= {0.0, 750.0, 500.0}, powers
+    # the whole sequence, in order, once, and nothing else
+    p = np.round(res["P_deferrable1"].values, 3)
+    on = np.flatnonzero(p)
+    assert len(on) == len(sequence), p
+    assert np.array_equal(on, np.arange(on[0], on[0] + len(sequence))), p
+    assert p[on].tolist() == sequence, p
 
 
 def test_a_plan_that_breaks_a_hard_limit_is_declined():
@@ -1060,6 +1064,13 @@ def test_the_coordinators_inputs_are_checked():
     assert "reserved" in site_mod.site_problem(
         [{"id": "ac", "parent": "grid", "type": "panel"}, {"id": "deferrable0", "parent": "ac"}]
     )
+    # "solar" is the ledger's player for the PV: no node or group takes it
+    assert "reserved" in site_mod.site_problem(
+        [{"id": "solar", "parent": "grid"}, {"id": "deferrable0", "parent": "solar"}]
+    )
+    assert "reserved" in site_mod.site_problem(
+        [{"id": "deferrable0", "parent": "grid", "group": "solar"}]
+    )
     from emhass.coordinator.master import DWCoordinator
 
     cfg = SiteConfig(horizon=h, set_limits=(SetLimit("l", ("pv",), max_export_kw=0.0),))
@@ -1223,3 +1234,61 @@ def test_the_ledger_counts_the_pv_the_export_ceiling_curtails():
     assert delivered is not None and np.any(delivered - flows.net > 1e-6)
     expected = float((flows.curtail + (delivered - flows.net)).sum() * co.dt)
     assert totals["curtailed_kwh"] == pytest.approx(expected)
+
+
+def test_a_cell_with_two_kinks_inside_is_cut(monkeypatch):
+    """The same gradient just inside both ends of a cell does not make it one
+    linear piece: the bill can dip and level off between them. Such a cell is
+    halved until its gradient explains its change, so the change is priced
+    where it happens and not handed to whichever total moved most."""
+    import types
+
+    from emhass.coordinator import settlement
+
+    def bill(_co, _fc, x):
+        # flat, down by 0.1 between 0.05 and 0.15 kW of "a", flat again; "b"
+        # (an independent connection at no tariff) costs nothing
+        return -np.clip((x["a"] - 0.05) / 0.1, 0.0, 1.0) * 0.1
+
+    monkeypatch.setattr(settlement, "_slot_cost", bill)
+    monkeypatch.setattr(settlement, "_slots", lambda fc, idx: idx)
+    co = types.SimpleNamespace(n=1)
+    x0 = {"a": np.zeros(1), "b": np.zeros(1)}
+    x1 = {"a": np.array([3.2]), "b": np.array([4.0])}
+    q = settlement._bus_prices(co, None, x0, x1)
+    assert q["b"][0] == pytest.approx(0.0, abs=1e-9)  # it changed nothing
+    assert q["a"][0] * 3.2 == pytest.approx(-0.1)  # the whole change
+
+
+def test_the_baseline_bills_add_up_under_an_export_ceiling(monkeypatch):
+    """With no PV the export ceiling is zero, so a baseline that exports
+    earns nothing in the house's bill before: the players' bills before are
+    split the same way, and add up to it."""
+    from emhass.coordinator import settlement
+    from emhass.coordinator.master import DWCoordinator
+
+    seen = []
+    run = DWCoordinator.run
+
+    def keep(self, **kwargs):
+        r = run(self, **kwargs)
+        seen.append((self, r.plan))
+        return r
+
+    with mock.patch.object(DWCoordinator, "run", keep):
+        _, res = _coordinated(set_nodischarge_to_grid=True)
+    (co, plan), (co_dark, plan_dark) = seen[0], seen[1]
+    assert co.fc.export_ceiling is not None and not co.cfg.has_tree
+    baseline = settlement._baseline
+
+    def exporting(c, key):
+        p, traj, cost = baseline(c, key)
+        if key == "battery":  # its baseline sells 5 kW in the first slots
+            p = p.copy()
+            p[:4] = -5.0
+        return p, traj, cost
+
+    monkeypatch.setattr(settlement, "_baseline", exporting)
+    out = settlement.ledger(co, plan, co_dark, plan_dark)
+    before = sum(r["bill_before"] for r in out["rows"])
+    assert before == pytest.approx(out["totals"]["house_bill_before"])

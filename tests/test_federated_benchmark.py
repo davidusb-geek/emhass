@@ -68,3 +68,35 @@ def test_a_pair_that_straddles_a_slot_is_run_again(capsys):
     milp, coord = bench._pair(drifting, tries=2)
     assert coord[0] != coord[0]  # NaN: not compared
     assert "not compared" in capsys.readouterr().out
+
+
+def test_a_study_case_that_plans_nothing_is_not_compared(monkeypatch):
+    """Inputs that could not be prepared, or an action that planned nothing,
+    give no cost (NaN) and no first slot, instead of stopping the benchmark;
+    the Home Assistant session a run opened is closed either way."""
+    import asyncio
+
+    closed = []
+
+    class Session:
+        async def close(self):
+            closed.append(True)
+
+    async def params():
+        return {"optim_conf": {}}
+
+    async def inputs(*args, **kwargs):
+        return answer["idd"]
+
+    async def action(idd, logger):
+        return answer["res"]
+
+    monkeypatch.setattr(bench, "_params", params)
+    monkeypatch.setattr(bench, "set_input_data_dict", inputs)
+    monkeypatch.setattr(bench, "dayahead_forecast_optim", action)
+    answer = {"idd": False, "res": None}
+    cost, _, start = asyncio.run(bench.study_case({}, "dayahead-optim", {}, "cvxpy", 0.0))
+    assert cost != cost and start is None
+    answer = {"idd": {"rh": Session(), "opt": None}, "res": False}
+    cost, _, start = asyncio.run(bench.study_case({}, "dayahead-optim", {}, "cvxpy", 0.0))
+    assert cost != cost and start is None and closed == [True]
