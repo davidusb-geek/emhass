@@ -74,7 +74,15 @@ def _meter_cost(co: DWCoordinator, z: np.ndarray) -> np.ndarray:
     """Grid cost per slot at raw meter flow z, exactly as the objective scores
     it: the curtailment rule, then the tariff and any priced breach."""
     zc, _ = apply_curtailment(z, ac_solar(co.cfg, co.fc), co.fc.sell, co.cfg.grid)
-    return _tariff_cost(co, zc)
+    return _tariff_cost(co, _under_ceiling(co.fc, zc))
+
+
+def _under_ceiling(fc: Forecasts, z: np.ndarray) -> np.ndarray:
+    """The meter flow `z` as delivered under `fc.export_ceiling`: export past
+    it is curtailed PV, as the plan's own score and results take it."""
+    if fc.export_ceiling is None:
+        return z
+    return z + np.maximum(-z - np.asarray(fc.export_ceiling, dtype=float), 0.0)
 
 
 def _path_prices(
@@ -148,7 +156,7 @@ def _slot_cost(co: DWCoordinator, fc: Forecasts, x: Mapping[str, np.ndarray]) ->
     scores it: the tree's flows, curtailment, every connection's tariff, every
     breach."""
     flows = meter_from_draws(co.cfg, fc, *_split(x))
-    c = _tariff_cost_at(co, fc, flows.net)
+    c = _tariff_cost_at(co, fc, _under_ceiling(fc, flows.net))
     if np.any(flows.breach_kwh > 0):
         c = c + flows.breach_kwh * breach_price(co.cfg.grid, co.fc.buy, co.fc.sell)
     for conn in co.cfg.connections:
@@ -177,6 +185,7 @@ def _slots(fc: Forecasts, idx: np.ndarray) -> Forecasts:
         solar=fc.solar[idx],
         pv_arrays={k: np.asarray(v)[idx] for k, v in fc.pv_arrays.items()},
         tariffs={k: (np.asarray(b)[idx], np.asarray(v)[idx]) for k, (b, v) in fc.tariffs.items()},
+        export_ceiling=None if fc.export_ceiling is None else np.asarray(fc.export_ceiling)[idx],
     )
 
 
@@ -186,6 +195,8 @@ def dark(fc: Forecasts) -> Forecasts:
         fc,
         solar=np.zeros_like(fc.solar),
         pv_arrays={k: np.zeros_like(np.asarray(v, dtype=float)) for k, v in fc.pv_arrays.items()},
+        # the ceiling is the PV surplus: none without PV
+        export_ceiling=None if fc.export_ceiling is None else np.zeros_like(fc.export_ceiling),
     )
 
 
@@ -347,8 +358,8 @@ def _device_shares(
 
 
 def device_keys(co: DWCoordinator) -> list[str]:
-    """Every device that takes a share: the site's batteries, tank and HVAC,
-    then the participants, in the coordinator's order."""
+    """Every device that takes a share: the batteries the master holds, then
+    the participants, in the coordinator's order."""
     keys = [
         SiteConfig.battery_key(i) for i, b in enumerate(co.cfg.battery_list) if b.capacity_kwh > 0
     ]

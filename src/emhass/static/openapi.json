@@ -346,7 +346,7 @@
               "array",
               "null"
             ],
-            "maxItems": 128,
+            "maxItems": 64,
             "items": {
               "anyOf": [
                 {
@@ -409,12 +409,18 @@
                       "minimum": 0
                     },
                     "efficiency_import": {
-                      "type": "number",
+                      "type": [
+                        "number",
+                        "null"
+                      ],
                       "exclusiveMinimum": 0,
                       "maximum": 1
                     },
                     "efficiency_export": {
-                      "type": "number",
+                      "type": [
+                        "number",
+                        "null"
+                      ],
                       "exclusiveMinimum": 0,
                       "maximum": 1
                     }

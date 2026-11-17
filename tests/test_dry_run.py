@@ -1538,7 +1538,18 @@ def _with(index: int, **change):
     "site, problem",
     [
         ({"nodes": []}, "must be a list"),
-        ([{"id": f"n{i}"} for i in range(129)], "at most 128 elements"),
+        ([{"id": f"n{i}"} for i in range(65)], "at most 64 elements"),
+        (
+            [{"id": "grid"}] + [{"id": f"n{i}", "parent": "grid"} for i in range(17)],
+            "at most 16 nodes and limits",
+        ),
+        (
+            [
+                {"id": "l1", "type": "limit", "max_import": 1},
+                {"id": "pv", "parent": "grid", "limits": ["l1"]},
+            ],
+            "nothing else",
+        ),
         (["inverter"], "must be an object with an id"),
         ([{"type": "panel"}], "must be an object with an id"),
         (_with(1, id="Inverter!"), "short lower-case name"),
@@ -1546,7 +1557,7 @@ def _with(index: int, **change):
         (_with(1, rogue=1), "may have only"),
         (_with(0, parent="inverter"), "may have only"),
         (_with(4, parent="grid"), "may have only"),
-        (_with(5, solver="emhass"), "planned by no solver"),
+        (_with(5, solver="emhass"), "nothing else"),
         (_with(6, solver="os.system"), "solver must be emhass"),
         (_with(6, solver="home_energy_optimizer"), "solver must be emhass"),
         (_with(6, config={"power_kw": 3.0}), "may have only"),
@@ -1654,13 +1665,33 @@ def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):
 def test_an_inverter_emhass_cannot_hold_leaves_its_keys(change, caplog):
     plant = {"inverter_is_hybrid": False}
     with caplog.at_level("WARNING"):
-        assert not site_mod.compile_site(_with(1, **change)[1:], plant, logger)
+        assert not site_mod.compile_site(_with(1, **change)[1:], plant, logger, battery=True)
     assert plant == {"inverter_is_hybrid": False}
 
 
 def test_a_second_device_on_the_inverter_leaves_its_keys():
-    site = SITE + [{"id": "deferrable2", "parent": "inverter"}]
-    assert site_mod.site_inverter(site) is None
+    """Only the PV and the battery on the inverter: EMHASS's model holds it;
+    a load moved onto it too, and it does not, battery or not."""
+    assert site_mod.site_inverter(SITE, battery=True) is not None
+    load = next(i for i, e in enumerate(SITE) if e["id"] == "deferrable2")
+    site = _with(load, parent="inverter")
+    assert site_mod.site_inverter(site, battery=True) is None
+
+
+def test_an_omitted_inverter_efficiency_keeps_the_configured_one():
+    """An efficiency site leaves out is the plant's, as a rating is: never
+    reset to 1.0 behind the user's back, for either solver."""
+    site = [dict(e) for e in SITE]
+    inverter = next(e for e in site if e.get("type") == "hybrid_inverter")
+    del inverter["efficiency_export"], inverter["efficiency_import"]
+    plant = {
+        "inverter_is_hybrid": False,
+        "inverter_efficiency_dc_ac": 0.96,
+        "inverter_efficiency_ac_dc": 0.95,
+    }
+    assert site_mod.compile_site(site, plant, logger, battery=True)
+    assert plant["inverter_efficiency_dc_ac"] == 0.96
+    assert plant["inverter_efficiency_ac_dc"] == 0.95
 
 
 def test_a_null_efficiency_is_an_omitted_one():

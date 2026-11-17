@@ -90,20 +90,32 @@ class _Capture:
         self._patch.stop()
 
 
-def _objective(opt, capture: _Capture, backend: str) -> float:
-    """EMHASS's objective (bill plus penalties, lower is better) of a solve.
+def _objective(opt, capture: _Capture, backend: str, res) -> float:
+    """EMHASS's objective (bill plus penalties, lower is better) of the plan
+    that was published.
 
     Args:
         opt: The Optimization that solved.
         capture: The coordinator result recorded during the solve, if any.
         backend: "cvxpy" or "dantzig_wolfe".
+        res: The published plan (opt_res).
 
     Returns:
-        float: The cost; NaN if the coordinated backend fell back to the MILP.
+        float: The cost; NaN when there is no fair comparison - the
+        coordinated backend fell back to the MILP (its reason is printed),
+        or the MILP published no plan.
     """
     if backend == "cvxpy":
-        return -float(opt.prob.value)
-    return float(capture.result.upper) if capture.result is not None else float("nan")
+        # the problem whose plan was published: a relaxed retry or a DP
+        # re-solve is not opt.prob
+        value = getattr(opt, "solved_value", None)
+        return float("nan") if value is None else -float(value)
+    used = res["backend_used"].iloc[0] if res is not None and "backend_used" in res else None
+    if used != "dantzig_wolfe" or capture.result is None:
+        reason = res["backend_fallback_reason"].iloc[0] if used else "no plan"
+        print(f"    (not compared: the coordinated backend fell back - {reason})")
+        return float("nan")
+    return float(capture.result.upper)
 
 
 # ------------------------------------------------------------ study cases
@@ -241,9 +253,9 @@ async def study_case(optim: dict, action: str, runtime: dict, backend: str, gap:
             dry_run=True,
         )
         run = dayahead_forecast_optim if action == "dayahead-optim" else naive_mpc_optim
-        await run(idd, LOGGER)
+        res = await run(idd, LOGGER)
         seconds = time.perf_counter() - t0
-    return _objective(idd["opt"], capture, backend), seconds
+    return _objective(idd["opt"], capture, backend, res), seconds
 
 
 # ---------------------------------------------------------- synthetic days
@@ -340,9 +352,9 @@ def solve_day(inputs, backend: str):
     )
     with _Capture() as capture:
         t0 = time.perf_counter()
-        opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
+        res = opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
         seconds = time.perf_counter() - t0
-    return _objective(opt, capture, backend), seconds
+    return _objective(opt, capture, backend, res), seconds
 
 
 # ------------------------------------------------------------------ main
@@ -372,7 +384,13 @@ def _summary(label, rows):
         label: The set of runs.
         rows: What _row returned for each run.
     """
-    diffs, tc, tm = zip(*rows, strict=True)
+    compared = [r for r in rows if r[0] == r[0]]  # NaN: not compared
+    if not compared:
+        print(f"{label}: {len(rows)} runs, none compared\n")
+        return
+    diffs, tc, tm = zip(*compared, strict=True)
+    if len(compared) < len(rows):
+        label = f"{label} ({len(rows) - len(compared)} not compared)"
     print(
         f"{label}: {len(rows)} runs, cost difference mean {statistics.mean(diffs):.4f}% / largest "
         f"{max(diffs):.4f}%, time coordinated {min(tc):.2f}-{max(tc):.2f} s / MILP {min(tm):.2f}-{max(tm):.2f} s\n"

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -42,6 +41,7 @@ from emhass.coordinator.model import (
     hybrid_inverter,
 )
 from emhass.coordinator.settlement import ledger
+from emhass.coordinator.site import _SITE_DEVICE, site_kind
 from emhass.coordinator.submeter import site_meter
 
 if TYPE_CHECKING:
@@ -49,10 +49,9 @@ if TYPE_CHECKING:
 
 
 class EmhassOptimization(Protocol):
-    """What this adapter uses of EMHASS's `Optimization` (emhass.optimization):
+    """What this module uses of EMHASS's `Optimization` (emhass.optimization):
     the one `optimize` is handed, and the one each participant builds for its
-    own devices. EMHASS is not a dependency, so its surface is written down here
-    rather than imported - one list of what an EMHASS upgrade must keep."""
+    own devices - one list of what a change to Optimization must keep."""
 
     optim_conf: dict[str, Any]
     plant_conf: dict[str, Any]
@@ -88,7 +87,8 @@ class EmhassOptimization(Protocol):
 # master's value has stopped falling, then fix the on/off participants to one
 # plan each and let the rest re-plan around them (the dive).
 RUN_DEFAULTS: RunOptions = {"stall": 2, "smoothing": 0.0, "dive": 6}
-OK_STATUSES = ("Optimal", "Optimal (Relaxed)")
+# The statuses EMHASS publishes a plan for (perform_optimization)
+OK_STATUSES = ("Optimal", "Optimal_Inaccurate", "Optimal (Relaxed)", "Optimal (Incumbent)")
 # A plan is reported "Optimal" only when it is proven within this relative
 # distance of the best possible (DWCoordinator.run's own gap_tol); otherwise
 # "Optimal_Inaccurate": a runnable plan, published as usual (both are in
@@ -163,8 +163,8 @@ def unsupported(
         return "set_total_pv_sell"
     for old in OLD_KEYS:
         if oc.get(old):
-            # read by 0.2.6 / 0.2.7 from drafts of EMHASS's coordinated backend;
-            # planning without what they said would be worse than the default solver
+            # keys of an earlier draft of this backend; planning without what they
+            # said would be worse than the default solver
             return f"{old} (replaced by site: one list of the meter, nodes, limits and devices)"
     elements = [e for e in oc.get("site") or [] if isinstance(e, dict)]
     # battery0 is the battery's indexed name (#1032); with one battery, EMHASS's P_batt
@@ -203,6 +203,17 @@ def unsupported(
         return "set_nodischarge_to_grid with the battery and the PV on one node (no discharge while exporting)"
     if int(pc.get("number_of_batteries", 1)) > 1:
         return "more than one battery"
+    extra = sorted(d for d in homes if d.startswith("battery") and d != "battery")
+    if extra:
+        return f"site names {extra[0]!r}; EMHASS plans one battery here (battery0)"
+    for key in ("maximum_power_from_grid", "maximum_power_to_grid"):
+        if isinstance(pc.get(key), list | tuple):
+            return f"{key} as a list (per-slot grid limits)"
+    for cfg in oc.get("def_load_config") or []:
+        thermal = (cfg or {}).get("thermal_battery") or {} if isinstance(cfg, dict) else {}
+        if float(thermal.get("internal_gains_factor", 0) or 0) > 0:
+            # its heat demand reads the house's load, which a price response sets to zero
+            return "internal_gains_factor (a thermal load's gains follow the house's load)"
     if oc.get("heat_topology") or oc.get("shared_thermal_tanks"):
         return "heat_topology or shared thermal tanks"
     if any(v is not None for v in (oc.get("cost_forecast_per_deferrable_load") or [])):
@@ -347,11 +358,27 @@ class EmhassParticipant:
         # count or single block, and no battery (EMHASS's battery has a charge or
         # discharge binary per slot). A mix of such plans runs as it is, so the
         # coordinator may keep one (see blend).
+        min_power = oc.get("minimum_power_of_deferrable_loads") or []
+        runtime_min = (runtime.get("min_power_of_deferrable_loads") or []) if runtime else []
+
+        def binary(k: int) -> bool:
+            """Whether load k is on/off at a level: semi-continuous, one block, a
+            power sequence (a list), or a minimum power - EMHASS gives each a
+            binary, so a mix of its plans is no plan it can run."""
+            local = loads[k] if k < len(loads) else k
+            return bool(
+                oc["treat_deferrable_load_as_semi_cont"][k]
+                or oc["set_deferrable_load_single_constant"][k]
+                or isinstance(oc["nominal_power_of_deferrable_loads"][k], list)
+                or float((min_power[k] if k < len(min_power) else 0) or 0) > 0
+                or float((runtime_min[local] if local < len(runtime_min) else 0) or 0) > 0
+            )
+
         self.modulating = (
             not battery
             and not any(g.get("mutual_exclusion") for g in oc["deferrable_load_groups"])
             and all(
-                not oc["treat_deferrable_load_as_semi_cont"][k]
+                not binary(k)
                 and not oc["set_deferrable_load_single_constant"][k]
                 and not oc["def_minimum_on_time"][k]
                 and not oc["def_minimum_off_time"][k]
@@ -366,8 +393,7 @@ class EmhassParticipant:
         # times, a start limit): the coordinator fixes such a participant to one
         # plan before the others re-plan around it (DWCoordinator.run dive).
         self.onoff = any(
-            oc["treat_deferrable_load_as_semi_cont"][k]
-            or oc["set_deferrable_load_single_constant"][k]
+            binary(k)
             or oc["def_minimum_on_time"][k]
             or oc["def_minimum_off_time"][k]
             or oc["set_deferrable_max_startups"][k]
@@ -414,7 +440,12 @@ class EmhassParticipant:
                 g.plan_kw, g.private_cost, g.trajectory, status="fallback", detail=g.detail
             )
         plan_w = np.zeros(self.n)
+        electric = self.opt.optim_conf.get("is_electric_load") or []
         for k in range(len(self.loads)):
+            # A load EMHASS keeps off the electrical balance (gas, say) is not
+            # drawn from the meter: its cost stays in the private cost
+            if k < len(electric) and electric[k] is False:
+                continue
             plan_w += res[f"P_deferrable{k}"].values
         if self.battery:
             plan_w -= res["P_batt"].values
@@ -427,7 +458,13 @@ class EmhassParticipant:
                 + np.asarray(sell) * res["P_grid_neg"].values
             )
         )
-        private = -float(self.opt.prob.value) - bill
+        # The objective of the solve that was published: a relaxed retry or a DP
+        # re-solve is not self.opt.prob (#1048)
+        value = getattr(self.opt, "solved_value", None)
+        value = self.opt.prob.value if value is None else value
+        if value is None or not np.isfinite(float(value)):
+            raise RuntimeError(f"participant {self.key}: no finite objective ({value})")
+        private = -float(value) - bill
         if self.battery:
             s0 = (
                 self.soc_init
@@ -499,23 +536,8 @@ class EmhassParticipant:
 
 # ------------------------------------------------------------------ the call
 OLD_KEYS = ("participants", "electrical_topology", "group_limits")
-SITE_DEVICE = re.compile(r"^(pv|battery0?|deferrable[0-9]{1,3})$")
-
-
-def _kind(element: dict[str, Any]) -> str:
-    """What a `site` element is: "grid" (the main meter), "limit" (a cap on
-    the devices tagged with it), "remote" (a solver on the network), "device"
-    (an EMHASS device name or "pv") or "node" (anything else: an inverter, a
-    panel, a breaker)."""
-    if element.get("id") == MAIN:
-        return "grid"
-    if element.get("type") == "limit":
-        return "limit"
-    if isinstance(element.get("solver"), dict):
-        return "remote"
-    if SITE_DEVICE.match(str(element.get("id", ""))):
-        return "device"
-    return "node"
+SITE_DEVICE = _SITE_DEVICE  # one vocabulary with the site check (emhass.coordinator.site)
+_kind = site_kind
 
 
 class Layout(NamedTuple):
@@ -553,7 +575,7 @@ def _site(
       its parent, `efficiency_import` / `efficiency_export`.
     - a limit (`type: "limit"`): `max_import` / `max_export` (W) on what the
       devices tagged with it draw together, wherever they are.
-    - a device (`pv`, `battery`, `deferrableN`, `water_heater`, `hvac`):
+    - a device (`pv`, `battery0` or `battery`, `deferrableN`):
       `group` (devices with the same group are planned together by EMHASS's
       model) and `limits` (limit ids); `solver` may only be "emhass".
 
@@ -799,12 +821,18 @@ def _battery(plant_conf: dict[str, Any], soc_init: float, buy: np.ndarray) -> Ba
     )
 
 
-def _linear_battery(oc: dict[str, Any], pc: dict[str, Any]) -> bool:
+def _linear_battery(
+    oc: dict[str, Any], pc: dict[str, Any], soc_init: float | None = None, buy: Any = None
+) -> bool:
     """Whether EMHASS's battery is exactly its linear constraints - the state
     of charge stepped by both efficiencies, power limits, the SoC window and
     the end-of-day target - so the coordinator can hold it in its master LP.
-    (The charge-or-discharge binary is relaxed; it matters only at negative
-    prices, where the plan is run as net power.)"""
+
+    Otherwise EMHASS's own model plans it, as a participant: with a penalty
+    or reward on its state of charge; when it starts outside its SoC window
+    (EMHASS's model recovers from there); and when an import price is
+    negative, where the LP without EMHASS's charge-or-discharge binary would
+    charge and discharge in one slot to be paid for the loss."""
 
     def zero(v: Any) -> bool:
         return all(float(x or 0) == 0 for x in (v if isinstance(v, list) else [v]))
@@ -818,6 +846,14 @@ def _linear_battery(oc: dict[str, Any], pc: dict[str, Any]) -> bool:
         and zero(pc.get("battery_stress_cost", 0))
         and all(zero(conf.get(k, 0)) for conf in (oc, pc) for k in penalties)
         and not pc.get("battery_charge_power_derating")
+        and zero(oc.get("battery_soc_final_reward_factor", 0))
+        and (
+            soc_init is None
+            or float(pc["battery_minimum_state_of_charge"])
+            <= float(soc_init)
+            <= float(pc["battery_maximum_state_of_charge"])
+        )
+        and (buy is None or float(np.min(buy)) >= 0.0)
     )
 
 
@@ -881,7 +917,8 @@ def optimize(
         f"deferrable{k}" for k in range(int(oc.get("number_of_deferrable_loads", 0)))
     ]
     nominal = oc.get("nominal_power_of_deferrable_loads") or []
-    device_w = sum((max(v) if isinstance(v, list) else float(v)) for v in nominal[: len(devices)])
+    loads_n = sum(1 for d in devices if d.startswith("deferrable"))
+    device_w = sum((max(v) if isinstance(v, list) else float(v)) for v in nominal[:loads_n])
     if oc.get("set_use_battery"):
         device_w += max(
             float(pc["battery_charge_power_max"]), float(pc["battery_discharge_power_max"])
@@ -901,7 +938,12 @@ def optimize(
     groups = layout.groups
     own_groups = layout.own_groups
     for g in groups:
-        if g["solver"] == "emhass" and g["devices"] == ["battery"] and _linear_battery(oc, pc):
+        if (
+            g["solver"] == "emhass"
+            and g["key"] == "battery"  # alone, not a group the master would not know
+            and g["devices"] == ["battery"]
+            and _linear_battery(oc, pc, soc_init, buy)
+        ):
             # EMHASS's battery, as its linear model in the master: the same
             # constraints from the same parameters, held exactly
             # unsupported() declined a battery without set_use_battery, which sets both
@@ -985,10 +1027,25 @@ def optimize(
     co = DWCoordinator(
         site, fc, participants=participants, export_ceiling=ceiling, soe_targets=targets
     )
+    # EMHASS's own solver time limit, for each coordinator run (the plan, then
+    # the one for the saving split): past it, the best plan so far is kept
+    budget = float(oc.get("lp_solver_timeout", 45) or 45)
+    run_kw = {**run_kw, "max_seconds": budget}
     try:
         r = co.run(**run_kw)
     except Exception as exc:  # a plan is always published
         _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
+        return None
+    if not np.isfinite(float(r.upper)):
+        # no plan it found can run: past the export ceiling with nothing to curtail
+        _decline(opt, "the coordinator found no plan within the export ceiling")
+        return None
+    breach = float(co.parts(r.plan)["breach_kwh"])
+    if breach > 1e-3:
+        # A grid, node or limit rating is hard in EMHASS: the default solver
+        # meets it (relaxing an on/off load if it must); the coordinator only
+        # priced it, and its on/off plans could not fit
+        _decline(opt, f"the coordinator's plan exceeds a limit by {breach:.3f} kWh")
         return None
 
     res = _results(

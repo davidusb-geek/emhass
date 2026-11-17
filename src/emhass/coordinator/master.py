@@ -31,12 +31,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
+from typing import Any, Literal, TypedDict, overload
 
 import numpy as np
-
-if TYPE_CHECKING:  # 3.11+; only ever an annotation here
-    pass
 
 from emhass.coordinator.costs import (
     battery_terminal_penalty,
@@ -110,10 +107,18 @@ class Device:
         return self.cfg
 
     def add(self, col: Column, tol: float = 1e-9) -> bool:
-        """Add unless an identical plan is already in the pool."""
-        for c in self.columns:
+        """Add unless a plan with the same power is already in the pool; of
+        two with the same power, keep the cheaper (its trajectory and detail
+        too). Returns whether the pool changed."""
+        for i, c in enumerate(self.columns):
             if np.max(np.abs(c.power - col.power)) < tol:
-                return False
+                if col.cost >= c.cost - tol:
+                    return False
+                col.born = c.born
+                self.columns[i] = col
+                if self.on_add is not None:
+                    self.on_add(self, col)
+                return True
         col.born = self.stamp
         self.columns.append(col)
         if self.on_add is not None:
@@ -138,6 +143,7 @@ class RunOptions(TypedDict, total=False):
     pool: str
     stall: int
     dive: int
+    max_seconds: float | None
     progress: Callable[..., None] | None
 
 
@@ -154,7 +160,7 @@ class DWResult:
     ms: float
     n_columns: int
     fractional_devices: int
-    pricing_error: float = 0.0  # worst amount a pool column undercut the DP oracle
+    pricing_error: float = 0.0  # worst amount a pool column undercut a participant's answer
     relaxed_view: dict | None = None  # snapshot of the final master (record=True)
     stop_reason: str = ""  # converged | no new proposals | iteration cap
     plan_parts: dict | None = None  # objective breakdown of the returned plan
@@ -211,7 +217,7 @@ class DWCoordinator:
         self.lp_batts: list[tuple[str, BatteryConfig]] = []
         for i, b in enumerate(cfg.battery_list):
             if b.capacity_kwh > 0:
-                # Pin the terminal price to the TARIFF's: by default the DP
+                # Pin the terminal price to the TARIFF's: by default it
                 # derives it from min(buy), and buy will be the master's duals.
                 pinned = replace(b, terminal_price=terminal_price(b, fc.buy))
                 key = SiteConfig.battery_key(i)
@@ -221,6 +227,8 @@ class DWCoordinator:
         self.export_ceiling = (
             None if export_ceiling is None else np.asarray(export_ceiling, dtype=float)
         )
+        # the saving split reads it from the forecasts, slot for slot
+        self.fc = replace(self.fc, export_ceiling=self.export_ceiling)
         self.soe_targets = dict(soe_targets or {})
         keys = {d.key for d in self.devices} | {k for k, _ in self.lp_batts}
         pv_keys = set(fc.pv_keys)
@@ -329,7 +337,7 @@ class DWCoordinator:
     def load_aware_oracle(
         self, dev: Device, others: Mapping[str, np.ndarray], price_kwh: np.ndarray
     ) -> Column:
-        """A HEURISTIC column: today's load-aware DP against the others' mix
+        """A HEURISTIC column: the participant's best response to the others' mix
         (`others`: every other device's power, by key).
 
         Any feasible plan is a legal column, so the master can absorb the
@@ -373,7 +381,7 @@ class DWCoordinator:
         """A recovered plan that still breaches a rating, repaired: each device
         behind a rated node is asked again against the plans the others will
         actually run (not a mix of them) - a participant at the secant prices
-        of its whole power, so an EV of 7 kW sees that a slot with 3 kW of
+        of its whole power, so a 7 kW load sees that a slot with 3 kW of
         headroom costs it the breach - and the plan is recovered again from
         the larger pool, kept only if it scores better. Up to `rounds` times."""
         for _ in range(rounds):
@@ -494,7 +502,17 @@ class DWCoordinator:
             + sum(max(b.p_charge_max_kw, b.p_discharge_max_kw) for b in cfg.battery_list)
             + sum(float(d.participant.max_power_kw) for d in self.devices)
         )
-        inf = 2.0 * reach + 1.0
+        # A node draws 1 / eta_import from its parent for each kWh it takes, so
+        # what reaches a root can exceed what the devices draw: scale by the
+        # largest such amplification on any path down the tree
+        amp = 1.0
+        for node in topo.nodes:
+            factor, at = 1.0, node
+            while at in topo.sm:
+                factor /= topo.sm[at].eta_import
+                at = topo.parent[at]
+            amp = max(amp, factor)
+        inf = 2.0 * amp * reach + 1.0
         full = lambda v: np.broadcast_to(v, (n,)).astype(float)  # noqa: E731
         zero = np.zeros(n)
         blocks: list[tuple[list[tuple[int, float]], np.ndarray, np.ndarray]] = []
@@ -516,6 +534,10 @@ class DWCoordinator:
                 blocks.append(([(r, +1.0)], (buy + B) * dt, full(inf)))  # over import cap
             blocks.append(([(r, -1.0)], -sell * dt, full(exp_cap)))  # export
             if rg.max_export_kw is not None:
+                # Past the limit, and past an export ceiling too, at the breach
+                # price: soft in the master, whose prices then lead to better
+                # plans than a hard cap's; a recovered plan past the ceiling
+                # scores infinite (`evaluate`) and is never published.
                 blocks.append(([(r, -1.0)], (B - sell) * dt, full(inf)))  # over export cap
             pv = pv_on(fc, topo, root)
             if rg.allow_curtailment and np.any(pv > 0):
@@ -646,7 +668,7 @@ class DWCoordinator:
         """Returns (value, column weights, meter duals, convexity duals, battery plans)."""
         n, devs, dt = self.n, self.devices, self.dt
         # Rows: the coupling rows (every bus, then every set limit; n each),
-        # the convexity rows, then the batteries' and the tank's own rows.
+        # the convexity rows, then the batteries' own rows.
         # The first two are the border that couples the rest.
         n_bal = n * len(self.rows)
         n_meter = len(self.blocks) * n
@@ -734,7 +756,7 @@ class DWCoordinator:
                     groups.append(np.arange(j, j + len(dev.columns)))
                 j += len(dev.columns)
             # the meter + convexity rows are the border that couples the
-            # batteries' and the tank's otherwise independent row blocks
+            # batteries' otherwise independent row blocks
             x, fun = self._choose(c, A, rhs, lb, ub, groups, time_limit, node_limit, base_row)
             self._note_links(x)
             return fun + const, x[lam_sl], None, None, batt_plans(x)
@@ -880,12 +902,11 @@ class DWCoordinator:
         return out
 
     def blend_plan(self, dev: Device, w: np.ndarray) -> Column:
-        """Execute a weighted mix of a modulating device's plans.
-
-        The mixed power is re-run through the device's physics, so the
-        trajectory and cost are what it actually produces - exact even where a
-        mix would carry a tank past its cut-out or a battery past full.
-        """
+        """A weighted mix of a modulating participant's plans: its power, state
+        and cost mixed with the same weights, and its detail from the
+        participant's own `blend` if it has one. A participant modulates only
+        when its dynamics are linear and its cost convex, so the mix runs as
+        it is, at no more than the mixed cost."""
         power = sum(wi * c.power for wi, c in zip(w, dev.columns))
         mix = [(float(wi), c.source, c.born) for wi, c in zip(w, dev.columns) if wi > 1e-6]
         # A participant that says it modulates has linear dynamics and a
@@ -1064,8 +1085,8 @@ class DWCoordinator:
             runnable = np.array([wi if c.runnable else -1.0 for wi, c in zip(w, dev.columns)])
             k = int(np.argmax(runnable))
             if dev.modulating and dev.columns[k].source == "aggregate":
-                # an aggregate carries an averaged trajectory: re-run its power
-                # through the physics so the plan is scored as it would run
+                # an aggregate carries an averaged trajectory: take it as one
+                # blend, so the plan is scored as it would run
                 one = np.zeros(len(dev.columns))
                 one[k] = 1.0
                 return self.blend_plan(dev, one)
@@ -1223,7 +1244,7 @@ class DWCoordinator:
         integer: str = "milp",  # milp | maxweight
         polish: bool = True,
         verbose: bool = False,
-        record: bool = False,  # keep a per-iteration snapshot (for the GUI)
+        record: bool = False,  # keep a per-iteration log entry for each iteration
         anytime: bool = False,  # also recover a plan at every iteration
         pool: str = "auto",  # active: what the master uses + the newest | full: keep all | auto (below)
         stall: int = 0,  # stop once the master's value has not fallen for this many
@@ -1233,6 +1254,8 @@ class DWCoordinator:
         # picks and re-price the modulating ones this many more
         # iterations (0: no dive). Their pools were built against a
         # fractional mix of the on/off plans, which cannot run.
+        max_seconds: float | None = None,  # stop iterating after this long (then
+        # recover the best plan from the pool as usual; no dive)
         progress: Callable[..., None] | None = None,
         # progress(it, max_iter) as each iteration starts, then
         # progress(it, max_iter, blend, bound, best runnable) as it ends
@@ -1261,6 +1284,9 @@ class DWCoordinator:
         best_rmp, flat = np.inf, 0
         incumbent = None  # best runnable plan seen at any iteration
         for it in range(1, max_iter + 1):
+            if max_seconds is not None and time.perf_counter() - t0 > max_seconds:
+                stop_reason = "time limit"
+                break
             if progress is not None:
                 progress(it, max_iter)
             rmp, lam, pi, _sigma, bplans = self.solve_master()
@@ -1285,16 +1311,18 @@ class DWCoordinator:
                 dev.stamp = it
 
             # "If we stopped now": recover from the pool as it stands. Costs a
-            # small MILP per iteration, so only when asked (the GUI asks).
+            # small MILP per iteration, so only when asked.
             anytime_rec = {}
             if anytime:
                 # quick: a few nodes only - the incumbent keeps the best anyway
                 snap_plan = self.recover(integer, weights, bplans, time_limit=0.5, node_limit=6)
                 pp = self.parts(snap_plan)
-                if pp["total"] < best_plan_val:
-                    best_plan_val, incumbent = pp["total"], dict(snap_plan)
+                # its score, the export ceiling applied, as the final plan's is
+                value = self.score(snap_plan)
+                if value < best_plan_val:
+                    best_plan_val, incumbent = value, dict(snap_plan)
                 anytime_rec = {
-                    "plan_value": pp["total"],
+                    "plan_value": value,
                     "plan_parts": pp,
                     "best_plan": best_plan_val,
                 }
@@ -1315,9 +1343,9 @@ class DWCoordinator:
                 for dev in self.devices:
                     q = self.price_of(p, dev)
                     col = self.price_oracle(dev, q / dt)
-                    # The DP is an exact pricing oracle only up to its grid:
-                    # a pool column can undercut it (measured: HVAC, 0.0026 at
-                    # a binding import limit). Take the min over both, so the
+                    # A participant's answer is the exact pricing oracle only up
+                    # to its own solver's tolerance: a pool column can undercut
+                    # it. Take the min over both, so the
                     # bound never exceeds the master; record the shortfall,
                     # because it is how far the certificate itself can be off.
                     pool_best = min(dev.columns, key=lambda c: c.cost + q @ c.power)
@@ -1386,7 +1414,7 @@ class DWCoordinator:
                 stop_reason = "no new proposals"
                 break
 
-        if dive:
+        if dive and stop_reason != "time limit":
             self._dive(dive, heuristic_columns, history, t0)
         if progress is not None:
             progress(-1, max_iter)
@@ -1394,11 +1422,12 @@ class DWCoordinator:
         shown = self._shown(pi)  # before recovery solves the master again
 
         # Re-state the bound against the FINAL pool. Columns added after a
-        # point was priced (heuristic ones especially) can undercut the DP's
-        # answer there; with the min taken over the whole pool, L(pi) <= the
-        # final master value by weak duality, so the reported ordering holds.
-        # What remains unguarded is a plan NO oracle proposed that beats the
-        # DP - the DP's own discretisation error (see pricing_error).
+        # point was priced (heuristic ones especially) can undercut the
+        # participant's answer there; with the min taken over the whole pool,
+        # L(pi) <= the final master value by weak duality, so the reported
+        # ordering holds. What remains unguarded is a plan no participant
+        # proposed that beats its answer - its own solver's tolerance (see
+        # pricing_error).
         best_lb = -np.inf
         for i, p in enumerate(priced):
             best = {}

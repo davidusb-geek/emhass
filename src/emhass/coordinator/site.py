@@ -17,6 +17,10 @@ _SITE_DEVICE = re.compile(r"^(pv|battery[0-9]?|deferrable[0-9]{1,3})$")
 _SITE_ROOT = "grid"
 _SITE_NODE_TYPES = ("hybrid_inverter", "inverter", "panel", "breaker", "meter")
 _SITE_SOLVERS = ("emhass",)
+# A house's meter, inverters, panels and breakers fit well within these; they
+# bound what a site sent with a request can make the coordinator do.
+_SITE_MAX_ELEMENTS = 64
+_SITE_MAX_ROWS = 16
 _SITE_KEYS = {
     "grid": {"id", "max_import", "max_export"},
     "node": {
@@ -89,8 +93,8 @@ def _site_element_problem(element, where: str) -> str | None:
     ):
         return f"{where}.limits must be a list of limit ids"
     if kind == "device":
-        if element["id"] == "pv" and set(element) & {"solver", "group"}:
-            return f"{where}: the PV is a forecast, planned by no solver"
+        if element["id"] == "pv" and set(element) & {"solver", "group", "limits"}:
+            return f"{where}: the PV is a forecast: it has a parent and nothing else (no solver, group or limits)"
         if element.get("solver", "emhass") not in _SITE_SOLVERS:
             return f"{where}.solver must be {', '.join(_SITE_SOLVERS)} (EMHASS's own models)"
         group = element.get("group")
@@ -123,8 +127,8 @@ def site_problem(site) -> str | None:
     Returns:
         str | None: The problem, for the log; None when it can be used.
     """
-    if not isinstance(site, list) or len(site) > 128:
-        return "site must be a list of at most 128 elements"
+    if not isinstance(site, list) or len(site) > _SITE_MAX_ELEMENTS:
+        return f"site must be a list of at most {_SITE_MAX_ELEMENTS} elements"
     ids: dict[str, str] = {}
     for i, element in enumerate(site):
         problem = _site_element_problem(element, f"site[{i}]")
@@ -135,6 +139,10 @@ def site_problem(site) -> str | None:
         ids[element["id"]] = site_kind(element)
     nodes = {e for e, kind in ids.items() if kind == "node"}
     limits = {e for e, kind in ids.items() if kind == "limit"}
+    if len(nodes) + len(limits) > _SITE_MAX_ROWS:
+        # each is a row of the coordinator's LP in every slot, and its solve
+        # grows about with the cube of the rows: a bound on what a request costs
+        return f"site may have at most {_SITE_MAX_ROWS} nodes and limits together"
     parent: dict[str, str] = {}
     for i, element in enumerate(site):
         if ids[element["id"]] in ("grid", "limit"):
@@ -219,6 +227,16 @@ def site_inverter(site: list, battery: bool = False, plant_conf: dict | None = N
             if isinstance(cap, bool) or not isinstance(cap, int | float):
                 continue
             n[site_key] = cap
+        # an omitted efficiency is the plant's, as an omitted rating is
+        for site_key, plant_key in (
+            ("efficiency_export", "inverter_efficiency_dc_ac"),
+            ("efficiency_import", "inverter_efficiency_ac_dc"),
+        ):
+            eff = plant_conf.get(plant_key)
+            if isinstance(eff, list | tuple):
+                eff = eff[0] if len(eff) == 1 else None
+            if n.get(site_key) is None and _finite_number(eff) and 0 < eff <= 1:
+                n[site_key] = eff
     keys = {"inverter_is_hybrid": True}
     if n.get("max_export") is not None:
         keys["inverter_ac_output_max"] = n["max_export"]
