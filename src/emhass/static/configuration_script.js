@@ -430,8 +430,8 @@ function buildParamContainers(
       !(section == "System" && INVERTER_ARRAY_PARAMS.includes(parameter_definition_name))
     ) {
       array_buttons = `
-                  <button type="button" class="input-plus ${parameter_definition_name}">+</button>
-                  <button type="button" class="input-minus ${parameter_definition_name}">-</button>
+                  <button type="button" class="input-plus ${escapeHtml(parameter_definition_name)}">+</button>
+                  <button type="button" class="input-minus ${escapeHtml(parameter_definition_name)}">-</button>
                   <br>
                   `;
     }
@@ -439,10 +439,10 @@ function buildParamContainers(
     //generates and appends param container into section
     //buildParamElement() builds the parameter input/s and returns html to append in param-input
     SectionParamElement[0].innerHTML += `
-          <div class="param" id="${parameter_definition_name}">
-             <h5>${
+          <div class="param" id="${escapeHtml(parameter_definition_name)}">
+             <h5>${escapeHtml(
                parameter_definition_object["friendly_name"]
-             }:</h5> <i>${parameter_definition_name}</i> </br>
+             )}:</h5> <i>${escapeHtml(parameter_definition_name)}</i> </br>
               ${array_buttons}
              <div class="param-input"> 
                   ${buildParamElement(
@@ -451,7 +451,7 @@ function buildParamContainers(
                     config
                   )}
              </div>
-              <p>${parameter_definition_object["Description"]}</p>
+              <p>${escapeHtml(parameter_definition_object["Description"])}</p>
           </div>
           `;
   }
@@ -546,8 +546,9 @@ function buildParamContainers(
   }
 }
 
-//HTML-encode a configuration-derived value for use inside a double-quoted
-//attribute or as element text, so it is always parsed as data (#1290).
+//HTML-encode a configuration- or definitions-derived value (value, friendly_name, Description,
+//parameter name) for use inside a double-quoted attribute or as element text, so it is always
+//parsed as data (#1290).
 //String() keeps the textual form template interpolation produced before.
 function escapeHtml(value) {
   return String(value)

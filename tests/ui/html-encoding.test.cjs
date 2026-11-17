@@ -429,3 +429,62 @@ test('JSON box view round trips configuration strings through the textarea value
   assert.deepEqual(JSON.parse(box.value), config);
   assert.deepEqual(await page.save(), config);
 });
+
+// ---- definitions metadata (friendly_name, Description, parameter name) must be rendered as data ----------
+// buildParamContainers() writes this metadata into the section markup; the page then parses it as HTML.
+function renderSection(definitions, config = {}) {
+  const body = { innerHTML: '' };
+  const ctx = setup();
+  ctx.document.getElementById = id => (id === 'Section' ? { getElementsByClassName: () => [body], querySelectorAll: () => [] } : null);
+  ctx.buildParamContainers('Section', definitions, config, []);
+  return body.innerHTML;
+}
+const textBetween = (html, open, close) => {
+  const start = html.indexOf(open) + open.length;
+  return decode(html.slice(start, html.indexOf(close, start)));
+};
+const entry = (extra = {}) => ({ input: 'string', default_value: 'x', friendly_name: 'Name', Description: 'Text', ...extra });
+const METADATA_MARKERS = [...MARKERS.filter(m => m !== ''), '<unit>_value', "'<unit>_value' & <b data-marker=\"1\">"];
+const GENERATED_TAGS = ['div', 'h5', 'i', 'button', 'br', 'p', 'input', 'label', 'span', 'select', 'option', 'textarea'];
+
+for (const marker of METADATA_MARKERS) {
+  test(`friendly_name and Description stay text: ${labelOf(marker)}`, () => {
+    const html = renderSection({ param: entry({ friendly_name: marker, Description: marker, input: 'string' }) });
+    const elements = parseElements(html);
+    assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value'].includes(n))));
+    assert.equal(textBetween(html, '<h5>', ':</h5>'), marker);
+    assert.equal(textBetween(html, '<p>', '</p>'), marker);
+  });
+
+  test(`parameter name stays data in id, class and visible text: ${labelOf(marker)}`, () => {
+    const html = renderSection({ [marker]: entry({ input: 'array.string', default_value: 'x' }) });
+    const elements = parseElements(html);
+    assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value'].includes(n))));
+    assert.equal(elements.find(e => e.attrs.id !== undefined).attrs.id, marker);
+    assert.equal(textBetween(html, '<i>', '</i>'), marker);
+    assert.equal(elements.filter(e => e.tag === 'button').length, 2);
+    for (const button of elements.filter(e => e.tag === 'button')) assert.equal(button.attrs.class.replace(/^input-(plus|minus) /, ''), marker);
+  });
+}
+
+test('every shipped friendly_name and Description renders as its own text, including <unit>_value', () => {
+  const definitions = JSON.parse(fs.readFileSync('src/emhass/static/data/param_definitions.json', 'utf8'));
+  let checked = 0;
+  for (const [section, parameters] of Object.entries(definitions)) {
+    for (const [name, definition] of Object.entries(parameters)) {
+      if (!('friendly_name' in definition && 'Description' in definition && 'input' in definition && 'default_value' in definition)) continue;
+      if (definition.input === 'select' && !('select_options' in definition)) continue;
+      const html = renderSection({ [name]: definition });
+      assert.deepEqual(parseElements(html).map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), [], `${section}.${name} creates an element`);
+      assert.equal(textBetween(html, '<h5>', ':</h5>'), definition.friendly_name, `${section}.${name} friendly_name`);
+      assert.equal(textBetween(html, '<p>', '</p>'), definition.Description, `${section}.${name} Description`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 50);
+  const text = definitions.Local.victoriametrics_metric_regex.Description;
+  assert.ok(text.includes('<unit>_value'));
+  assert.ok(!renderSection({ r: definitions.Local.victoriametrics_metric_regex }).includes('<unit>'));
+});
