@@ -1110,3 +1110,44 @@ def test_a_nodes_own_clipping_leaves_the_main_bus_pv_to_curtail():
     flows = site_meter(cfg, co.fc, {})
     delivered = co._delivered(flows)
     assert delivered is not None and np.allclose(delivered, 0.0)
+
+
+def test_a_grid_connection_may_not_take_a_reserved_name():
+    """The saving split keeps the main bus's total as "ac" and set totals
+    under "set:": a further grid connection may take neither, as a node may
+    not."""
+    from emhass.coordinator.model import GridConnection, Horizon, SiteConfig
+
+    h = Horizon(dt=0.5, hours=1.0)
+    for name in ("ac", "set:x"):
+        with pytest.raises(ValueError, match="reserved"):
+            SiteConfig(horizon=h, battery=None, connections=(GridConnection(name),)).validate()
+
+
+def test_the_soc_miss_is_priced_at_the_participants_own_tariff():
+    """A battery planned by EMHASS's own model that cannot reach its final
+    SoC: EMHASS prices the miss at the highest import price it is given. Two
+    queries that differ only in price level plan the same battery, and its
+    private cost - the miss at its own tariff - is the same for both."""
+    from emhass.coordinator.backend import EmhassParticipant
+    from emhass.coordinator.interface import Query
+
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = {
+        **oc,
+        "set_use_battery": True,
+        "number_of_deferrable_loads": 0,
+        "weight_battery_charge": 0.001,
+    }  # the battery's own model, not the master's
+    pc = {**pc, "battery_charge_power_max": 100, "battery_discharge_power_max": 100}
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    p = EmhassParticipant(opt, "battery", True, [], data, 0.3, 0.9, {}, buy)
+    flat = np.full(len(data), 0.2)
+    a = p.respond(Query("price_response", flat, flat))
+    miss = sum(float(np.sum(v.value)) for v in p.opt.vars["soc_final_under"])
+    assert miss > 0.1, "the target should be out of reach"
+    b = p.respond(Query("price_response", flat * 5, flat * 5))
+    assert np.allclose(a.plan_kw, b.plan_kw, atol=1e-6)
+    assert b.private_cost == pytest.approx(a.private_cost, rel=1e-6)
