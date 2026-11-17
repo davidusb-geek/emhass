@@ -1040,6 +1040,16 @@ def optimize(
         # no plan it found can run: past the export ceiling with nothing to curtail
         _decline(opt, "the coordinator found no plan within the export ceiling")
         return None
+    held = r.plan.get("battery") if battery_cfg is not None else None
+    if held is not None:
+        # The master's battery has a charge and a discharge per slot and no
+        # binary: both at once (to burn surplus it cannot export or curtail)
+        # is a plan one battery cannot run. Its net power must step its state.
+        p = np.asarray(held.power, dtype=float)
+        step = np.where(p > 0, p * battery_cfg.eta_c, p / battery_cfg.eta_d) * dt
+        if np.max(np.abs(np.diff(held.trajectory) - step), initial=0.0) > 1e-3:
+            _decline(opt, "the coordinator's battery plan charges and discharges in one slot")
+            return None
     breach = float(co.parts(r.plan)["breach_kwh"])
     if breach > 1e-3:
         # A grid, node or limit rating is hard in EMHASS: the default solver

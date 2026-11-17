@@ -61,6 +61,10 @@ async def _params() -> dict:
     return await build_params(EMHASS_CONF, secrets, config, LOGGER)
 
 
+# The statuses EMHASS publishes a plan for (perform_optimization)
+PUBLISHED = ("Optimal", "Optimal_Inaccurate", "Optimal (Relaxed)", "Optimal (Incumbent)")
+
+
 class _Capture:
     """Records the coordinator's first result in a solve (the plan; a second
     run, without PV, only splits the saving)."""
@@ -107,9 +111,11 @@ def _objective(opt, capture: _Capture, backend: str, res) -> float:
     """
     if backend == "cvxpy":
         # the problem whose plan was published: a relaxed retry or a DP
-        # re-solve is not opt.prob
+        # re-solve is not opt.prob; a failed one published no plan at all
         value = getattr(opt, "solved_value", None)
-        return float("nan") if value is None else -float(value)
+        if value is None or getattr(opt, "optim_status", None) not in PUBLISHED:
+            return float("nan")
+        return -float(value)
     used = res["backend_used"].iloc[0] if res is not None and "backend_used" in res else None
     if used != "dantzig_wolfe" or capture.result is None:
         reason = res["backend_fallback_reason"].iloc[0] if used else "no plan"

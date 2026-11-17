@@ -1629,6 +1629,11 @@ def test_the_published_schema_is_the_check():
     assert kinds["a node"]["properties"]["id"]["pattern"] == site_mod._SITE_ID.pattern
     for title in ("a node", "a device"):
         assert "parent" in kinds[title]["required"]
+    # null efficiencies, which the check reads as omitted, validate too
+    node = kinds["a node"]["properties"]
+    for key in ("efficiency_import", "efficiency_export"):
+        assert set(node[key]["type"]) == {"number", "null"}
+        assert node[key]["exclusiveMinimum"] == 0 and node[key]["maximum"] == 1
 
 
 def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):
