@@ -16,6 +16,7 @@ import logging
 import os
 import pathlib
 import pickle
+import re
 import shutil
 import tempfile
 import time
@@ -1618,12 +1619,23 @@ def test_the_published_schema_is_the_check():
         "a limit": "limit",
         "a device": "device",
     }
-    assert set(kinds) == set(names)
+    # the PV is a device with a parent and nothing else (the check refuses
+    # a solver, group or limits on it), so it has its own alternative
+    assert set(kinds) == set(names) | {"the PV"}
     for title, kind in names.items():
         assert kinds[title]["additionalProperties"] is False
         assert set(kinds[title]["properties"]) == site_mod._SITE_KEYS[kind]
+    pv = kinds["the PV"]
+    assert pv["additionalProperties"] is False and set(pv["properties"]) == {"id", "parent"}
+    assert pv["properties"]["id"] == {"const": "pv"} and "parent" in pv["required"]
     device = kinds["a device"]["properties"]
-    assert device["id"]["pattern"] == site_mod._SITE_DEVICE.pattern
+    # the PV's id and the devices' together are exactly the check's device names
+    for name in ("pv", "battery", "battery0", "battery9", "deferrable0", "deferrable123"):
+        assert bool(site_mod._SITE_DEVICE.match(name))
+        assert (name == "pv") != bool(re.match(device["id"]["pattern"], name))
+    for name in ("pvx", "battery10", "deferrable1234", "heater", "grid"):
+        assert not site_mod._SITE_DEVICE.match(name)
+        assert not re.match(device["id"]["pattern"], name)
     assert device["solver"]["enum"] == list(site_mod._SITE_SOLVERS)
     assert kinds["a node"]["properties"]["type"]["enum"] == list(site_mod._SITE_NODE_TYPES)
     assert kinds["a node"]["properties"]["id"]["pattern"] == site_mod._SITE_ID.pattern
