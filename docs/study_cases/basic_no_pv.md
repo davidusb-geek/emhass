@@ -38,7 +38,7 @@ The values for `operating_hours_of_each_deferrable_load` are intentional choices
 REST (Add-on or Docker):
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/dayahead-optim
 ```

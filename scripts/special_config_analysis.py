@@ -324,7 +324,7 @@ async def main():
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()"""
 
-    '''post_mpc_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{
+    '''post_mpc_optim: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type: application/json\" -X POST -d '{
         \"load_cost_forecast\":[17.836, 19.146, 18.753, 17.838, 17.277, 16.282, 16.736, 16.047, 17.004, 19.982, 17.17, 16.968, 16.556, 16.21, 12.333, 10.937],
         \"prod_price_forecast\":[6.651, 7.743, 7.415, 6.653, 6.185, 5.356, 5.734, 5.16, 5.958, 8.439, 6.096, 5.928, 5.584, 5.296, 4.495, 3.332],
         \"prediction_horizon\":16,

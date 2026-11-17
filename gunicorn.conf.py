@@ -1,7 +1,21 @@
 import os
 
-# Bind address
-bind = f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"
+# Bind address: the API port. Every request on it needs credentials (see emhass.api_auth).
+bind = [f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"]
+
+# Home Assistant add-on ingress gets a listener of its own, so ingress is recognised by the socket
+# that accepted the connection and never by a header. The add-on does not publish this port and the
+# app refuses every peer except the Supervisor on it. Same decision as emhass.api_auth.ingress_port().
+_ingress = os.getenv("EMHASS_INGRESS_PORT", "").strip() or (
+    "8099" if os.getenv("SUPERVISOR_TOKEN") else ""
+)
+try:
+    _api_port = int(os.getenv("PORT", "5000").strip())
+except ValueError:
+    _api_port = 5000
+# compared as numbers: "05000" is the API port too
+if _ingress.isdigit() and 0 < int(_ingress) < 65536 and int(_ingress) != _api_port:
+    bind.append(f"0.0.0.0:{int(_ingress)}")
 
 # Worker configuration
 workers = int(os.getenv("WEB_CONCURRENCY", 1))
@@ -28,6 +42,9 @@ errorlog = "-"
 loglevel = os.getenv("LOG_LEVEL", "warning")
 
 # Security
+# Access control trusts the TCP peer address only. uvicorn must not replace it with an
+# X-Forwarded-For value, or any process on loopback could choose which peer it appears to be.
+forwarded_allow_ips = ""
 limit_request_line = 4094
 limit_request_fields = 100
 limit_request_field_size = 8190
