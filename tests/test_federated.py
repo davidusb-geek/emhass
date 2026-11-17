@@ -1125,10 +1125,11 @@ def test_a_grid_connection_may_not_take_a_reserved_name():
 
 
 def test_the_soc_miss_is_priced_at_the_participants_own_tariff():
-    """A battery planned by EMHASS's own model that cannot reach its final
-    SoC: EMHASS prices the miss at the highest import price it is given. Two
-    queries that differ only in price level plan the same battery, and its
-    private cost - the miss at its own tariff - is the same for both."""
+    """EMHASS scales its terminal-SoC penalty with the highest import price it
+    is given. A participant pins it to its own tariff, so a query changes the
+    battery's bill, not its objective, and each answer minimises the
+    objective it reports (CodeRabbit's case: an own tariff of 0.001 and a
+    query at 1, where discharging the target's kWh pays)."""
     from emhass.coordinator.backend import EmhassParticipant
     from emhass.coordinator.interface import Query
 
@@ -1137,17 +1138,31 @@ def test_the_soc_miss_is_priced_at_the_participants_own_tariff():
         **oc,
         "set_use_battery": True,
         "number_of_deferrable_loads": 0,
-        "weight_battery_charge": 0.001,
-    }  # the battery's own model, not the master's
-    pc = {**pc, "battery_charge_power_max": 100, "battery_discharge_power_max": 100}
+        "set_nodischarge_to_grid": False,
+        "weight_battery_charge": 0.001,  # the battery's own model, not the master's
+    }
+    pc = {**pc, "battery_charge_efficiency": 1.0, "battery_discharge_efficiency": 1.0}
     opt = Optimization(
         rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
     )
-    p = EmhassParticipant(opt, "battery", True, [], data, 0.3, 0.9, {}, buy)
-    flat = np.full(len(data), 0.2)
-    a = p.respond(Query("price_response", flat, flat))
-    miss = sum(float(np.sum(v.value)) for v in p.opt.vars["soc_final_under"])
-    assert miss > 0.1, "the target should be out of reach"
-    b = p.respond(Query("price_response", flat * 5, flat * 5))
-    assert np.allclose(a.plan_kw, b.plan_kw, atol=1e-6)
-    assert b.private_cost == pytest.approx(a.private_cost, rel=1e-6)
+    n = len(data)
+    own = np.full(n, 0.001)
+    p = EmhassParticipant(opt, "battery", True, [], data, 0.5, 0.5, {}, own)
+    answers = {}
+    for price in (0.001, 1.0):
+        q = np.full(n, price)
+        answers[price] = p.respond(Query("price_response", q, q))
+        # the coefficient is the own tariff's, whatever the query
+        assert p.opt.param_soc_final_penalty.value == pytest.approx(0.001 * 100 * 0.001)
+
+    def objective(a, price):
+        """What a price response minimises: private cost plus the energy at
+        the query's price."""
+        return a.private_cost + price * float(np.sum(a.plan_kw)) * 0.5
+
+    # each answer is the best of the two at its own query's price
+    for price, a in answers.items():
+        for other in answers.values():
+            assert objective(a, price) <= objective(other, price) + 1e-6
+    # at 1.0 the battery's energy is worth more than the miss costs: it sells
+    assert np.sum(answers[1.0].plan_kw) < -0.5
