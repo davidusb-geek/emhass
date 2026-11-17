@@ -1031,8 +1031,8 @@ def test_only_main_bus_pv_is_curtailed_for_the_export_ceiling():
         return r
 
     site = [
-        {"id": "solar", "parent": "grid", "type": "inverter"},
-        {"id": "pv", "parent": "solar"},
+        {"id": "roof", "parent": "grid", "type": "inverter"},
+        {"id": "pv", "parent": "roof"},
         {"id": "battery0", "parent": "grid"},
     ]
     with mock.patch.object(DWCoordinator, "run", keep):
