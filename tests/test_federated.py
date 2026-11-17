@@ -1297,8 +1297,9 @@ def test_the_baseline_bills_add_up_under_an_export_ceiling(monkeypatch):
 def _schema_accepts(site) -> bool:
     """Whether the site schema in param_definitions.json (and so
     openapi.json) accepts `site`: the subset of JSON Schema it uses -
-    required, properties, additionalProperties, const, pattern, not, enum, and
-    anyOf of required."""
+    required, properties, additionalProperties, anyOf of required, and per
+    value type, const, pattern, not, enum, minimum, maximum,
+    exclusiveMinimum, maxItems and items."""
     import json
     import pathlib
     import re
@@ -1307,16 +1308,42 @@ def _schema_accepts(site) -> bool:
         (
             pathlib.Path(__file__).resolve().parents[1]
             / "src/emhass/static/data/param_definitions.json"
-        ).read_text()
+        ).read_text(encoding="utf-8")
     )
     alternatives = defs["Local"]["site"]["schema"]["items"]["anyOf"]
 
-    def string_ok(schema, v):
-        if "const" in schema:
-            return v == schema["const"]
-        if "pattern" in schema and not re.search(schema["pattern"], v):
+    kinds = {
+        "string": lambda v: isinstance(v, str),
+        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "array": lambda v: isinstance(v, list),
+        "null": lambda v: v is None,
+    }
+
+    def value_ok(schema, v):
+        if "const" in schema and v != schema["const"]:
             return False
-        return not ("not" in schema and string_ok(schema["not"], v))
+        types = schema.get("type")
+        if types is not None:
+            types = [types] if isinstance(types, str) else types
+            if not any(kinds[t](v) for t in types):
+                return False
+        if "enum" in schema and v not in schema["enum"]:
+            return False
+        if isinstance(v, str) and "pattern" in schema and not re.search(schema["pattern"], v):
+            return False
+        if kinds["number"](v):
+            if "minimum" in schema and v < schema["minimum"]:
+                return False
+            if "maximum" in schema and v > schema["maximum"]:
+                return False
+            if "exclusiveMinimum" in schema and v <= schema["exclusiveMinimum"]:
+                return False
+        if isinstance(v, list):
+            if len(v) > schema.get("maxItems", len(v)):
+                return False
+            if "items" in schema and not all(value_ok(schema["items"], x) for x in v):
+                return False
+        return not ("not" in schema and value_ok(schema["not"], v))
 
     def accepts(alt, e):
         props = alt["properties"]
@@ -1324,13 +1351,7 @@ def _schema_accepts(site) -> bool:
             return False
         if "anyOf" in alt and not any(all(k in e for k in a["required"]) for a in alt["anyOf"]):
             return False
-        for k, v in e.items():
-            p = props[k]
-            if isinstance(v, str) and not string_ok(p, v):
-                return False
-            if "enum" in p and v not in p["enum"]:
-                return False
-        return True
+        return all(value_ok(props[k], v) for k, v in e.items())
 
     return all(any(accepts(alt, e) for alt in alternatives) for e in site)
 
@@ -1345,6 +1366,11 @@ def _schema_accepts(site) -> bool:
             {"id": "feed", "type": "limit", "max_export": 3000},
             {"id": "deferrable0", "parent": "grid", "group": "pool", "limits": ["feed"]},
             {"id": "battery0", "parent": "roof", "solver": "emhass"},
+        ],
+        [
+            {"id": "grid", "max_import": 9000.5, "max_export": 0},
+            {"id": "panel", "parent": "grid", "efficiency_import": None, "efficiency_export": 0.97},
+            {"id": "deferrable0", "parent": "panel"},
         ],
     ],
 )
@@ -1366,6 +1392,10 @@ def test_the_site_schema_accepts_what_the_site_check_accepts(site):
         [{"id": "pv", "parent": "grid", "solver": "emhass"}],  # the PV is a forecast
         [{"id": "pv", "parent": "grid", "group": "g"}],
         [{"id": "deferrable0", "parent": "grid", "group": "solar"}],
+        [{"id": "grid", "max_export": "5000"}],  # a number, not text
+        [{"id": "grid", "max_import": -1}],
+        [{"id": "panel", "parent": "grid", "efficiency_export": 1.5}],
+        [{"id": "deferrable0", "parent": "grid", "limits": "feed"}],  # a list
     ],
 )
 def test_the_site_schema_refuses_what_the_site_check_refuses(site):
