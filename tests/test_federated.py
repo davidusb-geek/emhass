@@ -1082,3 +1082,31 @@ def test_an_omitted_efficiency_takes_the_plants_written_as_text():
     assert site_mod.compile_site(site, plant, logger, battery=True)
     assert plant["inverter_efficiency_dc_ac"] == pytest.approx(0.96)
     assert plant["inverter_efficiency_ac_dc"] == pytest.approx(0.95)
+
+
+def test_a_nodes_own_clipping_leaves_the_main_bus_pv_to_curtail():
+    """CodeRabbit's case: 1 kW of PV on the main bus, and a node with a zero
+    export cap clipping its own 2 kW. With an export ceiling of zero, the main
+    bus's 1 kW is curtailed; the node's clipping does not use it up."""
+    from emhass.coordinator.master import DWCoordinator
+    from emhass.coordinator.model import Forecasts, GridLimits, Horizon, SiteConfig, SubMeter
+    from emhass.coordinator.submeter import site_meter
+
+    h = Horizon(dt=1.0, hours=2.0)
+    cfg = SiteConfig(
+        horizon=h,
+        battery=None,
+        grid=GridLimits(allow_curtailment=True),
+        submeters=(SubMeter("node", ("pv2",), max_export_kw=0.0),),
+    )
+    fc = Forecasts(
+        buy=np.ones(2),
+        sell=np.full(2, 0.5),
+        load=np.zeros(2),
+        solar=np.ones(2),
+        pv_arrays={"pv2": np.full(2, 2.0)},
+    )
+    co = DWCoordinator(cfg, fc, export_ceiling=np.zeros(2))
+    flows = site_meter(cfg, co.fc, {})
+    delivered = co._delivered(flows)
+    assert delivered is not None and np.allclose(delivered, 0.0)
