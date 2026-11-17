@@ -489,11 +489,14 @@ class EmhassParticipant:
             raise RuntimeError(f"participant {self.key}: no finite objective ({value})")
         private = -float(value) - bill
         if self.battery:
-            s0 = (
-                self.soc_init
-                if self.soc_init is not None
-                else self.opt.plant_conf["battery_target_state_of_charge"]
-            )
+            # the start the solve used: as perform_optimization fills it, the
+            # final SoC when only that is given, else the target
+            if self.soc_init is not None:
+                s0 = self.soc_init
+            elif self.soc_final is not None:
+                s0 = self.soc_final
+            else:
+                s0 = self.opt.plant_conf["battery_target_state_of_charge"]
             traj = np.concatenate([[float(s0)], res["SOC_opt"].values]) * self.cap_wh / 1000.0
         else:
             traj = np.concatenate([[0.0], np.cumsum(plan_kw) * self.dt])
