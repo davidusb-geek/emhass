@@ -4,11 +4,13 @@ import ast
 import asyncio
 import copy
 import csv
+import html
 import itertools
 import logging
 import math
 import os
 import pathlib
+import re
 import shutil
 import stat
 import time
@@ -2805,6 +2807,20 @@ async def treat_runtimeparams(
                 # association[2] = parameter (config.json/config_defaults.json)
                 # association[3] = parameter list name if exists (not used, from legacy options.json)
                 for association in associations:
+                    # Connection settings and credentials are configuration-only
+                    if (
+                        association[2] in RUNTIME_DENIED_KEYS
+                        or association[1] in RUNTIME_DENIED_KEYS
+                    ):
+                        if (
+                            runtimeparams.get(association[2], None) is not None
+                            or runtimeparams.get(association[1], None) is not None
+                        ):
+                            logger.warning(
+                                "Runtime parameter %s ignored: it can only be set in the configuration",
+                                association[2],
+                            )
+                        continue
                     # Check parameter name exists in runtime
                     if runtimeparams.get(association[2], None) is not None:
                         params[association[0]][association[2]] = runtimeparams[association[2]]
@@ -2977,7 +2993,7 @@ async def treat_runtimeparams(
         # regressor-model-fit
         if set_type == "regressor-model-fit":
             if "csv_file" in runtimeparams:
-                csv_file = runtimeparams["csv_file"]
+                csv_file = validate_runtime_file_name("csv_file", runtimeparams["csv_file"])
                 params["passed_data"]["csv_file"] = csv_file
             if "features" in runtimeparams:
                 features = runtimeparams["features"]
@@ -3002,7 +3018,7 @@ async def treat_runtimeparams(
                 new_values = runtimeparams["new_values"]
                 params["passed_data"]["new_values"] = new_values
             if "csv_file" in runtimeparams:
-                csv_file = runtimeparams["csv_file"]
+                csv_file = validate_runtime_file_name("csv_file", runtimeparams["csv_file"])
                 params["passed_data"]["csv_file"] = csv_file
             if "features" in runtimeparams:
                 features = runtimeparams["features"]
@@ -3028,6 +3044,10 @@ async def treat_runtimeparams(
                 )
                 if k in runtimeparams
             }
+            if "csv_filename" in export_keys:
+                validate_runtime_file_name("csv_filename", export_keys["csv_filename"], ".csv")
+            if "timestamp_col_name" in export_keys:
+                validate_timestamp_col_name(export_keys["timestamp_col_name"])
             params["passed_data"].update(export_keys)
 
         # MPC control case
@@ -3621,6 +3641,10 @@ async def treat_runtimeparams(
                 default=default,
                 cast=caster,
             )
+        # model_type becomes part of the model's file name, whether the request
+        # or the saved configuration supplied it
+        if params["passed_data"]["model_type"] is not None:
+            validate_runtime_file_name("model_type", params["passed_data"]["model_type"])
         # config_defaults.json always supplies var_model, and a GUI save writes that stock
         # value back to config.json. An unset or stock var_model follows the configured
         # load sensor, so a custom sensor_power_load_no_var_loads is the forecaster input (#1208).
@@ -3635,9 +3659,14 @@ async def treat_runtimeparams(
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = ast.literal_eval(
-                str(runtimeparams["model_predict_publish"]).capitalize()
-            )
+            try:
+                model_predict_publish = ast.literal_eval(
+                    str(runtimeparams["model_predict_publish"]).capitalize()
+                )
+            except (ValueError, SyntaxError):
+                # The parser's error quotes the capitalized text, which the log
+                # mask cannot match if it is a secret sent here by mistake.
+                raise RuntimeParamError("model_predict_publish must be true or false") from None
         params["passed_data"]["model_predict_publish"] = model_predict_publish
         if "model_predict_entity_id" not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
@@ -3741,7 +3770,9 @@ async def treat_runtimeparams(
                 try:
                     dcs = orjson.loads(dcs)
                 except Exception:
-                    logger.warning(f"Could not parse def_current_state string: {dcs}")
+                    logger.warning(
+                        f"Could not parse def_current_state string ({len(dcs)} characters)"
+                    )
             # Use _cast_bool (not bool()) so string 'False' → False, not True.
             # bool('False') = True because non-empty strings are truthy in Python.
             if isinstance(dcs, list):
@@ -3750,73 +3781,54 @@ async def treat_runtimeparams(
                 n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
                 params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)] * n_loads
 
+        def _per_load_numbers(name, value, cast):
+            """A per-load runtime list: a JSON list string, a list, or one value for
+            every load. Neither the warning nor the error quotes the value."""
+            if isinstance(value, str):
+                try:
+                    value = orjson.loads(value)
+                except Exception:
+                    logger.warning(f"Could not parse {name} string ({len(value)} characters)")
+            try:
+                if isinstance(value, list):
+                    return [cast(v) for v in value]
+                one = cast(value)
+            except (TypeError, ValueError, OverflowError):
+                raise RuntimeParamError(f"{name} must be a number or a list of numbers") from None
+            # Only one value for every load needs the load count; a list has its own.
+            return [one] * len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+
         # def_current_on_timesteps: per-load elapsed ON timesteps for min-on remainder
         # (issue #952). Mirrors def_current_state: absent key -> no initial force (NOT
         # assumed zero). Validates that each entry is a non-negative integer.
         if "def_current_on_timesteps" in runtimeparams.keys():
-            dcot = runtimeparams["def_current_on_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcot, str):
-                try:
-                    dcot = orjson.loads(dcot)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_on_timesteps string: {dcot}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcot, list):
-                params["optim_conf"]["def_current_on_timesteps"] = [int(v) for v in dcot]
-            else:
-                params["optim_conf"]["def_current_on_timesteps"] = [int(dcot)] * n_loads
+            params["optim_conf"]["def_current_on_timesteps"] = _per_load_numbers(
+                "def_current_on_timesteps", runtimeparams["def_current_on_timesteps"], int
+            )
 
         # def_current_off_timesteps: per-load elapsed OFF timesteps for min-off remainder
         # (#952 follow-on). Mirrors def_current_on_timesteps: absent key -> no initial
         # force (NOT assumed zero). Validates that each entry is a non-negative integer.
         if "def_current_off_timesteps" in runtimeparams:
-            dcoft = runtimeparams["def_current_off_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcoft, str):
-                try:
-                    dcoft = orjson.loads(dcoft)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_off_timesteps string: {dcoft}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcoft, list):
-                params["optim_conf"]["def_current_off_timesteps"] = [int(v) for v in dcoft]
-            else:
-                params["optim_conf"]["def_current_off_timesteps"] = [int(dcoft)] * n_loads
+            params["optim_conf"]["def_current_off_timesteps"] = _per_load_numbers(
+                "def_current_off_timesteps", runtimeparams["def_current_off_timesteps"], int
+            )
 
         # def_current_power: per-load current power in watts (issue #605).
         # Absent key -> no pin, no force-on (NOT assumed zero). Mirrors def_current_on_timesteps.
         if "def_current_power" in runtimeparams:
-            dcp = runtimeparams["def_current_power"]
-            # String -> parse JSON list
-            if isinstance(dcp, str):
-                try:
-                    dcp = orjson.loads(dcp)
-                except Exception:
-                    logger.warning(f"Could not parse def_current_power string: {dcp}")
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcp, list):
-                params["optim_conf"]["def_current_power"] = [float(v) for v in dcp]
-            else:
-                params["optim_conf"]["def_current_power"] = [float(dcp)] * n_loads
+            params["optim_conf"]["def_current_power"] = _per_load_numbers(
+                "def_current_power", runtimeparams["def_current_power"], float
+            )
 
         # def_current_operating_timesteps: per-load completed operating timesteps today (issue #983).
         # Absent key -> no decrement (NOT assumed zero). Mirrors def_current_on_timesteps.
         if "def_current_operating_timesteps" in runtimeparams:
-            dcots = runtimeparams["def_current_operating_timesteps"]
-            # String -> parse JSON list
-            if isinstance(dcots, str):
-                try:
-                    dcots = orjson.loads(dcots)
-                except Exception:
-                    logger.warning(
-                        f"Could not parse def_current_operating_timesteps string: {dcots}"
-                    )
-            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
-            if isinstance(dcots, list):
-                params["optim_conf"]["def_current_operating_timesteps"] = [int(v) for v in dcots]
-            else:
-                params["optim_conf"]["def_current_operating_timesteps"] = [int(dcots)] * n_loads
+            params["optim_conf"]["def_current_operating_timesteps"] = _per_load_numbers(
+                "def_current_operating_timesteps",
+                runtimeparams["def_current_operating_timesteps"],
+                int,
+            )
 
         # set_deferrable_load_single_constant arrives via the generic associations.csv
         # path as-is (may be a list of strings from runtimeparams JSON).  Apply the
@@ -3916,10 +3928,17 @@ async def treat_runtimeparams(
                 "custom_heating_demand_id"
             ]
 
+        # Entity ids end up in a Home Assistant URL path and in a saved file name
+        validate_runtime_entity_ids(runtimeparams)
+
     # split config categories from params
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+    # costfun becomes part of a results file name (perfect-optim). Checked on the merged
+    # value, so a saved setting gets the same check as a runtime one.
+    if optim_conf.get("costfun") is not None and optim_conf["costfun"] not in COSTFUN_VALUES:
+        raise RuntimeParamError(f"costfun must be one of {', '.join(COSTFUN_VALUES)}")
     # After the runtime merge when a request was supplied, and on the saved
     # config when it was not. A percentage in either place must fail here.
     reject_configured_soc_fractions(plant_conf, optim_conf, logger)
@@ -4488,10 +4507,10 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
     injection_dict["subsubtitle0"] = (
         "<h4>Plotting train/test forecast model results for "
-        + mlf.model_type
+        + html.escape(str(mlf.model_type))
         + "<br>"
         + "Forecasting variable "
-        + mlf.var_model
+        + html.escape(str(mlf.var_model))
         + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
@@ -4552,10 +4571,10 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict["title"] = "<h2>Custom machine learning forecast model tune</h2>"
     injection_dict["subsubtitle0"] = (
         "<h4>Performed a tuning routine using bayesian optimization for "
-        + mlf.model_type
+        + html.escape(str(mlf.model_type))
         + "<br>"
         + "Forecasting variable "
-        + mlf.var_model
+        + html.escape(str(mlf.var_model))
         + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
@@ -5032,7 +5051,24 @@ async def build_secrets(
         logger.debug("Obtaining secrets from secrets file")
         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
-            params_secrets.update(yaml.safe_load(content))
+        # The parser's own error text can quote the secret: a YAML error quotes
+        # the line, and a !!bool, !!int or !!float tag that does not fit raises
+        # an error with the value lowercased or without its "_", which the log
+        # mask cannot match. Only the error type and the line number are kept.
+        try:
+            loaded = yaml.safe_load(content)
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = f" near line {mark.line + 1}" if mark is not None else ""
+            raise yaml.YAMLError(
+                f"secrets file is not valid YAML ({type(e).__name__}{where})"
+            ) from None
+        except Exception as e:
+            raise ValueError(f"Could not read the secrets file ({type(e).__name__})") from None
+        params_secrets.update(loaded)
+    # The web server's API token is read by api_auth on its own. Keep it out of the
+    # secrets that go on into params, logs and the configuration routes.
+    params_secrets.pop("emhass_api_token", None)
 
     # Receive key and url from ARG/arguments?
     if argument.get("url") is not None:
@@ -5678,7 +5714,9 @@ def validate_num_batteries(plant_conf: dict) -> int:
     else:
         shown = repr(raw)
         if len(shown) > 40:
-            shown = shown[:37] + "..."
+            # Not a cut copy: the log mask matches a secret pasted here by
+            # mistake (the API token, say) only when it is whole.
+            shown = f"a value of {len(shown)} characters"
     invalid = BatteryConfigError(f"number_of_batteries must be a positive integer, got {shown}")
     if isinstance(raw, bool) or not isinstance(raw, int | float | str):
         raise invalid
@@ -5975,6 +6013,227 @@ class InverterConfigError(ValueError):
     def __init__(self, *args, problems: Sequence[InverterConfigError] | None = None):
         super().__init__(*args)
         self.problems: list[InverterConfigError] = list(problems) if problems else [self]
+
+
+class RuntimeParamError(ValueError):
+    """A runtime parameter has an unusable value (a file or column name, or a
+    per-load number list). The message is fixed text and never quotes the value."""
+
+
+# Connection settings that only the configuration may set. A runtime request
+# must not redirect the data source or carry its credentials elsewhere.
+# use_influxdb is not here: the web UI's export passes it, and it only picks the
+# configured InfluxDB server, which a request cannot change.
+RUNTIME_DENIED_KEYS: frozenset[str] = frozenset(
+    {
+        "influxdb_host",
+        "influxdb_port",
+        "influxdb_database",
+        "influxdb_measurement",
+        "influxdb_retention_policy",
+        "influxdb_use_ssl",
+        "influxdb_verify_ssl",
+        "influxdb_username",
+        "influxdb_password",
+        "use_victoriametrics",
+        "victoriametrics_host",
+        "victoriametrics_port",
+        "victoriametrics_database",
+        "victoriametrics_metric_regex",
+        "victoriametrics_entity_label",
+        "victoriametrics_use_ssl",
+        "victoriametrics_verify_ssl",
+        "victoriametrics_username",
+        "victoriametrics_password",
+        "use_websocket",
+        # Not read back from a runtime request today, but listed so that it stays that way
+        "hass_url",
+        "long_lived_token",
+        "ssl_no_verify",
+        "emhass_api_token",
+    }
+)
+
+_RUNTIME_FILE_NAME_MAX = 128
+_TIMESTAMP_COL_NAME_RE = re.compile(r"[A-Za-z0-9_. -]{1,64}")
+# A Home Assistant entity id: domain.object_id. Upper case is allowed because
+# existing setups use ids like sensor.P_PV.
+_ENTITY_ID_RE = re.compile(r"[A-Za-z0-9_]{1,64}\.[A-Za-z0-9_]{1,190}")
+_PUBLISH_PREFIX_RE = re.compile(r"[A-Za-z0-9_]{0,64}")
+# Runtime parameters that hold one entity id
+_RUNTIME_ENTITY_ID_KEYS = ("model_predict_entity_id", "mlr_predict_entity_id")
+# A runtime request may only publish to sensor entities (every EMHASS default and
+# documented id is one); other domains could overwrite e.g. a door sensor's state.
+_RUNTIME_ENTITY_DOMAINS = ("sensor.",)
+# The cost functions the optimizer knows. costfun is also part of a results file name.
+COSTFUN_VALUES = ("profit", "cost", "self-consumption")
+# A database host setting: a host name or an IP address, nothing that could add a
+# scheme, credentials, a path or a query to the URL built from it.
+_DB_HOST_RE = re.compile(r"[A-Za-z0-9_.:\[\]-]{1,253}")
+# (use flag, host key, port key) for each database integration
+_DB_KEYS = (
+    ("use_influxdb", "influxdb_host", "influxdb_port"),
+    ("use_victoriametrics", "victoriametrics_host", "victoriametrics_port"),
+)
+
+
+def is_valid_db_host(value) -> bool:
+    """True when ``value`` is a plain host name or IP address (no scheme, path or query)."""
+    return isinstance(value, str) and _DB_HOST_RE.fullmatch(value) is not None
+
+
+def is_valid_db_port(value) -> bool:
+    """True when ``value`` is a port number from 1 to 65535, as an int or a string of digits."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    return isinstance(value, int) and 1 <= value <= 65535
+
+
+def config_value_faults(config: dict) -> list[str]:
+    """Faults in the settings that name files, hosts or the cost function.
+
+    Used when a configuration is saved, so a value that the runtime checks would
+    refuse cannot be stored instead.
+    """
+    faults = []
+    costfun = config.get("costfun")
+    if costfun is not None and costfun not in COSTFUN_VALUES:
+        faults.append(f"costfun must be one of {', '.join(COSTFUN_VALUES)}")
+    for use_key, host_key, port_key in _DB_KEYS:
+        enabled = bool(config.get(use_key))
+        # The web UI sends "" for a cleared field: fine while the integration is off
+        # A key that is not sent keeps its default
+        host = config.get(host_key)
+        if host is not None and (enabled or host != "") and not is_valid_db_host(host):
+            faults.append(f"{host_key} must be a host name or IP address, without a scheme or path")
+        port = config.get(port_key)
+        if port is not None and (enabled or port != "") and not is_valid_db_port(port):
+            faults.append(f"{port_key} must be a port number from 1 to 65535")
+    model_type = config.get("model_type")
+    if model_type is not None:
+        try:
+            validate_runtime_file_name("model_type", model_type)
+        except RuntimeParamError as exc:
+            faults.append(str(exc))
+    return faults
+
+
+def data_file_path(data_path, name) -> pathlib.Path:
+    """The file ``name`` inside the data folder, refused if it would land outside it.
+
+    A second line of defence behind the runtime checks: every file whose name a
+    request or a saved setting can influence is opened through this.
+
+    :param data_path: The data folder.
+    :param name: A file name, or a relative path such as ``entities/sensor.x.json``.
+    :raises RuntimeParamError: When ``name`` resolves outside ``data_path``.
+    """
+    # Only the folder the file goes in is resolved and checked. The file itself may be
+    # a symlink to somewhere else on purpose (atomic_write and replace_file replace
+    # what a link points to), so following it here would refuse a working setup.
+    refused = RuntimeParamError(f"{name!r} is not a file name inside the data folder")
+    try:
+        base = os.path.realpath(str(data_path))
+        folder, file_name = os.path.split(os.path.join(base, str(name)))
+        # "", ".", ".." and, on Windows, names such as ". " or "..." that it reads as
+        # one of those are not file names
+        if file_name.rstrip(". ") == "" or "\x00" in str(name):
+            raise refused
+        folder = os.path.realpath(folder)
+        inside = folder == base or os.path.commonpath([base, folder]) == base
+    except ValueError:  # another drive on Windows, or a NUL byte in the name
+        inside = False
+    if not inside:
+        raise refused
+    path = pathlib.Path(folder) / file_name
+    # A folder (or a link to one) is not a file a caller may write or load
+    if path.is_dir():
+        raise refused
+    return path
+
+
+def is_valid_entity_id(value) -> bool:
+    """True when ``value`` is a plain ``domain.object_id`` entity id.
+
+    Entity ids become part of a Home Assistant URL path and of a saved file
+    name, so anything else (a slash, ``..``, a query) is refused.
+    """
+    return isinstance(value, str) and _ENTITY_ID_RE.fullmatch(value) is not None
+
+
+def validate_runtime_entity_ids(runtimeparams: dict) -> None:
+    """Check every entity id and the publish prefix a runtime request sets.
+
+    Covers ``model_predict_entity_id``, ``mlr_predict_entity_id``,
+    ``publish_prefix`` and the ``entity_id`` of every ``custom_*_id`` object
+    (or list of objects, for the per-load ones).
+
+    :raises RuntimeParamError: Naming the parameter whose value is not usable.
+    """
+    prefix = runtimeparams.get("publish_prefix", "")
+    if not isinstance(prefix, str) or _PUBLISH_PREFIX_RE.fullmatch(prefix) is None:
+        raise RuntimeParamError("publish_prefix must be at most 64 letters, digits or underscores")
+
+    def check(label: str, value) -> None:
+        if not is_valid_entity_id(value):
+            raise RuntimeParamError(f"{label} must be an entity id like sensor.my_name")
+        if not value.startswith(_RUNTIME_ENTITY_DOMAINS):
+            raise RuntimeParamError(f"{label} must be a sensor entity id, like sensor.my_name")
+        # post_data adds the prefix after "sensor."; the result must still be an entity id
+        if not is_valid_entity_id(value.replace("sensor.", "sensor." + prefix)):
+            raise RuntimeParamError(f"{label} is too long once publish_prefix is added")
+
+    for key in _RUNTIME_ENTITY_ID_KEYS:
+        if key in runtimeparams:
+            check(key, runtimeparams[key])
+    for key, value in runtimeparams.items():
+        if not (key.startswith("custom_") and key.endswith("_id")):
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, dict) and "entity_id" in item:
+                check(f"{key} entity_id", item["entity_id"])
+
+
+def validate_runtime_file_name(name: str, value, suffix: str | None = None) -> str:
+    """Check a caller-supplied plain file name and return it.
+
+    It must be a non-empty string of at most 128 characters, with no path
+    separator or control character, not starting with a dot and without ``..``.
+    ``suffix`` (for example ``".csv"``) is matched case-insensitively.
+
+    :param name: The runtime parameter name, used in the error message.
+    :param value: The value the caller sent.
+    :param suffix: Required file name ending, if any.
+    :raises RuntimeParamError: When the value is not a plain file name.
+    """
+    if not isinstance(value, str) or not value:
+        raise RuntimeParamError(f"{name} must be a non-empty string")
+    if len(value) > _RUNTIME_FILE_NAME_MAX:
+        raise RuntimeParamError(f"{name} is longer than {_RUNTIME_FILE_NAME_MAX} characters")
+    if "/" in value or "\\" in value:
+        raise RuntimeParamError(f"{name} must be a plain file name, without a path")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise RuntimeParamError(f"{name} must not contain control characters")
+    if value.startswith(".") or ".." in value:
+        raise RuntimeParamError(f"{name} must not start with a dot or contain '..'")
+    if suffix is not None and not value.lower().endswith(suffix.lower()):
+        raise RuntimeParamError(f"{name} must end with {suffix}")
+    return value
+
+
+def validate_timestamp_col_name(value) -> str:
+    """Check the ``timestamp_col_name`` runtime parameter and return it.
+
+    :raises RuntimeParamError: When it is not 1 to 64 letters, digits, ``_``,
+        ``.``, ``-`` or spaces.
+    """
+    if not isinstance(value, str) or _TIMESTAMP_COL_NAME_RE.fullmatch(value) is None:
+        raise RuntimeParamError(
+            "timestamp_col_name must be 1 to 64 letters, digits, '_', '.', '-' or spaces"
+        )
+    return value
 
 
 def reject_configured_soc_fractions(

@@ -38,14 +38,16 @@ See the [heat-pump walkthrough](../study_cases/heat_pump_walkthrough.md) for the
 
 - [Battery-aware runtime params](battery_aware_runtime_params.md) — feed live SOC into MPC; avoids the percent/fraction gotcha.
 - [Power-dependent hybrid inverter efficiency](battery_power_dependent_inverter_efficiency.md) — optional, opt-in power-dependent efficiency curves for the inverter's DC↔AC conversion in both directions, entered as AC-side `[ac_power_w, efficiency]` points from your datasheet or measurements and solved as an exact piecewise-linear power transfer; the scalar default is unchanged.
+- [Two hybrid inverters, each with its own battery](battery_two_hybrid_inverters.md): plan two hybrids as two separate inverters with `number_of_inverters`, send the PV forecast per inverter, route each battery setpoint to its inverter through the `inverter` attribute on the battery sensors, and read curtailment and spill per inverter.
 
 Additional battery recipes welcome (charging-from-grid strategies, calendar-aware reservation, etc.) — see [Discussion #823](https://github.com/davidusb-geek/emhass/discussions/823) for good-practices crowdsourcing.
 
 ### Forecast
 
 - [Long training history with VictoriaMetrics](forecast_victoriametrics_long_history.md): replace the archived InfluxDB 1.x add-on by VictoriaMetrics, migrate the existing history with `vmctl`, and train the ML load forecaster on months of data through `use_victoriametrics`.
+- [Custom PV forecast injection via runtime params](forecast_custom_pv_injection.md): send your own PV forecast (any Solcast-format sensor) to `naive-mpc-optim` as a timestamp to W mapping, with an optional P10 curve and `soc_init`, from a Home Assistant `rest_command`.
 
-Other topics that would fit: ML vs naive load forecaster selection, custom forecast injection via runtime params, dealing with forecast outages. Contributions welcome.
+Other topics that would fit: ML vs naive load forecaster selection, dealing with forecast outages. Contributions welcome.
 
 ### Tariff
 

@@ -11,7 +11,7 @@ import re
 import tempfile
 import unittest
 import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import aiofiles
 import aiohttp
@@ -706,7 +706,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             database="fake-db",
             ssl=False,
             verify_ssl=False,
+            session=ANY,  # a session that does not follow redirects
         )
+        self.assertEqual(mock_influx_client_class.call_args.kwargs["session"].max_redirects, 0)
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()
 
@@ -2594,31 +2596,123 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         await self.rh.close()
 
     async def test_session_reuse_across_post_data_calls(self):
-        """Test that the same session is reused across multiple post_data calls."""
+        """Verify session reuse and entity-specific HTTP publications."""
         self.rh.get_data_from_file = False
+        self.rh.hass_url = "https://example.invalid/"
+        self.rh.long_lived_token = "stage3c-test-token"
+        self.rh.ssl_verify = True
+        self.rh.publish_horizon_attributes = True
 
-        # Create test data
         data_df = pd.Series(
-            [100.0, 200.0], index=pd.date_range("2024-01-01", periods=2, freq="30min")
+            [100.0, 200.0],
+            index=pd.date_range("2024-01-01", periods=2, freq="30min"),
         )
 
-        # Mock aiohttp session.post to track calls
-        with patch.object(self.rh, "_get_session") as mock_get_session:
-            mock_session = AsyncMock()
-            mock_response = AsyncMock()
-            mock_response.ok = True
-            mock_response.status = 200
-            mock_session.post.return_value.__aenter__.return_value = mock_response
-            mock_get_session.return_value = mock_session
+        mock_response = MagicMock(ok=True, status=200)
+        mock_response.read = AsyncMock(return_value=b"")
 
-            # Make multiple post_data calls
-            await self.rh.post_data(data_df, 0, "sensor.test1", "power", "W", "Test 1", "power")
-            await self.rh.post_data(data_df, 0, "sensor.test2", "power", "W", "Test 2", "power")
-            await self.rh.post_data(data_df, 0, "sensor.test3", "power", "W", "Test 3", "power")
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=False)
 
-            # _get_session should have been called 3 times (once per post_data)
-            # but it returns the same session each time
-            self.assertEqual(mock_get_session.call_count, 3)
+        expected_payloads = []
+
+        try:
+            # Use the real session lookup; intercept only HTTP transport.
+            with patch.object(
+                aiohttp.ClientSession, "post", return_value=mock_context
+            ) as mock_post:
+                first_session = None
+
+                for number in range(1, 4):
+                    entity_id = f"sensor.test{number}"
+
+                    response, returned_data = await self.rh.post_data(
+                        data_df * number,
+                        0,
+                        entity_id,
+                        "power",
+                        "W",
+                        f"Test {number}",
+                        "power",
+                    )
+
+                    self.assertTrue(response.ok)
+                    self.assertEqual(response.status_code, 200)
+
+                    expected_payload = {
+                        "state": f"{100 * number:.2f}",
+                        "attributes": {
+                            "device_class": "power",
+                            "unit_of_measurement": "W",
+                            "friendly_name": f"Test {number}",
+                            "forecasts": [
+                                {
+                                    "date": "2024-01-01T00:00:00",
+                                    f"test{number}": f"{100 * number:.1f}",
+                                },
+                                {
+                                    "date": "2024-01-01T00:30:00",
+                                    f"test{number}": f"{200 * number:.1f}",
+                                },
+                            ],
+                            "state_class": "measurement",
+                        },
+                    }
+
+                    expected_payloads.append(expected_payload)
+                    self.assertEqual(returned_data, expected_payload)
+
+                    session = self.rh._session
+                    self.assertIsInstance(session, aiohttp.ClientSession)
+                    self.assertFalse(session.closed)
+
+                    if first_session is None:
+                        first_session = session
+                    else:
+                        self.assertIs(session, first_session)
+
+                # Verify all requests were made, in order.
+                self.assertEqual(mock_post.call_count, 3)
+
+                for number, request in enumerate(mock_post.call_args_list, start=1):
+                    # Three distinct Home Assistant entity URLs.
+                    self.assertEqual(
+                        request.args,
+                        (f"https://example.invalid/api/states/sensor.test{number}",),
+                    )
+
+                    self.assertEqual(
+                        set(request.kwargs),
+                        {"headers", "data", "ssl"},
+                    )
+
+                    # Exact HTTP authentication and content type.
+                    self.assertEqual(
+                        request.kwargs["headers"],
+                        {
+                            "Authorization": "Bearer stage3c-test-token",
+                            "content-type": "application/json",
+                        },
+                    )
+
+                    self.assertIs(request.kwargs["ssl"], True)
+
+                    # Decode the actual HTTP payload and verify its
+                    # entity-specific state, metadata and forecast.
+                    self.assertEqual(
+                        orjson.loads(request.kwargs["data"]),
+                        expected_payloads[number - 1],
+                    )
+
+                self.assertEqual(mock_response.read.await_count, 3)
+                self.assertEqual(mock_context.__aenter__.await_count, 3)
+                self.assertEqual(mock_context.__aexit__.await_count, 3)
+
+        finally:
+            await self.rh.close()
+
+        self.assertIsNone(self.rh._session)
 
     async def test_post_scalar_sensor_numpy_values(self):
         """Test that post_scalar_sensor serialises numpy scalars (#1131)."""
@@ -2704,42 +2798,66 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
     @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "mock_supervisor_token"})
     async def test_supervisor_token_fallback_success(self):
-        """Test that SUPERVISOR_TOKEN is used when long_lived_token is empty."""
-        rh_empty_token = RetrieveHass(
-            self.retrieve_hass_conf["hass_url"],
-            "empty",  # Trigger the token == "empty" fallback
-            self.retrieve_hass_conf["optimization_time_step"],
-            self.retrieve_hass_conf["time_zone"],
-            {},
-            emhass_conf,
-            logger,
-            get_data_from_file=False,
-        )
+        """SUPERVISOR_TOKEN stands in for an empty long_lived_token, for the Supervisor URL only."""
+        supervisor_url = "http://supervisor/core/api"
 
-        # Test get_ha_config fallback (The first coverage gap: lines 184-186)
+        def make_rh(url):
+            return RetrieveHass(
+                url,
+                "empty",  # Trigger the token == "empty" fallback
+                self.retrieve_hass_conf["optimization_time_step"],
+                self.retrieve_hass_conf["time_zone"],
+                {},
+                emhass_conf,
+                logger,
+                get_data_from_file=False,
+            )
+
+        def sent_tokens(mocked):
+            return [
+                call.kwargs["headers"]["Authorization"]
+                for calls in mocked.requests.values()
+                for call in calls
+            ]
+
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.test"]
+
+        # Supervisor URL: get_ha_config uses the environment token
+        rh_supervisor = make_rh(supervisor_url)
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            with aioresponses() as mocked:
+                mocked.get(supervisor_url + "/config", status=200, payload={"time_zone": "UTC"})
+                self.assertTrue(await rh_supervisor.get_ha_config())
+                self.assertEqual(sent_tokens(mocked), ["Bearer mock_supervisor_token"])
+        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+        self.assertEqual(rh_supervisor.ha_config, {"time_zone": "UTC"})
+
+        # Supervisor URL: _get_data_rest_api uses it too
         with self.assertLogs(logger, level="DEBUG") as cm:
             with aioresponses() as mocked:
                 mocked.get(
-                    rh_empty_token.hass_url + "api/config", status=200, payload={"time_zone": "UTC"}
+                    re.compile(r"^http://supervisor/core/api/history/period/.*"),
+                    status=200,
+                    payload=[],
                 )
-                await rh_empty_token.get_ha_config()
+                await rh_supervisor._get_data_rest_api(days_list, var_list)
+                self.assertEqual(sent_tokens(mocked), ["Bearer mock_supervisor_token"])
         self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
 
-        # Test _get_data_rest_api fallback (The second coverage gap: lines 448-450)
-        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
-        var_list = ["sensor.test"]
-        with self.assertLogs(logger, level="DEBUG") as cm:
-            with aioresponses() as mocked:
-                # Mock the exact URL called
-                url = (
-                    rh_empty_token.hass_url
-                    + "api/history/period/"
-                    + days_list[0].isoformat()
-                    + "?filter_entity_id=sensor.test"
-                )
-                mocked.get(url, status=200, payload=[])
-                await rh_empty_token._get_data_rest_api(days_list, var_list)
-        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+        # Any other URL never receives the Supervisor token: nothing is sent
+        rh_custom = make_rh("https://myhass.duckdns.org/")
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r".*"), status=200, payload={"time_zone": "UTC"}, repeat=True)
+            self.assertTrue(await rh_custom.get_ha_config())
+            self.assertEqual(rh_custom.ha_config, {})
+            with self.assertLogs(logger, level="ERROR") as cm:
+                self.assertFalse(await rh_custom._get_data_rest_api(days_list, var_list))
+            self.assertEqual(sent_tokens(mocked), [])
+        self.assertTrue(any("No valid authentication token found" in log for log in cm.output))
+
+        await rh_supervisor.close()
+        await rh_custom.close()
 
     @patch.dict(os.environ, {}, clear=True)
     async def test_supervisor_token_fallback_failure(self):

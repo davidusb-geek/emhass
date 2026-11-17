@@ -574,6 +574,30 @@ def col(res, name):
     return res[name].to_numpy()
 
 
+def test_battery_first_import_floor_sums_what_each_inverter_can_deliver():
+    # #1253: above one inverter, the import exempt from the battery-first penalty is
+    # the load above what every inverter can deliver on its own. Inverter 0 converts
+    # its PV plus its battery's full discharge (0.8 x 2 kW) and caps it at 3 kW;
+    # inverter 1 converts its PV alone at 0.9 and caps it at 1.5 kW.
+    opt = build_multi(
+        cap_out=[3000, 1500],
+        eff_dc_ac=[1.0, 0.9],
+        optim_overrides={"set_battery_first_priority": True},
+        plant_overrides={
+            "battery_discharge_power_max": [2000],
+            "battery_discharge_efficiency": [0.8],
+        },
+    )
+    pv0 = np.array([0.0, 0.0, 500.0, 1500.0, 0.0, 0.0, 0.0, 0.0])
+    pv1 = np.array([0.0, 1000.0, 0.0, 0.0, 2000.0, 0.0, 0.0, 0.0])
+    load = np.array([1000.0, 6000.0, 3000.0, 6000.0, 8000.0, 0.0, 2000.0, 300.0])
+    solve(opt, pv=(pv0, pv1), load=load)
+    reach = np.minimum(3000.0, pv0 + 0.8 * 2000.0) + np.minimum(1500.0, 0.9 * pv1)
+    np.testing.assert_allclose(
+        opt.param_battery_first_import_floor.value, np.maximum(load - reach, 0.0)
+    )
+
+
 def test_caps_bind_per_inverter_even_when_the_sum_would_allow_more():
     # 5 kW of PV on inverter 0, whose own AC cap is 3 kW; inverter 1 (cap 3 kW) has none.
     opt = build_multi(
@@ -1027,3 +1051,92 @@ def test_the_horizon_can_change_between_runs():
     longer = solve(opt, n=HORIZON + 4)
     assert len(short) == HORIZON and len(longer) == HORIZON + 4
     assert all(len(v.value) == HORIZON + 4 for v in opt.vars["p_inverter"])
+
+
+# --------------------------------------------------------------------------- #
+# AC-coupled battery-only power-transfer regression (#1271)
+# --------------------------------------------------------------------------- #
+
+
+def test_ac_coupled_battery_only_discharge_curve_accounts_for_storage_losses():
+    """AC output must use the inverter curve; SoC uses storage-stage efficiency.
+
+    The separate PV-only inverter has no generation in this test. The battery-only
+    inverter must deliver household AC through its own discharge curve. The
+    battery discharge efficiency remains a distinct SoC/storage-stage loss.
+    """
+    curve = [[500, 0.74], [2400, 0.91]]
+    storage_efficiency = 0.95
+    opt = build_multi(
+        battery_inverter_index=(1,),
+        pv_plant_inverter_index=(0,),
+        cap_out=[5000, 2400],
+        curves_dc_ac=[[], curve],
+        plant_overrides={"battery_discharge_efficiency": [storage_efficiency]},
+        optim_overrides={"set_nodischarge_to_grid": True},
+    )
+    res = solve(opt, pv=(0.0,), load=550.0, cost=0.8, prod=0.0, soc=0.85, final=0.55)
+
+    ac_out = col(res, "P_hybrid_inverter_1")
+    assert ac_out.max() > 1.0
+    assert ac_out.min() >= -1e-3
+    assert ac_out.max() <= 550.0 + 1e-3  # no PV surplus and no battery export
+    internals = opt.vars["inverter_internals"][1]
+    dc_discharge = np.asarray(internals["p_dc_ac"].value).ravel()
+    expected_dc = np.interp(ac_out, [0, 500, 2400], [0, 500 / 0.74, 2400 / 0.91])
+    np.testing.assert_allclose(dc_discharge, expected_dc, atol=1e-3)
+    np.testing.assert_allclose(col(res, "P_batt"), dc_discharge, atol=1e-3)
+
+    # Inverter conversion and battery storage efficiency are separate stages.
+    # The time step is 30 minutes and capacity is CAP Wh.
+    expected_soc = 0.85 - np.cumsum(dc_discharge / storage_efficiency * 0.5 / CAP)
+    np.testing.assert_allclose(col(res, "SOC_opt"), expected_soc, atol=1e-6)
+    # The optimizer's own final-SoC constraint must use the same storage stage: the
+    # target is reached only if the plan was built with the storage efficiency.
+    assert col(res, "SOC_opt")[-1] == pytest.approx(0.55, abs=1e-6)
+
+
+def test_ac_coupled_battery_only_charge_curve_accounts_for_storage_losses():
+    """AC input -> inverter DC -> stored energy are distinct power boundaries."""
+    curve = [[100, 0.0], [1000, 0.90], [2400, 0.93]]
+    storage_charge_efficiency = 0.92
+    storage_discharge_efficiency = 0.95
+    opt = build_multi(
+        battery_inverter_index=(1,),
+        pv_plant_inverter_index=(0,),
+        cap_in=[5000, 2400],
+        curves_ac_dc=[[], curve],
+        plant_overrides={
+            "battery_charge_efficiency": [storage_charge_efficiency],
+            "battery_discharge_efficiency": [storage_discharge_efficiency],
+        },
+    )
+    res = solve(
+        opt,
+        pv=(0.0,),
+        load=2000.0,
+        cost=[-0.1] * 4 + [0.5] * 4,
+        prod=0.0,
+        soc=0.25,
+        final=0.55,
+    )
+
+    ac_in = np.maximum(-col(res, "P_hybrid_inverter_1"), 0.0)
+    assert (ac_in > 1000.0).any()
+    internals = opt.vars["inverter_internals"][1]
+    dc_charge = np.asarray(internals["p_ac_dc"].value).ravel()
+    dc_discharge = np.asarray(internals["p_dc_ac"].value).ravel()
+    expected_dc = np.interp(ac_in, [0, 100, 1000, 2400], [0, 0, 900, 2400 * 0.93])
+    np.testing.assert_allclose(dc_charge, expected_dc, atol=1e-3)
+    np.testing.assert_allclose(col(res, "P_batt"), dc_discharge - dc_charge, atol=1e-3)
+    assert np.minimum(dc_discharge, dc_charge).max() <= 1e-6
+
+    expected_soc = 0.25 - np.cumsum(
+        (dc_discharge / storage_discharge_efficiency - dc_charge * storage_charge_efficiency)
+        * 0.5
+        / CAP
+    )
+    np.testing.assert_allclose(col(res, "SOC_opt"), expected_soc, atol=1e-6)
+    # The optimizer's own final-SoC constraint must use the same storage stage: the
+    # target is reached only if the plan was built with the storage efficiency.
+    assert col(res, "SOC_opt")[-1] == pytest.approx(0.55, abs=1e-6)
