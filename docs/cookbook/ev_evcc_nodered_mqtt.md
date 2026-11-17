@@ -125,9 +125,9 @@ const soc_fresh = Number.isFinite(soc) && (now - (flow.get("ev_soc_ts") || 0)) <
 let ev_steps = 0;
 if (connected && soc_fresh) {
     const kwh = Math.max(0, (target_soc - soc) / 100 * capacity_kwh);
-    // Whole steps, rounded up (the round() removes float noise). A whole number of steps is solved as a
-    // normal mixed-integer problem with every step at the nominal power; a fractional hour count is
-    // solved as "Optimal (Relaxed)" with one partial-power step.
+    // Round the required energy up to a whole number of full-power charging steps (round() removes
+    // floating-point noise). The payload sends integer operating timesteps, not fractional hours,
+    // so this example does not schedule a fractional remainder step.
     ev_steps = Math.ceil(Math.round(kwh / (charger_kw * step_min / 60) * 1e6) / 1e6);
     if (ev_steps > end_step) {                                 // would be Infeasible or unlimited: plan what fits and say so
         node.warn(`EV needs ${ev_steps} steps but ${end_step > 0 ? "only " + end_step : "none"} remain before departure; the target will be missed`);
@@ -162,7 +162,7 @@ return msg;
 ```
 
 Wire the output to an `http request` node: `POST http://<emhass-host>:5000/action/naive-mpc-optim`,
-send as JSON, return parsed JSON, timeout 120 s. `def_current_state` keeps EMHASS from
+send as JSON, return parsed JSON, timeout 120 s, with the header `Authorization: Bearer <token>` (the EMHASS API token, see [API authentication](../api_authentication.md)). `def_current_state` keeps EMHASS from
 charging a startup penalty for a car that is already charging; `def_current_power` forces the
 EV on at the first step (at nominal power for a semi-continuous load, at the measured power
 for a modulated one) so a charge in progress is not planned off (the
@@ -177,7 +177,7 @@ and the departure step.
 <!-- source: src/emhass/web_server.py:769 (/api/v1/plan) -->
 <!-- transport: Node-RED 3.x (tested) -->
 
-After a 200, a second `http request` node does `GET http://<emhass-host>:5000/api/v1/plan`.
+After a 200, a second `http request` node (same `Authorization` header) does `GET http://<emhass-host>:5000/api/v1/plan`.
 The response is `{status, generated_at, plan: [...]}` with one record per step and a UTC
 `timestamp` per record (see the [plan output schema](../plan_output_schema.md)). A `function`
 node with four outputs turns the first record into retained topics, so any consumer gets

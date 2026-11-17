@@ -610,7 +610,8 @@ let influxChecks = 0; //only the newest check may update the export section
 async function checkInfluxDBAndShowExport() {
   const thisCheck = ++influxChecks;
   try {
-    const response = await fetch("/get-config", {
+    // relative, like every other URL here: behind Home Assistant ingress the app is served under a prefix
+    const response = await fetch("get-config", {
       signal: AbortSignal.timeout && AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (response.ok) {

@@ -1,4 +1,4 @@
-"""Opt-in API authentication (emhass.api_auth) and its wiring into the web server."""
+"""API access control (emhass.api_auth) and its wiring into the web server."""
 
 import io
 import json
@@ -56,28 +56,53 @@ class AuthTestBase(unittest.IsolatedAsyncioTestCase):
 
 
 class TestNoTokenConfigured(AuthTestBase):
-    async def test_routes_behave_as_before(self):
+    """With no token and nothing to generate one into, the server is closed, not open."""
+
+    async def test_routes_are_refused(self):
         await api_auth.configure(None, None, self.logger)
         response = await self.client.get("/api/v1/last-run")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
-    async def test_before_configure_runs_nothing_is_enforced(self):
+    async def test_before_configure_runs_nothing_is_open(self):
         response = await self.client.get("/api/v1/last-run")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
     @patch("emhass.web_server._action_call_unlocked", new_callable=AsyncMock)
-    async def test_actions_need_no_header(self, mock_action):
-        mock_action.return_value = "ran"
+    async def test_actions_do_not_run(self, mock_action):
         await api_auth.configure(None, None, self.logger)
-        response = await self.client.post("/action/publish-data", json={})
-        self.assertEqual(response.status_code, 200)
-        mock_action.assert_awaited_once()
+        for headers in ({}, {"Authorization": "Bearer anything-at-all-0123456789"}):
+            response = await self.client.post("/action/publish-data", json={}, headers=headers)
+            self.assertEqual(response.status_code, 503)
+        mock_action.assert_not_awaited()
 
-    async def test_login_page_redirects_home(self):
+    async def test_login_is_unavailable(self):
         await api_auth.configure(None, None, self.logger)
         response = await self.client.get("/login")
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["Location"], "./")
+        self.assertEqual(response.status_code, 503)
+
+    async def test_health_check_stays_open(self):
+        response = await self.client.get("/healthz")
+        # /healthz reports readiness itself (200 or 503); it is never the access-control refusal
+        self.assertNotIn("API authentication", await response.get_data(as_text=True))
+        self.assertNotIn("WWW-Authenticate", response.headers)
+
+    @patch("emhass.web_server._action_call_unlocked", new_callable=AsyncMock)
+    async def test_explicit_opt_out_runs_open(self, mock_action):
+        mock_action.return_value = "ran"
+        with patch.dict(os.environ, {api_auth.DISABLE_ENV: "true"}):
+            await api_auth.configure(None, None, self.logger)
+            response = await self.client.post("/action/publish-data", json={})
+            login = await self.client.get("/login")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(login.headers["Location"], "./")
+        mock_action.assert_awaited_once()
+
+    async def test_only_a_clear_opt_out_value_counts(self):
+        for value in ("", "0", "false", "no", "off", "tru", "disabled"):
+            with self.subTest(value=value), patch.dict(os.environ, {api_auth.DISABLE_ENV: value}):
+                await api_auth.configure(None, None, self.logger)
+                response = await self.client.get("/api/v1/last-run")
+                self.assertEqual(response.status_code, 503)
 
 
 class TestBearerToken(AuthTestBase):
@@ -265,9 +290,9 @@ class TestWebSocket(AuthTestBase):
         await api_auth.configure(self.write_secrets("emhass_api_token: true\n"), None, self.logger)
         self.assertEqual(await self.handshake_status(), 503)
 
-    async def test_handshake_without_a_token_is_unchanged(self):
+    async def test_handshake_without_a_token_is_refused(self):
         await api_auth.configure(None, None, self.logger)
-        self.assertNotIn(await self.handshake_status(), (401, 503))
+        self.assertEqual(await self.handshake_status(), 503)
 
 
 class TestTokenLogFilter(AuthTestBase):
@@ -424,7 +449,7 @@ class TestLogin(AuthTestBase):
         self.assertTrue(cookie.startswith(api_auth.SESSION_COOKIE + "="))
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
-        self.assertIn("Path=/", cookie)
+        self.assertNotIn("Path=", cookie)  # the browser scopes it to the login folder
         self.assertNotIn("Secure", cookie)  # plain http in the test client
         self.assertNotIn(TOKEN, cookie)
 
@@ -835,41 +860,29 @@ class TestFailClosed(AuthTestBase):
 
 
 class TestStartupWarning(AuthTestBase):
-    async def test_warns_when_open_on_the_network(self):
-        await api_auth.configure(None, None, self.logger)
-        for host, where in (
-            ("0.0.0.0", "all interfaces"),
-            ("192.0.2.10", "a network address"),
-            ("::", "all interfaces"),
-            ("emhass.lan", "a network address"),
-            ("", "all interfaces"),
-        ):
-            with self.subTest(host=host):
-                with self.assertLogs(self.logger, level="WARNING") as logs:
-                    api_auth.log_status(self.logger, host)
-                self.assertIn("No API token is set", logs.output[0])
-                self.assertIn(f"listens on {where}.", logs.output[0])
-                if host:
-                    self.assertNotIn(host, logs.output[0])
-
-    async def test_quiet_on_loopback(self):
-        await api_auth.configure(None, None, self.logger)
-        for host in ("127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost", "LOCALHOST"):
-            with self.subTest(host=host):
-                with self.assertNoLogs(self.logger, level="WARNING"):
-                    api_auth.log_status(self.logger, host)
-                with self.assertLogs(self.logger, level="INFO") as logs:
-                    api_auth.log_status(self.logger, host)
-                self.assertIn("API authentication is off", logs.output[0])
-
-    async def test_says_enabled_when_a_token_is_set(self):
+    async def test_says_on_with_a_configured_token(self):
         await self.enable()
         with self.assertNoLogs(self.logger, level="WARNING"):
             api_auth.log_status(self.logger, "0.0.0.0")
         with self.assertLogs(self.logger, level="INFO") as logs:
             api_auth.log_status(self.logger, "0.0.0.0")
         self.assertEqual(len(logs.output), 1)
-        self.assertIn("API authentication is enabled", logs.output[0])
+        self.assertIn("API access control is on (a configured token)", logs.output[0])
+        self.assertNotIn(TOKEN, logs.output[0])
+
+    async def test_errors_when_no_token_exists_and_none_can_be_made(self):
+        await api_auth.configure(None, None, self.logger)
+        with self.assertLogs(self.logger, level="ERROR") as logs:
+            api_auth.log_status(self.logger, "0.0.0.0")
+        self.assertIn("no emhass_api_token is available", logs.output[0])
+
+    async def test_warns_loudly_when_switched_off(self):
+        with patch.dict(os.environ, {api_auth.DISABLE_ENV: "true"}):
+            await api_auth.configure(None, None, self.logger)
+            for host in ("0.0.0.0", "127.0.0.1"):
+                with self.subTest(host=host), self.assertLogs(self.logger, level="WARNING") as logs:
+                    api_auth.log_status(self.logger, host)
+                self.assertIn("API access control is OFF", logs.output[0])
 
     async def test_quiet_when_configuration_failed(self):
         await api_auth.configure(self.write_secrets("emhass_api_token: true\n"), None, self.logger)
@@ -922,7 +935,7 @@ class TestWebServerWiring(AuthTestBase):
         response = await self.client.get("/api/v1/last-run")
         self.assertEqual(response.status_code, 401)
 
-    async def test_open_warning_still_logged_when_secrets_setup_fails(self):
+    async def test_closed_error_still_logged_when_secrets_setup_fails(self):
         await api_auth.configure(None, None, self.logger)
         paths = (
             self.dir / "config.json",
@@ -946,7 +959,7 @@ class TestWebServerWiring(AuthTestBase):
                     await web_server.initialize()
         finally:
             web_server.params_secrets = original_secrets
-        self.assertTrue(any("No API token is set" in line for line in logs.output))
+        self.assertTrue(any("no emhass_api_token is available" in line for line in logs.output))
 
     async def test_before_serving_keeps_the_token_loaded_at_import(self):
         # A worker that Gunicorn starts later must not take a new
@@ -983,7 +996,7 @@ class TestWebServerWiring(AuthTestBase):
         )
         self.assertEqual(response.status_code, 503)
 
-    async def test_before_serving_stays_open_when_still_no_token(self):
+    async def test_before_serving_stays_closed_when_still_no_token(self):
         await api_auth.configure(None, None, self.logger)
         env = {
             "SECRETS_PATH": str(self.dir / "missing.yaml"),
@@ -992,7 +1005,7 @@ class TestWebServerWiring(AuthTestBase):
         with patch.dict(os.environ, env), patch.object(web_server, "initialize", AsyncMock()):
             await web_server.before_serving()
         response = await self.client.get("/api/v1/last-run")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
     def test_importing_the_web_server_installs_log_masking(self):
         self.assertIs(logging.getLogRecordFactory(), api_auth._masking_record_factory)
