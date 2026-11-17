@@ -1012,14 +1012,17 @@ class DWCoordinator:
         """The main meter's flow as it runs under the export ceiling: what is
         exported past it must be curtailed PV, as the master would. None when
         it cannot be - the plan is not runnable."""
-        net, curtail = flows.net, flows.curtail
+        net = flows.net
         if self.export_ceiling is None:
             return net
         over = np.maximum(-net - self.export_ceiling, 0.0)
         if np.any(over > 1e-6):
             # Only PV on the main meter's own bus can be curtailed here without
-            # changing a node's flow; PV behind a node is that node's.
-            spare = np.maximum(pv_on(self.fc, self.topo, MAIN) - curtail, 0.0)
+            # changing a node's flow; PV behind a node is that node's. What the
+            # main meter already curtailed is net - raw (a node's own clipping
+            # is not on this bus).
+            main_curtailed = np.maximum(flows.net - flows.raw, 0.0)
+            spare = np.maximum(pv_on(self.fc, self.topo, MAIN) - main_curtailed, 0.0)
             if not (self.cfg.grid.allow_curtailment and np.all(over <= spare + 1e-6)):
                 return None
             net = net + over
