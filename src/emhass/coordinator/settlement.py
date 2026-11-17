@@ -439,7 +439,10 @@ def ledger(
         c: sum(r[c] for r in rows)
         for c in ("bill_before", "bill_after", "bill_change", "private_cost_change", "net_gain")
     }
-    curtailed = meter_from_draws(co.cfg, fc, *_split(_draws(co, fc, p_plan))).curtail
+    flows = meter_from_draws(co.cfg, fc, *_split(_draws(co, fc, p_plan)))
+    # what the tree clipped and curtailed, plus the PV the export ceiling
+    # curtails at the main meter (export past it is not delivered)
+    curtailed = flows.curtail + (_under_ceiling(fc, flows.net) - flows.net)
     tot.update(
         house_bill_before=bill_dark,
         house_bill_after=bill_plan,

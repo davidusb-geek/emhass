@@ -261,7 +261,8 @@ async def study_case(optim: dict, action: str, runtime: dict, backend: str, gap:
         run = dayahead_forecast_optim if action == "dayahead-optim" else naive_mpc_optim
         res = await run(idd, LOGGER)
         seconds = time.perf_counter() - t0
-    return _objective(idd["opt"], capture, backend, res), seconds
+    start = res.index[0] if res is not None and len(res) else None
+    return _objective(idd["opt"], capture, backend, res), seconds, start
 
 
 # ---------------------------------------------------------- synthetic days
@@ -364,6 +365,23 @@ def solve_day(inputs, backend: str):
 
 
 # ------------------------------------------------------------------ main
+def _pair(run, tries: int = 3):
+    """Both backends on the same inputs: `run(backend)` gives (cost, seconds,
+    first slot). A study case plans from now, rounded to a slot, so a pair
+    that straddles a slot boundary plans two different days; it is run again,
+    and after `tries` the pair is not compared (NaN).
+
+    Returns:
+        tuple: ((cost, seconds) for the MILP, (cost, seconds) coordinated).
+    """
+    for _ in range(tries):
+        milp, coord = run("cvxpy"), run("dantzig_wolfe")
+        if milp[2] == coord[2]:
+            return milp[:2], coord[:2]
+    print("    (not compared: the two runs kept planning from different slots)")
+    return milp[:2], (float("nan"), coord[1])
+
+
 def _row(name, milp, coord):
     """Print one run's costs and times, and return them for the summary.
 
@@ -418,8 +436,11 @@ def main():
     print(f"EMHASS study cases (lp_solver_mip_rel_gap {gap})\n{header}")
     rows = []
     for name, action, optim, runtime in STUDY_CASES:
-        milp = asyncio.run(study_case(optim, action, runtime, "cvxpy", gap))
-        coord = asyncio.run(study_case(optim, action, runtime, "dantzig_wolfe", gap))
+        milp, coord = _pair(
+            lambda backend, o=optim, a=action, r=runtime: asyncio.run(
+                study_case(o, a, r, backend, gap)
+            )
+        )
         rows.append(_row(name, milp, coord))
     _summary("Study cases", rows)
 

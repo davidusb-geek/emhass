@@ -45,3 +45,26 @@ def test_a_coordinated_run_that_fell_back_is_not_compared(capsys):
     bench._summary("Runs", rows)
     out = capsys.readouterr().out
     assert "Runs (1 not compared): 2 runs" in out
+
+
+def test_a_pair_that_straddles_a_slot_is_run_again(capsys):
+    """Both backends plan the same slot: a pair that crosses a slot boundary
+    between the two runs is run again, and one that keeps crossing is not
+    compared."""
+    starts = iter(["10:00", "10:30", "10:30", "10:30"])
+    calls = []
+
+    def run(backend):
+        calls.append(backend)
+        return (1.0 if backend == "cvxpy" else 1.1, 0.1, next(starts))
+
+    milp, coord = bench._pair(run)
+    assert calls == ["cvxpy", "dantzig_wolfe", "cvxpy", "dantzig_wolfe"]
+    assert milp == (1.0, 0.1) and coord == (1.1, 0.1)
+
+    def drifting(backend, n=iter(range(100))):
+        return (1.0, 0.1, next(n))
+
+    milp, coord = bench._pair(drifting, tries=2)
+    assert coord[0] != coord[0]  # NaN: not compared
+    assert "not compared" in capsys.readouterr().out

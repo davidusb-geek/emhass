@@ -1166,3 +1166,60 @@ def test_the_soc_miss_is_priced_at_the_participants_own_tariff():
             assert objective(a, price) <= objective(other, price) + 1e-6
     # at 1.0 the battery's energy is worth more than the miss costs: it sells
     assert np.sum(answers[1.0].plan_kw) < -0.5
+
+
+def test_an_answer_starts_from_the_soc_the_solve_used():
+    """With no initial SoC, EMHASS starts the battery at the final one; the
+    answer's state trajectory starts there too, not at the target."""
+    from emhass.coordinator.backend import EmhassParticipant
+    from emhass.coordinator.interface import Query
+
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = {
+        **oc,
+        "set_use_battery": True,
+        "number_of_deferrable_loads": 0,
+        "weight_battery_charge": 0.001,
+    }
+    pc = {**pc, "battery_target_state_of_charge": 0.5}
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    p = EmhassParticipant(opt, "battery", True, [], data, None, 0.8, {}, buy)
+    a = p.respond(Query("price_response", buy, buy))
+    cap = pc["battery_nominal_energy_capacity"] / 1000.0
+    assert a.trajectory[0] == pytest.approx(0.8 * cap)
+
+
+def test_the_ledger_counts_the_pv_the_export_ceiling_curtails():
+    """The ledger's curtailed energy includes what the export ceiling
+    curtails at the main meter, as the results do."""
+    from emhass.coordinator import settlement
+    from emhass.coordinator.master import DWCoordinator
+
+    seen = []
+    run = DWCoordinator.run
+
+    def keep(self, **kwargs):
+        r = run(self, **kwargs)
+        seen.append((self, r.plan))
+        return r
+
+    with mock.patch.object(DWCoordinator, "run", keep):
+        _, res = _coordinated(pc_update={"compute_curtailment": True})
+    (co, plan), (co_dark, plan_dark) = seen[0], seen[1]
+    import dataclasses
+
+    b = plan["battery"]
+    # half a kW more export where there is PV to curtail for it: past the
+    # ceiling, that much PV is curtailed
+    extra = np.where(co.fc.solar > 1.0, -0.5, 0.0)
+    pushed = {**plan, "battery": dataclasses.replace(b, power=b.power + extra)}
+    totals = settlement.ledger(co, pushed, co_dark, plan_dark)["totals"]
+    from emhass.coordinator.submeter import site_meter
+
+    flows = site_meter(co.cfg, co.fc, {k: c.power for k, c in pushed.items()})
+    delivered = co._delivered(flows)
+    assert delivered is not None and np.any(delivered - flows.net > 1e-6)
+    expected = float((flows.curtail + (delivered - flows.net)).sum() * co.dt)
+    assert totals["curtailed_kwh"] == pytest.approx(expected)
