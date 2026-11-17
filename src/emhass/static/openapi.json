@@ -434,7 +434,7 @@
                       "type": "string",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "not": {
-                        "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3})$"
+                        "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|ac|solar)$"
                       }
                     },
                     "parent": {
@@ -485,10 +485,25 @@
                     "id",
                     "type"
                   ],
+                  "anyOf": [
+                    {
+                      "required": [
+                        "max_import"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "max_export"
+                      ]
+                    }
+                  ],
                   "properties": {
                     "id": {
                       "type": "string",
-                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "not": {
+                        "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|solar)$"
+                      }
                     },
                     "type": {
                       "const": "limit"
@@ -504,6 +519,24 @@
                   }
                 },
                 {
+                  "title": "the PV",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "parent"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "pv"
+                    },
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    }
+                  }
+                },
+                {
                   "title": "a device",
                   "type": "object",
                   "additionalProperties": false,
@@ -514,7 +547,7 @@
                   "properties": {
                     "id": {
                       "type": "string",
-                      "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3})$"
+                      "pattern": "^(battery[0-9]?|deferrable[0-9]{1,3})$"
                     },
                     "parent": {
                       "type": "string",
@@ -529,7 +562,10 @@
                     },
                     "group": {
                       "type": "string",
-                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "not": {
+                        "const": "solar"
+                      }
                     },
                     "limits": {
                       "type": "array",
