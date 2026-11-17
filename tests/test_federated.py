@@ -638,13 +638,13 @@ def test_a_negative_price_keeps_the_battery_consistent():
     assert np.allclose(np.diff(soc), expected, atol=1e-4)
 
 
-def test_a_non_electric_load_is_not_drawn_from_the_meter():
-    """A load EMHASS keeps off the electrical balance (gas, say) is not added
-    to the coordinator's draw: the meter balances without it."""
+def test_a_non_electric_load_is_declined():
+    """EMHASS prices a non-electric load's commodity at the import tariff it
+    is given, so a query would change that load's own cost, not only the
+    electricity's: the default solver plans, saying why."""
     _, res = _coordinated(is_electric_load=[True, False])
-    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
-    supplied = res["P_PV"] + res["P_batt"] + res["P_grid"]
-    assert np.allclose(supplied, res["P_Load"] + res["P_deferrable0"], atol=1e-3)
+    assert (res["backend_used"] == "cvxpy").all()
+    assert res["backend_fallback_reason"].str.contains("non-electric").all()
 
 
 def test_what_the_coordinator_cannot_split_yet_is_declined_by_name():
@@ -947,3 +947,138 @@ def test_a_plan_past_the_ceiling_with_nothing_to_curtail_scores_infinite_and_is_
     assert scored and scored[0] == np.inf
     assert (res["backend_used"] == "cvxpy").all()
     assert res["backend_fallback_reason"].str.contains("within the export ceiling").all()
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit's second round (#1362)
+# --------------------------------------------------------------------------
+
+
+def test_what_moves_a_participants_own_cost_with_the_query_is_declined():
+    """Configurations where EMHASS's model prices something of the
+    participant's own at the queried price, or carries state between runs
+    the coordinator does not: the default solver plans, saying which."""
+    from emhass.coordinator.backend import unsupported
+
+    rh, oc, pc = _confs()
+    battery = {**oc, "set_use_battery": True}
+    assert "battery_soc_final_reward_factor" in unsupported(
+        {**battery, "battery_soc_final_reward_factor": 2.0}, pc, "profit", {}
+    )
+    inertia = [{"thermal_battery": {"thermal_inertia_time_constant": 2.0}}, {}]
+    assert "thermal_inertia_time_constant" in unsupported(
+        {**oc, "def_load_config": inertia}, pc, "profit", {}
+    )
+    # with q_input_initial, both solvers start every run from it
+    pinned = [{"thermal_battery": {"thermal_inertia_time_constant": 2.0, "q_input_initial": 1.0}}]
+    assert unsupported({**oc, "def_load_config": pinned + [{}]}, pc, "profit", {}) is None
+    assert "non-electric" in unsupported(
+        {**oc, "is_electric_load": [True, False]}, pc, "profit", {}
+    )
+
+
+def test_a_thermal_battery_with_an_overshoot_gate_is_never_blended():
+    """A thermal battery's overshoot temperature gates its power with a
+    binary, as a thermal_config's does: its participant is on/off."""
+    from emhass.coordinator.backend import EmhassParticipant
+
+    rh, oc, pc, data, pv, load_w, buy, sell = _site()
+    oc = {
+        **oc,
+        "set_use_battery": False,
+        "treat_deferrable_load_as_semi_cont": [False, False],
+        "def_load_config": [{}, {"thermal_battery": {"overshoot_temperature": 21.0}}],
+    }
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
+    )
+    p = EmhassParticipant(opt, "deferrable1", False, [1], data, None, None, {}, buy)
+    assert not p.modulating and p.onoff
+
+
+def test_an_lp_with_every_variable_fixed_is_solved_or_refused():
+    """Nothing left to solve: x is its bounds, optimal when it meets A x = b,
+    infeasible otherwise - never an error from an empty reduction."""
+    from emhass.coordinator.lpsolver import Triplets, linprog
+
+    A = Triplets((1, 1))
+    A[0, 0] = 1.0
+    ok = linprog(np.array([2.0]), A, np.array([5.0]), np.array([5.0]), np.array([5.0]))
+    assert ok.status == 0 and np.allclose(ok.x, [5.0]) and ok.fun == pytest.approx(10.0)
+    bad = linprog(np.array([2.0]), A, np.array([4.0]), np.array([5.0]), np.array([5.0]))
+    assert bad.status != 0
+
+
+def test_only_main_bus_pv_is_curtailed_for_the_export_ceiling():
+    """PV behind a node is that node's: curtailing it would change the node's
+    flow. A plan exporting past the ceiling with PV only behind a node cannot
+    run, and the breakdown and score say so."""
+    import dataclasses
+
+    from emhass.coordinator.master import DWCoordinator
+    from emhass.coordinator.submeter import site_meter
+
+    seen = []
+    run = DWCoordinator.run
+
+    def keep(self, **kwargs):
+        r = run(self, **kwargs)
+        seen.append((self, r.plan))
+        return r
+
+    site = [
+        {"id": "solar", "parent": "grid", "type": "inverter"},
+        {"id": "pv", "parent": "solar"},
+        {"id": "battery0", "parent": "grid"},
+    ]
+    with mock.patch.object(DWCoordinator, "run", keep):
+        _coordinated(site=site, pc_update={"compute_curtailment": True})
+    co, plan = seen[0]
+    b = plan["battery"]
+    surplus = co.export_ceiling > 0.5
+    pushed = {**plan, "battery": dataclasses.replace(b, power=np.where(surplus, -1.0, b.power))}
+    flows = site_meter(co.cfg, co.fc, {k: c.power for k, c in pushed.items()})
+    assert np.any(-flows.net > co.export_ceiling + 1e-6)
+    assert co._delivered(flows) is None
+    assert co.score(pushed) == np.inf and co.parts(pushed)["total"] == np.inf
+
+
+def test_the_coordinators_inputs_are_checked():
+    """A ceiling of the wrong length or not finite, a node with a name the
+    saving split keeps for itself, and PV counted in a set limit (its row sums
+    devices) are refused when the coordinator is built."""
+    from emhass.coordinator import site as site_mod
+    from emhass.coordinator.model import Forecasts, Horizon, SetLimit, SiteConfig, SubMeter
+
+    h = Horizon(dt=0.5, hours=1.0)
+    base = {"buy": np.ones(2), "sell": np.zeros(2), "load": np.zeros(2), "solar": np.zeros(2)}
+    for ceiling in (np.array([np.nan, 0.0]), np.array([1.0])):
+        with pytest.raises(ValueError, match="export_ceiling"):
+            Forecasts(**base, export_ceiling=ceiling).validate(h)
+    with pytest.raises(ValueError, match="reserved"):
+        SiteConfig(horizon=h, battery=None, submeters=(SubMeter("ac", ("x",)),)).validate()
+    assert "reserved" in site_mod.site_problem(
+        [{"id": "ac", "parent": "grid", "type": "panel"}, {"id": "deferrable0", "parent": "ac"}]
+    )
+    from emhass.coordinator.master import DWCoordinator
+
+    cfg = SiteConfig(horizon=h, set_limits=(SetLimit("l", ("pv",), max_export_kw=0.0),))
+    with pytest.raises(ValueError, match="no device"):
+        DWCoordinator(cfg, Forecasts(**base))
+
+
+def test_an_omitted_efficiency_takes_the_plants_written_as_text():
+    """A plant efficiency given as text in a one-element list (as the plant's
+    own keys accept) is the site's default, not 1.0."""
+    from emhass.coordinator import site as site_mod
+
+    site = [
+        {"id": "grid"},
+        {"id": "inverter", "parent": "grid", "type": "hybrid_inverter"},
+        {"id": "pv", "parent": "inverter"},
+        {"id": "battery0", "parent": "inverter"},
+    ]
+    plant = {"inverter_efficiency_dc_ac": ["0.96"], "inverter_efficiency_ac_dc": "0.95"}
+    assert site_mod.compile_site(site, plant, logger, battery=True)
+    assert plant["inverter_efficiency_dc_ac"] == pytest.approx(0.96)
+    assert plant["inverter_efficiency_ac_dc"] == pytest.approx(0.95)
