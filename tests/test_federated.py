@@ -625,6 +625,9 @@ def test_a_negative_price_keeps_the_battery_consistent():
     buy[10:14] = -0.05
     sell = np.minimum(sell, buy)
     data = data.assign(unit_load_cost=buy, unit_prod_price=sell)
+    # Paid to draw, everything runs at once; room at the meter, so this tests
+    # the battery, not the grid limit (a plan past that is declined)
+    pc = {**pc, "maximum_power_from_grid": 30000}
     opt, res = _plan(rh, oc, pc, data, pv, load, buy, sell, optimization_backend="dantzig_wolfe")
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     cap = pc["battery_nominal_energy_capacity"]
