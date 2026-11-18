@@ -331,7 +331,7 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
         assert start_instants.is_unique
         assert start_instants[0] == at.round("h")
         if action == "naive-mpc-optim":
-            expected_grid = pd.date_range(at.round("h"), periods=24, freq="h")
+            expected_grid = pd.date_range(at.round("h"), periods=24, freq="h").as_unit("ns")
             pd.testing.assert_index_equal(start_instants, expected_grid, check_names=False)
         # Only naive-MPC blends feedback into its first forecast slot. For
         # day-ahead check every slot, including the first.
