@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.11 - 2026-11-18
+### Fix
+- Fix Home Assistant add-on ingress port (8099) and expose `emhass_api_token` configuration option
+
 ## 0.18.10 - 2026-11-17
 
 ### Security
