@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from emhass import utils
+from emhass.coordinator.site import site_inverter, site_kind, site_problem
 
 # Most segments accepted for battery_stress_segments / inverter_stress_segments
 # (see Optimization._get_stress_segments for why this bound is generous).
@@ -200,6 +201,153 @@ def _cop_upper_bound(cops) -> float:
     cp.Parameter that the refinement re-values, so it is bounded by the COP clip
     rather than by today's value."""
     return HEAT_PUMP_COP_MAX if isinstance(cops, cp.Parameter) else float(np.max(cops))
+
+
+def _coordinated_plan(opt, *args, **kwargs):
+    """Plan with the coordinator `optimization_backend` names.
+
+    The coordinator is emhass.coordinator, imported only when a coordinator
+    backend is configured, so a default configuration never loads it.
+
+    Args:
+        opt: The calling Optimization (its configuration, logger and time step).
+        *args, **kwargs: perform_optimization's own arguments, passed through.
+
+    Returns:
+        tuple[pandas.DataFrame | None, str | None]: The plan, with the columns
+        perform_optimization returns plus the coordinator's own (fed_*), and
+        None; or None and why not, when the coordinator cannot plan this
+        configuration, so the caller runs the default cvxpy solver.
+    """
+    reason = _coordinated_config_problem(opt.optim_conf) or _coordinated_plant_problem(
+        opt.plant_conf
+    )
+    if reason:
+        opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    from emhass.coordinator.backend import optimize
+
+    # Whatever happens in the coordinator, a plan is published: any failure
+    # is logged and the default solver plans instead, live run or dry run.
+    opt.fed_fallback_reason = None
+    kwargs = _soc_endpoints_as_the_default_solver(opt, kwargs)
+    try:
+        res = optimize(opt, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - the fallback is the point
+        reason = f"the coordinator raised {type(exc).__name__}: {exc}"
+        opt.logger.error(f"optimization_backend: {reason}; using the default solver")
+        return None, reason
+    if res is None:
+        # The coordinator logged why, and says so here.
+        reason = getattr(opt, "fed_fallback_reason", None)
+        return None, str(reason) if reason else "the coordinator cannot plan this configuration"
+    return res, None
+
+
+def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
+    """soc_init and soc_final filled in as the default solver fills them: a
+    missing one from the other, and the target only when both are missing.
+    The coordinator would fill each from the target, so a run given only
+    soc_init would plan a different day. One battery only: the coordinator
+    declines more."""
+    if not opt.optim_conf.get("set_use_battery"):
+        return kwargs
+    init, final = kwargs.get("soc_init"), kwargs.get("soc_final")
+    # one battery's endpoints as a one-element list, as the default solver
+    # takes them; a longer list is left for the coordinator to decline
+    if isinstance(init, list | tuple) and len(init) == 1:
+        init = init[0]
+    if isinstance(final, list | tuple) and len(final) == 1:
+        final = final[0]
+    if isinstance(init, list | tuple) or isinstance(final, list | tuple):
+        return kwargs
+    target = opt.plant_conf.get("battery_target_state_of_charge")
+    if isinstance(target, list | tuple):
+        target = target[0] if target else None
+    if init is None:
+        init = final if final is not None else target
+    if final is None:
+        final = init
+    return {**kwargs, "soc_init": init, "soc_final": final}
+
+
+def _warn_unheld_limits(opt) -> None:
+    """On a fallback, say what of `site` the default solver does not hold:
+    its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
+    own keys describe (site.site_grid, site.site_inverter). For deferrable
+    loads alone, deferrable_load_groups it does hold."""
+    site = opt.optim_conf.get("site")
+    if not site or site_problem(site):
+        return
+    kinds = [site_kind(e) for e in site]
+    held = site_inverter(site, bool(opt.optim_conf.get("set_use_battery")))
+    if "limit" in kinds or kinds.count("node") > (1 if held else 0):
+        opt.logger.warning(
+            "optimization_backend: the default solver does not hold site's nodes and limits "
+            "(beyond the main meter and a hybrid inverter EMHASS's own model can hold); "
+            "for deferrable loads alone, deferrable_load_groups is"
+        )
+
+
+def _with_backend(res, requested: str, fallback_reason: str | None):
+    """Mark which backend made the plan in `res`: the one requested, or cvxpy
+    and why. Only with a coordinator backend requested, so a default
+    configuration's results keep exactly their columns."""
+    res["backend_requested"] = requested
+    res["backend_used"] = "cvxpy" if fallback_reason else requested
+    res["backend_fallback_reason"] = fallback_reason or ""
+    return res
+
+
+_BACKENDS = ("cvxpy", "dantzig_wolfe")
+
+
+def _coordinated_plant_problem(plant_conf: dict) -> str | None:
+    """Why the coordinator cannot plan this plant, or None if it can.
+
+    It models one inverter. With more (number_of_inverters, #1150) the default
+    solver plans, which holds each inverter and the PV and battery on it.
+    """
+    try:
+        inverters = utils.validate_num_inverters(plant_conf)
+    except utils.InverterConfigError as exc:
+        return str(exc)
+    if inverters > 1:
+        return f"number_of_inverters is {inverters}; the coordinator models one inverter"
+    if plant_conf.get("inverter_is_hybrid"):
+        curves = [
+            k
+            for k in ("inverter_power_curve_dc_ac", "inverter_power_curve_ac_dc")
+            if plant_conf.get(k)
+        ]
+        if curves:
+            # The coordinator models a hybrid inverter by its scalar efficiencies.
+            return f"{' and '.join(curves)}; the coordinator models efficiencies, not curves"
+    return None
+
+
+def _coordinated_config_problem(optim_conf: dict) -> str | None:
+    """Why `optimization_backend` and `site` cannot be used as given, or None
+    if they can.
+
+    Both may come from a request as well as from the configuration, so they
+    are checked for shape and type before anything reads them: a known
+    backend, and `site` (site.site_problem).
+
+    Args:
+        optim_conf: The optimisation configuration.
+
+    Returns:
+        str | None: The problem, for the log; None when it can be used.
+    """
+    backend = optim_conf.get("optimization_backend")
+    if backend == "admm":
+        return "admm is planned for a later release, not available yet"
+    if backend not in _BACKENDS:
+        return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
+    if optim_conf.get("site") is not None:
+        return site_problem(optim_conf["site"])
+    return None
 
 
 class Optimization:
@@ -8445,6 +8593,20 @@ class Optimization:
         pv_plant_inverters: list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        # Opt-in coordinator backend (emhass.coordinator): the devices are planned as separate
+        # participants. None means it cannot plan this configuration, so cvxpy runs below.
+        backend = self.optim_conf.get("optimization_backend", "cvxpy")
+        fallback_reason = None
+        if backend not in (None, "cvxpy"):
+            inputs = {
+                k: v
+                for k, v in locals().items()
+                if k not in ("self", "_build_start_perf", "backend", "fallback_reason")
+            }
+            res, fallback_reason = _coordinated_plan(self, **inputs)
+            if res is not None:
+                return _with_backend(res, backend, None)
+            _warn_unheld_limits(self)
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
         # Rebuild problem when forecast inputs change to ensure fresh forecasts are applied.
         if self.optim_conf.get("shared_thermal_tanks"):
@@ -8804,11 +8966,16 @@ class Optimization:
         # Under self-consumption grid import costs SELF_CONSUMPTION_BIGM times the tariff,
         # so the miss is scaled by the same factor to stay above the import it would save.
         penalty_scale = SELF_CONSUMPTION_BIGM if self.costfun == "self-consumption" else 1.0
+        # The tariff these terminal-SoC coefficients scale with: the one given,
+        # unless a caller pins them to another (the coordinated backend, whose
+        # queries change the price but must not change the battery's objective).
+        soc_tariff = getattr(self, "soc_final_reference_tariff", None)
+        soc_tariff = unit_load_cost if soc_tariff is None else soc_tariff
         self.param_soc_final_penalty.value = (
             0.001
             * SOC_FINAL_DEVIATION_PENALTY_FACTOR
             * penalty_scale
-            * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
+            * max(float(np.max(np.maximum(np.asarray(soc_tariff, dtype=float), 0.0))), 1e-3)
         )
         # If soc_final_reward_factor is defined, missing the final SOC
         # with more energy is rewarded by the purchase cost of the
@@ -8817,13 +8984,13 @@ class Optimization:
         reward_factor = self.optim_conf.get("battery_soc_final_reward_factor", 0.0)
         if reward_factor > 0.0:
             self.param_soc_final_reward.value = (
-                0.001 * reward_factor * float(np.asarray(unit_load_cost, dtype=float)[-1])
+                0.001 * reward_factor * float(np.asarray(soc_tariff, dtype=float)[-1])
             )
         else:
             self.param_soc_final_reward.value = (
                 -0.001
                 * SOC_FINAL_DEVIATION_PENALTY_FACTOR
-                * max(float(np.max(np.maximum(np.asarray(unit_load_cost, dtype=float), 0.0))), 1e-3)
+                * max(float(np.max(np.maximum(np.asarray(soc_tariff, dtype=float), 0.0))), 1e-3)
             )
         self.param_prod_price.value = unit_prod_price
         if self.n_inv > 1:
@@ -9975,6 +10142,9 @@ class Optimization:
         # Fix for Status Case: Map "optimal" -> "Optimal"
         status_raw = solved_prob.status
         self.optim_status = status_raw.title() if status_raw else "Failure"
+        # The objective of the problem whose plan is published: after a relaxed
+        # retry or an accepted DP re-solve that is not self.prob (#1048).
+        self.solved_value = solved_prob.value
 
         # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
         if solved_prob.value is None or solved_prob.status not in [
@@ -9991,6 +10161,8 @@ class Optimization:
             # explicitely set the status column so downstream functions (like get_injection_dict)
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
+            if fallback_reason:
+                _with_backend(opt_tp, backend, fallback_reason)
 
             if stage_times is not None:
                 stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -10023,6 +10195,8 @@ class Optimization:
             transfer_vars=solved_transfer_vars,
             p_pv_plants=p_pv_plants,
         )
+        if fallback_reason:
+            _with_backend(results_df, backend, fallback_reason)
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
         return results_df

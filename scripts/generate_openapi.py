@@ -85,6 +85,10 @@ def _input_to_schema(input_str: str, param: dict, scalar_default: bool = False) 
     if scalar_default and len(parts) == 2 and parts[0] == "array":
         element = {key: value for key, value in leaf.items() if key != "default"}
         schema = {"anyOf": [element, schema]}
+    if "schema" in param:
+        # The param's own JSON schema, when `input` (which drives the web UI's
+        # widget) is too coarse to describe it, e.g. a list of objects (site).
+        schema = json.loads(json.dumps(param["schema"]))
     if param.get("friendly_name"):
         schema["title"] = param["friendly_name"]
     desc = (param.get("Description") or "").strip()
