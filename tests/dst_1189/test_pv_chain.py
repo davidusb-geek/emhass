@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import pickle
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import numpy as np
@@ -288,6 +288,7 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
     try:
         env.params["retrieve_hass_conf"]["Latitude"] = LAT
         env.params["retrieve_hass_conf"]["Longitude"] = LON
+        env.params["retrieve_hass_conf"]["continual_publish"] = True
         _seed(env, at)
         if action == "naive-mpc-optim":
             # Only the hourly MPC action reads live PV/load history. Seed its
@@ -325,24 +326,26 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
 
         # Independent time-labelled PV series from the Open-Meteo -> pvlib
         # pipeline, computed without the optimisation solver or publish path.
-        pv_reference, truth, _ = _run("Europe/Copenhagen", 60, "nearest", at)
+        _, truth, _ = _run("Europe/Copenhagen", 60, "nearest", at)
         start_instants = pd.DatetimeIndex(plan.index).tz_convert("UTC")
         assert start_instants.is_unique
-        assert start_instants[0] == pd.Timestamp(run_at).round("h")
+        assert start_instants[0] == at.round("h")
+        if action == "naive-mpc-optim":
+            expected_grid = pd.date_range(at.round("h"), periods=24, freq="h")
+            pd.testing.assert_index_equal(start_instants, expected_grid, check_names=False)
         # Only naive-MPC blends feedback into its first forecast slot. For
         # day-ahead check every slot, including the first.
         skip = int(action == "naive-mpc-optim")
         np.testing.assert_allclose(
             plan["P_PV"].to_numpy(float)[skip:],
-            pv_reference.reindex(plan.index).to_numpy(float)[skip:],
+            _step_average(truth, start_instants, 60)[skip:],
             atol=0.5,
             rtol=0,
         )
         # The reporter's original day-ahead setup used continual_publish,
         # which reads saved entity JSON instead of the CSV read by publish-data.
-        # Save the real plan entities, then exercise both paths at each instant.
-        with time_machine.travel(at.to_pydatetime(), tick=False):
-            run_async(cl.publish_data(idd, LOG, entity_save=True, dont_post=True))
+        # The optimization action must save the entities itself. A manual
+        # save here would mask a broken continual_publish handoff.
         entity_path = env.data_path / "entities"
         entity_name = "sensor.p_pv_forecast.json"
         assert (entity_path / entity_name).is_file()
@@ -362,20 +365,32 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
             step_mean = _step_average(truth, pd.DatetimeIndex([expected]), 60)[0]
             assert with_publish.iloc[0]["P_PV"] == pytest.approx(step_mean, abs=0.5)
 
-            # Same selected PV value through the continual-publish JSON path.
-            # Mock only the external Home Assistant POST; leave index selection
-            # and JSON loading in production code, with both fall-hour offsets.
-            with patch.object(idd["rh"], "post_data", new_callable=AsyncMock) as poster:
+            # Exercise production post_data including its state selection and
+            # serialization. Only its HTTP session is simulated; no HA is contacted.
+            rh = idd["rh"]
+            with (
+                patch.object(rh, "get_data_from_file", False),
+                patch.object(rh, "_get_session", new_callable=AsyncMock) as get_session,
+            ):
+                session = MagicMock()
+                response = MagicMock(ok=True, status=200)
+                response.read = AsyncMock(return_value=b"{}")
+                session.post.return_value.__aenter__.return_value = response
+                get_session.return_value = session
                 with time_machine.travel(when.to_pydatetime(), tick=False):
                     run_async(
                         cl.publish_json(entity_name, idd, entity_path, LOG, "continual_publish")
                     )
-            poster.assert_awaited_once()
-            posted_series = poster.await_args.kwargs["data_df"]
-            posted_idx = poster.await_args.kwargs["idx"]
-            posted_instant = pd.Timestamp(posted_series.index[posted_idx]).tz_convert("UTC")
-            assert posted_instant == expected
-            assert posted_series.iloc[posted_idx] == pytest.approx(step_mean, abs=0.5)
+                get_session.assert_awaited_once()
+                session.post.assert_called_once()
+                payload = orjson.loads(session.post.call_args.kwargs["data"])
+                assert float(payload["state"]) == pytest.approx(step_mean, abs=0.01)
+                assert payload["attributes"]["unit_of_measurement"] == "W"
+                first_forecast = payload["attributes"]["forecasts"][0]
+                assert pd.Timestamp(first_forecast["date"]).tz_convert("UTC") == expected
+                assert float(first_forecast["p_pv_forecast"]) == pytest.approx(
+                    step_mean, abs=0.01
+                )
     finally:
         env.close()
 
