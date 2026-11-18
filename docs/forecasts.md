@@ -49,7 +49,7 @@ weather_forecast_method: 'solcast'
 ```
 ```bash
 # Example of running day-ahead, passing Solcast secrets via runtime parameters (i.e. not set in configuration)
-curl -i -H "Content-Type:application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{
 	"solcast_rooftop_id":"<your_system_id>",
 	"solcast_api_key":"<your_secret_api_key>"
 }' http://localhost:5000/action/dayahead-optim
@@ -61,7 +61,7 @@ When `weather_forecast_method: solcast` is set and a `prediction_horizon` longer
 
 ```bash
 # Run a 36-hour naive-MPC with a native Solcast forecast (no manual delta_forecast_daily required)
-curl -i -H "Content-Type:application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{
     "prediction_horizon": 72,
     "solcast_rooftop_id": "<your_system_id>",
     "solcast_api_key": "<your_secret_api_key>"
@@ -97,7 +97,7 @@ where `bias` is `weather_forecast_pv_quantile_bias` (range 0–1, default 0).
 To enable, pass the parameter at runtime or add it to your configuration:
 
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{
     "weather_forecast_pv_quantile_bias": 0.5,
     "solcast_rooftop_id": "<your_system_id>",
     "solcast_api_key": "<your_secret_api_key>"
@@ -129,7 +129,7 @@ A run of shortfalls pushes the bias toward P10 (more conservative); quiet stretc
 The supported `pv-bias-calibration` action exposes that same engine for caller-supplied history. It is reporting-only: it does not retrieve Home Assistant history, run an optimization, write configuration, or apply the returned bias.
 
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST \
   -d '{
     "p10": [1.8, 2.1, 2.4, 2.0],
     "p50": [2.5, 2.9, 3.1, 2.8],
@@ -164,7 +164,7 @@ A third method uses the Solar.Forecast service. You will need to set `method=sol
 
 For example, for a 5 kW installation:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{
 	"solar_forecast_kwp":5
 }' http://localhost:5000/action/dayahead-optim
 ```
@@ -172,7 +172,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 If your installation has several planes (several entries in `pv_module_model`), EMHASS sends one request per plane, using that plane's `surface_tilt` and `surface_azimuth`, and adds the answers up. A single number in `solar_forecast_kwp` is sent for every plane, so it should then be the size of one plane, not of the whole installation. If the planes differ in size, give a list with one kWp value per plane, in the order of `pv_module_model`:
 ```bash
 # Two planes, 3.5 kW and 4 kW
-curl -i -H "Content-Type:application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{
 	"solar_forecast_kwp":[3.5, 4]
 }' http://localhost:5000/action/dayahead-optim
 ```
@@ -209,10 +209,10 @@ Caching Forecast data will also speed up the forecast process, bypassing the nee
 
 ```bash
 # Run weather forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
 
 # Then run your regular MPC call (E.g. every 5 minutes)
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
 EMHASS will see the saved cache file and use its data over pulling new data from the API.
 
@@ -228,7 +228,7 @@ With the `csv` weather forecast method there is nothing to cache, because your f
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
 ```bash
 # Example of running day-ahead and optimization storing the retrieved Solcast data to cache
-curl -i -H 'Content-Type:application/json' -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{
 	"weather_forecast_cache":true
 }' http://localhost:5000/action/dayahead-optim
 ```
@@ -237,10 +237,10 @@ By default, if EMHASS finds a problem with the cache file, the cache will be aut
 For Solcast only, If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
 ```bash
 # Run the weather forecast action 1-10 times a day 
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
 
 # Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
-curl -i -H 'Content-Type:application/json' -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{
 	"weather_forecast_cache_only":true
 }' http://localhost:5000/action/naive-mpc-optim
 ```
@@ -289,7 +289,7 @@ The caching behavior is controlled by the `adjusted_pv_model_max_age` parameter 
 You can also override the `adjusted_pv_model_max_age` parameter at runtime using the API:
 
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
 	"adjusted_pv_model_max_age": 6,
 	"pv_power_forecast": [0, 0, 50, 150, ...]
 }' http://localhost:5000/action/naive-mpc-optim
@@ -338,7 +338,7 @@ The action retrieves your recent load history (90 days by default, since the typ
 You can launch it from the add-on web UI with the **Load forecast calibration** button on the advanced page, or over the REST API with an empty body:
 
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-calibration
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-calibration
 ```
 
 The three day windows are optional runtime parameters, so you can trade report length against how far back it looks without editing any config. They default to the values above when omitted:
@@ -348,7 +348,7 @@ The three day windows are optional runtime parameters, so you can trade report l
 - `calibration_val_days`: size of the held-out `val` window in days (default `14`).
 
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST \
   -d '{"calibration_days_to_retrieve": 120, "calibration_test_days": 21, "calibration_val_days": 21}' \
   http://localhost:5000/action/forecast-calibration
 ```
@@ -469,7 +469,7 @@ The possible dictionary keys to pass data are:
 
 For example, if using the add-on or the docker method, you can pass this data as a list of values to the data dictionary during the `curl` POST:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
 	"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 }' http://localhost:5000/action/dayahead-optim
 ```
@@ -498,7 +498,7 @@ ignored, and a shorter list is rejected with an error rather than padded
 
 **Example:**
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
 	"load_cost_forecast": [0.25, 0.24, 0.23, 0.26, 0.28, ...],
 	"prediction_horizon": 24,
 	"optimization_time_step": 60
@@ -538,7 +538,7 @@ Format:
 
 Example curl command:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
 	"load_cost_forecast": {
 		"2025-10-16 10:00:00+00:00": 0.25,
 		"2025-10-16 11:00:00+00:00": 0.28,
@@ -565,7 +565,7 @@ shell_command:
   emhass_dayahead_nordpool: >
     {% set prices = (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") or []) + (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") or []) %}
     {% set mapping = dict(zip(prices | map(attribute="start") | map("string") | list, prices | map(attribute="value") | list)) %}
-    curl -i -H "Content-Type: application/json" -X POST -d '{
+    curl -H "Authorization: Bearer YOUR_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
       "load_cost_forecast": {{ mapping | tojson }},
       "prod_price_forecast": {{ mapping | tojson }}
     }' http://localhost:5000/action/dayahead-optim
@@ -599,7 +599,7 @@ List format with Nordpool (Traditional - More Complex):
 ```yaml
 shell_command:
   emhass_dayahead_nordpool_list: >
-    curl -i -H "Content-Type: application/json" -X POST -d '{
+    curl -H "Authorization: Bearer YOUR_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
       "load_cost_forecast": {{(
         (state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
         state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
@@ -644,7 +644,7 @@ Mixing formats:
 - Example: `pv_power_forecast` as list, `load_cost_forecast` as dictionary
 
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" -X POST -d '{
 	"pv_power_forecast": [0, 0, 50, 150, 300, ...],
 	"load_cost_forecast": {
 		"2025-10-16 10:00:00+00:00": 0.25,
@@ -703,7 +703,7 @@ With this, you can now feed this Solcast forecast to EMHASS along with the mappi
 An MPC call may look like this for 4 deferrable loads:
 
 ```yaml
-    post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
+    post_mpc_optim_solcast: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
           ([states('sensor.amber_general_price')|float] +
           state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
           }}, \"prod_price_forecast\":{{(
@@ -793,7 +793,7 @@ And the fusion of the two sensors:
 And finally the shell command:
 
 ```yaml
-dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
+dayahead_optim: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
 ```
 
 ### Example using the Nordpool integration
@@ -807,7 +807,7 @@ The subsequent shell command to concatenate `today` and `tomorrow` values can be
 
 ```yaml
 shell_command:
-  trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
+  trigger_nordpool_forecast: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
 
 This command assumes a 60-minute `optimization_time_step` and `method_ts_round: first`, so that the list starts at the current hour (see [the list format](#understanding-forecast-data-formats-list-vs-dictionary)). With another step or rounding mode, prefer the dictionary format.

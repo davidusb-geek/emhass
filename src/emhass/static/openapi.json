@@ -3,8 +3,13 @@
   "info": {
     "title": "EMHASS API",
     "version": "1.1",
-    "description": "Machine-readable contract for the EMHASS JSON API. `default` values are sourced from param_definitions.json (the maintainer-declared source of truth); runtime currently loads config_defaults.json, which is kept aligned but not enforced in code."
+    "description": "Machine-readable contract for the EMHASS JSON API. `default` values are sourced from param_definitions.json (the maintainer-declared source of truth); runtime currently loads config_defaults.json, which is kept aligned but not enforced in code.\n\nAuthentication: every operation except `/healthz` needs `Authorization: Bearer <token>`, where the token is `EMHASS_API_TOKEN` or `emhass_api_token` (options.json, secrets file), or the token EMHASS generated into `<data folder>/emhass_api_token` when none is configured. With no usable token the server answers 503. Home Assistant add-on users reach the web UI through ingress, which needs no token. See docs/api_authentication.md."
   },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
   "paths": {
     "/get-config": {
       "get": {
@@ -19,6 +24,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -36,6 +47,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -64,6 +81,12 @@
           },
           "500": {
             "description": "Save failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -96,6 +119,12 @@
           },
           "500": {
             "description": "Conversion failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -162,6 +191,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -179,6 +211,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -196,6 +234,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -283,6 +327,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/AuthUnavailable"
           }
         }
       }
@@ -311,7 +361,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     }
   },
@@ -330,6 +381,206 @@
             "default": "profit",
             "title": "Cost function",
             "description": "Define the type of cost function."
+          },
+          "optimization_backend": {
+            "type": "string",
+            "enum": [
+              "cvxpy",
+              "dantzig_wolfe"
+            ],
+            "default": "cvxpy",
+            "title": "Optimization backend",
+            "description": "cvxpy (default): one MILP over every device, as before. dantzig_wolfe: each device (or group, see site) is planned as its own subproblem by EMHASS's own model, and a coordinator makes the plans agree at the meter and every limit in site. Anything the coordinator cannot plan yet runs on cvxpy, with a log line."
+          },
+          "site": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 64,
+            "items": {
+              "anyOf": [
+                {
+                  "title": "the main meter",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "grid"
+                    },
+                    "max_import": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_export": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                {
+                  "title": "a node",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "parent"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "not": {
+                        "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|ac|solar)$"
+                      }
+                    },
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "hybrid_inverter",
+                        "inverter",
+                        "panel",
+                        "breaker",
+                        "meter"
+                      ]
+                    },
+                    "max_import": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_export": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "efficiency_import": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "exclusiveMinimum": 0,
+                      "maximum": 1
+                    },
+                    "efficiency_export": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "exclusiveMinimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                },
+                {
+                  "title": "a limit",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "type"
+                  ],
+                  "anyOf": [
+                    {
+                      "required": [
+                        "max_import"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "max_export"
+                      ]
+                    }
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "not": {
+                        "pattern": "^(pv|battery[0-9]?|deferrable[0-9]{1,3}|grid|solar)$"
+                      }
+                    },
+                    "type": {
+                      "const": "limit"
+                    },
+                    "max_import": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_export": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                {
+                  "title": "the PV",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "parent"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "pv"
+                    },
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    }
+                  }
+                },
+                {
+                  "title": "a device",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "parent"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^(battery[0-9]?|deferrable[0-9]{1,3})$"
+                    },
+                    "parent": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    },
+                    "solver": {
+                      "type": "string",
+                      "enum": [
+                        "emhass"
+                      ],
+                      "default": "emhass"
+                    },
+                    "group": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "not": {
+                        "const": "solar"
+                      }
+                    },
+                    "limits": {
+                      "type": "array",
+                      "maxItems": 16,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "title": "Site",
+            "description": "Optional, with a coordinator backend: the house in one list. Each element has an id. 'grid' is the main meter (max_import / max_export, W). Every element but the main meter and the limits names its parent ('grid', the main meter, or a node). A node (any other id: an inverter, a panel, a breaker) has its parent, a type (hybrid_inverter, inverter, panel, breaker, meter), max_import / max_export (W) on its connection to its parent, and efficiency_import / efficiency_export. A limit (type 'limit') caps what the devices tagged with it draw together (max_import / max_export, W), wherever they are. A device (pv, battery0 or battery, deferrable0, ...) has a parent, a group (devices in one group are planned together by EMHASS's model) and limits (limit ids). A device left out is planned alone by EMHASS, on the main meter. The main meter's limits and a hybrid_inverter node on it holding just the PV and the battery also set EMHASS's own keys, so the default solver plans the same meter and inverter. Example: [{\"id\": \"inverter\", \"parent\": \"grid\", \"type\": \"hybrid_inverter\", \"max_import\": 4000, \"max_export\": 4000}, {\"id\": \"garage\", \"parent\": \"grid\", \"type\": \"panel\", \"max_import\": 7400, \"max_export\": 0}, {\"id\": \"pv\", \"parent\": \"inverter\"}, {\"id\": \"battery0\", \"parent\": \"inverter\"}, {\"id\": \"deferrable0\", \"parent\": \"garage\", \"group\": \"loads\"}, {\"id\": \"deferrable1\", \"parent\": \"garage\", \"group\": \"loads\"}]"
           },
           "sensor_power_photovoltaics": {
             "type": "string",
@@ -1112,7 +1363,7 @@
             },
             "title": "Deferrable load operating hours",
             "x-unit": "h",
-            "description": "The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. 4.5) and the energy delivered is nominal_power * hours; a value that is not a whole number of timesteps runs at least one step below the nominal power and, for semi-continuous loads, is solved as 'Optimal (Relaxed)' (integer constraints not enforced). For whole timesteps at the nominal power naive-mpc-optim accepts operating_timesteps_of_each_deferrable_load at runtime, one entry per load (it makes EMHASS ignore the hours of all loads). (unit: h)"
+            "description": "The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. 4.5) and the energy delivered is nominal_power * hours; a value that is not a whole number of timesteps is delivered, for semi-continuous loads, as whole steps at the nominal power plus one last remainder step whose average power over the step is the leftover fraction of the nominal power (the load itself is not modulated), and the remainder formulation does not itself require a relaxed solve when other constraints are feasible. The energy is exact within 1e-5 timesteps (at most 1e-5 * nominal_power * timestep Wh). This applies to ordinary semi-continuous deferrable loads, not sequence/thermal/thermal-battery loads. A switch-only executor must run at nominal power for the remainder fraction of the timestep; the reported wattage is only an interval average, not the load's instantaneous consumption, so instantaneous grid, inverter and equipment limits must be enforced independently of the step average. For whole timesteps at the nominal power naive-mpc-optim accepts operating_timesteps_of_each_deferrable_load at runtime, one entry per load (it makes EMHASS ignore the hours of all loads). (unit: h)"
           },
           "treat_deferrable_load_as_semi_cont": {
             "type": "array",
@@ -1981,6 +2232,42 @@
               "schema_version": {
                 "type": "string"
               }
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The EMHASS API token, sent as `Authorization: Bearer <token>`."
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No valid token. The `WWW-Authenticate: Bearer` header says how to authenticate.",
+        "headers": {
+          "WWW-Authenticate": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AuthUnavailable": {
+        "description": "API access control is not usable: no token is configured and none can be generated, or a token source cannot be read. Nothing was run.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
             }
           }
         }

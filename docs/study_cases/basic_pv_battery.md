@@ -44,7 +44,7 @@ The `battery_*_efficiency` values above are the battery's own scalar efficiencie
 ## Run
 
 ```bash
-curl -i -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type: application/json" \
      -X POST -d '{}' \
      http://localhost:5000/action/dayahead-optim
 ```

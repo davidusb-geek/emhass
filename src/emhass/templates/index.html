@@ -7,7 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" type="text/css" href="static/style.css?version=3">
     <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
-    <script src="static/script.js?version=1"></script>
+    <script src="static/script.js?version=2"></script>
 </head>
 
 <body style="margin: auto; align-items:center; text-align:center;">
@@ -21,6 +21,14 @@
                     <use class="feather" href="static/img/feather-sprite.svg#settings" />
                 </svg>
             </a>
+            {% if api_token_link %}
+            <!-- API token (Home Assistant ingress only, for a token EMHASS generated) -->
+            <a href="api-token" title="API token" style="margin-right: 12px; cursor: pointer; z-index: 1">
+                <svg class="feather" aria-hidden="true">
+                    <use class="feather" href="static/img/feather-sprite.svg#key" />
+                </svg>
+            </a>
+            {% endif %}
             <!-- advanced or basic page switch -->
             <button type="button" id="basicOrAdvanced" class="icon-button" title="Advanced Toggle" style="margin-right: 24px; cursor: pointer; z-index: 1">
                 <svg class="feather" aria-hidden="true">

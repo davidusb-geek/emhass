@@ -55,7 +55,7 @@ const settle = (r, options) => (r === STALL
   ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)))
   : r);
 const ok = html => () => new Response(html, { status: 200 });
-const healthy = { 'basic.html': ok(BASIC), 'advanced.html': ok(ADVANCED), '/get-config': ok('{}') };
+const healthy = { 'basic.html': ok(BASIC), 'advanced.html': ok(ADVANCED), 'get-config': ok('{}') };
 const failures = {
   'a rejected request': () => { throw new TypeError('Failed to fetch'); },
   'an HTTP 502 error page': () => new Response('<html><h1>Bad Gateway</h1></html>', { status: 502 }),
@@ -76,7 +76,7 @@ test('stored Advanced selection loads the Advanced view with its controls wired'
   s.done();
 });
 test('a /get-config request that never completes does not delay the Advanced view setup', async () => {
-  const s = setup({ stored: 'advanced', replies: { ...healthy, '/get-config': () => new Promise(() => {}) } });
+  const s = setup({ stored: 'advanced', replies: { ...healthy, 'get-config': () => new Promise(() => {}) } });
   let restored = false; s.ctx.getSavedData = () => { restored = true; };
   const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('view setup waited for /get-config')), 2000).unref());
   await Promise.race([s.load(), timeout]);
@@ -116,7 +116,7 @@ for (const [kind, reply] of Object.entries({
   'a non-JSON 200 body': () => new Response('<html>not json</html>', { status: 200 }),
 })) {
   test(`the export-section check failing with ${kind} neither rejects nor breaks the Advanced view`, async () => {
-    const s = setup({ stored: 'advanced', replies: { ...healthy, '/get-config': reply } });
+    const s = setup({ stored: 'advanced', replies: { ...healthy, 'get-config': reply } });
     await s.load();
     await new Promise(r => setImmediate(r)); // let any unhandled rejection surface
     assert.equal(s.rejections.length, 0);
@@ -185,7 +185,7 @@ test('a normal Advanced load requests /get-config for the export section and res
   const requested = [];
   s.ctx.fetch = async (url) => { requested.push(url); return healthy[url.replace('static/', '')](); };
   await s.load();
-  assert.ok(requested.includes('/get-config'));
+  assert.ok(requested.includes('get-config'));
   assert.equal(restored, true);
   s.done();
 });

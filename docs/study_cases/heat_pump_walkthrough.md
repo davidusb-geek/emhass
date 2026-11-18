@@ -67,6 +67,7 @@ rest_command:
     method: POST
     timeout: 300
     headers:
+      authorization: !secret emhass_bearer
       content-type: application/json
     payload: >
       {%- set horizon = 48 -%}

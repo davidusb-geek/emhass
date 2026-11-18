@@ -44,7 +44,7 @@ runtimeparams = {
 A correct `curl` call to launch a model fit can look like this:
 
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
 ```
 
 A Home Assistant `rest_command` can look like this:
@@ -54,6 +54,7 @@ fit_heating_hours:
   url: http://127.0.0.1:5000/action/regressor-model-fit
   method: POST
   headers:
+    authorization: !secret emhass_bearer
     content-type: application/json
   payload: >-
     {
@@ -108,11 +109,11 @@ runtimeparams = {
 
 Pass the correct `model_type` like this:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d '{"new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 ```
 or
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_device_class": "duration","mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_device_class": "duration","mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 ```
 
 A Home Assistant `rest_command` can look like this:
@@ -122,6 +123,7 @@ predict_heating_hours:
   url: http://localhost:5001/action/regressor-model-predict
   method: POST
   headers:
+    authorization: !secret emhass_bearer
     content-type: application/json
   payload: >-
    {

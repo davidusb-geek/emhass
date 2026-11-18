@@ -16,7 +16,7 @@ With this web server, you can perform RESTful POST commands on multiple ENDPOINT
 - A POST call to `action/forecast-calibration` to compare the accuracy of the load forecast methods on your own history and help you pick the best one (see the [Load forecast calibration](forecasts.md) section for more help).
 - A POST call to `action/pv-bias-calibration` to run the side-effect-free PV P10/P50 bias recommendation engine on caller-supplied history (see the [Conservative PV bias](forecasts.md#conservative-pv-bias-p10-blend) section).
 
-A `curl` command can then be used to launch an optimization task like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
+A `curl` command can then be used to launch an optimization task like this: `curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
 > **⚠️ Breaking change — HTTP status codes.** On success, the JSON API endpoints
 > (`action/*`, `get-config`, `get-config/defaults`, `set-config`, `get-json`) now return

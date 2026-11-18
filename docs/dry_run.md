@@ -11,7 +11,7 @@ Send the body you would send to `/action/<action>` to `/api/v1/dry-run/<action>`
 For example, the live MPC call with a per-step import cap that leaves room for an EV charge:
 
 ```bash
-curl -s -H 'Content-Type: application/json' -X POST \
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -s -H 'Content-Type: application/json' -X POST \
   -d '{"prediction_horizon": 24, "soc_init": 0.5, "soc_final": 0.6,
        "maximum_power_from_grid": [9000, 9000, 9000, 9000, 2000, 2000, 2000, 2000, 9000, 9000, 9000, 9000,
                                    9000, 9000, 9000, 9000, 9000, 9000, 9000, 9000, 9000, 9000, 9000, 9000]}' \
@@ -66,7 +66,7 @@ A dry run reads every cache, model and file a live run reads, and writes none of
 ## What it does not cover
 
 - Home Assistant is read, as in a live run.
-- Like `/action/<action>`, this URL has no authentication. Keep EMHASS on a trusted network, or behind Home Assistant's ingress. A dry run uses CPU as an action does, but spends no forecast quota.
+- Like `/action/<action>`, this URL needs the API token (see [API authentication](api_authentication.md)). A dry run uses CPU as an action does, but spends no forecast quota.
 - The machine learning actions (`forecast-model-fit` and the others), `publish-data`, `weather-forecast-cache` and the other actions have no dry run.
 - The HTTP status of a live `/action/<action>` request is still read from the shared action log. A dry run cannot change it, because its records stay out of that log.
 
