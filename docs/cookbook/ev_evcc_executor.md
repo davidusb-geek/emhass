@@ -111,7 +111,7 @@ rest_command:
     url: http://localhost:5000/action/naive-mpc-optim
     method: POST
     timeout: 120
-    headers: {content-type: application/json}
+    headers: {content-type: application/json, authorization: !secret emhass_bearer}
     payload: >
       {
         "prediction_horizon": {{ horizon }},

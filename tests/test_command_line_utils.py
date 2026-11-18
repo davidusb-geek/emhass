@@ -373,6 +373,95 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Identical config -> cache hit -> same reused object
         self.assertIs(idd2["opt"], idd1["opt"], "Non-shared configs must still warm-start")
 
+    async def test_cache_hit_plans_like_a_fresh_build(self):
+        """A cache hit must return the plan a fresh build of the same inputs gives (#1364).
+
+        B is A with the prices reversed: nothing structural changes, so B reuses A's
+        cached problem. Warm-started from A's solution, HiGHS returned A's schedule
+        (a run in what is now a 3.75 step) while a fresh build of B plans no run.
+        """
+        self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["optim_conf"]["costfun"] = "cost"
+        params_json = orjson.dumps(params).decode("utf-8")
+        n = 48
+        # fmt: off
+        prices = [
+            2.55, 2.44, 2.44, 2.41, 2.41, 2.49, 2.49, 2.58, 2.58, 2.71, 2.71, 3.75,
+            3.75, 3.86, 3.86, 3.81, 3.81, 3.52, 3.52, 2.57, 2.57, 2.5, 2.5, 2.41,
+            2.41, 0.99, 0.99, 0.94, 0.94, 0.88, 0.88, 0.97, 0.97, 0.96, 0.96, 1.21,
+            1.21, 1.82, 1.82, 2.3, 2.3, 2.71, 2.71, 2.82, 2.82, 2.56, 2.56, 2.35,
+        ]
+        outdoor = [
+            44.0, 44.4, 44.9, 45.3, 45.8, 46.3, 46.8, 47.2, 47.7, 48.0, 48.4, 48.7,
+            48.9, 49.0, 49.1, 49.2, 49.3, 49.3, 49.4, 49.2, 49.1, 48.9, 48.6, 48.4,
+            48.2, 48.0, 47.7, 47.3, 47.0, 46.4, 45.9, 45.3, 44.7, 44.1, 43.6, 43.1,
+            42.6, 42.2, 41.8, 41.4, 41.0, 40.6, 40.2, 40.1, 39.9, 39.8, 39.7, 39.6,
+        ]
+        # fmt: on
+        # A humidifier modelled as a heater (relative humidity in place of degC)
+        runtime_a = {
+            "prediction_horizon": n,
+            "optimization_time_step": 30,
+            "load_cost_forecast": prices,
+            "outdoor_temperature_forecast": outdoor,
+            "prod_price_forecast": [0.0] * n,
+            "pv_power_forecast": [0.0] * n,
+            "load_power_forecast": [0.0] * n,
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [365.0],
+            "operating_hours_of_each_deferrable_load": [0],
+            "treat_deferrable_load_as_semi_cont": [True],
+            "def_current_state": [False],
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "heating_rate": 5.9,
+                        "cooling_constant": 0.47,
+                        "start_temperature": 45.0,
+                        "sense": "heat",
+                        "min_temperatures": [38.0] * n,
+                        "max_temperatures": [48.0] * 12
+                        + [48.4, 48.6, 48.9, 49.1, 49.2, 49.4, 49.5, 49.5, 49.5]
+                        + [49.5, 49.5, 49.4, 49.3, 49.2, 49.0, 48.8, 48.6, 48.3]
+                        + [48.0] * 18,
+                        "desired_temperatures": [48.0] * n,
+                        "overshoot_temperature": 48.0,
+                        "penalty_factor": 0.02326,
+                    }
+                }
+            ],
+        }
+        runtime_b = copy.deepcopy(runtime_a)
+        runtime_b["load_cost_forecast"].reverse()
+
+        async def solve(runtime):
+            idd = await set_input_data_dict(
+                emhass_conf,
+                "cost",
+                params_json,
+                orjson.dumps(runtime).decode("utf-8"),
+                "naive-mpc-optim",
+                logger,
+                get_data_from_file=True,
+            )
+            opt_res = await naive_mpc_optim(idd, logger, debug=True)
+            return idd["opt"], opt_res["P_deferrable0"].round(3).tolist()
+
+        OptimizationCache.clear(logger)
+        _, fresh_b = await solve(runtime_b)
+        OptimizationCache.clear(logger)
+        opt_a, _ = await solve(runtime_a)
+        opt_b, cached_b = await solve(runtime_b)
+        self.assertIs(opt_b, opt_a, "B must reuse A's cached problem")
+        self.assertEqual(cached_b, fresh_b, "A cache hit must plan like a fresh build (#1364)")
+
     # Test day-ahead optimization
     async def test_webserver_get_injection_dict(self):
         costfun = "profit"

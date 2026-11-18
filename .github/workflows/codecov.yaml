@@ -31,9 +31,14 @@ jobs:
         run: |
           uv venv
           uv sync --reinstall --extra test
-          uv run coverage run --source=emhass -m pytest tests/
-          uv run coverage report
-          uv run coverage xml -o coverage.xml
+          # Keep the non-DST suite serial; collect coverage from xdist workers only for DST.
+          # Install CI-only tools without changing the application's test dependencies.
+          uv pip install --python .venv/bin/python "pytest-cov==7.1.0" "pytest-xdist==3.8.0"
+          uv run --no-sync coverage erase
+          uv run --no-sync pytest tests/ --ignore=tests/dst_1189 --cov=emhass --cov-report=
+          uv run --no-sync pytest tests/dst_1189 -n 4 --cov=emhass --cov-append --cov-report=
+          uv run --no-sync coverage report
+          uv run --no-sync coverage xml -o coverage.xml
 
       - name: Upload coverage reports to Codecov
         if: github.event.pull_request.head.repo.fork == false

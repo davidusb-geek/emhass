@@ -77,7 +77,7 @@ from emhass.utils import (
 )
 
 app = Quart(__name__)
-# Opt-in API authentication: a before_request hook plus /login and /logout.
+# API access control: a before_request hook plus /login, /logout and /api-token.
 api_auth.install(app)
 
 
@@ -89,9 +89,14 @@ def _api_token_sources() -> tuple[str, str]:
     )
 
 
+def _api_token_dir() -> str:
+    """Where a generated API token is kept: the folder EMHASS already writes its state to."""
+    return os.getenv("DATA_PATH", default="/data/")
+
+
 # Loaded at import: under Gunicorn with preload_app this runs once in the master,
 # so every worker, including one that starts later, shares one snapshot.
-api_auth.configure_now(*_api_token_sources(), app.logger)
+api_auth.configure_now(*_api_token_sources(), app.logger, data_dir=_api_token_dir())
 
 emhass_conf: dict[str, Path] = {}
 entity_path: Path = Path()
@@ -303,7 +308,7 @@ async def _configure_api_auth() -> None:
     """Load the API token from the same files _setup_paths and _setup_secrets use,
     or, when the import already loaded it, recheck them."""
     if not api_auth.is_loaded():
-        await api_auth.configure(*_api_token_sources(), app.logger)
+        await api_auth.configure(*_api_token_sources(), app.logger, data_dir=_api_token_dir())
     else:
         api_auth.recheck_now(*_api_token_sources(), app.logger)
 
@@ -420,7 +425,11 @@ async def index():
         injection_dict = {}
 
     template = templates.get_template("index.html")
-    return await make_response(template.render(injection_dict=injection_dict))
+    return await make_response(
+        template.render(
+            injection_dict=injection_dict, api_token_link=api_auth.token_page_available()
+        )
+    )
 
 
 @app.route("/configuration", methods=["GET"])
@@ -1672,7 +1681,8 @@ async def main() -> None:
     port = int(os.getenv("PORT", 5000))
     app.logger.info(f"Starting server directly on {host}:{port}")
     # Use uvicorn.Server to run within existing event loop
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    # proxy_headers=False: access control must see the real TCP peer, never an X-Forwarded-For value
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", proxy_headers=False)
     server = uvicorn.Server(config)
     await server.serve()
 

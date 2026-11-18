@@ -35,7 +35,7 @@ If `number_of_inverters` is greater than 1, the site-total sensors (`sensor.p_pv
 If you run publish manually *(or via a Home Assistant Automation)*, it is possible to provide custom sensor names for all the data exported by the `publish-data` command. For this, when using the `publish-data` endpoint we can just add some runtime parameters as dictionaries like this:
 ```yaml
 shell_command:
-  publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_load_forecast_id\": {\"entity_id\": \"sensor.p_load_forecast\", \"unit_of_measurement\": \"W\", \"friendly_name\": \"Load Power Forecast\"}}' http://localhost:5000/action/publish-data"
+  publish_data: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_load_forecast_id\": {\"entity_id\": \"sensor.p_load_forecast\", \"unit_of_measurement\": \"W\", \"friendly_name\": \"Load Power Forecast\"}}' http://localhost:5000/action/publish-data"
 ```
 
 These keys are available to modify: `custom_pv_forecast_id`, `custom_load_forecast_id`, `custom_batt_forecast_id`, `custom_batt_soc_forecast_id`,  `custom_grid_forecast_id`, `custom_cost_fun_id`, `custom_deferrable_forecast_id`, `custom_unit_load_cost_id` and `custom_unit_prod_price_id`.
@@ -45,7 +45,7 @@ With `number_of_batteries` greater than 1, `custom_batt_forecast_id` keeps overr
 If you provide the `custom_deferrable_forecast_id` then the passed data should be a list of dictionaries, like this:
 ```yaml
 shell_command:
-  publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_deferrable_forecast_id\": [{\"entity_id\": \"sensor.p_deferrable0\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 0\"},{\"entity_id\": \"sensor.p_deferrable1\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 1\"}]}' http://localhost:5000/action/publish-data"
+  publish_data: "curl -H \"Authorization: Bearer YOUR_API_TOKEN\" -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_deferrable_forecast_id\": [{\"entity_id\": \"sensor.p_deferrable0\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 0\"},{\"entity_id\": \"sensor.p_deferrable1\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 1\"}]}' http://localhost:5000/action/publish-data"
 ```
 You should be careful that the list of dictionaries has the correct length, which is the number of defined deferrable loads.
 
@@ -83,7 +83,7 @@ deferrable load:
 
 | Variable | Description | Published Sensor |
 |---|---|---|
-| P_deferrableX_state<br/>[X = 0, 1, 2, ...] | An interpretable command for deferrable load X at the current timestep: `off` (idle), `on` (running at nominal power) or `variable` (a modulated level in between). The full optimized plan over the horizon is attached as a `schedule` attribute (a list of `{date, value}` entries). This is a generic, automation-agnostic command surface — you map `on`/`off`/`variable` onto your own switch, number or script as you see fit. | sensor.p_deferrableX_state |
+| P_deferrableX_state<br/>[X = 0, 1, 2, ...] | An interpretable command for deferrable load X at the current timestep: `off` (idle), `on` (running at nominal power) or `variable` (a level in between). For a semi-continuous load, a fractional remainder step is labelled `variable` only when its average power is above max(1 % of nominal power, 1 W) and below 99 % of nominal power; smaller remainders may read `off` and larger ones `on`, so the label cannot guarantee an accurate partial-step execution (it never says for how long inside the step the load runs). The published power is the average over the step, not a setpoint, and a load that can only switch has to be on at its nominal power for that fraction of the step (see `operating_hours_of_each_deferrable_load`). The full optimized plan over the horizon is attached as a `schedule` attribute (a list of `{date, value}` entries). This is a generic, automation-agnostic command surface — you map `on`/`off`/`variable` onto your own switch, number or script as you see fit. | sensor.p_deferrableX_state |
 
 The labels are derived from the optimized `P_deferrableX` power and the load's
 `nominal_power_of_deferrable_loads`, so they stay consistent with the power
@@ -100,9 +100,9 @@ Due to the flexibility of EMHASS, multiple different approaches to publishing th
 By default, running an optimization in EMHASS will output the results into the CSV file: `data_path/opt_res_latest.csv`  *(overriding the existing data on that file)*. We run the publish command to publish the last optimization saved in the `opt_res_latest.csv`:
 ```bash
 # RUN dayahead
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/dayahead-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/dayahead-optim
 # Then publish the results of dayahead
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 *Note, the published entities from the publish-data action will not automatically update the entities' current state (current state being used to check when to turn on and off appliances via Home Assistant automations). To update the EMHASS entities state, another publish would have to be re-run later when the current time matches the next value's timestamp (e.g. every 30 minutes). See examples below for methods to automate the publish-action.*
 
@@ -126,9 +126,9 @@ For users that wish to run multiple different optimizations, you can set the run
 
 ```bash
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_ 
-curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_
-curl -i -H 'Content-Type:application/json' -X POST -d '{"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 This will tell continual_publish to loop every 5 minutes based on the optimization_time_step passed in MPC. All entities from the output of dayahead "dh_" and MPC "mpc_" will be published every 5 minutes.
 
@@ -144,12 +144,12 @@ This will tell continual_publish to loop every 5 minutes based on the optimizati
 You can choose to save one optimization for continual_publish and bypass another optimization by setting `'continual_publish':false` runtime parameter:
 ```bash
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_, included into continual_publish
-curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, Manually publish, excluded from continual_publish loop
-curl -i -H 'Content-Type:application/json' -X POST -d '{"continual_publish":false,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"continual_publish":false,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 # Publish MPC output
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 This example saves the dayahead optimization into `data_path/entities` as .json files, being included in the `continutal_publish` loop (publishing every 30 minutes). The MPC optimization will not be saved in `data_path/entities`, and therefore only into `data_path/opt_res_latest.csv`. Requiring a publish-data action to be run manually (or via a Home Assistant) Automation for the MPC results. 
 
@@ -164,20 +164,20 @@ in configuration page/`config.json` :
 POST action :
 ```bash
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_, save entity
-curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, save entity
-curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save":true,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"entity_save":true,"optimization_time_step":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 You can then reference these .json saved entities via their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
 ```bash
 #Publish the MPC optimization ran above 
-curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"mpc_"}'  http://localhost:5000/action/publish-data
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"mpc_"}'  http://localhost:5000/action/publish-data
 ```
 This will publish all entities from the MPC (_mpc) optimization above.
 </br>
 Alternatively, you can choose to publish all the saved files .json files with `publish_prefix` = all:
 ```bash
 #Publish all saved entities
-curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"all"}'  http://localhost:5000/action/publish-data
+curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"all"}'  http://localhost:5000/action/publish-data
 ```
 This action will publish the dayahead (_dh) and MPC (_mpc) optimization results from the optimizations above.
