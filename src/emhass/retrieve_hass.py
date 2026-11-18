@@ -511,7 +511,8 @@ class RetrieveHass:
             Home Assistant adds at the start of each requested day does not count), \
             the number of real readings in each bucket in ``bucket_row_count`` and \
             the buckets holding an unavailable or unknown row in \
-            ``marker_buckets``. ``df_final`` is the same either way. Used by battery \
+            ``marker_buckets``, all limited to the buckets ``df_final`` holds. \
+            ``df_final`` is the same either way. Used by battery \
             self-identification to hold short silences at the last recorded state. \
             All three attributes are emptied at the start of every call. Defaults to False
         :type record_staleness: bool, optional
@@ -1070,12 +1071,24 @@ class RetrieveHass:
         # entire range is listed here without a matching df_final column, so
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
+        # Each day is resampled from its own midnight, so with a step that does
+        # not divide a day the days sit on different grids, and the cleanup above
+        # keeps only the days on the first day's grid. Keep the aux series to the
+        # labels df_final holds, so the off-grid days do not void the days on it.
+        final_index = self.df_final.index
         for var, parts in staleness_by_var.items():
-            self.bucket_last_state[var] = pd.concat([last for last, _, _ in parts])
-            self.bucket_row_count[var] = pd.concat([count for _, count, _ in parts])
-            self.marker_buckets[var] = (
-                parts[0][2].append([markers for _, _, markers in parts[1:]]).unique().sort_values()
-            )
+            last = pd.concat([last for last, _, _ in parts])
+            count = pd.concat([count for _, count, _ in parts])
+            on_final = last.index.isin(final_index)
+            if not on_final.all():
+                self.logger.debug(
+                    f"Staleness data of {var}: {int((~on_final).sum())} of {len(last)} "
+                    "buckets are off the history grid and were left out"
+                )
+            self.bucket_last_state[var] = last[on_final]
+            self.bucket_row_count[var] = count[count.index.isin(final_index)]
+            markers = parts[0][2].append([m for _, _, m in parts[1:]]).unique().sort_values()
+            self.marker_buckets[var] = markers[markers.isin(final_index)]
         return True
 
     async def get_data_websocket(
