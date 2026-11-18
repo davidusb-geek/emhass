@@ -350,6 +350,27 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
         entity_name = "sensor.p_pv_forecast.json"
         assert (entity_path / entity_name).is_file()
 
+        # The two repeated 02:00 hours are dark in Copenhagen: a value-only
+        # one-hour swap would leave both physical PV readings at zero. Keep the
+        # independent PV checks above and distinguish the saved JSON slots with
+        # nonzero synthetic markers, without altering the physical PV model.
+        fold_markers = {}
+        if run_at == "2026-10-24T22:05Z":
+            fold_markers = {
+                pd.Timestamp("2026-10-25T00:00Z"): 123.0,
+                pd.Timestamp("2026-10-25T01:00Z"): 789.0,
+            }
+            saved_file = entity_path / entity_name
+            saved = orjson.loads(saved_file.read_bytes())
+            matched = set()
+            for key in saved:
+                stamp = pd.Timestamp(key).tz_convert("UTC")
+                if stamp in fold_markers:
+                    saved[key] = fold_markers[stamp]
+                    matched.add(stamp)
+            assert matched == set(fold_markers), "both UTC fallback hours must be saved"
+            saved_file.write_bytes(orjson.dumps(saved))
+
         for instant in publish_at:
             when = pd.Timestamp(instant)
             expected = when.round("h")
@@ -385,6 +406,7 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
                 session.post.assert_called_once()
                 payload = orjson.loads(session.post.call_args.kwargs["data"])
                 posted_w = round(float(with_publish.iloc[0]["P_PV"]), 2)
+                posted_w = fold_markers.get(expected, posted_w)
                 assert float(payload["state"]) == pytest.approx(posted_w, abs=0.01)
                 assert payload["attributes"]["unit_of_measurement"] == "W"
                 first_forecast = payload["attributes"]["forecasts"][0]
