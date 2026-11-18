@@ -384,12 +384,12 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
                 get_session.assert_awaited_once()
                 session.post.assert_called_once()
                 payload = orjson.loads(session.post.call_args.kwargs["data"])
-                posted_power = round(float(with_publish.iloc[0]["P_PV"]), 2)
-                assert float(payload["state"]) == pytest.approx(posted_power, abs=0.01)
+                posted_w = round(float(with_publish.iloc[0]["P_PV"]), 2)
+                assert float(payload["state"]) == pytest.approx(posted_w, abs=0.01)
                 assert payload["attributes"]["unit_of_measurement"] == "W"
                 first_forecast = payload["attributes"]["forecasts"][0]
                 assert pd.Timestamp(first_forecast["date"]).tz_convert("UTC") == expected
-                assert float(first_forecast["p_pv_forecast"]) == pytest.approx(posted_power, abs=0.01)
+                assert float(first_forecast["p_pv_forecast"]) == pytest.approx(posted_w, abs=0.01)
     finally:
         env.close()
 
