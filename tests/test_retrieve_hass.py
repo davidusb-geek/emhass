@@ -2441,6 +2441,59 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(counts[pd.Timestamp("2024-01-02 00:30", tz="UTC")], 1)
         self.assertEqual(int(counts.sum()), 6)
 
+    async def test_record_staleness_keeps_aux_on_df_final_grid_for_non_divisor_step(self):
+        """Regression: with a step that does not divide a day (7 min), each day is
+        resampled from its own midnight, so day 2 sits 5 minutes off day 1's grid
+        and the final cleanup keeps the days on day 1's grid. The aux must keep to the labels
+        df_final holds; with day 2's off-grid labels in it, the fill rejected the
+        whole series, day 1's eligible silence included."""
+        from emhass.battery_identification import apply_staleness_fill
+
+        p, s, load = "sensor.batt_power", "sensor.batt_soc", "sensor.load"
+
+        def rows(day, entries):
+            return [(f"{day}T{hhmm}:00+00:00", v) for hhmm, v in entries]
+
+        # Day 1 on a 7-min grid from 00:00: power reads twice in buckets 0, 1, 4
+        # and 5 and is silent in buckets 2 and 3 (00:14-00:28); SoC and the load
+        # read in every bucket, so the silence is witnessed.
+        d1_power = [("00:01", "100"), ("00:03", "110"), ("00:08", "120"), ("00:10", "130")]
+        d1_power += [("00:29", "200"), ("00:31", "210"), ("00:36", "220"), ("00:38", "230")]
+        d1_soc = [(f"00:{m:02d}", str(50 + m)) for m in (1, 3, 8, 10, 15, 17, 22, 24, 29, 31)]
+        d1_soc += [("00:36", "90"), ("00:38", "91")]
+        d1_load = [(f"00:{m:02d}", "500") for m in (2, 9, 16, 23, 30, 37)]
+        payloads = {
+            ("2024-01-01", p): self._ha_rows(p, rows("2024-01-01", d1_power)),
+            ("2024-01-01", s): self._ha_rows(s, rows("2024-01-01", d1_soc)),
+            ("2024-01-01", load): self._ha_rows(load, rows("2024-01-01", d1_load)),
+        }
+        for var, value in ((p, "300"), (s, "60"), (load, "400")):
+            payloads[("2024-01-02", var)] = self._ha_rows(
+                var, rows("2024-01-02", [("00:20", value), ("00:40", value)])
+            )
+        self.rh.freq = pd.Timedelta(minutes=7)
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        final = self.rh.df_final
+        self.assertEqual(final.index.freq, pd.Timedelta(minutes=7))
+        for aux in (self.rh.bucket_last_state, self.rh.bucket_row_count):
+            for var in (p, s, load):
+                self.assertTrue(aux[var].index.isin(final.index).all(), var)
+        for markers in self.rh.marker_buckets.values():
+            self.assertTrue(markers.isin(final.index).all())
+        # Day 1's silence (buckets 00:14 and 00:21) is held at 130 W.
+        out = apply_staleness_fill(
+            final,
+            p,
+            s,
+            self.rh.bucket_last_state,
+            self.rh.marker_buckets,
+            self.rh.freq,
+            row_counts=self.rh.bucket_row_count,
+        )
+        t0 = pd.Timestamp("2024-01-01 00:00", tz="UTC")
+        held = out.loc[[t0 + pd.Timedelta(minutes=14), t0 + pd.Timedelta(minutes=21)], p]
+        self.assertEqual(list(held), [130.0, 130.0])
+
     async def test_record_staleness_does_not_change_df_final(self):
         """The flag only records aux: df_final is identical with and without it,
         and a call without it leaves both attributes empty."""

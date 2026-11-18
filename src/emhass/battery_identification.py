@@ -285,12 +285,12 @@ def apply_staleness_fill(
       still.
 
     Nothing is filled at all unless both sensors of the pair report faster than
-    the step: in at least a fifth of the buckets where a sensor has a reading, it
-    has two or more. A sensor polled once per step or slower rarely puts two
-    readings in one bucket, so its empty buckets are changes nobody sampled, not
-    an unchanged value. The exception is a poll period equal to the step whose
-    poll instant sits on a bucket edge: timing jitter can then put two polls in
-    one bucket often enough to pass the check.
+    the step: each has at least one reading, and in at least a fifth of the
+    buckets where it has a reading, it has two or more. A sensor polled once per
+    step or slower rarely puts two readings in one bucket, so its empty buckets
+    are changes nobody sampled, not an unchanged value. The exception is a poll
+    period equal to the step whose poll instant sits on a bucket edge: timing
+    jitter can then put two polls in one bucket often enough to pass the check.
 
     The run and its fill value come from the retrieval's aux series, not from
     ``df``, so a bucket holding only Home Assistant's synthetic start-of-day row
@@ -384,11 +384,14 @@ def apply_staleness_fill(
         counts = on_grid(row_counts[col])
         if grid is None or counts is None:
             return df
-        if np.sum(counts >= 2) < min_multi_share * np.sum(counts >= 1):
+        # A sensor with no reading at all gives no reporting rate to check.
+        observed_buckets = np.sum(counts >= 1)
+        if observed_buckets == 0 or np.sum(counts >= 2) < min_multi_share * observed_buckets:
             if logger is not None:
                 logger.debug(
-                    "battery_identification: a battery sensor reports no faster than "
-                    "the optimization time step, so short silences are not held"
+                    "battery_identification: a battery sensor has no reading or reports "
+                    "no faster than the optimization time step, so short silences are "
+                    "not held"
                 )
             return df
         held[col] = grid

@@ -28,7 +28,6 @@ try:
     from emhass.battery_identification import (
         BatteryIdentification,
         BatteryIdentificationResult,
-        apply_staleness_fill,
     )
 
     HAVE_FEATURE = True
@@ -36,8 +35,14 @@ except ImportError:  # base commit without the feature
     HAVE_FEATURE = False
     BatteryIdentification = None
     BatteryIdentificationResult = None
-    apply_staleness_fill = None
     bi_module = None
+
+# Imported on its own, so a base commit without the #1073 fill still runs the
+# estimator tests above; the fill tests then error rather than skip.
+try:
+    from emhass.battery_identification import apply_staleness_fill
+except ImportError:
+    apply_staleness_fill = None
 
 
 def _make_history(
@@ -1979,6 +1984,17 @@ class TestStalenessFill(unittest.TestCase):
         power_counts.iloc[1] = 1  # 1 of 10
         self.assertIs(self._fill(df, last, counts=counts), df)
 
+    def test_sensor_with_no_reading_has_no_rate_and_stops_the_fill(self):
+        """Regression: a state of charge sensor with no real reading in the
+        retrieval has no reporting rate to check (0 of 0 buckets used to pass),
+        so a fast power sensor's silence is not held on the load alone."""
+        df, last, _ = _fill_case([100, 200, NAN, 400, 500, 600], [NAN] * 6, soc_df=[50.0] * 6)
+        self.assertTrue(last[_S].isna().all())
+        self.assertIs(self._fill(df, last), df)
+        # The same power history is held once the state of charge reports.
+        _, last_ok, _ = _fill_case([100, 200, NAN, 400, 500, 600], [50.0] * 6)
+        self.assertEqual(self._fill(df, last_ok)[_P].iloc[2], 200.0)
+
     def test_missing_row_counts_is_identity(self):
         """Without the readings per bucket the reporting rate cannot be checked."""
         df, last, _ = _fill_case([100, 200, NAN, 400], [10, 20, 30, 40])
@@ -2034,10 +2050,18 @@ class TestStalenessFill(unittest.TestCase):
         buckets on this four-row frame."""
         df, last, _ = _fill_case([100, 200, NAN, 400], [10, 20, 30, 40])
         counts = _fast_counts(last)
+        real_full = np.full
+
+        def bounded_full(shape, *args, **kwargs):
+            # Fail on the size asked for, before anything is allocated.
+            self.assertLessEqual(int(np.prod(shape)), 1000, f"grid of {shape} buckets")
+            return real_full(shape, *args, **kwargs)
+
         for step in (pd.Timedelta("1ns"), pd.Timedelta("1ms"), pd.Timedelta("1s"), 1):
-            started = time.perf_counter()
-            self.assertIs(apply_staleness_fill(df, _P, _S, last, {}, step, row_counts=counts), df)
-            self.assertLess(time.perf_counter() - started, 1.0)
+            with unittest.mock.patch.object(bi_module.np, "full", side_effect=bounded_full):
+                self.assertIs(
+                    apply_staleness_fill(df, _P, _S, last, {}, step, row_counts=counts), df
+                )
 
     def test_degenerate_inputs_do_not_raise(self):
         df, last, _ = _fill_case([100, NAN, 300], [10, NAN, 30])
