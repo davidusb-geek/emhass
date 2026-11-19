@@ -87,6 +87,20 @@ const INVERTER_SYNC_LIMIT = 100;
 //says (see updateInverterCurveAccess)
 const INVERTER_CURVE_PARAMS = ["inverter_power_curve_dc_ac", "inverter_power_curve_ac_dc"];
 
+const INVERTER_CARD_PARAMS = new Set([
+  "maximum_power_from_grid",
+  "maximum_power_to_grid",
+  "number_of_inverters",
+  "inverter_is_hybrid",
+  ...INVERTER_ARRAY_PARAMS,
+  ...INVERTER_CURVE_PARAMS,
+  "inverter_stress_segments",
+  "battery_inverter_index",
+  "pv_plant_inverter_index",
+]);
+
+let lastLoadedConfig = null;
+
 //a request still pending after this long fails with an error instead of leaving the page waiting
 //(browsers without AbortSignal.timeout keep waiting, as before)
 const REQUEST_TIMEOUT_MS = 30000;
@@ -131,6 +145,19 @@ window.onload = async function () {
     .addEventListener("click", () =>
       ToggleView(param_definitions, list_html, false)
     );
+
+  const yearEl = document.getElementById("current-year");
+  if (yearEl) {
+    yearEl.textContent = String(new Date().getFullYear());
+  }
+  const searchInput = document.getElementById("config-search-input");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => applyConfigFilters());
+  }
+  const levelSelect = document.getElementById("config-level-filter");
+  if (levelSelect) {
+    levelSelect.addEventListener("change", () => applyConfigFilters());
+  }
 };
 
 //obtain file containing information about parameters (definitions)
@@ -234,6 +261,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   if (list_html == null || config == null || param_definitions == null) {
     return 1;
   }
+  lastLoadedConfig = config;
 
   //list parameters used in the section headers
   //#610: number_of_batteries added to auto-sync the 15 per-battery array params
@@ -286,72 +314,28 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   //#1150: size the per-inverter lists to number_of_inverters
   setupInverterSync(param_definitions, config);
 
-  // Dynamic hiding for InfluxDB options
-  const use_influx_param = "use_influxdb";
-  const influx_related_params = [
-    "influxdb_host",
-    "influxdb_port",
-    "influxdb_username",
-    "influxdb_password",
-    "influxdb_database",
-    "influxdb_measurement",
-    "influxdb_retention_policy",
-    "influxdb_use_ssl",
-    "influxdb_verify_ssl"
-  ];
-
-  const influx_toggle_div = document.getElementById(use_influx_param);
-  if (influx_toggle_div) {
-    // The actual input is inside the div with the ID
-    const influx_input = influx_toggle_div.querySelector("input");
-    if (influx_input) {
-      const toggleInfluxVisibility = () => {
-        const isChecked = influx_input.checked;
-        influx_related_params.forEach(paramId => {
-          const paramDiv = document.getElementById(paramId);
-          if (paramDiv) {
-            paramDiv.style.display = isChecked ? "" : "none";
-          }
-        });
-      };
-
-      // Add listener and set initial state
-      influx_input.addEventListener("change", toggleInfluxVisibility);
-      toggleInfluxVisibility();
+  setupDynamicVisibility();
+  initConfigTabs();
+  setupThermalLoadsBuilder(config);
+  applyConfigFilters();
+  updateConfigSystemOverviewBadges(config);
+  const cfgContainer = document.getElementById("configuration-container");
+  if (
+    cfgContainer &&
+    typeof cfgContainer.addEventListener === "function" &&
+    !cfgContainer._boundOverviewBadges &&
+    (!cfgContainer.dataset || !cfgContainer.dataset.boundOverviewBadges)
+  ) {
+    cfgContainer._boundOverviewBadges = true;
+    if (cfgContainer.dataset) {
+      cfgContainer.dataset.boundOverviewBadges = "1";
     }
-  }
-
-  // ML Forecaster Visibility Logic
-  const forecast_method_param = "load_forecast_method";
-  const ml_related_params = [
-    "model_type",
-    "var_model",
-    "sklearn_model",
-    "regression_model",
-    "num_lags",
-    "split_date_delta",
-    "n_trials",
-    "perform_backtest"
-  ];
-
-  const forecast_method_div = document.getElementById(forecast_method_param);
-  if (forecast_method_div) {
-    const method_select = forecast_method_div.querySelector("select, input");
-    if (method_select) {
-      const toggleMLVisibility = () => {
-        const isML = method_select.value === "mlforecaster";
-        ml_related_params.forEach(paramId => {
-          const paramDiv = document.getElementById(paramId);
-          if (paramDiv) {
-            paramDiv.style.display = isML ? "" : "none";
-          }
-        });
-      };
-      // Add listener and set initial state
-      method_select.addEventListener("change", toggleMLVisibility);
-      method_select.addEventListener("input", toggleMLVisibility); // Handle both select and text input types
-      toggleMLVisibility();
-    }
+    cfgContainer.addEventListener("change", () =>
+      updateConfigSystemOverviewBadges(lastLoadedConfig)
+    );
+    cfgContainer.addEventListener("input", () =>
+      updateConfigSystemOverviewBadges(lastLoadedConfig)
+    );
   }
 }
 
@@ -364,12 +348,25 @@ function buildParamContainers(
 ) {
   //get the section container element
   let SectionContainer = document.getElementById(section);
+  if (SectionContainer == null) {
+    console.error("Unable to find Section container: " + section);
+    return 0;
+  }
   //get the body container inside the section (where the parameters will be appended)
   let SectionParamElement = SectionContainer.getElementsByClassName("section-body");
-  if (SectionContainer == null || SectionParamElement.length == 0) {
+  if (SectionParamElement.length == 0) {
     console.error("Unable to find Section container or Section Body");
     return 0;
   }
+
+  const invertersSection =
+    section === "System" ? document.getElementById("Inverters") : null;
+  const invertersBodies = invertersSection
+    ? invertersSection.getElementsByClassName("section-body")
+    : [];
+  const invertersTargetBody =
+    invertersBodies.length > 0 ? invertersBodies[0] : null;
+  let routedToInverters = false;
 
   //loop though the sections parameters in definition file, generate and append param (div) elements for the section
   for (const [
@@ -461,8 +458,21 @@ function buildParamContainers(
     const description = document.createElement("p");
     description.textContent = parameter_definition_object["Description"];
     param_container.append(description);
-    SectionParamElement[0].append(param_container);
+
+    const useInvertersCard =
+      invertersTargetBody !== null &&
+      INVERTER_CARD_PARAMS.has(parameter_definition_name);
+    if (useInvertersCard) {
+      routedToInverters = true;
+    }
+    const targetBody = useInvertersCard ? invertersTargetBody : SectionParamElement[0];
+    targetBody.append(param_container);
   }
+
+  const containerTargets =
+    routedToInverters && invertersSection
+      ? [SectionContainer, invertersSection]
+      : [SectionContainer];
 
   //after looping though, build and appending the parameters in the corresponding section:
   //create add button (array plus) event listeners
@@ -472,29 +482,31 @@ function buildParamContainers(
   //not in this function's scope - the generic +/- path threw ReferenceError on
   //click; it was only ever reached by load_peak_hour_periods until #540 Part B
   //routed capacity_cost_per_kw / capacity_charge_interval_timesteps through it.)
-  let plus = SectionContainer.querySelectorAll(".input-plus");
-  plus.forEach(function (answer) {
-    answer.addEventListener("click", () =>
-      plusElements(
-        answer.dataset.paramName,
-        { [section]: section_parameters_definitions },
-        section,
-        {}
-      )
-    );
-  });
+  containerTargets.forEach(function (container) {
+    let plus = container.querySelectorAll(".input-plus");
+    plus.forEach(function (answer) {
+      answer.addEventListener("click", () =>
+        plusElements(
+          answer.dataset.paramName,
+          { [section]: section_parameters_definitions },
+          section,
+          {}
+        )
+      );
+    });
 
-  //create subtract button (array minus) event listeners
-  let minus = SectionContainer.querySelectorAll(".input-minus");
-  minus.forEach(function (answer) {
-    answer.addEventListener("click", () => minusElements(answer.dataset.paramName));
-  });
+    //create subtract button (array minus) event listeners
+    let minus = container.querySelectorAll(".input-minus");
+    minus.forEach(function (answer) {
+      answer.addEventListener("click", () => minusElements(answer.dataset.paramName));
+    });
 
-  //check initial checkbox state, check "value" of input and match to "checked" value
-  let checkbox = SectionContainer.querySelectorAll("input[type='checkbox']");
-  checkbox.forEach(function (answer) {
-    let value = answer.value === "true";
-    answer.checked = value;
+    //check initial checkbox state, check "value" of input and match to "checked" value
+    let checkbox = container.querySelectorAll("input[type='checkbox']");
+    checkbox.forEach(function (answer) {
+      let value = answer.value === "true";
+      answer.checked = value;
+    });
   });
 
   //loop though sections params again, check if param has a requirement, if so add a event listener to the required param input
@@ -879,9 +891,12 @@ function headerElement(element, param_definitions, config) {
           "number_of_batteries",
         ]);
         element.checked = true;
+        setupDynamicVisibility();
       } else {
         param_container.innerHTML = "";
+        applyConfigFilters();
       }
+      updateConfigSystemOverviewBadges(lastLoadedConfig || config);
       break;
 
     //if set_use_pv, add or remove PV section (inc. related params)
@@ -892,9 +907,12 @@ function headerElement(element, param_definitions, config) {
           "set_use_pv",
         ]);
         element.checked = true;
+        setupDynamicVisibility();
       } else {
         param_container.innerHTML = "";
+        applyConfigFilters();
       }
+      updateConfigSystemOverviewBadges(lastLoadedConfig || config);
       break;
 
     //if number_of_deferrable_loads, the number of inputs in the "Deferrable Loads" section should add up to number_of_deferrable_loads value in header
@@ -992,7 +1010,11 @@ function parseInverterCount(raw) {
 
 //#1150: the first input of a param row, or undefined when the row is missing
 function paramInputOf(param_id) {
-  return document.getElementById(param_id)?.getElementsByClassName("param_input")[0];
+  const el = document.getElementById(param_id);
+  if (!el || typeof el.getElementsByClassName !== "function") {
+    return undefined;
+  }
+  return el.getElementsByClassName("param_input")[0];
 }
 
 //#1150: keep the INVERTER_ARRAY_PARAMS at number_of_inverters entries, the way
@@ -1288,6 +1310,22 @@ async function saveConfiguration(param_definitions) {
         }
       }
     }
+    const builtThermalList =
+      typeof buildThermalLoadsConfig === "function"
+        ? buildThermalLoadsConfig()
+        : null;
+    if (builtThermalList !== null) {
+      const hasThermalModel = builtThermalList.some(
+        (entry) => entry && Object.keys(entry).length > 0
+      );
+      const hadExistingThermal =
+        typeof lastLoadedConfig !== "undefined" &&
+        lastLoadedConfig &&
+        Array.isArray(lastLoadedConfig.def_load_config);
+      if (hasThermalModel || hadExistingThermal) {
+        config["def_load_config"] = builtThermalList;
+      }
+    }
   }
 
   //if box view, extract json from box view
@@ -1377,16 +1415,26 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   //remove contents of current view
   configuration_container.innerHTML = "";
   //build new view
+  const filterBar =
+    typeof document.querySelector === "function"
+      ? document.querySelector(".config-filter-bar")
+      : null;
   switch (selected) {
     case "box":
       //load list
       loadConfigurationListView(param_definitions, config, list_html);
       yaml_button.style.display = "none";
+      if (filterBar) {
+        filterBar.style.display = "";
+      }
       break;
     case "list":
       //load box
       loadConfigurationBoxPage(config);
       yaml_button.style.display = "block";
+      if (filterBar) {
+        filterBar.style.display = "none";
+      }
       break;
   }
 }
@@ -1400,15 +1448,27 @@ async function loadConfigurationBoxPage(config) {
   }
   //append configuration container with textbox area
   configuration_container.innerHTML = `
-      <textarea id="config-box" rows="30" placeholder="{}"></textarea>
+      <textarea id="config-box" rows="30" placeholder="{}" aria-label="Configuration JSON or YAML text editor"></textarea>
       `;
   //set created textarea box with retrieved config
   //.value, not innerHTML: a textarea's HTML parsing would decode &amp; etc. in the data (#1290)
-  document.getElementById("config-box").value = JSON.stringify(
-    config,
-    null,
-    2
-  );
+  const box = document.getElementById("config-box");
+  box.value = JSON.stringify(config, null, 2);
+  lastLoadedConfig = config;
+  updateConfigSystemOverviewBadges(config);
+  if (typeof box.addEventListener === "function") {
+    box.addEventListener("input", () => {
+      try {
+        const parsed = JSON.parse(box.value);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          lastLoadedConfig = parsed;
+          updateConfigSystemOverviewBadges(parsed);
+        }
+      } catch (_err) {
+        // ignore incomplete JSON/YAML while editing
+      }
+    });
+  }
 }
 
 //function in control of status icons and alert box from a fetch request
@@ -1420,6 +1480,7 @@ async function showChangeStatus(status, logJson) {
   }
   if (status === 200 || status === 201) {
     //if status is 200 or 201, then show a tick
+    loading.classList.remove("loading");
     loading.innerHTML = `<p class=tick>&#x2713;</p>`;
     //a request that succeeds ends the failure shown for the one before it
     document.getElementById("alert").style.display = "none";
@@ -1468,7 +1529,7 @@ async function yamlToJson() {
       body: config_box_element.value,
     });
     let response_status = response.status; //return status
-    if (response_status == 201) {
+    if (response_status == 200 || response_status == 201) {
       showChangeStatus(response_status, {});
       let blob = await response.blob(); //get data blob
       config = await new Response(blob).json(); //obtain json from blob
@@ -1478,4 +1539,974 @@ async function yamlToJson() {
     }
   }
   return 0;
+}
+
+const BASIC_PARAM_IDS = new Set([
+  "costfun",
+  "optimization_time_step",
+  "historic_days_to_retrieve",
+  "delta_forecast_daily",
+  "load_forecast_method",
+  "sensor_power_photovoltaics",
+  "sensor_power_load_no_var_loads",
+  "load_cost_forecast_method",
+  "load_peak_hour_periods",
+  "load_peak_hours_cost",
+  "load_offpeak_hours_cost",
+  "production_price_forecast_method",
+  "photovoltaic_production_sell_price",
+  "capacity_cost_per_kw",
+  "capacity_charge_interval_timesteps",
+  "set_use_pv",
+  "weather_forecast_method",
+  "pv_module_model",
+  "pv_inverter_model",
+  "surface_tilt",
+  "surface_azimuth",
+  "modules_per_string",
+  "strings_per_inverter",
+  "inverter_ac_output_max",
+  "maximum_power_from_grid",
+  "maximum_power_to_grid",
+  "set_use_battery",
+  "number_of_batteries",
+  "battery_nominal_energy_capacity",
+  "battery_discharge_power_max",
+  "battery_charge_power_max",
+  "battery_minimum_state_of_charge",
+  "battery_maximum_state_of_charge",
+  "battery_target_state_of_charge",
+  "number_of_deferrable_loads",
+  "nominal_power_of_deferrable_loads",
+  "operating_hours_of_each_deferrable_load",
+  "start_timesteps_of_each_deferrable_load",
+  "end_timesteps_of_each_deferrable_load",
+  "continual_publish",
+  "logging_level",
+]);
+
+let activeConfigTab = "all";
+
+function initConfigTabs() {
+  if (typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  const buttons = Array.from(document.querySelectorAll(".config-tab-btn"));
+  const cards = Array.from(document.querySelectorAll(".section-card"));
+  if (!buttons.length || !cards.length) {
+    return;
+  }
+
+  function selectTab(tabId) {
+    activeConfigTab = tabId;
+    buttons.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset?.configTab === tabId);
+    });
+    cards.forEach((card) => {
+      card.style.display = tabId === "all" || card.id === tabId ? "" : "none";
+    });
+  }
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectTab(btn.dataset?.configTab || "all");
+      applyConfigFilters();
+    });
+  });
+
+  selectTab(activeConfigTab);
+}
+
+function resolveControllerInput(controllerId) {
+  const controllerDiv = document.getElementById(controllerId);
+  if (!controllerDiv) {
+    return null;
+  }
+  if (controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT") {
+    return controllerDiv;
+  }
+  return typeof controllerDiv.querySelector === "function"
+    ? controllerDiv.querySelector("input, select")
+    : null;
+}
+
+function setupDynamicVisibility() {
+  const rules = [
+    {
+      controller: "use_influxdb",
+      targets: [
+        "influxdb_host",
+        "influxdb_port",
+        "influxdb_username",
+        "influxdb_password",
+        "influxdb_database",
+        "influxdb_measurement",
+        "influxdb_retention_policy",
+        "influxdb_use_ssl",
+        "influxdb_verify_ssl",
+      ],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "use_victoriametrics",
+      targets: [
+        "victoriametrics_host",
+        "victoriametrics_port",
+        "victoriametrics_database",
+        "victoriametrics_metric_regex",
+        "victoriametrics_entity_label",
+        "victoriametrics_use_ssl",
+        "victoriametrics_verify_ssl",
+      ],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "load_forecast_method",
+      targets: [
+        "mlforecaster_weather_features",
+        "model_type",
+        "var_model",
+        "sklearn_model",
+        "regression_model",
+        "num_lags",
+        "split_date_delta",
+        "n_trials",
+        "perform_backtest",
+      ],
+      when: (el) => el.value === "mlforecaster",
+    },
+    {
+      controller: "optimization_backend",
+      targets: ["site"],
+      when: (el) => el.value === "dantzig_wolfe",
+    },
+    {
+      controller: "load_cost_forecast_method",
+      targets: [
+        "load_peak_hour_periods",
+        "tariff_schedule_time_zone",
+        "load_peak_hours_cost",
+        "load_offpeak_hours_cost",
+      ],
+      when: (el) => el.value === "hp_hc_periods",
+    },
+    {
+      controller: "production_price_forecast_method",
+      targets: ["photovoltaic_production_sell_price"],
+      when: (el) => el.value === "constant",
+    },
+    {
+      controller: "set_use_adjusted_pv",
+      targets: [
+        "adjusted_pv_regression_model",
+        "adjusted_pv_solar_elevation_threshold",
+        "adjusted_pv_model_max_age",
+      ],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "weather_forecast_method",
+      targets: ["open_meteo_cache_max_age"],
+      when: (el) => el.value === "open-meteo",
+    },
+    {
+      controller: "weather_forecast_method",
+      targets: ["weather_forecast_pv_quantile_bias"],
+      when: (el) => el.value === "solcast",
+    },
+    {
+      controller: "set_use_battery_identification",
+      targets: [
+        "battery_identification_trust_tier",
+        "battery_identification_model_max_age",
+      ],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "set_battery_dynamic",
+      targets: ["battery_dynamic_max", "battery_dynamic_min"],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "cop_solver",
+      targets: ["cop_solver_tolerance", "cop_hx_approach"],
+      when: (el) => el.value !== "static",
+    },
+    {
+      controller: "inverter_is_hybrid",
+      targets: ["inverter_ac_input_max", "inverter_efficiency_ac_dc"],
+      when: (el) => Boolean(el.checked),
+    },
+    {
+      controller: "inverter_is_hybrid",
+      targets: ["inverter_power_curve_ac_dc"],
+      when: (el) => {
+        const count = parseInverterCount(paramInputOf("number_of_inverters")?.value);
+        return Boolean(el.checked) || (count !== null && count > 1);
+      },
+    },
+    {
+      controller: "number_of_inverters",
+      targets: ["inverter_power_curve_ac_dc"],
+      when: (el) => {
+        const count = parseInverterCount(el.value);
+        const hybrid = Boolean(paramInputOf("inverter_is_hybrid")?.checked);
+        return hybrid || (count !== null && count > 1);
+      },
+    },
+  ];
+
+  function evaluateAllRules() {
+    const targetVisibility = new Map();
+    rules.forEach((rule) => {
+      const ctrl = resolveControllerInput(rule.controller);
+      if (!ctrl) {
+        return;
+      }
+      const visible = rule.when(ctrl);
+      rule.targets.forEach((targetId) => {
+        // Track whether at least one matching rule says visible, vs hidden
+        if (!targetVisibility.has(targetId)) {
+          targetVisibility.set(targetId, visible);
+        } else if (visible) {
+          targetVisibility.set(targetId, true);
+        }
+      });
+    });
+
+    targetVisibility.forEach((visible, targetId) => {
+      const el = document.getElementById(targetId);
+      if (!el || !el.dataset) {
+        return;
+      }
+      el.dataset.dynamicHidden = visible ? "0" : "1";
+    });
+    applyConfigFilters();
+  }
+
+  const boundControllers = new Set();
+  rules.forEach((rule) => {
+    if (boundControllers.has(rule.controller)) {
+      return;
+    }
+    const ctrl = resolveControllerInput(rule.controller);
+    if (!ctrl) {
+      return;
+    }
+    boundControllers.add(rule.controller);
+    const alreadyBound =
+      Boolean(ctrl._boundDynVis) ||
+      ctrl.dataset?.boundDynVis === "1";
+    if (!alreadyBound && typeof ctrl.addEventListener === "function") {
+      ctrl._boundDynVis = true;
+      if (ctrl.dataset) {
+        ctrl.dataset.boundDynVis = "1";
+      }
+      ctrl.addEventListener("change", evaluateAllRules);
+      ctrl.addEventListener("input", evaluateAllRules);
+    }
+  });
+
+  evaluateAllRules();
+}
+
+function applyConfigFilters() {
+  if (typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  const searchEl = document.getElementById("config-search-input");
+  const levelEl = document.getElementById("config-level-filter");
+  const query = searchEl ? searchEl.value.trim().toLowerCase() : "";
+  const level = levelEl ? levelEl.value : "all";
+
+  const params = Array.from(document.querySelectorAll(".section-card .param"));
+  params.forEach((paramDiv) => {
+    const paramId = paramDiv.id || "";
+    const text = paramDiv.textContent ? paramDiv.textContent.toLowerCase() : "";
+    const dynHidden = paramDiv.dataset?.dynamicHidden === "1";
+    const matchQuery = !query || paramId.toLowerCase().includes(query) || text.includes(query);
+    const matchLevel = level === "all" || BASIC_PARAM_IDS.has(paramId);
+
+    // Explicit search surfaces matching parameters even if collapsed by a dynamic toggle
+    const show = query ? matchQuery && matchLevel : !dynHidden && matchLevel;
+    paramDiv.style.display = show ? "" : "none";
+  });
+
+  const cards = Array.from(document.querySelectorAll(".section-card"));
+  cards.forEach((card) => {
+    if (activeConfigTab !== "all" && card.id !== activeConfigTab && !query) {
+      card.style.display = "none";
+      return;
+    }
+    if (!query) {
+      card.style.display = activeConfigTab === "all" || card.id === activeConfigTab ? "" : "none";
+      return;
+    }
+    const visibleParams = Array.from(card.querySelectorAll(".param")).some(
+      (p) => p.style.display !== "none"
+    );
+    card.style.display = visibleParams ? "" : "none";
+  });
+}
+
+let thermalLoadStates = [];
+
+function parseTempArrayText(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((x) => {
+      if (x === null || x === undefined || x === "") {
+        return null;
+      }
+      const n = Number(x);
+      return Number.isFinite(n) ? n : null;
+    });
+  }
+  const str = String(raw || "").trim();
+  if (!str) {
+    return [];
+  }
+  if (str.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(str);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => {
+          if (x === null || x === undefined || x === "") {
+            return null;
+          }
+          const n = Number(x);
+          return Number.isFinite(n) ? n : null;
+        });
+      }
+    } catch (_err) {
+      // fall through to CSV split
+    }
+  }
+  const tokens = [];
+  for (const chunk of str.split(/[,;]/)) {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      tokens.push("");
+    } else if (/\s/.test(trimmed)) {
+      tokens.push(...trimmed.split(/\s+/));
+    } else {
+      tokens.push(trimmed);
+    }
+  }
+  return tokens.map((token) => {
+    if (!token || token.toLowerCase() === "null" || token.toLowerCase() === "none") {
+      return null;
+    }
+    const n = Number(token);
+    return Number.isFinite(n) ? n : null;
+  });
+}
+
+// 7 days at 1-minute resolution: upper guard against accidental huge allocations
+const MAX_THERMAL_SCHEDULE_STEPS = 7 * 24 * 60;
+
+function getLocalHourInTimeZone(dateObj, timeZone) {
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(dateObj);
+      const hPart = parts.find((p) => p.type === "hour");
+      const mPart = parts.find((p) => p.type === "minute");
+      if (hPart && mPart) {
+        return Number(hPart.value) + Number(mPart.value) / 60;
+      }
+    } catch (_err) {
+      // fall back to local Date methods if timeZone string is invalid
+    }
+  }
+  return dateObj.getHours() + dateObj.getMinutes() / 60;
+}
+
+function getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, timeZone) {
+  if (!Number.isFinite(stepMin) || stepMin <= 0 || !Number.isFinite(days) || days <= 0) {
+    return null;
+  }
+  const baseDate = firstStepDate instanceof Date ? firstStepDate : new Date();
+  const startMs = baseDate.getTime();
+  const wholeDays = Math.max(1, Math.floor(days));
+  const endDate = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate() + wholeDays,
+    baseDate.getHours(),
+    baseDate.getMinutes(),
+    0,
+    0
+  );
+  // If browser timezone differs from configured IANA zone, compute calendar end via elapsed approx
+  // refined to match local hour across DST transitions.
+  let endMs = endDate.getTime();
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const targetHour = getLocalHourInTimeZone(baseDate, timeZone);
+      let guessMs = startMs + wholeDays * 24 * 3600 * 1000;
+      for (const offsetMin of [0, -60, 60, -30, 30]) {
+        const cand = new Date(guessMs + offsetMin * 60000);
+        if (Math.abs(getLocalHourInTimeZone(cand, timeZone) - targetHour) < 1e-3) {
+          endMs = cand.getTime();
+          break;
+        }
+      }
+    } catch (_err) {
+      // keep endDate
+    }
+  }
+  const totalMin = Math.max(stepMin, Math.round((endMs - startMs) / 60000));
+  return Math.max(1, Math.round(totalMin / stepMin));
+}
+
+function getConfiguredHorizonSteps() {
+  const stepEl = paramInputOf("optimization_time_step");
+  const daysEl = paramInputOf("delta_forecast_daily");
+  const stepMin = stepEl ? Number(stepEl.value) : 30;
+  const days = daysEl ? Number(daysEl.value) : 1;
+  if (!Number.isFinite(stepMin) || stepMin <= 0 || !Number.isFinite(days) || days <= 0) {
+    return 48;
+  }
+  const tz = paramInputOf("time_zone")?.value || lastLoadedConfig?.time_zone || "";
+  const steps = getDstAdjustedHorizonSteps(stepMin, days, new Date(), tz);
+  return steps ?? Math.max(1, Math.round((days * 24 * 60) / stepMin));
+}
+
+function buildZonedStepDate(referenceDate, targetHour, timeZone) {
+  const h = Math.floor(targetHour);
+  const m = Math.round((targetHour % 1) * 60);
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+      const getParts = (d) => {
+        const map = {};
+        for (const p of fmt.formatToParts(d)) {
+          map[p.type] = Number(p.value);
+        }
+        return map;
+      };
+      const ref = getParts(referenceDate);
+      const targetUtcMs = Date.UTC(ref.year, ref.month - 1, ref.day, h, m, 0, 0);
+      let guessMs = targetUtcMs;
+      for (let iter = 0; iter < 2; iter++) {
+        const cur = getParts(new Date(guessMs));
+        const curAsUtcMs = Date.UTC(cur.year, cur.month - 1, cur.day, cur.hour, cur.minute, 0, 0);
+        const diffMs = targetUtcMs - curAsUtcMs;
+        if (diffMs === 0) {
+          break;
+        }
+        guessMs += diffMs;
+      }
+      return new Date(guessMs);
+    } catch (_err) {
+      // fall back to browser local timezone if timeZone string is invalid
+    }
+  }
+  return new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    h,
+    m,
+    0,
+    0
+  );
+}
+
+function buildDayNightTempArrays(opts) {
+  const stepEl = paramInputOf("optimization_time_step");
+  const daysEl = paramInputOf("delta_forecast_daily");
+  const stepMin = stepEl ? Number(stepEl.value) : 30;
+  const days = daysEl ? Number(daysEl.value) : 1;
+  if (!Number.isFinite(stepMin) || stepMin <= 0) {
+    return { error: "optimization_time_step must be a positive number of minutes." };
+  }
+  if (!Number.isFinite(days) || days <= 0) {
+    return { error: "delta_forecast_daily must be a positive number of days." };
+  }
+  const rawStart = Number(opts.dayStartHour);
+  const rawEnd = Number(opts.dayEndHour);
+  const rawFirst = Number(opts.firstStepHour);
+  const startH = Number.isFinite(rawStart) ? rawStart : 7;
+  const endH = Number.isFinite(rawEnd) ? rawEnd : 22;
+  const firstStepHour = Number.isFinite(rawFirst) ? rawFirst : 0;
+  const tz =
+    opts.timeZone || paramInputOf("time_zone")?.value || lastLoadedConfig?.time_zone || "";
+
+  const now = opts.referenceDate instanceof Date ? opts.referenceDate : new Date();
+  const firstStepDate = buildZonedStepDate(now, firstStepHour, tz);
+  const horizon =
+    Number.isFinite(Number(opts.horizon)) && Number(opts.horizon) > 0
+      ? Number(opts.horizon)
+      : getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, tz);
+  if (!Number.isFinite(horizon) || horizon < 1 || horizon > MAX_THERMAL_SCHEDULE_STEPS) {
+    return {
+      error: `Computed thermal schedule length (${horizon}) exceeds the supported limit (${MAX_THERMAL_SCHEDULE_STEPS} steps). Check optimization_time_step and delta_forecast_daily.`,
+    };
+  }
+  const minDay = Number(opts.minDay);
+  const minNight = Number(opts.minNight);
+  const maxDay = Number(opts.maxDay);
+  const maxNight = Number(opts.maxNight);
+
+  const minArr = [];
+  const maxArr = [];
+  const startMs = firstStepDate.getTime();
+  for (let i = 0; i < horizon; i++) {
+    const stepDate = new Date(startMs + i * stepMin * 60000);
+    const hour = getLocalHourInTimeZone(stepDate, tz);
+    const isDay =
+      startH <= endH ? hour >= startH && hour < endH : hour >= startH || hour < endH;
+    minArr.push(isDay ? minDay : minNight);
+    maxArr.push(isDay ? maxDay : maxNight);
+  }
+  return { minArr, maxArr };
+}
+
+function renderThermalLoadCards(builderEl, count) {
+  while (thermalLoadStates.length < count) {
+    thermalLoadStates.push({ kind: "standard", extra: {} });
+  }
+
+  let html = '<div class="thermal-builder-header">';
+  html += "<h4>Thermal &amp; Heat Pump Model Configurator (<code>def_load_config</code>)</h4>";
+  html +=
+    '<p class="section-hint">Configure Simple Thermal Models (<code>thermal_config</code>) or Heat Pumps (<code>thermal_battery</code>) per load with a Day/Night comfort schedule generator anchored to your first optimization step hour.</p>';
+  html += "</div>";
+
+  if (count <= 0) {
+    html += '<p class="muted-hint">Set Number of Loads &gt; 0 to configure deferrable or thermal loads.</p>';
+    builderEl.innerHTML = html;
+    return;
+  }
+
+  html += '<div class="thermal-cards-grid">';
+  for (let idx = 0; idx < count; idx++) {
+    const state = thermalLoadStates[idx] || { kind: "standard", extra: {} };
+    const tc = state.thermal_config || {};
+    const tb = state.thermal_battery || {};
+    const extraKeys = state.extra ? Object.keys(state.extra) : [];
+    const horizon = getConfiguredHorizonSteps();
+
+    html += `<div class="thermal-load-card" data-load-index="${idx}">`;
+    html += `<div class="thermal-load-card-head"><strong>Load ${idx}</strong>`;
+    html += `<select class="thermal-kind-select form-select" data-load-index="${idx}" aria-label="Deferrable load ${idx} thermal model type">`;
+    html += `<option value="standard"${state.kind === "standard" ? " selected" : ""}>Standard Deferrable Load ({})</option>`;
+    html += `<option value="thermal_config"${state.kind === "thermal_config" ? " selected" : ""}>Simple Thermal Load (thermal_config)</option>`;
+    html += `<option value="thermal_battery"${state.kind === "thermal_battery" ? " selected" : ""}>Heat Pump / Thermal Battery (thermal_battery)</option>`;
+    if (state.kind === "passthrough") {
+      html += `<option value="passthrough" selected>Custom / Preserved Entry (${escapeHtml(extraKeys.join(", "))})</option>`;
+    }
+    html += "</select></div>";
+
+    if (state.kind === "passthrough") {
+      html += `<p class="muted-hint">Preserving existing configuration keys: <code>${escapeHtml(
+        extraKeys.join(", ")
+      )}</code>. Switch model type above only if you intend to replace them.</p>`;
+    } else if (state.kind === "standard") {
+      html +=
+        '<p class="muted-hint">Standard electrical load (no thermal envelope simulation attached; exports as <code>{}</code>).</p>';
+    } else if (state.kind === "thermal_config") {
+      const minStr = Array.isArray(tc.min_temperatures)
+        ? tc.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
+        : "20";
+      const maxStr = Array.isArray(tc.max_temperatures)
+        ? tc.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
+        : "24";
+      html += '<div class="thermal-fields-grid">';
+      html += `<label>Heating rate (°C/h)<input type="number" step="any" data-field="heating_rate" value="${tc.heating_rate ?? 5.0}" aria-label="Load ${idx} heating rate"></label>`;
+      html += `<label>Cooling constant<input type="number" step="any" data-field="cooling_constant" value="${tc.cooling_constant ?? 0.1}" aria-label="Load ${idx} cooling constant"></label>`;
+      html += `<label>Thermal inertia (h)<input type="number" step="any" data-field="thermal_inertia" value="${tc.thermal_inertia ?? 0.0}" aria-label="Load ${idx} thermal inertia"></label>`;
+      html += `<label>Start temp (°C)<input type="number" step="any" data-field="start_temperature" value="${tc.start_temperature ?? 20.0}" aria-label="Load ${idx} start temperature"></label>`;
+      html += `<label>Sense<select data-field="sense" aria-label="Load ${idx} thermal sense"><option value="heat"${(tc.sense || "heat") === "heat" ? " selected" : ""}>heat</option><option value="cool"${tc.sense === "cool" ? " selected" : ""}>cool</option></select></label>`;
+      html += "</div>";
+      html += `<div class="thermal-schedule-helper">
+        <span>Day/Night Comfort Schedule (${horizon} steps):</span>
+        <div class="thermal-schedule-inputs">
+          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
+          <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
+          <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
+          Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
+          <input type="number" step="0.5" class="sched-min-night" value="18" aria-label="Load ${idx} night min temperature"> °C |
+          Max: <input type="number" step="0.5" class="sched-max-day" value="23" aria-label="Load ${idx} max temperature"> °C
+          <button type="button" class="tool-btn apply-sched-btn" data-load-index="${idx}">Fill Schedule</button>
+        </div>
+      </div>`;
+      html += `<div class="thermal-array-fields">
+        <label>min_temperatures (comma-separated °C)<input type="text" data-field="min_temperatures" value="${escapeHtml(minStr)}" aria-label="Load ${idx} min temperatures"></label>
+        <label>max_temperatures (comma-separated °C)<input type="text" data-field="max_temperatures" value="${escapeHtml(maxStr)}" aria-label="Load ${idx} max temperatures"></label>
+      </div>`;
+    } else if (state.kind === "thermal_battery") {
+      const minStr = Array.isArray(tb.min_temperatures)
+        ? tb.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
+        : "20";
+      const maxStr = Array.isArray(tb.max_temperatures)
+        ? tb.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
+        : "26";
+      html += '<div class="thermal-fields-grid">';
+      html += `<label>Supply temp (°C)<input type="number" step="any" data-field="supply_temperature" value="${tb.supply_temperature ?? 35.0}" aria-label="Load ${idx} supply temperature"></label>`;
+      html += `<label>Buffer volume (m³/unit)<input type="number" step="any" data-field="volume" value="${tb.volume ?? 14.91}" aria-label="Load ${idx} volume"></label>`;
+      html += `<label>Start temp (°C)<input type="number" step="any" data-field="start_temperature" value="${tb.start_temperature ?? 22.0}" aria-label="Load ${idx} start temperature"></label>`;
+      html += `<label>Carnot efficiency<input type="number" step="any" data-field="carnot_efficiency" value="${tb.carnot_efficiency ?? 0.45}" aria-label="Load ${idx} Carnot efficiency"></label>`;
+      html += `<label>U-value<input type="number" step="any" data-field="u_value" value="${tb.u_value ?? 0.326}" aria-label="Load ${idx} U-value"></label>`;
+      html += `<label>Envelope area (m²)<input type="number" step="any" data-field="envelope_area" value="${tb.envelope_area ?? 649.4}" aria-label="Load ${idx} envelope area"></label>`;
+      html += `<label>Ventilation rate<input type="number" step="any" data-field="ventilation_rate" value="${tb.ventilation_rate ?? 0.12}" aria-label="Load ${idx} ventilation rate"></label>`;
+      html += `<label>Heated volume (m³)<input type="number" step="any" data-field="heated_volume" value="${tb.heated_volume ?? 573.5}" aria-label="Load ${idx} heated volume"></label>`;
+      html += "</div>";
+      html += `<div class="thermal-schedule-helper">
+        <span>Day/Night Comfort Schedule (${horizon} steps):</span>
+        <div class="thermal-schedule-inputs">
+          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
+          <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
+          <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
+          Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
+          <input type="number" step="0.5" class="sched-min-night" value="18.5" aria-label="Load ${idx} night min temperature"> °C |
+          Max: <input type="number" step="0.5" class="sched-max-day" value="26" aria-label="Load ${idx} max temperature"> °C
+          <button type="button" class="tool-btn apply-sched-btn" data-load-index="${idx}">Fill Schedule</button>
+        </div>
+      </div>`;
+      html += `<div class="thermal-array-fields">
+        <label>min_temperatures (comma-separated °C)<input type="text" data-field="min_temperatures" value="${escapeHtml(minStr)}" aria-label="Load ${idx} min temperatures"></label>
+        <label>max_temperatures (comma-separated °C)<input type="text" data-field="max_temperatures" value="${escapeHtml(maxStr)}" aria-label="Load ${idx} max temperatures"></label>
+      </div>`;
+    }
+    html += "</div>";
+  }
+  html += "</div>";
+  builderEl.innerHTML = html;
+
+  builderEl.querySelectorAll(".thermal-kind-select").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const i = Number(sel.dataset?.loadIndex);
+      const kind = sel.value;
+      const existingExtra = thermalLoadStates[i] ? thermalLoadStates[i].extra || {} : {};
+      if (kind === "passthrough") {
+        thermalLoadStates[i] = { kind: "passthrough", extra: existingExtra };
+      } else if (kind === "standard") {
+        thermalLoadStates[i] = { kind: "standard", extra: {} };
+      } else if (kind === "thermal_config") {
+        thermalLoadStates[i] = {
+          kind: "thermal_config",
+          extra: existingExtra,
+          thermal_config: thermalLoadStates[i].thermal_config || {
+            heating_rate: 5.0,
+            cooling_constant: 0.1,
+            thermal_inertia: 0.0,
+            start_temperature: 20.0,
+            sense: "heat",
+            min_temperatures: [20.0],
+            max_temperatures: [24.0],
+          },
+        };
+      } else {
+        thermalLoadStates[i] = {
+          kind: "thermal_battery",
+          extra: existingExtra,
+          thermal_battery: thermalLoadStates[i].thermal_battery || {
+            supply_temperature: 35.0,
+            volume: 14.91,
+            start_temperature: 22.0,
+            carnot_efficiency: 0.45,
+            u_value: 0.326,
+            envelope_area: 649.4,
+            ventilation_rate: 0.12,
+            heated_volume: 573.5,
+            min_temperatures: [20.0],
+            max_temperatures: [26.0],
+          },
+        };
+      }
+      renderThermalLoadCards(builderEl, count);
+      updateConfigSystemOverviewBadges(lastLoadedConfig);
+    });
+  });
+
+  builderEl.querySelectorAll(".thermal-load-card").forEach((card) => {
+    const idx = Number(card.dataset?.loadIndex);
+    card.querySelectorAll("[data-field]").forEach((input) => {
+      const markDirtyAndSync = () => {
+        if (input.dataset) {
+          input.dataset.dirty = "1";
+        }
+        syncSingleThermalState(card, idx);
+      };
+      input.addEventListener("change", markDirtyAndSync);
+      input.addEventListener("input", markDirtyAndSync);
+    });
+    const schedBtn = card.querySelector(".apply-sched-btn");
+    if (schedBtn) {
+      schedBtn.addEventListener("click", () => {
+        const minDay = Number(card.querySelector(".sched-min-day").value);
+        const minNight = Number(card.querySelector(".sched-min-night").value);
+        const maxVal = Number(card.querySelector(".sched-max-day").value);
+        const built = buildDayNightTempArrays({
+          firstStepHour: Number(card.querySelector(".sched-first-hour")?.value ?? 0),
+          dayStartHour: Number(card.querySelector(".sched-day-start").value),
+          dayEndHour: Number(card.querySelector(".sched-day-end").value),
+          minDay,
+          minNight,
+          maxDay: maxVal,
+          maxNight: maxVal,
+        });
+        if (built.error) {
+          errorAlert(built.error);
+          return;
+        }
+        const minInput = card.querySelector('[data-field="min_temperatures"]');
+        const maxInput = card.querySelector('[data-field="max_temperatures"]');
+        if (minInput) {
+          minInput.value = built.minArr.join(", ");
+          if (minInput.dataset) {
+            minInput.dataset.dirty = "1";
+          }
+        }
+        if (maxInput) {
+          maxInput.value = built.maxArr.join(", ");
+          if (maxInput.dataset) {
+            maxInput.dataset.dirty = "1";
+          }
+        }
+        syncSingleThermalState(card, idx);
+      });
+    }
+  });
+}
+
+function syncSingleThermalState(card, idx) {
+  const state = thermalLoadStates[idx];
+  if (!state || state.kind === "standard" || state.kind === "passthrough") {
+    return;
+  }
+  const bucket = state[state.kind] || {};
+  card.querySelectorAll("[data-field]").forEach((el) => {
+    const field = el.dataset?.field;
+    if (field === "min_temperatures" || field === "max_temperatures") {
+      // Preserve loaded temperature arrays verbatim unless this field was explicitly edited
+      if (Array.isArray(bucket[field]) && el.dataset?.dirty !== "1") {
+        return;
+      }
+      bucket[field] = parseTempArrayText(el.value);
+    } else if (field === "sense") {
+      bucket[field] = el.value;
+    } else {
+      const n = Number.parseFloat(el.value);
+      if (Number.isFinite(n)) {
+        bucket[field] = n;
+      }
+    }
+  });
+  state[state.kind] = bucket;
+}
+
+function parseThermalLoadStateItem(item) {
+  const isObj = Boolean(item && typeof item === "object" && !Array.isArray(item));
+  const extra = {};
+  if (isObj) {
+    for (const k of Object.keys(item)) {
+      if (k !== "thermal_config" && k !== "thermal_battery") {
+        extra[k] = item[k];
+      }
+    }
+    if (item.thermal_battery) {
+      return {
+        kind: "thermal_battery",
+        extra,
+        thermal_battery: { ...item.thermal_battery },
+      };
+    }
+    if (item.thermal_config) {
+      return {
+        kind: "thermal_config",
+        extra,
+        thermal_config: { ...item.thermal_config },
+      };
+    }
+  }
+  if (Object.keys(extra).length > 0) {
+    return { kind: "passthrough", extra };
+  }
+  return { kind: "standard", extra: {} };
+}
+
+function setupThermalLoadsBuilder(config) {
+  const builderEl = document.getElementById("thermal-loads-builder");
+  const countInput = document.getElementById("number_of_deferrable_loads");
+  if (!builderEl || !countInput) {
+    return;
+  }
+  const rawList = Array.isArray(config?.def_load_config) ? config.def_load_config : [];
+  const count = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
+  thermalLoadStates = [];
+  for (let i = 0; i < Math.max(count, rawList.length); i++) {
+    thermalLoadStates.push(parseThermalLoadStateItem(rawList[i]));
+  }
+  renderThermalLoadCards(builderEl, count);
+
+  if (
+    typeof countInput.addEventListener === "function" &&
+    !countInput._boundThermalBuilder &&
+    !countInput.dataset?.boundThermalBuilder
+  ) {
+    countInput._boundThermalBuilder = true;
+    if (countInput.dataset) {
+      countInput.dataset.boundThermalBuilder = "1";
+    }
+    countInput.addEventListener("input", () => {
+      const nextCount = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
+      renderThermalLoadCards(builderEl, nextCount);
+    });
+  }
+}
+
+function buildThermalLoadsConfig() {
+  const builderEl = document.getElementById("thermal-loads-builder");
+  const countInput = document.getElementById("number_of_deferrable_loads");
+  if (!builderEl || !countInput) {
+    return null;
+  }
+  const count = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
+  const cards = builderEl.querySelectorAll(".thermal-load-card");
+  cards.forEach((card) => {
+    const idx = Number(card.dataset?.loadIndex);
+    syncSingleThermalState(card, idx);
+  });
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    const state = thermalLoadStates[i];
+    if (state?.kind === "thermal_config") {
+      result.push({
+        ...state.extra,
+        thermal_config: { ...state.thermal_config },
+      });
+    } else if (state?.kind === "thermal_battery") {
+      result.push({
+        ...state.extra,
+        thermal_battery: { ...state.thermal_battery },
+      });
+    } else if (state?.kind === "passthrough") {
+      result.push({ ...state.extra });
+    } else {
+      result.push({ ...state?.extra });
+    }
+  }
+  return result;
+}
+
+function updateConfigSystemOverviewBadges(fallbackConfig) {
+  const strip = document.getElementById("system-overview-badges");
+  if (!strip) {
+    return;
+  }
+  const readBool = (id, defVal) => {
+    const el = paramInputOf(id) || document.getElementById(id);
+    if (el && el.type === "checkbox") return Boolean(el.checked);
+    return fallbackConfig && id in fallbackConfig ? Boolean(fallbackConfig[id]) : defVal;
+  };
+  const readNum = (id, defVal) => {
+    const el = paramInputOf(id) || document.getElementById(id);
+    if (el && el.value !== "") {
+      const v = Number(el.value);
+      if (Number.isFinite(v)) return v;
+    }
+    return fallbackConfig && id in fallbackConfig ? Number(fallbackConfig[id]) : defVal;
+  };
+  const readStr = (id, defVal) => {
+    const el = paramInputOf(id) || document.getElementById(id);
+    if (el?.value) return String(el.value);
+    return fallbackConfig?.[id] ? String(fallbackConfig[id]) : defVal;
+  };
+
+  const badges = [];
+  if (readBool("set_use_pv", false)) {
+    badges.push({ cls: "sys-pv", text: "PV Plant (" + readStr("weather_forecast_method", "csv") + ")" });
+  } else {
+    badges.push({ cls: "sys-muted", text: "No PV" });
+  }
+  if (readBool("set_use_battery", false)) {
+    const nb = Math.max(1, readNum("number_of_batteries", 1));
+    badges.push({ cls: "sys-batt", text: nb > 1 ? nb + " Batteries" : "1 Battery" });
+  } else {
+    badges.push({ cls: "sys-muted", text: "No Battery" });
+  }
+  const ndef = Math.max(0, readNum("number_of_deferrable_loads", 0));
+  badges.push({
+    cls: ndef > 0 ? "sys-loads" : "sys-muted",
+    text: ndef + " Deferrable Load" + (ndef === 1 ? "" : "s"),
+  });
+  let thermalCount = 0;
+  const isBoxMode = document.getElementById("config-box") !== null;
+  if (isBoxMode) {
+    const rawDefCfg =
+      fallbackConfig && Array.isArray(fallbackConfig.def_load_config)
+        ? fallbackConfig.def_load_config
+        : [];
+    for (let i = 0; i < Math.min(ndef, rawDefCfg.length); i++) {
+      const item = rawDefCfg[i];
+      if (
+        item &&
+        typeof item === "object" &&
+        (item.thermal_config || item.thermal_battery || item.thermal_source)
+      ) {
+        thermalCount += 1;
+      }
+    }
+  } else {
+    for (let i = 0; i < Math.min(ndef, thermalLoadStates.length); i++) {
+      if (thermalLoadStates[i] && thermalLoadStates[i].kind !== "standard") {
+        thermalCount += 1;
+      }
+    }
+  }
+  if (thermalCount > 0) {
+    badges.push({
+      cls: "sys-thermal",
+      text: thermalCount + " Thermal Load" + (thermalCount === 1 ? "" : "s"),
+    });
+  }
+  const nInv = Math.max(1, readNum("number_of_inverters", 1));
+  badges.push({
+    cls: "sys-neutral",
+    text: nInv > 1 ? nInv + " Inverters" : readBool("inverter_is_hybrid", false) ? "Hybrid Inverter" : "1 Inverter",
+  });
+  const capContainer = document.getElementById("capacity_cost_per_kw");
+  let hasCapTariff = false;
+  if (capContainer && typeof capContainer.getElementsByClassName === "function") {
+    const capInputs = Array.from(capContainer.getElementsByClassName("param_input"));
+    if (capInputs.length > 0) {
+      hasCapTariff = capInputs.some((inp) => Number(inp.value) > 0);
+    }
+  } else if (fallbackConfig && "capacity_cost_per_kw" in fallbackConfig) {
+    const rawCap = fallbackConfig.capacity_cost_per_kw;
+    hasCapTariff = Array.isArray(rawCap)
+      ? rawCap.some((v) => Number(v) > 0)
+      : Number(rawCap) > 0;
+  }
+  if (hasCapTariff) {
+    badges.push({ cls: "sys-tariff", text: "Capacity Tariff" });
+  }
+  badges.push(
+    { cls: "sys-neutral", text: "Objective: " + readStr("costfun", "profit") },
+    { cls: "sys-load", text: "Load: " + readStr("load_forecast_method", "naive") },
+    { cls: "sys-neutral", text: readNum("optimization_time_step", 30) + " min step" }
+  );
+  if (readStr("optimization_backend", "cvxpy") === "dantzig_wolfe") {
+    badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
+  }
+  strip.innerHTML =
+    '<span class="system-overview-title">Configured system:</span>' +
+    badges
+      .map((b) => `<span class="sys-badge ${b.cls}">${escapeHtml(b.text)}</span>`)
+      .join("");
 }

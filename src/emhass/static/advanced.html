@@ -1,46 +1,156 @@
-<!-- advance div, dynamically appended inside of index.html -->
-<!-- action button elements section -->
-<div class="loading-div" id="advance">
-    <h4>Use the buttons below to manually launch different optimization tasks</h4>
-    <div id=loader></div> <!-- status dynamic element -->
-</div>
-<button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
-<button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
-<button type="button" id="naive-mpc-optim" class="button button3">MPC Optimization</button>
-<!--ml toggled div button -->
-<h4>Use the button below to publish the optimized variables at the current timestamp</h4>
-<button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
-<h4>Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
-<button type="button" id="forecast-model-fit" class="button button1">ML forecast model fit</button>
-<button type="button" id="forecast-model-predict" class="button button2">ML forecast model
-    predict</button>
-<button type="button" id="forecast-model-tune" class="button button3">ML forecast model tune</button>
-</br></br>
-<h4>Use the button below to compare the load forecast methods against your own history</h4>
-<button type="button" id="forecast-calibration" class="button button1">Load forecast calibration</button>
-</br></br>
-<button type="button" id="regressor-model-fit" class="button button1">ML regressor model fit</button>
-<button type="button" id="regressor-model-predict" class="button button2">ML regressor model predict</button>
-</br></br>
-<div id="export-influxdb-section" style="display: none;">
-    <h4>Export InfluxDB data to CSV for ML training</h4>
-    <p style="font-size: 0.9em; color: #666; margin-top: -10px;">Export historical sensor data from InfluxDB to train ML regressor models</p>
-    <button type="button" id="export-influxdb-to-csv" class="button button1">Export InfluxDB to CSV</button>
-    </br></br>
-</div>
-<!-- -->
-<!--dynamic runtime parameter input (list and box) elements section -->
-<h4>Input Runtime Parameters</h4>
-<div class="input-button-container">
-    <div class="input-buttons">
-        <button type="button" id="input-plus">+</button>
-        <button type="button" id="input-minus">-</button>
-        <select name="Select" id="input-select" aria-label="Runtime parameters view">
-            <option value="List" selected>List</option>
-            <option value="Box">Box</option>
-        </select>
-        <button type="button" id="input-clear">Clear</button>
+<div id="advance" style="align-items: center;">
+  <div class="advanced-toolbar">
+    <div class="action-tabs" role="tablist" aria-label="EMHASS action categories">
+      <button type="button" class="action-tab-btn active" data-action-tab="optim">
+        Optimization &amp; Publish
+      </button>
+      <button type="button" class="action-tab-btn" data-action-tab="forecast">
+        Load Forecasting &amp; Calibration
+      </button>
+      <button type="button" class="action-tab-btn" data-action-tab="ml-export">
+        ML Regressor &amp; Data Export
+      </button>
+      <button type="button" class="action-tab-btn" data-action-tab="thermal-tuning">
+        Thermal Model Tuning
+      </button>
     </div>
-</div>
-<div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
+    <div class="loader-slot">
+      <div id="loader"></div>
+    </div>
+  </div>
+
+  <div class="action-tab-panels">
+    <div class="action-tab-panel active" data-action-panel="optim">
+      <div class="action-btn-grid">
+        <button type="button" id="dayahead-optim" class="action-btn primary-action">
+          Day-ahead Optimization
+        </button>
+        <button type="button" id="naive-mpc-optim" class="action-btn">
+          MPC Optimization
+        </button>
+        <button type="button" id="perfect-optim" class="action-btn">
+          Perfect Optimization
+        </button>
+        <button type="button" id="publish-data" class="action-btn accent-action">
+          Publish Data
+        </button>
+      </div>
+    </div>
+
+    <div class="action-tab-panel" data-action-panel="forecast" style="display: none">
+      <div class="action-btn-grid">
+        <button type="button" id="forecast-model-fit" class="action-btn">
+          ML Forecast Model Fit
+        </button>
+        <button type="button" id="forecast-model-predict" class="action-btn">
+          ML Forecast Model Predict
+        </button>
+        <button type="button" id="forecast-model-tune" class="action-btn">
+          ML Forecast Model Tune
+        </button>
+        <button type="button" id="forecast-calibration" class="action-btn">
+          Forecast Calibration
+        </button>
+      </div>
+    </div>
+
+    <div class="action-tab-panel" data-action-panel="ml-export" style="display: none">
+      <div class="action-btn-grid">
+        <button type="button" id="regressor-model-fit" class="action-btn">
+          ML Regressor Model Fit
+        </button>
+        <button type="button" id="regressor-model-predict" class="action-btn">
+          ML Regressor Model Predict
+        </button>
+        <div id="export-influxdb-section" class="inline-action-group">
+          <button type="button" id="export-influxdb-to-csv" class="action-btn">
+            Export InfluxDB to CSV
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-tab-panel thermal-tuning-panel" data-action-panel="thermal-tuning" style="display: none">
+      <p class="muted-hint">
+        Compare predicted vs. actual indoor temperatures over historical windows (8h / 12h / 24h+) and fit
+        <code>heating_rate</code>, <code>cooling_constant</code>, and <code>thermal_inertia</code> using your configured
+        InfluxDB or Home Assistant sensors (falls back to an offline synthetic validation demo when no live DB is attached).
+      </p>
+      <div class="thermal-fields-grid">
+        <label>Load Index<input id="thermal-tune-load-index" type="number" min="0" step="1" value="0" aria-label="Deferrable load index" /></label>
+        <label>Nominal Power (W, optional override)<input id="thermal-tune-p-nom" type="number" min="1" step="any" placeholder="Configured load power" aria-label="Heater nominal power in Watts" /></label>
+        <label>Window
+          <select id="thermal-tune-lookback-hours" aria-label="Thermal validation lookback hours">
+            <option value="8">Last 8 hours</option>
+            <option value="12">Last 12 hours</option>
+            <option value="24" selected>Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+            <option value="72">Last 72 hours</option>
+          </select>
+        </label>
+        <label>Current heating_rate (°C/h, optional)<input id="thermal-tune-current-alpha" type="number" step="any" placeholder="From load config" aria-label="Current heating rate constant" /></label>
+        <label>Current cooling_constant (1/h, optional)<input id="thermal-tune-current-gamma" type="number" step="any" placeholder="From load config" aria-label="Current cooling constant" /></label>
+        <label>Current thermal_inertia (h, optional)<input id="thermal-tune-current-inertia" type="number" min="0" step="0.5" placeholder="From load config" aria-label="Current thermal inertia hours" /></label>
+        <label>Indoor Temp Entity<input id="thermal-tune-entity-tin" type="text" value="sensor.temp_air_in" aria-label="Indoor temperature sensor entity" /></label>
+        <label>Outdoor Temp Entity<input id="thermal-tune-entity-tout" type="text" value="sensor.outdoor_temperature" aria-label="Outdoor temperature sensor entity" /></label>
+        <label>Power Entity (optional)<input id="thermal-tune-entity-power" type="text" placeholder="sensor.p_deferrable0" aria-label="Heater power sensor entity" /></label>
+        <label>Plan Temp / Setpoint Entity<input id="thermal-tune-entity-setpoint" type="text" value="sensor.temp_predicted_0_proxy" aria-label="Predicted temperature or setpoint entity" /></label>
+        <label>Heater Switch Entity<input id="thermal-tune-entity-switch" type="text" value="switch.floor_heater_switch" aria-label="Heater switch entity" /></label>
+        <label>UTC Start (optional)<input id="thermal-tune-date-start" type="text" placeholder="2026-11-08 10:30:00" aria-label="Optional UTC window start timestamp" /></label>
+        <label>UTC End (optional)<input id="thermal-tune-date-end" type="text" placeholder="2026-11-08 19:00:00" aria-label="Optional UTC window end timestamp" /></label>
+      </div>
+      <div class="thermal-tuning-actions">
+        <button type="button" id="thermal-model-calibration" class="action-btn primary-action">
+          Validate &amp; Auto-Tune Thermal Model
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="runtime-panel">
+    <div class="runtime-panel-header">
+      <div>
+        <h3>Runtime Parameters Override</h3>
+        <p class="muted-hint">
+          Attach optional JSON overrides (forecasts, MPC horizons, thermal targets) to the next action request.
+        </p>
+      </div>
+      <div class="runtime-preset-row">
+        <label for="runtime-preset-select" class="sr-label">Preset</label>
+        <select
+          id="runtime-preset-select"
+          class="form-select compact-select"
+          aria-label="Runtime parameter quick preset"
+        >
+          <option value="">Insert quick preset...</option>
+          <option value="mpc_horizon">MPC Horizon (prediction_horizon + soc_init)</option>
+          <option value="pv_quantiles">PV Forecast (P50 + P10 list sample)</option>
+          <option value="deferrable_window">Deferrable Window Overrides</option>
+          <option value="raw_json">Raw JSON Box</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="input-select-bar">
+      <button type="button" id="input-plus" class="tool-btn" title="Add runtime parameter input">
+        + Add Field
+      </button>
+      <button type="button" id="input-minus" class="tool-btn" title="Remove last runtime parameter input">
+        - Remove
+      </button>
+      <select
+        id="input-select"
+        class="form-select"
+        aria-label="Runtime parameter input mode"
+      >
+        <option value="List" selected>Key : Value List</option>
+        <option value="Box">JSON Box</option>
+      </select>
+      <button type="button" id="input-clear" class="tool-btn danger-outline" title="Clear all runtime inputs">
+        Clear
+      </button>
+    </div>
+
+    <div id="input-container" class="runtime-inputs-grid"></div>
+  </div>
 </div>
