@@ -1,77 +1,168 @@
-<!-- Configuration page html -->
 <!DOCTYPE html>
-<html lang="en" class="adaptive">
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EMHASS — Configuration</title>
+    <link rel="icon" type="image/png" href="static/img/emhass_icon.png" />
+    <link rel="stylesheet" href="static/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-group">
+        <img
+          src="static/img/emhass_logo_short.svg"
+          alt="EMHASS logo"
+          class="brand-logo"
+        />
+        <div class="brand-text">
+          <h1 class="app-title">EMHASS Configuration</h1>
+          <span class="app-subtitle">Parametric Plant, Forecast, Tariff &amp; Thermal Setup</span>
+        </div>
+      </div>
 
-<head>
-  <title>EMHASS: Energy Management Optimization for Home Assistant</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" type="text/css" href="static/style.css?version=3">
-  <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
-  <script src="static/configuration_script.js?version=2"></script>
-</head>
+      <div class="header-badges">
+        <span id="emhass-version-badge" class="badge version-badge" title="Installed EMHASS version">
+          {% if emhass_version %}EMHASS v{{ emhass_version }}{% else %}EMHASS{% endif %}
+        </span>
+      </div>
 
-<body style="margin: auto; align-items:center; text-align:center;">
+      <div id="top-links" class="top-links">
+        <a href="./" class="icon icon-btn" title="Back to optimization dashboard">
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+          <span class="icon-btn-label">Dashboard</span>
+        </a>
 
-  <div>
-    <!-- Icons by feather https://github.com/feathericons/feather -->
-    <div id="top-links">
-      <!-- index page  -->
-      <a href="index" title="Home" style="margin-right: 12px; cursor: pointer; z-index: 1">
-        <svg class="feather" aria-hidden="true">
-          <use class="feather" href="static/img/feather-sprite.svg#home" />
-        </svg>
-      </a>
-      <a href="https://emhass.readthedocs.io/en/latest/" title="EMHASS Docs">
-        <svg class="feather" aria-hidden="true" style="margin-right: 12px;" ;>
-          <use class="feather" href="static/img/feather-sprite.svg#book" />
-        </svg>
-      </a>
-      <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer" title="EMHASS Git repo">
-        <svg class="feather" aria-hidden="true" style="margin-right: 0px;">
-          <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
-        </svg>
-      </a>
-    </div>
+        <button
+          id="json-toggle"
+          type="button"
+          class="icon icon-btn"
+          title="Toggle YAML or structured form view"
+        >
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          <span class="icon-btn-label">YAML Box</span>
+        </button>
 
-    <!-- Title -->
-    <img src="static/img/emhass_icon.png" alt="">
-    <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
-  </div>
-  <div class="header-footer">
-    <h4>Configuration:</h4>
-    <button type="button" id="json-toggle" class="icon-button" title="List and Box view toggle">
-      <svg id="json" class="feather" class="header-footer-button" aria-hidden="true">
-        <use class="feather" href="static/img/feather-sprite.svg#code" />
-      </svg>
-    </button>
-  </div>
+        <a
+          href="https://emhass.readthedocs.io/en/latest/config.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="icon icon-btn"
+          title="Open configuration documentation"
+        >
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+          <span class="icon-btn-label">Docs</span>
+        </a>
+      </div>
+    </header>
 
-  <!-- parameter list/box elements section -->
-  <div id=configuration-container>
-  </div>
-  <!-- configuration buttons (defaults, save, yaml) -->
-  <div class="save_button header-footer">
-    <button style="margin-right: 5px;" type="button" id="yaml" title="Convert yaml to json" class="">YAML</button>
-    <button type="button" id="defaults" title="Restore to default parameter values" class="">Defaults</button>
-    <button type="button" id="save" title="Save Config to EMHASS" class="">Save</button>
-    <div class="loading-div"> <!-- dynamic tick/cross element -->
-      <div id=loader></div> 
-    </div>
-  </div>
-  <!-- alert box -->
-  <div style="display: none;" id="alert" class="alert">
-    <div>
-      <button type="button" class="close-btn" onclick="this.parentElement.parentElement.style.display='none';" aria-label="Close">
-  &times;
-</button>
-      <p id="alert-text"></p>
-    </div>
-  </div>
-  <footer class="footer">
-    <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2025 David
-      HERNANDEZ</p>
-  </footer>
-  </div>
-</body>
+    <main class="page-shell">
+      <div id="system-overview-badges" class="system-overview-strip" aria-label="Configured system overview"></div>
+      <section class="card onboarding-banner">
+        <div class="onboarding-cols">
+          <div class="onboarding-pill basic-pill">
+            <strong>New to EMHASS (Basic Setup):</strong>
+            Start with <em>Home Assistant &amp; Data</em> (timezone, coordinates, sensors), set
+            <em>Tariff</em> rates, and enable only the hardware you own (PV, Battery, Deferrable or Thermal Loads).
+          </div>
+          <div class="onboarding-pill adv-pill">
+            <strong>Power Users (Advanced):</strong>
+            Use the <em>YAML Box</em> toggle anytime for bulk edits, filter parameters below, or configure
+            multi-inverter topologies, P10/P50 weather quantiles, Federated Dantzig-Wolfe decomposition, and thermal loads.
+          </div>
+        </div>
 
+        <div class="config-filter-bar">
+          <input
+            id="config-search-input"
+            type="text"
+            class="config-search-input"
+            placeholder="Search parameter by name or description..."
+            aria-label="Filter configuration parameters by keyword"
+          />
+          <select
+            id="config-level-filter"
+            class="form-select compact-select"
+            aria-label="Filter parameters by setup complexity level"
+          >
+            <option value="basic" selected>Essential / Basic Setup Only</option>
+            <option value="all">All Parameters (Basic + Advanced)</option>
+          </select>
+        </div>
+      </section>
+
+      <div id="configuration-container" class="config-container"></div>
+
+      <div class="config-action-bar card">
+        <div class="config-action-buttons">
+          <button type="button" id="yaml" class="action-btn">Convert YAML to Form</button>
+          <button type="button" id="defaults" class="action-btn danger-outline">
+            Reset to Defaults
+          </button>
+          <button type="button" id="save" class="action-btn primary-action">
+            Save Configuration
+          </button>
+        </div>
+        <div id="loader" class="loading" style="display: none"></div>
+      </div>
+
+      <div id="alert" class="alert" style="display: none">
+        <span class="closebtn" onclick="this.parentElement.style.display='none';">&times;</span>
+        <p id="alert-text"></p>
+      </div>
+    </main>
+
+    <footer id="footer" class="app-footer">
+      <p>
+        &copy; Copyright 2021-<span id="current-year">{{ current_year | default(2026) }}</span>
+        David HERNANDEZ &bull; EMHASS
+        <span class="footer-version">{% if emhass_version %}v{{ emhass_version }}{% endif %}</span>
+        &bull; MIT License
+      </p>
+    </footer>
+
+    <script src="static/configuration_script.js"></script>
+  </body>
 </html>
