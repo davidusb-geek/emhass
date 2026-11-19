@@ -429,3 +429,147 @@ test('JSON box view round trips configuration strings through the textarea value
   assert.deepEqual(JSON.parse(box.value), config);
   assert.deepEqual(await page.save(), config);
 });
+
+// ---- definition metadata and array control names -------------------------------------------
+// A lightweight DOM stand-in captures node creation without interpreting markup
+// supplied as metadata; the generated input fragment still uses the HTML tokenizer.
+function renderSectionState(definitions, config = {}) {
+  const encode = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  const nodes = [];
+  const createElement = tag => {
+    const node = {
+      tag, attrs: {}, children: [], dataset: {}, events: {},
+      set className(v) { this.attrs.class = v; },
+      set id(v) { this.attrs.id = v; },
+      set type(v) { this.attrs.type = v; },
+      set textContent(v) { this.children = [{ text: String(v) }]; },
+      append(...children) { this.children.push(...children); },
+      addEventListener(name, callback) { this.events[name] = callback; },
+    };
+    nodes.push(node);
+    return node;
+  };
+  const render = node => {
+    if (node.rawHtml !== undefined) return node.rawHtml;
+    if (node.text !== undefined) return encode(node.text);
+    const attrs = { ...node.attrs };
+    for (const [name, value] of Object.entries(node.dataset)) {
+      attrs['data-' + name.replace(/[A-Z]/g, c => '-' + c.toLowerCase())] = value;
+    }
+    return '<' + node.tag + Object.entries(attrs).map(([key, value]) =>
+      ' ' + key + '="' + encode(value) + '"').join('') + '>' +
+      node.children.map(render).join('') + '</' + node.tag + '>';
+  };
+  const body = createElement('div');
+  const section = {
+    getElementsByClassName: () => [body],
+    querySelectorAll: selector => nodes.filter(node =>
+      selector === 'input[type=\'checkbox\']' ? false :
+        node.attrs.class === selector.slice(1)),
+  };
+  const ctx = setup();
+  ctx.document.getElementById = id => (id === 'Section' ? section : null);
+  ctx.document.createElement = createElement;
+  ctx.document.createTextNode = value => ({ text: String(value) });
+  ctx.document.createRange = () => ({
+    selectNodeContents() {},
+    createContextualFragment: html => ({ rawHtml: html }),
+  });
+  ctx.buildParamContainers('Section', definitions, config, []);
+  return { html: body.children.map(render).join(''), nodes, ctx };
+}
+function renderSection(definitions, config = {}) {
+  return renderSectionState(definitions, config).html;
+}
+const textBetween = (html, open, close) => {
+  const start = html.indexOf(open) + open.length;
+  return decode(html.slice(start, html.indexOf(close, start)));
+};
+const entry = (extra = {}) => ({ input: 'string', default_value: 'x', friendly_name: 'Name', Description: 'Text', ...extra });
+const METADATA_MARKERS = [...MARKERS.filter(m => m !== ''), '<unit>_value', "'<unit>_value' & <b data-marker=\"1\">"];
+const GENERATED_TAGS = ['div', 'h5', 'i', 'button', 'br', 'p', 'input', 'label', 'span', 'select', 'option', 'textarea'];
+
+for (const marker of METADATA_MARKERS) {
+  test(`friendly_name and Description stay text: ${labelOf(marker)}`, () => {
+    const html = renderSection({ param: entry({ friendly_name: marker, Description: marker, input: 'string' }) });
+    const elements = parseElements(html);
+    assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value', 'data-param-name'].includes(n))));
+    assert.equal(textBetween(html, '<h5>', ':</h5>'), marker);
+    assert.equal(textBetween(html, '<p>', '</p>'), marker);
+  });
+
+  test(`parameter name stays data in id, class and visible text: ${labelOf(marker)}`, () => {
+    const html = renderSection({ [marker]: entry({ input: 'array.string', default_value: 'x' }) });
+    const elements = parseElements(html);
+    assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value', 'data-param-name'].includes(n))));
+    assert.equal(elements.find(e => e.attrs.id !== undefined).attrs.id, marker);
+    assert.equal(textBetween(html, '<i>', '</i>'), marker);
+    assert.equal(elements.filter(e => e.tag === 'button').length, 2);
+    for (const button of elements.filter(e => e.tag === 'button')) {
+      assert.ok(['input-plus', 'input-minus'].includes(button.attrs.class));
+      assert.equal(button.attrs['data-param-name'], marker);
+    }
+  });
+}
+
+test('every shipped friendly_name and Description renders as its own text, including <unit>_value', () => {
+  const definitions = JSON.parse(fs.readFileSync('src/emhass/static/data/param_definitions.json', 'utf8'));
+  let checked = 0;
+  for (const [section, parameters] of Object.entries(definitions)) {
+    for (const [name, definition] of Object.entries(parameters)) {
+      if (!('friendly_name' in definition && 'Description' in definition && 'input' in definition && 'default_value' in definition)) continue;
+      if (definition.input === 'select' && !('select_options' in definition)) continue;
+      const html = renderSection({ [name]: definition });
+      assert.deepEqual(parseElements(html).map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), [], `${section}.${name} creates an element`);
+      assert.equal(textBetween(html, '<h5>', ':</h5>'), definition.friendly_name, `${section}.${name} friendly_name`);
+      assert.equal(textBetween(html, '<p>', '</p>'), definition.Description, `${section}.${name} Description`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 50);
+  const text = definitions.Local.victoriametrics_metric_regex.Description;
+  assert.ok(text.includes('<unit>_value'));
+  assert.ok(!renderSection({ r: definitions.Local.victoriametrics_metric_regex }).includes('<unit>'));
+});
+
+test('array button handlers retain full names containing spaces and markup', () => {
+  const name = 'two words <unit> "quoted" & more';
+  const page = renderSectionState({ [name]: entry({ input: 'array.string', default_value: 'x' }) });
+  const buttons = page.nodes.filter(node => ['input-plus', 'input-minus'].includes(node.attrs.class));
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].dataset.paramName, name);
+  assert.equal(buttons[1].dataset.paramName, name);
+  assert.equal(typeof buttons[0].events.click, 'function');
+  assert.equal(typeof buttons[1].events.click, 'function');
+
+  // Exercise the actual event callbacks, including their full argument contract.
+  const plusCalls = [];
+  const minusCalls = [];
+  page.ctx.plusElements = (...args) => plusCalls.push(args);
+  page.ctx.minusElements = (...args) => minusCalls.push(args);
+  buttons[0].events.click();
+  buttons[1].events.click();
+
+  assert.equal(plusCalls.length, 1);
+  assert.equal(plusCalls[0][0], name);
+  assert.equal(plusCalls[0][1].Section[name].input, 'array.string');
+  assert.equal(plusCalls[0][2], 'Section');
+  assert.deepEqual(Object.keys(plusCalls[0][3]), []);
+  assert.equal(minusCalls.length, 1);
+  assert.equal(minusCalls[0][0], name);
+});
+
+test('rendered section metadata never writes via innerHTML, including hostile markup', () => {
+  const hostile = '<marker-element onclick="bad()"> & "quoted"';
+  const html = renderSection({ [hostile]: entry({ friendly_name: hostile, Description: hostile }) });
+  const elements = parseElements(html);
+  assert.ok(!elements.some(e => e.tag === 'marker-element'));
+  assert.ok(!elements.some(e => 'onclick' in e.attrs));
+  assert.equal(elements.find(e => e.attrs.id !== undefined).attrs.id, hostile);
+  assert.equal(textBetween(html, '<p>', '</p>'), hostile);
+  // renderSectionState's body has no innerHTML property: a write would not
+  // generate the HTML under test, so the assertions also cover DOM append.
+});
