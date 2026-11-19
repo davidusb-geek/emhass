@@ -149,7 +149,13 @@
       </div>
 
       <div id="alert" class="alert" style="display: none">
-        <span class="closebtn" onclick="this.parentElement.style.display='none';">&times;</span>
+        <span
+          class="closebtn"
+          role="button"
+          tabindex="0"
+          onclick="this.parentElement.style.display='none';"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.parentElement.style.display='none';}"
+        >&times;</span>
         <p id="alert-text"></p>
       </div>
     </main>
