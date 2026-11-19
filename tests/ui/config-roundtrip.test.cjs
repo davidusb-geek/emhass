@@ -21,6 +21,32 @@ const CUSTOM = {
 const DEFAULT_REPLY = { battery_nominal_energy_capacity: 9999, costfun: 'profit', optimization_time_step: 30 };
 
 const decode = s => s.replaceAll('&quot;', '"').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+// The real UI now appends DOM nodes rather than assigning section-body HTML.
+// Serialize the tiny DOM stand-in so parseParams still models browser controls.
+function mockElement(tag) {
+  return {
+    tag, attrs: {}, dataset: {}, children: [],
+    set className(value) { this.attrs.class = value; },
+    set id(value) { this.attrs.id = value; },
+    set type(value) { this.attrs.type = value; },
+    set textContent(value) { this.children = [{ text: String(value) }]; },
+    append(...nodes) { this.children.push(...nodes); },
+    addEventListener() {},
+  };
+}
+function serializeNode(node) {
+  const encode = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  if (node.rawHtml !== undefined) return node.rawHtml;
+  if (node.text !== undefined) return encode(node.text);
+  const attrs = { ...node.attrs };
+  for (const [key, value] of Object.entries(node.dataset)) {
+    attrs['data-' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())] = value;
+  }
+  return '<' + node.tag + Object.entries(attrs).map(([key, value]) =>
+    ' ' + key + '="' + encode(value) + '"').join('') + '>' +
+    node.children.map(serializeNode).join('') + '</' + node.tag + '>';
+}
 function parseParams(html) {
   const params = {};
   const blocks = html.split('<div class="param" id="').slice(1);
@@ -46,7 +72,9 @@ function parseParams(html) {
 }
 
 function setup({ getConfig = () => ({}) } = {}) {
-  const bodies = Object.fromEntries(Object.keys(defs).map(section => [section, { innerHTML: '' }]));
+  const bodies = Object.fromEntries(Object.keys(defs).map(section => [section, {
+    innerHTML: '', append(node) { this.innerHTML += serializeNode(node); },
+  }]));
   const sections = Object.fromEntries(Object.keys(defs).map(section => [section, {
     getElementsByClassName: () => [bodies[section]], querySelectorAll: () => [] }]));
   const header = (id, type) => ({ id, tagName: 'INPUT', type, value: '', checked: false, style: {}, addEventListener() {}, getElementsByClassName: () => [] });
@@ -78,7 +106,13 @@ function setup({ getConfig = () => ({}) } = {}) {
         return inputs ? { tagName: 'DIV', style: {}, getElementsByClassName: c => (c === 'param_input' ? inputs : []),
           querySelector: () => null, querySelectorAll: () => [], classList: { add() {}, remove() {}, contains: () => false } } : null;
       },
-      getElementsByClassName: c => (c === 'section-card' && rendered ? [{}] : []) },
+      getElementsByClassName: c => (c === 'section-card' && rendered ? [{}] : []),
+      createElement: mockElement,
+      createTextNode: value => ({ text: String(value) }),
+      createRange: () => ({
+        selectNodeContents() {},
+        createContextualFragment: html => ({ rawHtml: html }),
+      }) },
     fetch: async (url, options) => {
       calls.push(url);
       if (options && options.method === 'POST') { posts.push(JSON.parse(options.body)); return new Response('[]', { status: 200 }); }
