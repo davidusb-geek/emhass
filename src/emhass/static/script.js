@@ -15,8 +15,8 @@ window.onload = async function () {
   }
   initStickyTables();
   initResultsTabs();
-  refreshLastRunBanner();
-  loadSystemOverviewBadges();
+  void refreshLastRunBanner();
+  void loadSystemOverviewBadges();
 
   //add listener for basic and advanced html switch
   const switchBtn = document.getElementById("basicOrAdvanced");
@@ -319,7 +319,9 @@ async function getTemplate() {
     const fallbackDiv = document.createElement("div");
     fallbackDiv.id = "stage-times-client-fallback";
     fallbackDiv.className = "table_div";
-    fallbackDiv.setAttribute("data-plot-key", "figure_stage_times_client");
+    if (fallbackDiv.dataset) {
+      fallbackDiv.dataset.plotKey = "figure_stage_times_client";
+    }
     fallbackDiv.style.display = "none";
     templateDiv.appendChild(fallbackDiv);
   }
@@ -327,7 +329,7 @@ async function getTemplate() {
     initStickyTables();
   }
   initResultsTabs();
-  refreshLastRunBanner();
+  void refreshLastRunBanner();
 }
 
 let stickyTableCleanups = [];
@@ -697,12 +699,12 @@ function initAdvancedTabs() {
   }
   buttons.forEach(function (btn) {
     btn.addEventListener("click", function () {
-      const target = btn.getAttribute("data-action-tab");
+      const target = btn.dataset?.actionTab;
       buttons.forEach(function (b) {
         b.classList.toggle("active", b === btn);
       });
       panels.forEach(function (panel) {
-        const match = panel.getAttribute("data-action-panel") === target;
+        const match = panel.dataset?.actionPanel === target;
         panel.classList.toggle("active", match);
         panel.style.display = match ? "block" : "none";
       });
@@ -787,10 +789,8 @@ function getResultsTabForKey(plotKey) {
   if (plotKey.indexOf("figure_fed_") === 0) {
     return "federated";
   }
-  const categories = Object.keys(RESULTS_TAB_GROUPS);
-  for (let i = 0; i < categories.length; i++) {
-    const cat = categories[i];
-    if (RESULTS_TAB_GROUPS[cat].indexOf(plotKey) !== -1) {
+  for (const cat of Object.keys(RESULTS_TAB_GROUPS)) {
+    if (RESULTS_TAB_GROUPS[cat].includes(plotKey)) {
       return cat;
     }
   }
@@ -802,10 +802,10 @@ function resizeVisiblePlotlyPlots(container) {
     return;
   }
   const plotlyDivs = container.querySelectorAll(".js-plotly-plot");
-  if (typeof window !== "undefined" && window.Plotly && window.Plotly.Plots && plotlyDivs.length) {
-    for (let i = 0; i < plotlyDivs.length; i++) {
+  if (typeof window !== "undefined" && window.Plotly?.Plots && plotlyDivs.length) {
+    for (const plotDiv of plotlyDivs) {
       try {
-        window.Plotly.Plots.resize(plotlyDivs[i]);
+        window.Plotly.Plots.resize(plotDiv);
       } catch (_err) {
         // ignore detached or hidden plots
       }
@@ -843,17 +843,17 @@ function initResultsTabs() {
   };
 
   items.forEach(function (item) {
-    const key = item.getAttribute("data-plot-key") || "";
+    const key = item.dataset?.plotKey || "";
     if (
       key === "figure_stage_times_client" &&
-      (!item.innerHTML || !item.innerHTML.trim())
+      !item.innerHTML?.trim()
     ) {
       return;
     }
     const isCountableItem =
       key.indexOf("figure_") === 0 || key.indexOf("table") === 0;
     const tab = getResultsTabForKey(key);
-    if (isCountableItem && Object.prototype.hasOwnProperty.call(counts, tab)) {
+    if (isCountableItem && Object.hasOwn(counts, tab)) {
       counts[tab] += 1;
       counts.all += 1;
     }
@@ -863,9 +863,9 @@ function initResultsTabs() {
     tabBar.querySelectorAll(".results-tab-btn")
   );
   buttons.forEach(function (btn) {
-    const tab = btn.getAttribute("data-results-tab");
+    const tab = btn.dataset?.resultsTab;
     const countSpan = btn.querySelector(".tab-count");
-    const c = Object.prototype.hasOwnProperty.call(counts, tab) ? counts[tab] : 0;
+    const c = tab && Object.hasOwn(counts, tab) ? counts[tab] : 0;
     if (countSpan) {
       countSpan.textContent = c > 0 ? String(c) : "";
     }
@@ -898,14 +898,14 @@ function initResultsTabs() {
     currentButtons.forEach(function (btn) {
       btn.classList.toggle(
         "active",
-        btn.getAttribute("data-results-tab") === selectedTab
+        btn.dataset?.resultsTab === selectedTab
       );
     });
     currentItems.forEach(function (item) {
-      const key = item.getAttribute("data-plot-key") || "";
+      const key = item.dataset?.plotKey || "";
       if (
         key === "figure_stage_times_client" &&
-        (!item.innerHTML || !item.innerHTML.trim())
+        !item.innerHTML?.trim()
       ) {
         item.style.display = "none";
         return;
@@ -927,7 +927,7 @@ function initResultsTabs() {
       btn.addEventListener("click", function () {
         if (typeof tabBar._applyTabSelection === "function") {
           tabBar._applyTabSelection(
-            btn.getAttribute("data-results-tab") || "schedule"
+            btn.dataset?.resultsTab || "schedule"
           );
         }
       });
@@ -947,11 +947,10 @@ function renderStageTimesFallback(lastRun) {
   );
   if (
     hasServerPlot ||
-    !lastRun ||
-    !lastRun.stage_times ||
+    !lastRun?.stage_times ||
     typeof lastRun.stage_times !== "object"
   ) {
-    fallbackEl.innerHTML = "";
+    fallbackEl.textContent = "";
     fallbackEl.style.display = "none";
     return;
   }
@@ -965,7 +964,7 @@ function renderStageTimesFallback(lastRun) {
     });
 
   if (!entries.length) {
-    fallbackEl.innerHTML = "";
+    fallbackEl.textContent = "";
     fallbackEl.style.display = "none";
     return;
   }
@@ -980,31 +979,44 @@ function renderStageTimesFallback(lastRun) {
           return item.name.indexOf(".") === -1 ? sum + item.val : sum;
         }, 0);
 
-  let html = '<div class="stage-times-card">';
-  html +=
-    "<h3>Pipeline Stage Execution Times (total: " +
-    totalSec.toFixed(3) +
-    " s)</h3>";
-  html += '<div class="stage-bars">';
-  entries.forEach(function (entry) {
+  const card = document.createElement("div");
+  card.className = "stage-times-card";
+  const heading = document.createElement("h3");
+  heading.textContent =
+    "Pipeline Stage Execution Times (total: " + totalSec.toFixed(3) + " s)";
+  card.appendChild(heading);
+
+  const bars = document.createElement("div");
+  bars.className = "stage-bars";
+  for (const entry of entries) {
     const pct = Math.max(2, Math.min(100, (entry.val / maxVal) * 100));
     const ms = Math.round(entry.val * 1000);
-    html += '<div class="stage-bar-row">';
-    html += '<span class="stage-label">' + entry.name + "</span>";
-    html +=
-      '<div class="stage-track"><div class="stage-fill" style="width:' +
-      pct.toFixed(1) +
-      '%"></div></div>';
-    html +=
-      '<span class="stage-value">' +
-      entry.val.toFixed(3) +
-      " s (" +
-      ms +
-      " ms)</span>";
-    html += "</div>";
-  });
-  html += "</div></div>";
-  fallbackEl.innerHTML = html;
+    const row = document.createElement("div");
+    row.className = "stage-bar-row";
+
+    const label = document.createElement("span");
+    label.className = "stage-label";
+    label.textContent = String(entry.name);
+    row.appendChild(label);
+
+    const track = document.createElement("div");
+    track.className = "stage-track";
+    const fill = document.createElement("div");
+    fill.className = "stage-fill";
+    fill.style.width = pct.toFixed(1) + "%";
+    track.appendChild(fill);
+    row.appendChild(track);
+
+    const value = document.createElement("span");
+    value.className = "stage-value";
+    value.textContent = entry.val.toFixed(3) + " s (" + ms + " ms)";
+    row.appendChild(value);
+
+    bars.appendChild(row);
+  }
+  card.appendChild(bars);
+  fallbackEl.textContent = "";
+  fallbackEl.appendChild(card);
 }
 
 async function refreshLastRunBanner() {
@@ -1045,7 +1057,7 @@ async function refreshLastRunBanner() {
       return;
     }
     const versionBadge = document.getElementById("emhass-version-badge");
-    if (versionBadge && data && data.emhass_version) {
+    if (versionBadge && data?.emhass_version) {
       versionBadge.textContent = "EMHASS v" + String(data.emhass_version);
     }
     const statusPill = document.getElementById("last-run-pill");
@@ -1103,8 +1115,8 @@ function updateOptimStatusFromDom(templateDiv) {
     return;
   }
   const rows = summaryDiv.querySelectorAll("tr");
-  for (let i = 0; i < rows.length; i++) {
-    const cells = rows[i].querySelectorAll("td");
+  for (const row of rows) {
+    const cells = row.querySelectorAll("td");
     if (cells.length >= 2 && cells[0].textContent.trim() === "optim_status") {
       const val = cells[1].textContent.trim();
       optimPill.classList.remove("status-ok", "status-warn", "status-error");
@@ -1151,8 +1163,7 @@ function renderSystemOverviewBadges(config) {
 
   if (Array.isArray(config.def_load_config)) {
     let thermalCount = 0;
-    for (let i = 0; i < config.def_load_config.length; i++) {
-      const item = config.def_load_config[i];
+    for (const item of config.def_load_config) {
       if (item && (item.thermal_config || item.thermal_battery)) {
         thermalCount += 1;
       }
@@ -1190,11 +1201,17 @@ function renderSystemOverviewBadges(config) {
     badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
   }
 
-  let html = '<span class="system-overview-title">Configured system:</span>';
-  for (let j = 0; j < badges.length; j++) {
-    html += '<span class="sys-badge ' + badges[j].cls + '">' + badges[j].text + "</span>";
+  strip.textContent = "";
+  const titleSpan = document.createElement("span");
+  titleSpan.className = "system-overview-title";
+  titleSpan.textContent = "Configured system:";
+  strip.appendChild(titleSpan);
+  for (const badge of badges) {
+    const span = document.createElement("span");
+    span.className = "sys-badge " + badge.cls;
+    span.textContent = badge.text;
+    strip.appendChild(span);
   }
-  strip.innerHTML = html;
 }
 
 async function loadSystemOverviewBadges() {
@@ -1229,7 +1246,7 @@ async function runThermalModelCalibration() {
   const numField = function (id, key, isInt) {
     const el = document.getElementById(id);
     if (el && el.value !== "") {
-      const parsed = isInt ? parseInt(el.value, 10) : parseFloat(el.value);
+      const parsed = isInt ? Number.parseInt(el.value, 10) : Number.parseFloat(el.value);
       if (Number.isFinite(parsed)) {
         payload[key] = parsed;
       }

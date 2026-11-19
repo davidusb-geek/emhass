@@ -1600,7 +1600,7 @@ function initConfigTabs() {
   function selectTab(tabId) {
     activeConfigTab = tabId;
     buttons.forEach((btn) => {
-      btn.classList.toggle("active", btn.getAttribute("data-config-tab") === tabId);
+      btn.classList.toggle("active", btn.dataset?.configTab === tabId);
     });
     cards.forEach((card) => {
       card.style.display = tabId === "all" || card.id === tabId ? "" : "none";
@@ -1609,12 +1609,25 @@ function initConfigTabs() {
 
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
-      selectTab(btn.getAttribute("data-config-tab") || "all");
+      selectTab(btn.dataset?.configTab || "all");
       applyConfigFilters();
     });
   });
 
   selectTab(activeConfigTab);
+}
+
+function resolveControllerInput(controllerId) {
+  const controllerDiv = document.getElementById(controllerId);
+  if (!controllerDiv) {
+    return null;
+  }
+  if (controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT") {
+    return controllerDiv;
+  }
+  return typeof controllerDiv.querySelector === "function"
+    ? controllerDiv.querySelector("input, select")
+    : null;
 }
 
 function setupDynamicVisibility() {
@@ -1743,19 +1756,6 @@ function setupDynamicVisibility() {
     },
   ];
 
-  function resolveControllerInput(controllerId) {
-    const controllerDiv = document.getElementById(controllerId);
-    if (!controllerDiv) {
-      return null;
-    }
-    if (controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT") {
-      return controllerDiv;
-    }
-    return typeof controllerDiv.querySelector === "function"
-      ? controllerDiv.querySelector("input, select")
-      : null;
-  }
-
   function evaluateAllRules() {
     const targetVisibility = new Map();
     rules.forEach((rule) => {
@@ -1796,7 +1796,7 @@ function setupDynamicVisibility() {
     boundControllers.add(rule.controller);
     const alreadyBound =
       Boolean(ctrl._boundDynVis) ||
-      Boolean(ctrl.dataset && ctrl.dataset.boundDynVis === "1");
+      ctrl.dataset?.boundDynVis === "1";
     if (!alreadyBound && typeof ctrl.addEventListener === "function") {
       ctrl._boundDynVis = true;
       if (ctrl.dataset) {
@@ -1823,9 +1823,7 @@ function applyConfigFilters() {
   params.forEach((paramDiv) => {
     const paramId = paramDiv.id || "";
     const text = paramDiv.textContent ? paramDiv.textContent.toLowerCase() : "";
-    const dynHidden = Boolean(
-      paramDiv.dataset && paramDiv.dataset.dynamicHidden === "1"
-    );
+    const dynHidden = paramDiv.dataset?.dynamicHidden === "1";
     const matchQuery = !query || paramId.toLowerCase().includes(query) || text.includes(query);
     const matchLevel = level === "all" || BASIC_PARAM_IDS.has(paramId);
 
@@ -2190,7 +2188,7 @@ function renderThermalLoadCards(builderEl, count) {
 
   builderEl.querySelectorAll(".thermal-kind-select").forEach((sel) => {
     sel.addEventListener("change", () => {
-      const i = Number(sel.getAttribute("data-load-index"));
+      const i = Number(sel.dataset?.loadIndex);
       const kind = sel.value;
       const existingExtra = thermalLoadStates[i] ? thermalLoadStates[i].extra || {} : {};
       if (kind === "passthrough") {
@@ -2235,7 +2233,7 @@ function renderThermalLoadCards(builderEl, count) {
   });
 
   builderEl.querySelectorAll(".thermal-load-card").forEach((card) => {
-    const idx = Number(card.getAttribute("data-load-index"));
+    const idx = Number(card.dataset?.loadIndex);
     card.querySelectorAll("[data-field]").forEach((input) => {
       const markDirtyAndSync = () => {
         if (input.dataset) {
@@ -2292,10 +2290,10 @@ function syncSingleThermalState(card, idx) {
   }
   const bucket = state[state.kind] || {};
   card.querySelectorAll("[data-field]").forEach((el) => {
-    const field = el.getAttribute("data-field");
+    const field = el.dataset?.field;
     if (field === "min_temperatures" || field === "max_temperatures") {
       // Preserve loaded temperature arrays verbatim unless this field was explicitly edited
-      if (Array.isArray(bucket[field]) && (!el.dataset || el.dataset.dirty !== "1")) {
+      if (Array.isArray(bucket[field]) && el.dataset?.dirty !== "1") {
         return;
       }
       bucket[field] = parseTempArrayText(el.value);
@@ -2311,50 +2309,54 @@ function syncSingleThermalState(card, idx) {
   state[state.kind] = bucket;
 }
 
+function parseThermalLoadStateItem(item) {
+  const isObj = Boolean(item && typeof item === "object" && !Array.isArray(item));
+  const extra = {};
+  if (isObj) {
+    for (const k of Object.keys(item)) {
+      if (k !== "thermal_config" && k !== "thermal_battery") {
+        extra[k] = item[k];
+      }
+    }
+    if (item.thermal_battery) {
+      return {
+        kind: "thermal_battery",
+        extra,
+        thermal_battery: { ...item.thermal_battery },
+      };
+    }
+    if (item.thermal_config) {
+      return {
+        kind: "thermal_config",
+        extra,
+        thermal_config: { ...item.thermal_config },
+      };
+    }
+  }
+  if (Object.keys(extra).length > 0) {
+    return { kind: "passthrough", extra };
+  }
+  return { kind: "standard", extra: {} };
+}
+
 function setupThermalLoadsBuilder(config) {
   const builderEl = document.getElementById("thermal-loads-builder");
   const countInput = document.getElementById("number_of_deferrable_loads");
   if (!builderEl || !countInput) {
     return;
   }
-  const rawList =
-    config && Array.isArray(config.def_load_config) ? config.def_load_config : [];
+  const rawList = Array.isArray(config?.def_load_config) ? config.def_load_config : [];
   const count = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
   thermalLoadStates = [];
   for (let i = 0; i < Math.max(count, rawList.length); i++) {
-    const item = rawList[i];
-    const extra = {};
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      Object.keys(item).forEach((k) => {
-        if (k !== "thermal_config" && k !== "thermal_battery") {
-          extra[k] = item[k];
-        }
-      });
-    }
-    if (item && typeof item === "object" && item.thermal_battery) {
-      thermalLoadStates.push({
-        kind: "thermal_battery",
-        extra,
-        thermal_battery: { ...item.thermal_battery },
-      });
-    } else if (item && typeof item === "object" && item.thermal_config) {
-      thermalLoadStates.push({
-        kind: "thermal_config",
-        extra,
-        thermal_config: { ...item.thermal_config },
-      });
-    } else if (Object.keys(extra).length > 0) {
-      thermalLoadStates.push({ kind: "passthrough", extra });
-    } else {
-      thermalLoadStates.push({ kind: "standard", extra: {} });
-    }
+    thermalLoadStates.push(parseThermalLoadStateItem(rawList[i]));
   }
   renderThermalLoadCards(builderEl, count);
 
   if (
     typeof countInput.addEventListener === "function" &&
     !countInput._boundThermalBuilder &&
-    (!countInput.dataset || !countInput.dataset.boundThermalBuilder)
+    !countInput.dataset?.boundThermalBuilder
   ) {
     countInput._boundThermalBuilder = true;
     if (countInput.dataset) {
@@ -2376,26 +2378,26 @@ function buildThermalLoadsConfig() {
   const count = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
   const cards = builderEl.querySelectorAll(".thermal-load-card");
   cards.forEach((card) => {
-    const idx = Number(card.getAttribute("data-load-index"));
+    const idx = Number(card.dataset?.loadIndex);
     syncSingleThermalState(card, idx);
   });
   const result = [];
   for (let i = 0; i < count; i++) {
     const state = thermalLoadStates[i];
-    if (state && state.kind === "thermal_config") {
+    if (state?.kind === "thermal_config") {
       result.push({
-        ...(state.extra || {}),
-        thermal_config: { ...(state.thermal_config || {}) },
+        ...state.extra,
+        thermal_config: { ...state.thermal_config },
       });
-    } else if (state && state.kind === "thermal_battery") {
+    } else if (state?.kind === "thermal_battery") {
       result.push({
-        ...(state.extra || {}),
-        thermal_battery: { ...(state.thermal_battery || {}) },
+        ...state.extra,
+        thermal_battery: { ...state.thermal_battery },
       });
-    } else if (state && state.kind === "passthrough") {
-      result.push({ ...(state.extra || {}) });
+    } else if (state?.kind === "passthrough") {
+      result.push({ ...state.extra });
     } else {
-      result.push({ ...(state?.extra || {}) });
+      result.push({ ...state?.extra });
     }
   }
   return result;
@@ -2421,8 +2423,8 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
   };
   const readStr = (id, defVal) => {
     const el = paramInputOf(id) || document.getElementById(id);
-    if (el && el.value) return String(el.value);
-    return fallbackConfig && fallbackConfig[id] ? String(fallbackConfig[id]) : defVal;
+    if (el?.value) return String(el.value);
+    return fallbackConfig?.[id] ? String(fallbackConfig[id]) : defVal;
   };
 
   const badges = [];
@@ -2493,9 +2495,11 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
   if (hasCapTariff) {
     badges.push({ cls: "sys-tariff", text: "Capacity Tariff" });
   }
-  badges.push({ cls: "sys-neutral", text: "Objective: " + readStr("costfun", "profit") });
-  badges.push({ cls: "sys-load", text: "Load: " + readStr("load_forecast_method", "naive") });
-  badges.push({ cls: "sys-neutral", text: readNum("optimization_time_step", 30) + " min step" });
+  badges.push(
+    { cls: "sys-neutral", text: "Objective: " + readStr("costfun", "profit") },
+    { cls: "sys-load", text: "Load: " + readStr("load_forecast_method", "naive") },
+    { cls: "sys-neutral", text: readNum("optimization_time_step", 30) + " min step" }
+  );
   if (readStr("optimization_backend", "cvxpy") === "dantzig_wolfe") {
     badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
   }

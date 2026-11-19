@@ -283,7 +283,7 @@ code {
   width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: stretch !important;
+  align-items: stretch;
   gap: 1rem;
 }
 
@@ -320,7 +320,7 @@ code {
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .action-tab-btn:hover,
@@ -573,6 +573,16 @@ input[type="checkbox"] {
 @media (prefers-reduced-motion: reduce) {
   .loading {
     animation: none;
+  }
+
+  button.action-btn,
+  button.tool-btn {
+    transition: none;
+  }
+
+  button.action-btn:active,
+  button.tool-btn:active {
+    transform: none;
   }
 }
 
