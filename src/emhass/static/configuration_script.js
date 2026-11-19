@@ -1883,8 +1883,18 @@ function parseTempArrayText(raw) {
       // fall through to CSV split
     }
   }
-  return str.split(/[,;]+/).map((part) => {
-    const token = part.trim();
+  const tokens = [];
+  for (const chunk of str.split(/[,;]/)) {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      tokens.push("");
+    } else if (/\s/.test(trimmed)) {
+      tokens.push(...trimmed.split(/\s+/));
+    } else {
+      tokens.push(trimmed);
+    }
+  }
+  return tokens.map((token) => {
     if (!token || token.toLowerCase() === "null" || token.toLowerCase() === "none") {
       return null;
     }
@@ -1967,6 +1977,55 @@ function getConfiguredHorizonSteps() {
   return steps ?? Math.max(1, Math.round((days * 24 * 60) / stepMin));
 }
 
+function buildZonedStepDate(referenceDate, targetHour, timeZone) {
+  const h = Math.floor(targetHour);
+  const m = Math.round((targetHour % 1) * 60);
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+      const getParts = (d) => {
+        const map = {};
+        for (const p of fmt.formatToParts(d)) {
+          map[p.type] = Number(p.value);
+        }
+        return map;
+      };
+      const ref = getParts(referenceDate);
+      const targetUtcMs = Date.UTC(ref.year, ref.month - 1, ref.day, h, m, 0, 0);
+      let guessMs = targetUtcMs;
+      for (let iter = 0; iter < 2; iter++) {
+        const cur = getParts(new Date(guessMs));
+        const curAsUtcMs = Date.UTC(cur.year, cur.month - 1, cur.day, cur.hour, cur.minute, 0, 0);
+        const diffMs = targetUtcMs - curAsUtcMs;
+        if (diffMs === 0) {
+          break;
+        }
+        guessMs += diffMs;
+      }
+      return new Date(guessMs);
+    } catch (_err) {
+      // fall back to browser local timezone if timeZone string is invalid
+    }
+  }
+  return new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    h,
+    m,
+    0,
+    0
+  );
+}
+
 function buildDayNightTempArrays(opts) {
   const stepEl = paramInputOf("optimization_time_step");
   const daysEl = paramInputOf("delta_forecast_daily");
@@ -1988,15 +2047,7 @@ function buildDayNightTempArrays(opts) {
     opts.timeZone || paramInputOf("time_zone")?.value || lastLoadedConfig?.time_zone || "";
 
   const now = opts.referenceDate instanceof Date ? opts.referenceDate : new Date();
-  const firstStepDate = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    Math.floor(firstStepHour),
-    Math.round((firstStepHour % 1) * 60),
-    0,
-    0
-  );
+  const firstStepDate = buildZonedStepDate(now, firstStepHour, tz);
   const horizon =
     Number.isFinite(Number(opts.horizon)) && Number(opts.horizon) > 0
       ? Number(opts.horizon)
