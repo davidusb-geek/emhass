@@ -405,21 +405,10 @@ function buildParamContainers(
       continue;
     }
 
-    //if parameter type == array.*, append plus and minus buttons in param div so
-    //the user can grow/shrink the list. Three groups of array.* params are excluded
-    //because their length is managed elsewhere: the DEFERRABLE_ARRAY_PARAMS in
-    //the "Deferrable Loads" section (by number_of_deferrable_loads), the 15
-    //BATTERY_ARRAY_PARAMS in the "Battery" section (by number_of_batteries) and
-    //the INVERTER_ARRAY_PARAMS in the "System" section (by number_of_inverters,
-    //see setupInverterSync) - a free +/- button on those would desync their
-    //length and crash check_batt_params/check_def_loads (or be refused by
-    //check_inverter_params) on save. Any other array.* param in
-    //those sections (e.g. the #540 Part B capacity_cost_per_kw /
-    //capacity_charge_interval_timesteps in Battery, which are NOT per-battery)
-    //still gets the normal generic +/- controls - the allow-lists, not the
-    //section name, own cardinality.
-    let array_buttons = "";
-    if (
+    // Generic array controls are excluded when another header owns cardinality.
+    // Keep the original names in data attributes: a CSS class token cannot
+    // preserve whitespace (or other non-class-token characters) in an ID.
+    const has_array_buttons =
       parameter_definition_object["input"].search("array.") > -1 &&
       !(
         parameter_definition_object["input"] === "array.array.float" &&
@@ -427,33 +416,52 @@ function buildParamContainers(
       ) &&
       !(section == "Deferrable Loads" && DEFERRABLE_ARRAY_PARAMS.includes(parameter_definition_name)) &&
       !(section == "Battery" && BATTERY_ARRAY_PARAMS.includes(parameter_definition_name)) &&
-      !(section == "System" && INVERTER_ARRAY_PARAMS.includes(parameter_definition_name))
-    ) {
-      array_buttons = `
-                  <button type="button" class="input-plus ${parameter_definition_name}">+</button>
-                  <button type="button" class="input-minus ${parameter_definition_name}">-</button>
-                  <br>
-                  `;
+      !(section == "System" && INVERTER_ARRAY_PARAMS.includes(parameter_definition_name));
+
+    // Definition metadata must be DOM text, not interpolated HTML. This also
+    // avoids reparsing previously rendered siblings on each new parameter.
+    const param_container = document.createElement("div");
+    param_container.className = "param";
+    param_container.id = parameter_definition_name;
+
+    const heading = document.createElement("h5");
+    heading.textContent = String(parameter_definition_object["friendly_name"]) + ":";
+    const param_name = document.createElement("i");
+    param_name.textContent = parameter_definition_name;
+    param_container.append(heading, document.createTextNode(" "), param_name, document.createElement("br"));
+
+    if (has_array_buttons) {
+      const plus = document.createElement("button");
+      plus.type = "button";
+      plus.className = "input-plus";
+      plus.dataset.paramName = parameter_definition_name;
+      plus.textContent = "+";
+      const minus = document.createElement("button");
+      minus.type = "button";
+      minus.className = "input-minus";
+      minus.dataset.paramName = parameter_definition_name;
+      minus.textContent = "-";
+      param_container.append(plus, minus, document.createElement("br"));
     }
 
-    //generates and appends param container into section
-    //buildParamElement() builds the parameter input/s and returns html to append in param-input
-    SectionParamElement[0].innerHTML += `
-          <div class="param" id="${parameter_definition_name}">
-             <h5>${
-               parameter_definition_object["friendly_name"]
-             }:</h5> <i>${parameter_definition_name}</i> </br>
-              ${array_buttons}
-             <div class="param-input"> 
-                  ${buildParamElement(
-                    parameter_definition_object,
-                    parameter_definition_name,
-                    config
-                  )}
-             </div>
-              <p>${parameter_definition_object["Description"]}</p>
-          </div>
-          `;
+    const input_container = document.createElement("div");
+    input_container.className = "param-input";
+    // buildParamElement supplies only fixed markup and HTML-encodes all
+    // configuration/default/option values. Metadata above never enters this
+    // parser; it is written through textContent and DOM properties instead.
+    const input_range = document.createRange();
+    input_range.selectNodeContents(input_container);
+    input_container.append(
+      input_range.createContextualFragment(
+        buildParamElement(parameter_definition_object, parameter_definition_name, config)
+      )
+    );
+    param_container.append(input_container);
+
+    const description = document.createElement("p");
+    description.textContent = parameter_definition_object["Description"];
+    param_container.append(description);
+    SectionParamElement[0].append(param_container);
   }
 
   //after looping though, build and appending the parameters in the corresponding section:
@@ -468,7 +476,7 @@ function buildParamContainers(
   plus.forEach(function (answer) {
     answer.addEventListener("click", () =>
       plusElements(
-        answer.classList[1],
+        answer.dataset.paramName,
         { [section]: section_parameters_definitions },
         section,
         {}
@@ -479,7 +487,7 @@ function buildParamContainers(
   //create subtract button (array minus) event listeners
   let minus = SectionContainer.querySelectorAll(".input-minus");
   minus.forEach(function (answer) {
-    answer.addEventListener("click", () => minusElements(answer.classList[1]));
+    answer.addEventListener("click", () => minusElements(answer.dataset.paramName));
   });
 
   //check initial checkbox state, check "value" of input and match to "checked" value
@@ -546,8 +554,9 @@ function buildParamContainers(
   }
 }
 
-//HTML-encode a configuration-derived value for use inside a double-quoted
-//attribute or as element text, so it is always parsed as data (#1290).
+//HTML-encode configuration/default/option values for use in buildParamElement's
+//generated form controls. Definition metadata is assigned via DOM properties and
+//textContent instead of being parsed as HTML (#1374).
 //String() keeps the textual form template interpolation produced before.
 function escapeHtml(value) {
   return String(value)
