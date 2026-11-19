@@ -1031,7 +1031,9 @@ class Forecast:
                     q_index = self.forecast_dates
                 stored_bias = cached_q.get("bias")
                 reconstructed: dict[str, object] = {
-                    "bias": stored_bias if stored_bias is not None else self._parse_pv_quantile_bias(),
+                    "bias": stored_bias
+                    if stored_bias is not None
+                    else self._parse_pv_quantile_bias(),
                     "source": cached_q.get("source") or "solcast",
                 }
                 for q_key in ("p50", "p10", "p90"):
@@ -1158,8 +1160,12 @@ class Forecast:
                             source_p50 = []
                             source_p10 = []
                             source_p90 = []
-                            has_p10 = any(elm.get("pv_estimate10") is not None for elm in data["forecasts"])
-                            has_p90 = any(elm.get("pv_estimate90") is not None for elm in data["forecasts"])
+                            has_p10 = any(
+                                elm.get("pv_estimate10") is not None for elm in data["forecasts"]
+                            )
+                            has_p90 = any(
+                                elm.get("pv_estimate90") is not None for elm in data["forecasts"]
+                            )
                             any_roof_has_p10 = any_roof_has_p10 or has_p10
                             any_roof_has_p90 = any_roof_has_p90 or has_p90
                             for elm in data["forecasts"]:

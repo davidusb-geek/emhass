@@ -4417,7 +4417,11 @@ def _infer_timestep_hours(index: pd.Index, ui_meta: dict | None = None) -> float
             pass
     if isinstance(ui_meta, dict):
         meta_dt = ui_meta.get("optimization_time_step_hours")
-        if isinstance(meta_dt, int | float) and math.isfinite(float(meta_dt)) and float(meta_dt) > 0:
+        if (
+            isinstance(meta_dt, int | float)
+            and math.isfinite(float(meta_dt))
+            and float(meta_dt) > 0
+        ):
             return float(meta_dt)
     return 0.5
 
@@ -4446,7 +4450,9 @@ def _battery_power_total(df: pd.DataFrame) -> pd.Series | None:
     ]
     if not multi_cols:
         return None
-    return df[multi_cols].apply(pd.to_numeric, errors="coerce").astype(float).sum(axis=1, min_count=1)
+    return (
+        df[multi_cols].apply(pd.to_numeric, errors="coerce").astype(float).sum(axis=1, min_count=1)
+    )
 
 
 def _build_pv_forecast_quantiles_figure(
@@ -4465,9 +4471,7 @@ def _build_pv_forecast_quantiles_figure(
 
     fig = go.Figure()
     x_idx = df.index
-    q_timestamps = (
-        pv_quantiles.get("timestamps") if isinstance(pv_quantiles, dict) else None
-    )
+    q_timestamps = pv_quantiles.get("timestamps") if isinstance(pv_quantiles, dict) else None
 
     def _to_utc_index(idx_like: object) -> pd.DatetimeIndex | None:
         try:
@@ -4850,7 +4854,9 @@ def _build_energy_pie_figure(df: pd.DataFrame, ui_meta: dict | None = None) -> s
             demand_values.append(round(chg_kwh, 3))
 
     if "P_Load" in df.columns:
-        base_kwh = _sum_kwh(pd.to_numeric(df["P_Load"], errors="coerce").astype(float).clip(lower=0.0))
+        base_kwh = _sum_kwh(
+            pd.to_numeric(df["P_Load"], errors="coerce").astype(float).clip(lower=0.0)
+        )
         if base_kwh > 1e-4:
             demand_labels.append("Base Home Load")
             demand_values.append(round(base_kwh, 3))
@@ -5034,7 +5040,10 @@ def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | N
                 fcst_idx = fcst_idx.tz_localize("UTC")
             # Align by (hour, minute) diurnal median + IQR band as benchmark
             slot_df = pd.DataFrame(
-                {"val": hist_clean.to_numpy(dtype=float), "hm": list(zip(hist_idx.hour, hist_idx.minute, strict=True))}
+                {
+                    "val": hist_clean.to_numpy(dtype=float),
+                    "hm": list(zip(hist_idx.hour, hist_idx.minute, strict=True)),
+                }
             )
             grouped = slot_df.groupby("hm")["val"]
             med_map = grouped.median().to_dict()
@@ -5154,7 +5163,9 @@ def _build_federated_figures(df: pd.DataFrame) -> dict[str, str]:
                 if scalar_col in df.columns:
                     val = pd.to_numeric(df[scalar_col], errors="coerce").iloc[0]
                     if pd.notna(val):
-                        fmt = f"{int(val)}" if scalar_col == "fed_iterations" else f"{float(val):.4f}"
+                        fmt = (
+                            f"{int(val)}" if scalar_col == "fed_iterations" else f"{float(val):.4f}"
+                        )
                         meta_parts.append(f"{label}={fmt}")
             meta_txt = f" ({', '.join(meta_parts)})" if meta_parts else ""
             fig_shares = go.Figure(
@@ -5410,9 +5421,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         if c in ("fed_lower_bound", "fed_gap", "fed_iterations") or c.startswith("fed_share_")
     ]
     summary_scalars = {c: df[c].iloc[0] for c in fed_scalar_cols if not df.empty}
-    drop_from_table1 = [
-        c for c in df.columns if c in _UI_DROP_TABLE_COLS or c in fed_scalar_cols
-    ]
+    drop_from_table1 = [c for c in df.columns if c in _UI_DROP_TABLE_COLS or c in fed_scalar_cols]
     df_table1 = df.drop(columns=drop_from_table1) if drop_from_table1 else df
 
     # Tables
@@ -5676,10 +5685,7 @@ def _emhass_thermal_step_delta(
     """First-order EMHASS thermal balance step delta."""
     p_def, t_in, t_out = inputs
     sign = 1.0 if sense == "heat" else -1.0
-    return (
-        sign * alpha_h * dt_hours * (p_def / nominal_power)
-        - gamma_c * dt_hours * (t_in - t_out)
-    )
+    return sign * alpha_h * dt_hours * (p_def / nominal_power) - gamma_c * dt_hours * (t_in - t_out)
 
 
 def _simulate_thermal_trajectory(
@@ -5716,10 +5722,9 @@ def _simulate_thermal_trajectory(
         if i == 0 or not obs[i - 1] or not contig[i - 1] or not np.isfinite(t_sim[i]):
             t_sim[i] = t_actual[i]
         if contig[i] and i + 1 < n and obs[i + 1]:
-            delta = (
-                sign * alpha_h * dt_hours * (p_shifted[i] / nominal_power)
-                - gamma_c * dt_hours * (t_sim[i] - t_out[i])
-            )
+            delta = sign * alpha_h * dt_hours * (
+                p_shifted[i] / nominal_power
+            ) - gamma_c * dt_hours * (t_sim[i] - t_out[i])
             t_sim[i + 1] = t_sim[i] + delta
     return t_sim
 
@@ -5805,7 +5810,9 @@ async def _fetch_influx_thermal_window(
             f"GROUP BY time({dt_minutes}m) fill(none)"
         )
         res = await _run_q(session, q)
-        return pd.to_numeric(res["val"], errors="coerce") if not res.empty else pd.Series(dtype=float)
+        return (
+            pd.to_numeric(res["val"], errors="coerce") if not res.empty else pd.Series(dtype=float)
+        )
 
     async def _fetch_switch(
         session: aiohttp.ClientSession, eid: str, target_index: pd.DatetimeIndex
@@ -5849,8 +5856,12 @@ async def _fetch_influx_thermal_window(
         t_out = await _fetch_num(session, entity_t_out)
         if t_out.empty:
             return pd.DataFrame()
-        p_direct = await _fetch_num(session, entity_power) if entity_power else pd.Series(dtype=float)
-        t_set = await _fetch_num(session, entity_t_pred) if entity_t_pred else pd.Series(dtype=float)
+        p_direct = (
+            await _fetch_num(session, entity_power) if entity_power else pd.Series(dtype=float)
+        )
+        t_set = (
+            await _fetch_num(session, entity_t_pred) if entity_t_pred else pd.Series(dtype=float)
+        )
         sw_duty = await _fetch_switch(session, entity_switch, t_in.index)
 
     frame = pd.DataFrame({"T_in": t_in, "T_out": t_out})
@@ -5867,7 +5878,10 @@ async def _fetch_influx_thermal_window(
         frame["P_def"] = sw_duty.reindex(frame.index).fillna(1.0) * clim_duty * nominal_power
     else:
         frame["P_def"] = sw_duty.reindex(frame.index).fillna(0.0) * nominal_power
-    logger.info("Loaded %d InfluxDB rows for thermal model tuning", len(frame.dropna(subset=["T_in", "T_out", "P_def"])))
+    logger.info(
+        "Loaded %d InfluxDB rows for thermal model tuning",
+        len(frame.dropna(subset=["T_in", "T_out", "P_def"])),
+    )
     return frame.dropna(subset=["T_in", "T_out", "P_def"])
 
 
@@ -5879,7 +5893,10 @@ def _build_offline_demo_thermal_frame(
     end_ts = pd.Timestamp.now(tz="UTC").floor(f"{int(round(dt_hours * 60))}min")
     idx = pd.date_range(end=end_ts, periods=n_steps, freq=f"{int(round(dt_hours * 60))}min")
     t_out = np.array(
-        [8.5 + 4.5 * math.sin((i / max(n_steps, 1) - 0.25) * 2.0 * math.pi) for i in range(n_steps)],
+        [
+            8.5 + 4.5 * math.sin((i / max(n_steps, 1) - 0.25) * 2.0 * math.pi)
+            for i in range(n_steps)
+        ],
         dtype=float,
     )
     t_set = np.array(
@@ -5990,7 +6007,9 @@ async def compute_thermal_model_calibration(
     entity_t_in = str(rt.get("entity_t_in") or "sensor.temp_air_in").strip()
     entity_t_out = str(rt.get("entity_t_out") or "sensor.outdoor_temperature").strip()
     entity_power = str(rt.get("entity_power") or f"sensor.p_deferrable{load_index}").strip()
-    entity_t_pred = str(rt.get("entity_t_pred") or f"sensor.temp_predicted_{load_index}_proxy").strip()
+    entity_t_pred = str(
+        rt.get("entity_t_pred") or f"sensor.temp_predicted_{load_index}_proxy"
+    ).strip()
     entity_switch = str(rt.get("entity_switch") or "switch.floor_heater_switch").strip()
 
     date_ranges = rt.get("date_ranges")
@@ -6013,9 +6032,8 @@ async def compute_thermal_model_calibration(
     data_source = "offline_demo"
 
     # 1. Explicit arrays in runtimeparams
-    if (
-        isinstance(rt.get("indoor_temperature"), list)
-        and isinstance(rt.get("outdoor_temperature"), list)
+    if isinstance(rt.get("indoor_temperature"), list) and isinstance(
+        rt.get("outdoor_temperature"), list
     ):
         t_in_arr = pd.to_numeric(pd.Series(rt["indoor_temperature"]), errors="coerce")
         t_out_arr = pd.to_numeric(pd.Series(rt["outdoor_temperature"]), errors="coerce")
@@ -6024,7 +6042,9 @@ async def compute_thermal_model_calibration(
             end_ts = pd.Timestamp.now(tz="UTC").floor(f"{dt_minutes}min")
             idx = pd.date_range(end=end_ts, periods=n, freq=f"{dt_minutes}min")
             if isinstance(rt.get("heater_power"), list) and len(rt["heater_power"]) >= n:
-                p_arr = pd.to_numeric(pd.Series(rt["heater_power"][:n]), errors="coerce").fillna(0.0)
+                p_arr = pd.to_numeric(pd.Series(rt["heater_power"][:n]), errors="coerce").fillna(
+                    0.0
+                )
             else:
                 p_arr = pd.Series(0.0, index=idx)
             candidate_df = pd.DataFrame(
@@ -6035,7 +6055,10 @@ async def compute_thermal_model_calibration(
                 },
                 index=idx,
             )
-            if isinstance(rt.get("predicted_temperature"), list) and len(rt["predicted_temperature"]) >= n:
+            if (
+                isinstance(rt.get("predicted_temperature"), list)
+                and len(rt["predicted_temperature"]) >= n
+            ):
                 candidate_df["T_set"] = pd.to_numeric(
                     pd.Series(rt["predicted_temperature"][:n]), errors="coerce"
                 ).to_numpy(dtype=float)
@@ -6469,7 +6492,9 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
 
     # Figure 1: RMSE & Fitted Constants Across Inertia Lags
     fig_lags = make_subplots(specs=[[{"secondary_y": True}]])
-    x_lags = [f"{row['thermal_inertia_h']}h ({row['lag_steps']} steps)" for _, row in lag_df.iterrows()]
+    x_lags = [
+        f"{row['thermal_inertia_h']}h ({row['lag_steps']} steps)" for _, row in lag_df.iterrows()
+    ]
     fig_lags.add_trace(
         go.Bar(
             x=x_lags,
@@ -6586,9 +6611,18 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
         "</div>"
     )
 
-    preview_cols = [c for c in ("T_in", "T_pred_current", "T_pred_tuned", "T_out", "P_def", "dT_actual") if c in series_df.columns]
+    preview_cols = [
+        c
+        for c in ("T_in", "T_pred_current", "T_pred_tuned", "T_out", "P_def", "dT_actual")
+        if c in series_df.columns
+    ]
     table1 = lag_df.to_html(classes="mystyle", index=False)
-    table2 = series_df[preview_cols].round(3).reset_index(names="Timestamp").to_html(classes="mystyle", index=False)
+    table2 = (
+        series_df[preview_cols]
+        .round(3)
+        .reset_index(names="Timestamp")
+        .to_html(classes="mystyle", index=False)
+    )
 
     return {
         "title": "<h2>Thermal Model Validation &amp; Parameter Auto-Tuning</h2>",
