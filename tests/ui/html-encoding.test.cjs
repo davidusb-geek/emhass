@@ -430,14 +430,57 @@ test('JSON box view round trips configuration strings through the textarea value
   assert.deepEqual(await page.save(), config);
 });
 
-// ---- definitions metadata (friendly_name, Description, parameter name) must be rendered as data ----------
-// buildParamContainers() writes this metadata into the section markup; the page then parses it as HTML.
-function renderSection(definitions, config = {}) {
-  const body = { innerHTML: '' };
+// ---- definition metadata and array control names -------------------------------------------
+// A lightweight DOM stand-in captures node creation without interpreting markup
+// supplied as metadata; the generated input fragment still uses the HTML tokenizer.
+function renderSectionState(definitions, config = {}) {
+  const encode = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  const nodes = [];
+  const createElement = tag => {
+    const node = {
+      tag, attrs: {}, children: [], dataset: {}, events: {},
+      set className(v) { this.attrs.class = v; },
+      set id(v) { this.attrs.id = v; },
+      set type(v) { this.attrs.type = v; },
+      set textContent(v) { this.children = [{ text: String(v) }]; },
+      append(...children) { this.children.push(...children); },
+      addEventListener(name, callback) { this.events[name] = callback; },
+    };
+    nodes.push(node);
+    return node;
+  };
+  const render = node => {
+    if (node.rawHtml !== undefined) return node.rawHtml;
+    if (node.text !== undefined) return encode(node.text);
+    const attrs = { ...node.attrs };
+    for (const [name, value] of Object.entries(node.dataset)) {
+      attrs['data-' + name.replace(/[A-Z]/g, c => '-' + c.toLowerCase())] = value;
+    }
+    return '<' + node.tag + Object.entries(attrs).map(([key, value]) =>
+      ' ' + key + '="' + encode(value) + '"').join('') + '>' +
+      node.children.map(render).join('') + '</' + node.tag + '>';
+  };
+  const body = createElement('div');
+  const section = {
+    getElementsByClassName: () => [body],
+    querySelectorAll: selector => nodes.filter(node =>
+      selector === 'input[type=\'checkbox\']' ? false :
+        node.attrs.class === selector.slice(1)),
+  };
   const ctx = setup();
-  ctx.document.getElementById = id => (id === 'Section' ? { getElementsByClassName: () => [body], querySelectorAll: () => [] } : null);
+  ctx.document.getElementById = id => (id === 'Section' ? section : null);
+  ctx.document.createElement = createElement;
+  ctx.document.createTextNode = value => ({ text: String(value) });
+  ctx.document.createRange = () => ({
+    selectNodeContents() {},
+    createContextualFragment: html => ({ rawHtml: html }),
+  });
   ctx.buildParamContainers('Section', definitions, config, []);
-  return body.innerHTML;
+  return { html: body.children.map(render).join(''), nodes, ctx };
+}
+function renderSection(definitions, config = {}) {
+  return renderSectionState(definitions, config).html;
 }
 const textBetween = (html, open, close) => {
   const start = html.indexOf(open) + open.length;
@@ -452,7 +495,7 @@ for (const marker of METADATA_MARKERS) {
     const html = renderSection({ param: entry({ friendly_name: marker, Description: marker, input: 'string' }) });
     const elements = parseElements(html);
     assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
-    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value'].includes(n))));
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value', 'data-param-name'].includes(n))));
     assert.equal(textBetween(html, '<h5>', ':</h5>'), marker);
     assert.equal(textBetween(html, '<p>', '</p>'), marker);
   });
@@ -461,11 +504,14 @@ for (const marker of METADATA_MARKERS) {
     const html = renderSection({ [marker]: entry({ input: 'array.string', default_value: 'x' }) });
     const elements = parseElements(html);
     assert.deepEqual(elements.map(e => e.tag).filter(t => !GENERATED_TAGS.includes(t)), []);
-    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value'].includes(n))));
+    assert.ok(elements.every(e => Object.keys(e.attrs).every(n => ['class', 'id', 'type', 'placeholder', 'value', 'data-param-name'].includes(n))));
     assert.equal(elements.find(e => e.attrs.id !== undefined).attrs.id, marker);
     assert.equal(textBetween(html, '<i>', '</i>'), marker);
     assert.equal(elements.filter(e => e.tag === 'button').length, 2);
-    for (const button of elements.filter(e => e.tag === 'button')) assert.equal(button.attrs.class.replace(/^input-(plus|minus) /, ''), marker);
+    for (const button of elements.filter(e => e.tag === 'button')) {
+      assert.ok(['input-plus', 'input-minus'].includes(button.attrs.class));
+      assert.equal(button.attrs['data-param-name'], marker);
+    }
   });
 }
 
@@ -487,4 +533,32 @@ test('every shipped friendly_name and Description renders as its own text, inclu
   const text = definitions.Local.victoriametrics_metric_regex.Description;
   assert.ok(text.includes('<unit>_value'));
   assert.ok(!renderSection({ r: definitions.Local.victoriametrics_metric_regex }).includes('<unit>'));
+});
+
+test('array button handlers retain full names containing spaces and markup', () => {
+  const name = 'two words <unit> "quoted" & more';
+  const page = renderSectionState({ [name]: entry({ input: 'array.string', default_value: 'x' }) });
+  const buttons = page.nodes.filter(node => ['input-plus', 'input-minus'].includes(node.attrs.class));
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].dataset.paramName, name);
+  assert.equal(buttons[1].dataset.paramName, name);
+  assert.equal(typeof buttons[0].events.click, 'function');
+  assert.equal(typeof buttons[1].events.click, 'function');
+
+  // The callback must never reconstruct a name from a classList token.
+  const sourceSection = source.slice(source.indexOf('function buildParamContainers('), source.indexOf('function escapeHtml('));
+  assert.ok(!sourceSection.includes('classList[1]'));
+  assert.ok(sourceSection.includes('answer.dataset.paramName'));
+});
+
+test('rendered section metadata never writes via innerHTML, including hostile markup', () => {
+  const hostile = '<marker-element onclick="bad()"> & "quoted"';
+  const html = renderSection({ [hostile]: entry({ friendly_name: hostile, Description: hostile }) });
+  const elements = parseElements(html);
+  assert.ok(!elements.some(e => e.tag === 'marker-element'));
+  assert.ok(!elements.some(e => 'onclick' in e.attrs));
+  assert.equal(elements.find(e => e.attrs.id !== undefined).attrs.id, hostile);
+  assert.equal(textBetween(html, '<p>', '</p>'), hostile);
+  // renderSectionState's body has no innerHTML property: a write would not
+  // generate the HTML under test, so the assertions also cover DOM append.
 });
