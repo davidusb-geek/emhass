@@ -5452,6 +5452,246 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total_heating_energy = opt_res["P_deferrable0"].sum()
         self.assertGreaterEqual(total_heating_energy, 0, "Heat pump energy must be non-negative")
 
+    def _run_thermal_battery_cap(self, max_thermal_power, outdoor_temps=None):
+        """One standalone thermal_battery that cannot coast on stored heat, with a
+        single cheap window in which an uncapped heat pump banks at nominal power.
+
+        50 m3 of concrete is 29.33 kWh/K, so the 1 K between start and minimum holds
+        29.33 kWh while the day needs 36 kWh (0.75 kWh/step, `specific_heating_demand`
+        60 kWh/m2/yr over 100 m2): the source has to run. `max_thermal_power`
+        (W thermal, or None) caps cop * electrical.
+        """
+        thermal_config = {
+            "start_temperature": 19.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 60.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [65.0] * 48,
+        }
+        if max_thermal_power is not None:
+            thermal_config["max_thermal_power"] = max_thermal_power
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = (
+            np.zeros(48) if outdoor_temps is None else outdoor_temps
+        )
+        self.optim_conf["def_load_config"] = [{"thermal_battery": thermal_config}]
+        opt = self.create_optimization()
+        # One cheap window: at 0.01 against a 0.30 baseline the uncapped unit
+        # concentrates its banking there, well above any sane thermal cap.
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            self.df_input_data_dayahead[opt.var_prod_price].values,
+        )
+        return opt, res, thermal_config
+
+    def _delivered_heat_kwh(self, res, thermal_config, outdoor_temps):
+        """cop * electrical * dt per step, in kWh of delivered heat."""
+        cops = np.asarray(
+            utils.resolve_thermal_battery_cop(thermal_config, outdoor_temps, length=48)
+        )
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        return res["P_deferrable0"].reset_index(drop=True).to_numpy() * cops / 1000 * timestep_h
+
+    def test_thermal_battery_max_thermal_power_caps_delivered_heat(self):
+        """`max_thermal_power` bounds cop * p on a standalone thermal_battery (#1324).
+
+        Before the fix the field was read only by the shared-tank builder, so a
+        thermal_battery load was free to deliver cop * nominal_power - here 3000 W of
+        electricity times a COP near 3.5, i.e. over 10 kW of heat from a source rated
+        at 1 kW.
+        """
+        cap = 1000.0  # W of delivered heat
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        cap_kwh = cap / 1000 * timestep_h
+        outdoor_temps = np.zeros(48)
+
+        opt0, res0, cfg0 = self._run_thermal_battery_cap(max_thermal_power=None)
+        self.assertEqual(opt0.optim_status, "Optimal")
+        delivered0 = self._delivered_heat_kwh(res0, cfg0, outdoor_temps)
+        self.assertGreater(
+            delivered0.max(),
+            cap_kwh,
+            "the uncapped run must exceed the cap somewhere, else the test is vacuous",
+        )
+
+        opt1, res1, cfg1 = self._run_thermal_battery_cap(max_thermal_power=cap)
+        self.assertEqual(opt1.optim_status, "Optimal")
+        delivered1 = self._delivered_heat_kwh(res1, cfg1, outdoor_temps)
+        self.assertTrue(
+            np.all(delivered1 <= cap_kwh + 1e-6),
+            f"delivered heat {delivered1.max():.4f} kWh/step exceeds the "
+            f"{cap_kwh:.4f} kWh/step ceiling",
+        )
+        # A cap that never binds would let this test pass for the wrong reason: the
+        # cheap window is where the unit wants to bank, so it has to sit at the cap.
+        self.assertGreater(delivered1.max(), 0.9 * cap_kwh)
+
+    def test_thermal_battery_cap_on_level_follows_cop_on_cache_hit(self):
+        """A cache hit re-values the COP; the ON level has to follow it.
+
+        The semi-continuous ON level is built as min(nominal, cap/COP) and rides in
+        a cp.Parameter, so a second solve on the cached problem may not keep the
+        level derived from the first COP: a higher COP shrinks cap/COP, and the
+        stale level would leave the source unable to turn on where the cap binds.
+        """
+        cap = 1000.0
+        warm = np.full(48, 10.0)  # higher COP -> lower ON level
+        cold = np.zeros(48)  # lower COP -> higher ON level
+        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+
+        opt, _, thermal_config = self._run_thermal_battery_cap(cap, outdoor_temps=warm)
+        self.assertEqual(opt.optim_status, "Optimal")
+        cached_problem = opt.prob
+        cop_warm = utils.resolve_thermal_battery_cop(thermal_config, warm, length=48)
+        np.testing.assert_allclose(
+            opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_warm)
+        )
+
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = cold
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        # The second solve has to reuse the cached problem: a rebuild would create a
+        # fresh ON-level Parameter and the refresh path would go untested.
+        self.assertIs(opt.prob, cached_problem, "the cached problem must not be replaced")
+        cop_cold = utils.resolve_thermal_battery_cop(thermal_config, cold, length=48)
+        np.testing.assert_allclose(
+            opt._semi_cont_on_level[0].value, np.minimum(nominal, cap / cop_cold)
+        )
+
+    def test_thermal_battery_cap_warns_when_a_cop_refresh_drops_below_min_power(self):
+        """A cache hit that lowers cap/COP under min_power forces the source off at
+        those steps, so the refresh path has to warn like the build path does."""
+        cap = 6000.0
+        min_power = 1500.0
+        cold = np.zeros(48)  # COP 3.52 -> cap/COP 1704 W, above min_power
+        warm = np.full(48, 10.0)  # COP 4.93 -> cap/COP 1217 W, below it
+
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        opt, _, _ = self._run_thermal_battery_cap(cap, outdoor_temps=cold)
+        self.assertEqual(opt.optim_status, "Optimal")
+
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = warm
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        with self.assertLogs(opt.logger, level="WARNING") as logs:
+            opt.perform_optimization(
+                df,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                prices,
+                df[opt.var_prod_price].values,
+            )
+        self.assertTrue(
+            any("max_thermal_power allows" in line for line in logs.output),
+            f"expected the capped-level warning, got: {logs.output}",
+        )
+
+    def test_thermal_battery_cap_releases_a_forced_run_at_a_step_it_cannot_serve(self):
+        """A forced run pinned where `max_thermal_power` leaves less than
+        `min_power` must be released, not left to make the model infeasible.
+
+        6000 W of thermal ceiling at 10 C outdoor is cap/COP = 1217 W, below a
+        1500 W minimum, so step 0 cannot run. The min-on remainder still pins it on
+        there (the load is currently running), and before the release both the
+        solve and the relaxed retry returned Infeasible.
+        """
+        cap = 6000.0
+        min_power = 1500.0
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        self.optim_conf["def_minimum_on_time"] = [2, 0]
+        self.optim_conf["def_current_state"] = [True, False]
+        self.optim_conf["def_current_on_timesteps"] = [1, 0]
+
+        opt, _, _ = self._run_thermal_battery_cap(cap, outdoor_temps=np.zeros(48))
+        self.assertEqual(opt.optim_status, "Optimal")
+        # At 0 C cap/COP is 1704 W, above the minimum, so the forced run stands.
+        np.testing.assert_array_equal(
+            np.asarray(opt.param_running_lb[0].value) > 0, [True] + [False] * 47
+        )
+
+        warm_step = np.zeros(48)
+        warm_step[0] = 10.0
+        df = self.df_input_data_dayahead.copy()
+        df["outdoor_temperature_forecast"] = warm_step
+        prices = np.full(48, 0.30)
+        prices[8:11] = 0.01
+        res = opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            prices,
+            df[opt.var_prod_price].values,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        np.testing.assert_array_equal(
+            opt._capped_steps_below_min_power(0, 48), [True] + [False] * 47
+        )
+        self.assertFalse(
+            np.any(np.asarray(opt.param_running_lb[0].value) > 0),
+            "the forced run must end at the step the cap cannot serve",
+        )
+        self.assertEqual(float(res["P_deferrable0"].iloc[0]), 0.0)
+
+    def test_thermal_battery_cap_releases_a_forced_run_on_the_first_solve(self):
+        """The capped-load registry is filled by the constraint build, which runs
+        after the per-solve parameter update, so the release has to run after the
+        build: on a process's first plan that registry does not exist yet."""
+        cap = 6000.0
+        min_power = 1500.0
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [min_power, 0]
+        self.optim_conf["def_minimum_on_time"] = [2, 0]
+        self.optim_conf["def_current_state"] = [True, False]
+        self.optim_conf["def_current_on_timesteps"] = [1, 0]
+
+        # Only step 0 is warm: cap/COP = 1217 W there, below the 1500 W minimum,
+        # while every cold step can still run at 1704 W.
+        warm_step = np.zeros(48)
+        warm_step[0] = 10.0
+        opt, res, _ = self._run_thermal_battery_cap(cap, outdoor_temps=warm_step)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertFalse(
+            np.any(np.asarray(opt.param_running_lb[0].value) > 0),
+            "the forced run must end at the step the cap cannot serve",
+        )
+        self.assertEqual(float(res["P_deferrable0"].iloc[0]), 0.0)
+
+    def test_thermal_battery_max_thermal_power_must_be_positive_and_finite(self):
+        """A non-positive or non-finite `max_thermal_power` is a configuration
+        error: NaN slips past a `<= 0` test and then crashes CVXPY on the nonneg
+        ON-level Parameter, while inf would silently disable the cap."""
+        thermal_config = {
+            "start_temperature": 19.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 150.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "max_thermal_power": 0.0,
+        }
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            thermal_config["max_thermal_power"] = bad
+            with self.assertRaises(ValueError) as ctx:
+                self.run_thermal_battery_optimization(thermal_config, outdoor_temps=np.zeros(48))
+            self.assertIn("max_thermal_power", str(ctx.exception))
+
     def test_thermal_battery_infeasible_temperature_constraints(self):
         """Test optimizer handles infeasible thermal battery configuration (min_temperatures > max_temperatures)."""
         self.df_input_data_dayahead = self.prepare_forecast_data()

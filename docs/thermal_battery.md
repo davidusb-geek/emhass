@@ -34,6 +34,7 @@ These parameters define the basic thermal battery system:
     * Radiator systems: typically 50-70°C
     * Lower temperatures = better heat pump efficiency
     * Example: `35.0` for underfloor heating
+    * It may also be a per-timestep list or Series, one value per optimization step, for a supply profile no outdoor-temperature curve can express - for example charging the thermal mass above the weather-compensation curve for the cheap hours before a cold snap. A single-element list means the same as the scalar, a longer list is truncated to the horizon, and a shorter one is rejected. Every entry must be a number: strings and booleans are rejected instead of being converted.
     * Note: this drives the COP only - it is not enforced as a physical ceiling. To stop the optimiser heating the tank above the supply temperature, keep `max_temperatures` at or below it. In a [heat_topology](heat_topology.md), set the source's `max_supply_temperature` instead.
 
 * **volume**: Volume of the thermal storage medium in m³.
@@ -68,6 +69,18 @@ These parameters define the basic thermal battery system:
     * Standard on/off heat pumps: 0.35-0.42
     * Example: `0.42`
     * See the calibration section below for how to determine this
+
+### Delivered-heat ceiling
+
+The heat the model may inject is otherwise bounded only by `cop * nominal_power_of_deferrable_loads`, which in mild weather can be far above what the unit or the emitters can physically deliver. Set:
+
+* **max_thermal_power**: Optional hard ceiling in W on the delivered heat at every timestep, `COP * electrical power`.
+    * Set it to the unit's rated thermal output (e.g. `8000` for an 8 kW heat pump)
+    * Omitted (the default) means no ceiling beyond `cop * nominal_power`
+    * A semi-continuous load runs at `min(nominal_power, max_thermal_power / COP)` per step, so a binding cap throttles the unit instead of forcing it off
+    * Must be positive; `0` or a negative value is rejected
+
+The same field exists per source in the [heat topology](heat_topology.md) graph, where one value caps every flow of that source together.
 
 ### Surface solar gain (pool, outdoor tank, solar-thermal)
 

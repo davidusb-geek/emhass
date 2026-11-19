@@ -1215,18 +1215,7 @@ class Optimization:
                             "running cannot be interrupted."
                         )
             if k < len(self.param_running_lb):
-                lb = np.asarray(self.param_running_lb[k].value, dtype=float).copy()
-                blocked_forced = np.flatnonzero(cannot_run & (lb > 0))
-                if blocked_forced.size:
-                    # The forced run ends at the first step the load cannot run.
-                    lb[blocked_forced[0] :] = 0.0
-                    self.param_running_lb[k].value = lb
-                    if k < len(self.param_min_on_full_lb):
-                        self.param_min_on_full_lb[k].value = np.minimum(
-                            np.asarray(self.param_min_on_full_lb[k].value, dtype=float), lb
-                        )
-                    if k < len(self.param_already_running_sc):
-                        self.param_already_running_sc[k].value = 0.0
+                self._release_force_on_at(k, cannot_run)
             if (
                 k < len(self.param_def_current_power_active)
                 and self.param_def_current_power_active[k].value > 0
@@ -1247,6 +1236,66 @@ class Optimization:
                 int(np.sum((avail > 0.0) & (avail < 1.0))),
                 len(avail),
             )
+
+    def _release_force_on_at(self, k: int, cannot_run: np.ndarray) -> None:
+        """End a forced run at the first step the load cannot run.
+
+        A forced run (single-constant pin, min-on remainder, current-power
+        force-on) pins ``p_def_bin2[k] >= 1``. Where the load cannot run at all -
+        ``def_availability`` blocks the step, or ``max_thermal_power`` leaves a
+        ceiling below its minimum power - that pin contradicts the power bounds
+        and makes the MILP infeasible. The run ends at the first such step, and a
+        single-constant load loses its "already running" credit there, so the
+        rest of its run counts as a new block.
+
+        A released step is also released from the "full step only" mask of a
+        still-running minimum on-time (#1105), so the fractional remainder step
+        is free to land where the run ends.
+        """
+        if k >= len(self.param_running_lb):
+            return
+        lb = np.asarray(self.param_running_lb[k].value, dtype=float).copy()
+        blocked_forced = np.flatnonzero(cannot_run & (lb > 0))
+        if not blocked_forced.size:
+            return
+        lb[blocked_forced[0] :] = 0.0
+        self.param_running_lb[k].value = lb
+        min_on_full_lb = getattr(self, "param_min_on_full_lb", [])
+        if k < len(min_on_full_lb):
+            min_on_full_lb[k].value = np.minimum(
+                np.asarray(min_on_full_lb[k].value, dtype=float), lb
+            )
+        if k < len(self.param_already_running_sc):
+            self.param_already_running_sc[k].value = 0.0
+
+    def _capped_steps_below_min_power(self, k: int, n: int) -> np.ndarray:
+        """Steps where ``max_thermal_power`` leaves no room for the load's
+        minimum power: ``cap / COP < min_power`` makes the step impossible to run,
+        because the thermal ceiling and the electrical floor contradict each
+        other there. Empty for every load that is not capped."""
+        cap_entry = getattr(self, "_thermal_cap_by_load", {}).get(k)
+        if cap_entry is None:
+            return np.zeros(n, dtype=bool)
+        min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
+        if min_powers is None:
+            min_powers = self.optim_conf.get("minimum_power_of_deferrable_loads") or []
+        min_power = float(min_powers[k]) if k < len(min_powers) and min_powers[k] else 0.0
+        if min_power <= 0:
+            return np.zeros(n, dtype=bool)
+        # The live parameter carries the COP a cache hit refreshed; the recorded
+        # array is the build-time fallback.
+        params = getattr(self, "param_thermal", {}).get(k)
+        cops = None
+        if params is not None and "heatpump_cops" in params:
+            cops = np.asarray(params["heatpump_cops"].value, dtype=float)
+        if cops is None or cops.size != n:
+            cops = np.asarray(cap_entry[1], dtype=float)
+            if cops.size == 1:
+                cops = np.full(n, float(cops[0]))
+        if cops.size != n:
+            # A horizon the build did not see: no reliable per-step answer.
+            return np.zeros(n, dtype=bool)
+        return float(cap_entry[0]) / np.maximum(cops, 1e-9) < min_power
 
     def _init_current_period_peak_param(self) -> None:
         """Initialize the CVXPY parameter for the peak grid import already
@@ -2400,6 +2449,40 @@ class Optimization:
                 # flat value for constant-efficiency sources like gas boilers).
                 heatpump_cops = utils.resolve_thermal_battery_cop(hc, outdoor_temp, length=n)
                 params["heatpump_cops"].value = np.array(heatpump_cops)
+
+                # A cache hit re-values the COP but cannot re-add constraints, so the
+                # semi-continuous ON level (built as min(nominal, cap/COP)) has to
+                # follow: a higher COP shrinks cap/COP, and keeping the old level would
+                # leave the source unable to turn on where the cap binds.
+                cap_entry = getattr(self, "_thermal_cap_by_load", {}).get(k)
+                if cap_entry is not None:
+                    on_level = getattr(self, "_semi_cont_on_level", {}).get(k)
+                    if on_level is not None:
+                        nominal = np.broadcast_to(
+                            np.asarray(
+                                self.optim_conf["nominal_power_of_deferrable_loads"][k],
+                                dtype=float,
+                            ),
+                            on_level.shape,
+                        )
+                        on_level.value = np.minimum(
+                            nominal,
+                            float(cap_entry[0])
+                            / np.maximum(
+                                np.asarray(heatpump_cops, dtype=float)[: on_level.size], 1e-9
+                            ),
+                        )
+                    # The refreshed COP can also push cap/COP under min_power, which
+                    # forces the source off at those steps: warn, exactly as the
+                    # build path and the DP refinement do.
+                    self._warn_capped_level_below_min_power(
+                        "Thermal battery load",
+                        k,
+                        heatpump_cops,
+                        cap_entry[0],
+                        n,
+                        when="after a COP refresh",
+                    )
 
                 # Thermal losses and heating demand
                 base_loss = hc.get("thermal_loss", 0.045)
@@ -5473,6 +5556,45 @@ class Optimization:
 
         constraints.append(predicted_temp_thermal[0] == start_temperature)
 
+        # Delivered-heat ceiling (issue #1324). `max_thermal_power` is the source's
+        # rated thermal output; without this bound the only ceiling on the heat the
+        # model may inject is cop * nominal_power, so a high mild-weather COP plans
+        # more heat than the emitter can physically deliver. The field sits with the
+        # other source-side fields (`thermal_source`, legacy fallback `thermal_battery`),
+        # exactly where the shared-tank builder reads it.
+        thermal_cap = self._get_load_source_config(k).get("max_thermal_power")
+        if thermal_cap is not None:
+            thermal_cap = float(thermal_cap)
+            # A NaN cap would pass `<= 0` and then crash CVXPY when it reaches the
+            # nonneg ON-level Parameter; an infinite one would silently mean "no
+            # cap". The heat-topology compiler rejects both, so the standalone
+            # path does too.
+            if not np.isfinite(thermal_cap) or thermal_cap <= 0:
+                raise ValueError(
+                    f"Load {k}: 'max_thermal_power' must be a positive finite number, "
+                    f"got {thermal_cap}"
+                )
+            # Same form, and the same DPP-safety argument, as
+            # _add_shared_thermal_tank_constraints: `heatpump_cops` is a cp.Parameter
+            # on a parameterised load and a constant array on the fallback path, so
+            # parameter * variable <= const survives a cache hit unchanged.
+            constraints.append(cp.multiply(heatpump_cops, p_deferrable) <= thermal_cap)
+            cop_vals = np.asarray(
+                heatpump_cops.value if hasattr(heatpump_cops, "value") else heatpump_cops,
+                dtype=float,
+            )
+            # A semi-continuous member runs at p == ON_level * bin with the ON level
+            # defaulting to nominal; a binding cap would leave OFF as the only feasible
+            # state and the source would be silently abandoned. The level has to come
+            # down to min(nominal, cap/COP) - but this builder runs before the load
+            # loop creates that Parameter, so record the cap here and let the
+            # semi-continuous block apply it. update_thermal_params re-applies it when
+            # a cache hit re-values the COP.
+            self._thermal_cap_by_load[k] = (thermal_cap, cop_vals)
+            self._warn_capped_level_below_min_power(
+                "Thermal battery load", k, cop_vals, thermal_cap, required_len
+            )
+
         # Thermal inertia: first-order low-pass filter on heat input
         tau_hours = float(hc.get("thermal_inertia_time_constant", 0.0) or 0.0)
 
@@ -5844,18 +5966,23 @@ class Optimization:
                 return
 
     def _warn_capped_level_below_min_power(
-        self, tank_id, k, cop_vals, thermal_cap, n_steps, after_dp=False
+        self, store_label, k, cop_vals, thermal_cap, n_steps, after_dp=False, when=""
     ):
         """Warn when a capped source cannot run at some steps.
+
+        `store_label` names the storage in the message ("Shared tank 'x'",
+        "Thermal battery load"): the same cap applies to a source feeding a
+        shared tank and to a standalone thermal_battery load.
 
         Where cap/COP < min_power, `cop * p <= cap` and `p >= min_power * bin` leave
         OFF as the only feasible state, whether the source is semi-continuous (its
         ON level is min(nominal, cap/COP)) or continuous, so the source is dropped
         at those steps. That is physically right (the unit cannot modulate below
         its floor), but it must not happen silently: warn rather than lower the
-        floor. After the DP refinement, or in the relaxed-LP rebuild, the warning
-        is repeated only when the number of affected steps changed. Returns that
-        number.
+        floor. `when` names a later re-derivation of the level ("after a COP
+        refresh"); the DP refinement (`after_dp`) and the relaxed-LP rebuild
+        repeat the warning only when the number of affected steps changed.
+        Returns that number.
         """
         cap_over_cop = float(thermal_cap) / np.maximum(np.asarray(cop_vals, dtype=float), 1e-9)
         min_powers = getattr(self, "_min_power_of_deferrable_loads", None)
@@ -5864,20 +5991,20 @@ class Optimization:
         min_power_k = float(min_powers[k]) if k < len(min_powers) and min_powers[k] else 0.0
         below_min = int(np.count_nonzero(cap_over_cop < min_power_k)) if min_power_k > 0 else 0
         counts = self.__dict__.setdefault("_capped_below_min_counts", {})
-        repeat = after_dp or getattr(self, "_relaxed_rebuild", False)
+        repeat = after_dp or bool(when) or getattr(self, "_relaxed_rebuild", False)
         if repeat and counts.get(k) == below_min:
             return below_min
         counts[k] = below_min
         if below_min > 0:
             self.logger.warning(
-                "Shared tank '%s': deferrable load %s cannot run at %s/%s steps%s; its "
+                "%s: deferrable load %s cannot run at %s/%s steps%s; its "
                 "min_power (%s W) exceeds the level max_thermal_power allows "
                 "(cap/COP), so those steps are forced off.",
-                tank_id,
+                store_label,
                 k,
                 below_min,
                 n_steps,
-                " after the DP COP refinement" if after_dp else "",
+                f" {when}" if when else (" after the DP COP refinement" if after_dp else ""),
                 min_power_k,
             )
         return below_min
@@ -6590,7 +6717,9 @@ class Optimization:
                 on_level.value = np.minimum(
                     on_level.value, float(thermal_cap) / np.maximum(cop_vals, 1e-9)
                 )
-            self._warn_capped_level_below_min_power(tank_id, k, cop_vals, thermal_cap, required_len)
+            self._warn_capped_level_below_min_power(
+                f"Shared tank '{tank_id}'", k, cop_vals, thermal_cap, required_len
+            )
 
         # Soft comfort constraints (issue #539): the tank's desired_temperatures
         # set a comfort target whose shortfall is penalized in the objective
@@ -7153,7 +7282,12 @@ class Optimization:
                             base, float(cap_w) / np.maximum(new_cop[: on_level.size], 1e-9)
                         )
                     self._warn_capped_level_below_min_power(
-                        e["tank_id"], hp["load_idx"], new_cop, cap_w, n, after_dp=True
+                        f"Shared tank '{e['tank_id']}'",
+                        hp["load_idx"],
+                        new_cop,
+                        cap_w,
+                        n,
+                        after_dp=True,
                     )
                 # Bound the re-solve to the range the DP priced: at most 1 C above its
                 # peak (below its trough when cooling). A per-step bound at the DP's
@@ -7335,6 +7469,11 @@ class Optimization:
         # nominal). The shared-tank builder lowers it for thermal-capped sources,
         # and the DP COP refinement re-derives it when it re-values the COP.
         self._semi_cont_on_level: dict[int, cp.Parameter] = {}
+        # Thermal cap recorded by the standalone thermal_battery builder, keyed by
+        # load: (max_thermal_power in W, COP array). The ON-level Parameter does not
+        # exist yet when that builder runs, so it is applied here and re-applied by
+        # update_thermal_params when a cache hit re-values the COP.
+        self._thermal_cap_by_load: dict[int, tuple[float, np.ndarray]] = {}
         # Semi-continuous loads that may carry one fractional remainder step (#1105).
         self._semi_cont_remainder: set[int] = set()
 
@@ -7840,6 +7979,17 @@ class Optimization:
                             value=np.broadcast_to(np.asarray(nominal, dtype=float), n).copy(),
                         )
                         self._semi_cont_on_level[k] = on_level
+                        # A standalone thermal_battery with max_thermal_power: lower the
+                        # ON level to min(nominal, cap/COP) per step. With the plain
+                        # nominal, a binding cap would make OFF the only feasible state
+                        # and the source would be silently dropped.
+                        cap_entry = self._thermal_cap_by_load.get(k)
+                        if cap_entry is not None:
+                            cap_w, cap_cops = cap_entry
+                            on_level.value = np.minimum(
+                                on_level.value,
+                                float(cap_w) / np.maximum(np.asarray(cap_cops)[:n], 1e-9),
+                            )
                         if has_remainder:
                             self._add_semi_cont_remainder(
                                 constraints, k, on_level, p_def_bin1[k], p_def_bin2[k]
@@ -9819,6 +9969,14 @@ class Optimization:
             # for, so cached-retry rebuilds see them (issue #1048).
             self._batt_stress_conf = batt_stress_conf
             self._inv_stress_conf = inv_stress_conf
+
+        # A max_thermal_power cap below the load's minimum power forces that step
+        # off, so a forced run pinned there would make the model infeasible -
+        # exactly as a def_availability block does. Released after the build, which
+        # is what fills the registry, so a process's first plan is covered too, and
+        # on every cache hit before the solve.
+        for k in getattr(self, "_thermal_cap_by_load", {}):
+            self._release_force_on_at(k, self._capped_steps_below_min_power(k, n))
 
         # The battery-first import floor (#1253) reads this solve's PV, load and
         # battery power Parameters and the inverter cap the problem was built with,
