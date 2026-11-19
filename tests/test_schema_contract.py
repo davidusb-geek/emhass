@@ -817,41 +817,51 @@ function makeInputContainer() {
 }
 
 const paramDivs = {};
-let buttons = [];
-const body = { _html: "" };
-Object.defineProperty(body, "innerHTML", {
-  get: () => body._html,
-  set: (v) => {
-    body._html = v;
-    for (const [, id] of v.matchAll(/<div class="param" id="([^"]+)">/g)) {
-      if (paramDivs[id]) continue;
-      const c = makeInputContainer();
-      c._inputs.push(makeInput(0)); // the row buildParamElement emitted
-      paramDivs[id] = {
-        id,
-        _c: c,
-        getElementsByClassName: (k) => (k === "param-input" ? [c] : []),
-        getElementsByTagName: (t) => c.getElementsByTagName(t),
-      };
-    }
-    buttons = [...v.matchAll(/class="input-(plus|minus) ([^"]+)"/g)].map(([, kind, name]) => ({
-      classList: ["input-" + kind, name],
-      addEventListener(ev, fn) { if (ev === "click") this._h = fn; },
-    }));
+const nodes = [];
+function makeNode(tag) {
+  const node = {
+    tagName: tag.toUpperCase(), className: "", dataset: {}, children: [], _inputs: [],
+    append(...children) {
+      this.children.push(...children);
+      if (this.className === "param-input") {
+        for (const child of children) {
+          if (child.fragmentHTML !== undefined) {
+            const m = child.fragmentHTML.match(/\\bvalue="([^"]*)"/);
+            this._inputs.push(makeInput(m ? m[1] : "0"));
+          }
+        }
+      }
+    },
+    getElementsByClassName(k) { return this.children.filter(child => child.className === k); },
+    getElementsByTagName(t) { return t === "input" ? this._inputs : []; },
+    insertAdjacentHTML(pos, html) {
+      const m = html.match(/\\bvalue="([^"]*)"/);
+      if (pos === "beforeend") this._inputs.push(makeInput(m ? m[1] : ""));
+    },
+    addEventListener(event, callback) { if (event === "click") this._h = callback; },
+  };
+  nodes.push(node);
+  return node;
+}
+const body = {
+  append(param) {
+    param._c = param.children.find(child => child.className === "param-input");
+    paramDivs[param.id] = param;
   },
-});
+};
 const container = {
   getElementsByClassName: (k) => (k === "section-body" ? [body] : []),
-  querySelectorAll: (sel) => {
-    if (sel === ".input-plus") return buttons.filter((b) => b.classList[0] === "input-plus");
-    if (sel === ".input-minus") return buttons.filter((b) => b.classList[0] === "input-minus");
-    return [];
-  },
+  querySelectorAll: (sel) => nodes.filter(node => node.className === sel.slice(1)),
 };
 var document = {
   getElementById: (id) => (id === SPEC.section ? container : paramDivs[id] || null),
+  createElement: makeNode,
+  createTextNode: value => ({ text: String(value) }),
+  createRange: () => ({
+    selectNodeContents() {},
+    createContextualFragment: html => ({ fragmentHTML: html }),
+  }),
 };
-
 const defs = {};
 for (const [name, input] of Object.entries(SPEC.params)) {
   defs[name] = { input, default_value: input.endsWith("int") ? 1 : 0, friendly_name: name, Description: "d" };
@@ -861,14 +871,14 @@ buildParamContainers(SPEC.section, defs, {}, []);
 const out = { buttons: {}, before: null, after: null, first_value: null, error: null };
 for (const name of Object.keys(SPEC.params)) {
   out.buttons[name] =
-    body._html.includes('class="input-plus ' + name + '"') &&
-    body._html.includes('class="input-minus ' + name + '"');
+    nodes.some(b => b.className === "input-plus" && b.dataset.paramName === name) &&
+    nodes.some(b => b.className === "input-minus" && b.dataset.paramName === name);
 }
 if (SPEC.click) {
   const div = paramDivs[SPEC.click];
   if (SPEC.typed != null) div._c._inputs[0].value = SPEC.typed;
   out.before = div._c._inputs.length;
-  const btn = buttons.find((b) => b.classList[0] === "input-plus" && b.classList[1] === SPEC.click);
+  const btn = nodes.find((b) => b.className === "input-plus" && b.dataset.paramName === SPEC.click);
   try {
     btn._h();
     out.after = div._c._inputs.length;
