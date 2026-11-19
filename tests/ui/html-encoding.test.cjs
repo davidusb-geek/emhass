@@ -545,10 +545,21 @@ test('array button handlers retain full names containing spaces and markup', () 
   assert.equal(typeof buttons[0].events.click, 'function');
   assert.equal(typeof buttons[1].events.click, 'function');
 
-  // The callback must never reconstruct a name from a classList token.
-  const sourceSection = source.slice(source.indexOf('function buildParamContainers('), source.indexOf('function escapeHtml('));
-  assert.ok(!sourceSection.includes('classList[1]'));
-  assert.ok(sourceSection.includes('answer.dataset.paramName'));
+  // Exercise the actual event callbacks, including their full argument contract.
+  const plusCalls = [];
+  const minusCalls = [];
+  page.ctx.plusElements = (...args) => plusCalls.push(args);
+  page.ctx.minusElements = (...args) => minusCalls.push(args);
+  buttons[0].events.click();
+  buttons[1].events.click();
+
+  assert.equal(plusCalls.length, 1);
+  assert.equal(plusCalls[0][0], name);
+  assert.equal(plusCalls[0][1].Section[name].input, 'array.string');
+  assert.equal(plusCalls[0][2], 'Section');
+  assert.deepEqual(Object.keys(plusCalls[0][3]), []);
+  assert.equal(minusCalls.length, 1);
+  assert.equal(minusCalls[0][0], name);
 });
 
 test('rendered section metadata never writes via innerHTML, including hostile markup', () => {
