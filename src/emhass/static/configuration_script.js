@@ -1010,7 +1010,11 @@ function parseInverterCount(raw) {
 
 //#1150: the first input of a param row, or undefined when the row is missing
 function paramInputOf(param_id) {
-  return document.getElementById(param_id)?.getElementsByClassName("param_input")[0];
+  const el = document.getElementById(param_id);
+  if (!el || typeof el.getElementsByClassName !== "function") {
+    return undefined;
+  }
+  return el.getElementsByClassName("param_input")[0];
 }
 
 //#1150: keep the INVERTER_ARRAY_PARAMS at number_of_inverters entries, the way
@@ -1851,7 +1855,13 @@ let thermalLoadStates = [];
 
 function parseTempArrayText(raw) {
   if (Array.isArray(raw)) {
-    return raw.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+    return raw.map((x) => {
+      if (x === null || x === undefined || x === "") {
+        return null;
+      }
+      const n = Number(x);
+      return Number.isFinite(n) ? n : null;
+    });
   }
   const str = String(raw || "").trim();
   if (!str) {
@@ -1861,36 +1871,141 @@ function parseTempArrayText(raw) {
     try {
       const parsed = JSON.parse(str);
       if (Array.isArray(parsed)) {
-        return parsed.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+        return parsed.map((x) => {
+          if (x === null || x === undefined || x === "") {
+            return null;
+          }
+          const n = Number(x);
+          return Number.isFinite(n) ? n : null;
+        });
       }
     } catch (_err) {
       // fall through to CSV split
     }
   }
-  return str
-    .split(/[\s,;]+/)
-    .map((part) => Number(part))
-    .filter((x) => Number.isFinite(x));
+  return str.split(/[,;]+/).map((part) => {
+    const token = part.trim();
+    if (!token || token.toLowerCase() === "null" || token.toLowerCase() === "none") {
+      return null;
+    }
+    const n = Number(token);
+    return Number.isFinite(n) ? n : null;
+  });
+}
+
+// 7 days at 1-minute resolution: upper guard against accidental huge allocations
+const MAX_THERMAL_SCHEDULE_STEPS = 7 * 24 * 60;
+
+function getLocalHourInTimeZone(dateObj, timeZone) {
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(dateObj);
+      const hPart = parts.find((p) => p.type === "hour");
+      const mPart = parts.find((p) => p.type === "minute");
+      if (hPart && mPart) {
+        return Number(hPart.value) + Number(mPart.value) / 60;
+      }
+    } catch (_err) {
+      // fall back to local Date methods if timeZone string is invalid
+    }
+  }
+  return dateObj.getHours() + dateObj.getMinutes() / 60;
+}
+
+function getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, timeZone) {
+  if (!Number.isFinite(stepMin) || stepMin <= 0 || !Number.isFinite(days) || days <= 0) {
+    return null;
+  }
+  const baseDate = firstStepDate instanceof Date ? firstStepDate : new Date();
+  const startMs = baseDate.getTime();
+  const endDate = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate() + Math.round(days),
+    baseDate.getHours(),
+    baseDate.getMinutes(),
+    0,
+    0
+  );
+  // If browser timezone differs from configured IANA zone, compute calendar end via elapsed approx
+  // refined to match local hour across DST transitions.
+  let endMs = endDate.getTime();
+  if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+    try {
+      const targetHour = getLocalHourInTimeZone(baseDate, timeZone);
+      let guessMs = startMs + Math.round(days) * 24 * 3600 * 1000;
+      for (const offsetMin of [0, -60, 60, -30, 30]) {
+        const cand = new Date(guessMs + offsetMin * 60000);
+        if (Math.abs(getLocalHourInTimeZone(cand, timeZone) - targetHour) < 1e-3) {
+          endMs = cand.getTime();
+          break;
+        }
+      }
+    } catch (_err) {
+      // keep endDate
+    }
+  }
+  const totalMin = Math.max(stepMin, Math.round((endMs - startMs) / 60000));
+  return Math.max(1, Math.round(totalMin / stepMin));
 }
 
 function getConfiguredHorizonSteps() {
   const stepEl = paramInputOf("optimization_time_step");
   const daysEl = paramInputOf("delta_forecast_daily");
-  const stepMin = stepEl ? Number(stepEl.value) || 30 : 30;
-  const days = daysEl ? Number(daysEl.value) || 1 : 1;
-  return Math.max(1, Math.round((days * 24 * 60) / stepMin));
+  const stepMin = stepEl ? Number(stepEl.value) : 30;
+  const days = daysEl ? Number(daysEl.value) : 1;
+  if (!Number.isFinite(stepMin) || stepMin <= 0 || !Number.isFinite(days) || days <= 0) {
+    return 48;
+  }
+  const tz = paramInputOf("time_zone")?.value || lastLoadedConfig?.time_zone || "";
+  const steps = getDstAdjustedHorizonSteps(stepMin, days, new Date(), tz);
+  return steps ?? Math.max(1, Math.round((days * 24 * 60) / stepMin));
 }
 
 function buildDayNightTempArrays(opts) {
   const stepEl = paramInputOf("optimization_time_step");
-  const stepMin = stepEl ? Number(stepEl.value) || 30 : 30;
-  const horizon = Math.max(1, Number(opts.horizon) || getConfiguredHorizonSteps());
+  const daysEl = paramInputOf("delta_forecast_daily");
+  const stepMin = stepEl ? Number(stepEl.value) : 30;
+  const days = daysEl ? Number(daysEl.value) : 1;
+  if (!Number.isFinite(stepMin) || stepMin <= 0) {
+    return { error: "optimization_time_step must be a positive number of minutes." };
+  }
+  if (!Number.isFinite(days) || days <= 0) {
+    return { error: "delta_forecast_daily must be a positive number of days." };
+  }
   const rawStart = Number(opts.dayStartHour);
   const rawEnd = Number(opts.dayEndHour);
   const rawFirst = Number(opts.firstStepHour);
   const startH = Number.isFinite(rawStart) ? rawStart : 7;
   const endH = Number.isFinite(rawEnd) ? rawEnd : 22;
   const firstStepHour = Number.isFinite(rawFirst) ? rawFirst : 0;
+  const tz =
+    opts.timeZone || paramInputOf("time_zone")?.value || lastLoadedConfig?.time_zone || "";
+
+  const now = opts.referenceDate instanceof Date ? opts.referenceDate : new Date();
+  const firstStepDate = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    Math.floor(firstStepHour),
+    Math.round((firstStepHour % 1) * 60),
+    0,
+    0
+  );
+  const horizon =
+    Number.isFinite(Number(opts.horizon)) && Number(opts.horizon) > 0
+      ? Number(opts.horizon)
+      : getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, tz);
+  if (!Number.isFinite(horizon) || horizon < 1 || horizon > MAX_THERMAL_SCHEDULE_STEPS) {
+    return {
+      error: `Computed thermal schedule length (${horizon}) exceeds the supported limit (${MAX_THERMAL_SCHEDULE_STEPS} steps). Check optimization_time_step and delta_forecast_daily.`,
+    };
+  }
   const minDay = Number(opts.minDay);
   const minNight = Number(opts.minNight);
   const maxDay = Number(opts.maxDay);
@@ -1898,8 +2013,10 @@ function buildDayNightTempArrays(opts) {
 
   const minArr = [];
   const maxArr = [];
+  const startMs = firstStepDate.getTime();
   for (let i = 0; i < horizon; i++) {
-    const hour = (((firstStepHour * 60 + i * stepMin) / 60) % 24 + 24) % 24;
+    const stepDate = new Date(startMs + i * stepMin * 60000);
+    const hour = getLocalHourInTimeZone(stepDate, tz);
     const isDay =
       startH <= endH ? hour >= startH && hour < endH : hour >= startH || hour < endH;
     minArr.push(isDay ? minDay : minNight);
@@ -1953,10 +2070,10 @@ function renderThermalLoadCards(builderEl, count) {
         '<p class="muted-hint">Standard electrical load (no thermal envelope simulation attached; exports as <code>{}</code>).</p>';
     } else if (state.kind === "thermal_config") {
       const minStr = Array.isArray(tc.min_temperatures)
-        ? tc.min_temperatures.join(", ")
+        ? tc.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
         : "20";
       const maxStr = Array.isArray(tc.max_temperatures)
-        ? tc.max_temperatures.join(", ")
+        ? tc.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
         : "24";
       html += '<div class="thermal-fields-grid">';
       html += `<label>Heating rate (°C/h)<input type="number" step="any" data-field="heating_rate" value="${tc.heating_rate ?? 5.0}" aria-label="Load ${idx} heating rate"></label>`;
@@ -1983,10 +2100,10 @@ function renderThermalLoadCards(builderEl, count) {
       </div>`;
     } else if (state.kind === "thermal_battery") {
       const minStr = Array.isArray(tb.min_temperatures)
-        ? tb.min_temperatures.join(", ")
+        ? tb.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
         : "20";
       const maxStr = Array.isArray(tb.max_temperatures)
-        ? tb.max_temperatures.join(", ")
+        ? tb.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
         : "26";
       html += '<div class="thermal-fields-grid">';
       html += `<label>Supply temp (°C)<input type="number" step="any" data-field="supply_temperature" value="${tb.supply_temperature ?? 35.0}" aria-label="Load ${idx} supply temperature"></label>`;
@@ -2069,8 +2186,14 @@ function renderThermalLoadCards(builderEl, count) {
   builderEl.querySelectorAll(".thermal-load-card").forEach((card) => {
     const idx = Number(card.getAttribute("data-load-index"));
     card.querySelectorAll("[data-field]").forEach((input) => {
-      input.addEventListener("change", () => syncSingleThermalState(card, idx));
-      input.addEventListener("input", () => syncSingleThermalState(card, idx));
+      const markDirtyAndSync = () => {
+        if (input.dataset) {
+          input.dataset.dirty = "1";
+        }
+        syncSingleThermalState(card, idx);
+      };
+      input.addEventListener("change", markDirtyAndSync);
+      input.addEventListener("input", markDirtyAndSync);
     });
     const schedBtn = card.querySelector(".apply-sched-btn");
     if (schedBtn) {
@@ -2078,8 +2201,7 @@ function renderThermalLoadCards(builderEl, count) {
         const minDay = Number(card.querySelector(".sched-min-day").value);
         const minNight = Number(card.querySelector(".sched-min-night").value);
         const maxVal = Number(card.querySelector(".sched-max-day").value);
-        const { minArr, maxArr } = buildDayNightTempArrays({
-          horizon: getConfiguredHorizonSteps(),
+        const built = buildDayNightTempArrays({
           firstStepHour: Number(card.querySelector(".sched-first-hour")?.value ?? 0),
           dayStartHour: Number(card.querySelector(".sched-day-start").value),
           dayEndHour: Number(card.querySelector(".sched-day-end").value),
@@ -2088,13 +2210,23 @@ function renderThermalLoadCards(builderEl, count) {
           maxDay: maxVal,
           maxNight: maxVal,
         });
+        if (built.error) {
+          errorAlert(built.error);
+          return;
+        }
         const minInput = card.querySelector('[data-field="min_temperatures"]');
         const maxInput = card.querySelector('[data-field="max_temperatures"]');
         if (minInput) {
-          minInput.value = minArr.join(", ");
+          minInput.value = built.minArr.join(", ");
+          if (minInput.dataset) {
+            minInput.dataset.dirty = "1";
+          }
         }
         if (maxInput) {
-          maxInput.value = maxArr.join(", ");
+          maxInput.value = built.maxArr.join(", ");
+          if (maxInput.dataset) {
+            maxInput.dataset.dirty = "1";
+          }
         }
         syncSingleThermalState(card, idx);
       });
@@ -2111,6 +2243,10 @@ function syncSingleThermalState(card, idx) {
   card.querySelectorAll("[data-field]").forEach((el) => {
     const field = el.getAttribute("data-field");
     if (field === "min_temperatures" || field === "max_temperatures") {
+      // Preserve loaded temperature arrays verbatim unless this field was explicitly edited
+      if (Array.isArray(bucket[field]) && (!el.dataset || el.dataset.dirty !== "1")) {
+        return;
+      }
       bucket[field] = parseTempArrayText(el.value);
     } else if (field === "sense") {
       bucket[field] = el.value;
@@ -2256,8 +2392,28 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
     text: ndef + " Deferrable Load" + (ndef === 1 ? "" : "s"),
   });
   let thermalCount = 0;
-  for (let i = 0; i < Math.min(ndef, thermalLoadStates.length); i++) {
-    if (thermalLoadStates[i] && thermalLoadStates[i].kind !== "standard") thermalCount += 1;
+  const isBoxMode = document.getElementById("config-box") !== null;
+  if (isBoxMode) {
+    const rawDefCfg =
+      fallbackConfig && Array.isArray(fallbackConfig.def_load_config)
+        ? fallbackConfig.def_load_config
+        : [];
+    for (let i = 0; i < Math.min(ndef, rawDefCfg.length); i++) {
+      const item = rawDefCfg[i];
+      if (
+        item &&
+        typeof item === "object" &&
+        (item.thermal_config || item.thermal_battery || item.thermal_source)
+      ) {
+        thermalCount += 1;
+      }
+    }
+  } else {
+    for (let i = 0; i < Math.min(ndef, thermalLoadStates.length); i++) {
+      if (thermalLoadStates[i] && thermalLoadStates[i].kind !== "standard") {
+        thermalCount += 1;
+      }
+    }
   }
   if (thermalCount > 0) {
     badges.push({

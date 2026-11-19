@@ -522,11 +522,10 @@ def _render_standalone_preview(
     """Write a self-contained static HTML page showing the scenario WebUI plots and tables."""
     css_path = SRC_DIR / "emhass" / "static" / "style.css"
     style_css = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
-    sections = []
-    for key, val in injection_dict.items():
-        sections.append(
-            f'<div class="table_div" data-plot-key="{html.escape(key)}">{val}</div>'
-        )
+    sections = [
+        f'<div class="table_div" data-plot-key="{html.escape(key)}">{val}</div>'
+        for key, val in injection_dict.items()
+    ]
     body_html = "\n".join(sections)
     sys_badges_html = _build_system_badges_html(config or spec.config_overrides)
     page = f"""<!DOCTYPE html>

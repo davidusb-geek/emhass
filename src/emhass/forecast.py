@@ -1010,8 +1010,16 @@ class Forecast:
             else await self._get_cached_forecast_or_none(w_forecast_cache_path)
         )
         if cached_data is not None:
+            cached_provider = cached_data.attrs.get("emhass_weather_provider")
+            if cached_provider is not None and cached_provider != "solcast":
+                cached_data = None
+        if cached_data is not None:
             cached_q = cached_data.attrs.get("emhass_pv_quantiles")
-            if isinstance(cached_q, dict) and cached_q.get("p50") is not None:
+            if (
+                isinstance(cached_q, dict)
+                and cached_q.get("p50") is not None
+                and cached_q.get("source", "solcast") == "solcast"
+            ):
                 q_timestamps = cached_q.get("timestamps")
                 if q_timestamps:
                     q_index = pd.DatetimeIndex(pd.to_datetime(q_timestamps, utc=True))
@@ -1021,8 +1029,9 @@ class Forecast:
                         q_index = q_index.tz_localize(None)
                 else:
                     q_index = self.forecast_dates
+                stored_bias = cached_q.get("bias")
                 reconstructed: dict[str, object] = {
-                    "bias": self._parse_pv_quantile_bias(),
+                    "bias": stored_bias if stored_bias is not None else self._parse_pv_quantile_bias(),
                     "source": cached_q.get("source") or "solcast",
                 }
                 for q_key in ("p50", "p10", "p90"):
@@ -1254,12 +1263,14 @@ class Forecast:
                 "source": "solcast",
             }
         data = self._with_pv_plant_columns(total_data, roof_series)
+        data.attrs["emhass_weather_provider"] = "solcast"
         if p50_total is not None:
             data.attrs["emhass_pv_quantiles"] = {
                 "timestamps": [str(ts) for ts in p50_total.index],
                 "p50": p50_total.tolist(),
                 "p10": resolved_p10.tolist() if resolved_p10 is not None else None,
                 "p90": resolved_p90.tolist() if resolved_p90 is not None else None,
+                "bias": bias,
                 "source": "solcast",
             }
         if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
@@ -1351,30 +1362,10 @@ class Forecast:
             return False
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
         if cached_data is not None:
-            cached_q = cached_data.attrs.get("emhass_pv_quantiles")
-            if isinstance(cached_q, dict) and cached_q.get("p50") is not None:
-                q_timestamps = cached_q.get("timestamps")
-                if q_timestamps:
-                    q_index = pd.DatetimeIndex(pd.to_datetime(q_timestamps, utc=True))
-                    if self.forecast_dates.tz is not None:
-                        q_index = q_index.tz_convert(self.forecast_dates.tz)
-                    else:
-                        q_index = q_index.tz_localize(None)
-                else:
-                    q_index = self.forecast_dates
-                reconstructed: dict[str, object] = {
-                    "bias": self._parse_pv_quantile_bias(),
-                    "source": cached_q.get("source") or "solcast",
-                }
-                for q_key in ("p50", "p10", "p90"):
-                    raw_vals = cached_q.get(q_key)
-                    if raw_vals is not None and len(raw_vals) == len(q_index):
-                        reconstructed[q_key] = pd.Series(
-                            np.asarray(raw_vals, dtype=float), index=q_index
-                        ).reindex(cached_data.index)
-                    else:
-                        reconstructed[q_key] = None
-                self.last_pv_quantiles = reconstructed
+            cached_provider = cached_data.attrs.get("emhass_weather_provider")
+            if cached_provider is not None and cached_provider != "solar.forecast":
+                cached_data = None
+        if cached_data is not None:
             return cached_data
         if self.dry_run:
             self.logger.warning(dry_run_no_saved_forecast, "solar.forecast")
@@ -1470,6 +1461,7 @@ class Forecast:
                     data = data + array_data
 
         data = self._with_pv_plant_columns(data, plane_series)
+        data.attrs["emhass_weather_provider"] = "solar.forecast"
         if self.params["passed_data"].get("weather_forecast_cache", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data

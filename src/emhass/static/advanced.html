@@ -78,7 +78,7 @@
       </p>
       <div class="thermal-fields-grid">
         <label>Load Index<input id="thermal-tune-load-index" type="number" min="0" step="1" value="0" aria-label="Deferrable load index" /></label>
-        <label>Nominal Power (W)<input id="thermal-tune-p-nom" type="number" min="1" step="any" value="3300" aria-label="Heater nominal power in Watts" /></label>
+        <label>Nominal Power (W, optional override)<input id="thermal-tune-p-nom" type="number" min="1" step="any" placeholder="Configured load power" aria-label="Heater nominal power in Watts" /></label>
         <label>Window
           <select id="thermal-tune-lookback-hours" aria-label="Thermal validation lookback hours">
             <option value="8">Last 8 hours</option>
@@ -88,9 +88,9 @@
             <option value="72">Last 72 hours</option>
           </select>
         </label>
-        <label>Current heating_rate (°C/h)<input id="thermal-tune-current-alpha" type="number" step="any" value="0.74" aria-label="Current heating rate constant" /></label>
-        <label>Current cooling_constant (1/h)<input id="thermal-tune-current-gamma" type="number" step="any" value="0.03" aria-label="Current cooling constant" /></label>
-        <label>Current thermal_inertia (h)<input id="thermal-tune-current-inertia" type="number" min="0" step="0.5" value="0.0" aria-label="Current thermal inertia hours" /></label>
+        <label>Current heating_rate (°C/h, optional)<input id="thermal-tune-current-alpha" type="number" step="any" placeholder="From load config" aria-label="Current heating rate constant" /></label>
+        <label>Current cooling_constant (1/h, optional)<input id="thermal-tune-current-gamma" type="number" step="any" placeholder="From load config" aria-label="Current cooling constant" /></label>
+        <label>Current thermal_inertia (h, optional)<input id="thermal-tune-current-inertia" type="number" min="0" step="0.5" placeholder="From load config" aria-label="Current thermal inertia hours" /></label>
         <label>Indoor Temp Entity<input id="thermal-tune-entity-tin" type="text" value="sensor.temp_air_in" aria-label="Indoor temperature sensor entity" /></label>
         <label>Outdoor Temp Entity<input id="thermal-tune-entity-tout" type="text" value="sensor.outdoor_temperature" aria-label="Outdoor temperature sensor entity" /></label>
         <label>Power Entity (optional)<input id="thermal-tune-entity-power" type="text" placeholder="sensor.p_deferrable0" aria-label="Heater power sensor entity" /></label>
