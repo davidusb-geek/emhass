@@ -93,9 +93,8 @@ code {
    ========================================================================== */
 
 .app-header {
-  position: sticky;
-  top: 0;
-  z-index: 40;
+  position: relative;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -706,7 +705,6 @@ table.mystyle tbody tr:nth-child(even) td:first-child {
   top: 0;
   overflow: hidden;
   z-index: 30;
-  display: none;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
@@ -1043,6 +1041,14 @@ table.mystyle tbody tr:nth-child(even) td:first-child {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
+}
+
+.system-overview-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-right: 0.25rem;
+  white-space: nowrap;
 }
 
 .sys-badge,

@@ -473,10 +473,13 @@ def _build_system_badges_html(config: dict[str, Any]) -> str:
         ("sys-loads" if ndef > 0 else "sys-muted", f"{ndef} Deferrable Load{'s' if ndef != 1 else ''}")
     )
     def_cfgs = config.get("def_load_config") or []
-    thermal_n = sum(
-        1
-        for entry in def_cfgs
-        if isinstance(entry, dict) and (entry.get("thermal_config") or entry.get("thermal_battery"))
+    thermal_n = len(
+        [
+            entry
+            for entry in def_cfgs
+            if isinstance(entry, dict)
+            and (entry.get("thermal_config") or entry.get("thermal_battery"))
+        ]
     )
     if thermal_n > 0:
         badges.append(("sys-thermal", f"{thermal_n} Thermal Load{'s' if thermal_n != 1 else ''}"))
@@ -503,7 +506,7 @@ def _build_system_badges_html(config: dict[str, Any]) -> str:
         badges.append(("sys-load", f"Load: {config['load_forecast_method']}"))
     if config.get("optimization_backend") == "dantzig_wolfe":
         badges.append(("sys-fed", "Federated Coordinator"))
-    return "".join(
+    return '<span class="system-overview-title">Configured system:</span>' + "".join(
         f'<span class="sys-badge {cls}">{html.escape(text)}</span>' for cls, text in badges
     )
 
@@ -618,6 +621,7 @@ def _render_standalone_preview(
 
 
 def _apply_scenario_env(scen_dir: Path) -> None:
+    os.environ.pop("SUPERVISOR_TOKEN", None)
     os.environ["DATA_PATH"] = str(scen_dir)
     os.environ["ROOT_PATH"] = str(SRC_DIR / "emhass")
     os.environ["CONFIG_PATH"] = str(scen_dir / "config.json")
@@ -628,10 +632,10 @@ def _apply_scenario_env(scen_dir: Path) -> None:
     os.environ["ASSOCIATIONS_PATH"] = str(SRC_DIR / "emhass" / "data" / "associations.csv")
 
 
-async def _run_scenario_async(
-    spec: ScenarioSpec, preview_root: Path
-) -> tuple[Path, list[str], float]:
-    """Execute one offline scenario end-to-end and persist its WebUI state."""
+async def _prepare_scenario_workspace(
+    spec: ScenarioSpec, preview_root: Path, logger: Any
+) -> tuple[Path, dict[str, Path], dict[str, Any], dict[str, Any]]:
+    """Copy offline fixtures and build configuration/params files for one scenario."""
     scen_dir = preview_root / spec.name
     _copy_offline_fixtures(scen_dir)
     (scen_dir / "options.json").write_text("{}", encoding="utf-8")
@@ -651,104 +655,121 @@ async def _run_scenario_async(
         "secrets_path": scen_dir / "secrets_emhass.yaml",
         "legacy_config_path": scen_dir / "config_emhass.yaml",
     }
+    base_config = orjson.loads(emhass_conf["defaults_path"].read_bytes())
+    full_config = {**base_config, "time_zone": "Europe/Paris", **spec.config_overrides}
+    (scen_dir / "config.json").write_bytes(
+        orjson.dumps(full_config, option=orjson.OPT_INDENT_2)
+    )
+    params = await utils.build_params(
+        emhass_conf,
+        {
+            "hass_url": "empty",
+            "long_lived_token": "empty",
+            "server_ip": "127.0.0.1",
+            "time_zone": "Europe/Paris",
+            "Latitude": 45.83,
+            "Longitude": 6.86,
+            "Altitude": 4807.8,
+        },
+        full_config,
+        logger,
+    )
+    (scen_dir / "params.pkl").write_bytes(pickle.dumps((emhass_conf["config_path"], params)))
+    return scen_dir, emhass_conf, full_config, params
 
+
+async def _execute_scenario_action(
+    spec: ScenarioSpec,
+    scen_dir: Path,
+    emhass_conf: dict[str, Path],
+    full_config: dict[str, Any],
+    params: dict[str, Any],
+    logger: Any,
+) -> tuple[dict[str, Any], str, float]:
+    """Run calibration or optimization for one scenario and return (injection_dict, optim_status, elapsed)."""
+    from emhass import api_auth
+
+    params_json = orjson.dumps(params).decode("utf-8")
+    runtime_json = orjson.dumps(spec.runtime_params).decode("utf-8")
+    costfun = full_config.get("costfun", "profit")
+    t0 = time.perf_counter()
+
+    if spec.action == "thermal-model-calibration":
+        calib = await utils.compute_thermal_model_calibration(
+            emhass_conf, params, spec.runtime_params, logger, get_data_from_file=True
+        )
+        elapsed = time.perf_counter() - t0
+        optim_status = "Optimal"
+        last_run.record(
+            scen_dir,
+            action=spec.action,
+            stage_times={"thermal_calibration": elapsed},
+            optim_status=optim_status,
+            infeasible=False,
+            duration_total_seconds=elapsed,
+            schema_version="1.1",
+        )
+        api_auth.provision_token(scen_dir, logger)
+        return utils.get_injection_dict_thermal_calibration(calib), optim_status, elapsed
+
+    input_data_dict = await command_line.set_input_data_dict(
+        emhass_conf,
+        costfun,
+        params_json,
+        runtime_json,
+        spec.action,
+        logger,
+        get_data_from_file=True,
+    )
+    if not input_data_dict:
+        raise RuntimeError(f"set_input_data_dict failed for scenario '{spec.name}'")
+
+    if spec.action == "naive-mpc-optim":
+        opt_res = await command_line.naive_mpc_optim(input_data_dict, logger)
+    else:
+        opt_res = await command_line.dayahead_forecast_optim(input_data_dict, logger)
+
+    elapsed = time.perf_counter() - t0
+    if not isinstance(opt_res, pd.DataFrame) or opt_res.empty:
+        raise RuntimeError(f"Optimization returned empty result for '{spec.name}'")
+
+    stage_times = dict(input_data_dict.get("stage_times") or {})
+    optim_status = (
+        str(opt_res["optim_status"].iloc[0])
+        if "optim_status" in opt_res.columns and not opt_res.empty
+        else "Optimal"
+    )
+    last_run.record(
+        scen_dir,
+        action=spec.action,
+        stage_times=stage_times,
+        optim_status=optim_status,
+        infeasible=optim_status not in last_run.OK_OPTIM_STATUSES,
+        duration_total_seconds=elapsed,
+        schema_version="1.1",
+    )
+
+    from emhass import web_server as _ws
+
+    api_auth.provision_token(scen_dir, logger)
+    _ws.emhass_conf["data_path"] = scen_dir
+    _ws._attach_ui_metadata(opt_res, input_data_dict, action_name=spec.action)
+    opt_res.to_csv(scen_dir / "opt_res_latest.csv")
+    return utils.get_injection_dict(opt_res), optim_status, elapsed
+
+
+async def _run_scenario_async(
+    spec: ScenarioSpec, preview_root: Path
+) -> tuple[Path, list[str], float]:
+    """Execute one offline scenario end-to-end and persist its WebUI state."""
     logger, ch = utils.get_logger(f"emhass_scenario_{spec.name}", {}, save_to_file=False)
     try:
-        base_config = orjson.loads(emhass_conf["defaults_path"].read_bytes())
-        full_config = {**base_config, "time_zone": "Europe/Paris", **spec.config_overrides}
-        (scen_dir / "config.json").write_bytes(
-            orjson.dumps(full_config, option=orjson.OPT_INDENT_2)
+        scen_dir, emhass_conf, full_config, params = await _prepare_scenario_workspace(
+            spec, preview_root, logger
         )
-        params = await utils.build_params(
-            emhass_conf,
-            {
-                "hass_url": "empty",
-                "long_lived_token": "empty",
-                "server_ip": "127.0.0.1",
-                "time_zone": "Europe/Paris",
-                "Latitude": 45.83,
-                "Longitude": 6.86,
-                "Altitude": 4807.8,
-            },
-            full_config,
-            logger,
+        injection_dict, optim_status, elapsed = await _execute_scenario_action(
+            spec, scen_dir, emhass_conf, full_config, params, logger
         )
-        (scen_dir / "params.pkl").write_bytes(pickle.dumps((emhass_conf["config_path"], params)))
-
-        params_json = orjson.dumps(params).decode("utf-8")
-        runtime_json = orjson.dumps(spec.runtime_params).decode("utf-8")
-        costfun = full_config.get("costfun", "profit")
-
-        t0 = time.perf_counter()
-        if spec.action == "thermal-model-calibration":
-            from emhass import api_auth
-
-            calib = await utils.compute_thermal_model_calibration(
-                emhass_conf, params, spec.runtime_params, logger, get_data_from_file=True
-            )
-            elapsed = time.perf_counter() - t0
-            optim_status = "Optimal"
-            last_run.record(
-                scen_dir,
-                action=spec.action,
-                stage_times={"thermal_calibration": elapsed},
-                optim_status=optim_status,
-                infeasible=False,
-                duration_total_seconds=elapsed,
-                schema_version="1.1",
-            )
-            api_auth.provision_token(scen_dir, logger)
-            injection_dict = utils.get_injection_dict_thermal_calibration(calib)
-        else:
-            input_data_dict = await command_line.set_input_data_dict(
-                emhass_conf,
-                costfun,
-                params_json,
-                runtime_json,
-                spec.action,
-                logger,
-                get_data_from_file=True,
-            )
-            if not input_data_dict:
-                raise RuntimeError(f"set_input_data_dict failed for scenario '{spec.name}'")
-
-            if spec.action == "naive-mpc-optim":
-                opt_res = await command_line.naive_mpc_optim(input_data_dict, logger)
-            else:
-                opt_res = await command_line.dayahead_forecast_optim(input_data_dict, logger)
-
-            elapsed = time.perf_counter() - t0
-            if not isinstance(opt_res, pd.DataFrame) or opt_res.empty:
-                raise RuntimeError(f"Optimization returned empty result for '{spec.name}'")
-
-            stage_times = dict(input_data_dict.get("stage_times") or {})
-            optim_status = (
-                str(opt_res["optim_status"].iloc[0])
-                if "optim_status" in opt_res.columns and not opt_res.empty
-                else "Optimal"
-            )
-            infeasible = optim_status not in last_run.OK_OPTIM_STATUSES
-            last_run.record(
-                scen_dir,
-                action=spec.action,
-                stage_times=stage_times,
-                optim_status=optim_status,
-                infeasible=infeasible,
-                duration_total_seconds=elapsed,
-                schema_version="1.1",
-            )
-
-            # Ensure this scenario directory has its own emhass_api_token before importing web_server
-            from emhass import api_auth
-            from emhass import web_server as _ws
-
-            api_auth.provision_token(scen_dir, logger)
-            _ws.emhass_conf["data_path"] = scen_dir
-            _ws._attach_ui_metadata(opt_res, input_data_dict, action_name=spec.action)
-
-            opt_res.to_csv(scen_dir / "opt_res_latest.csv")
-            injection_dict = utils.get_injection_dict(opt_res)
-
         (scen_dir / "injection_dict.pkl").write_bytes(pickle.dumps(injection_dict))
         preview_html = preview_root / f"{spec.name}.html"
         _render_standalone_preview(

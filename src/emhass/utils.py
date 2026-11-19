@@ -4432,29 +4432,54 @@ def _build_pv_forecast_quantiles_figure(
     """Build PV & Load forecast chart with optional P10/P50/P90 uncertainty bands and method badges."""
     has_pv = "P_PV" in df.columns
     has_load = "P_Load" in df.columns
-    has_q = isinstance(pv_quantiles, dict) and (
-        pv_quantiles.get("p50") is not None or pv_quantiles.get("p10") is not None
+    has_q = isinstance(pv_quantiles, dict) and any(
+        pv_quantiles.get(k) is not None for k in ("p50", "p10", "p90")
     )
     if not (has_pv or has_load or has_q):
         return None
 
     fig = go.Figure()
     x_idx = df.index
+    q_timestamps = (
+        pv_quantiles.get("timestamps") if isinstance(pv_quantiles, dict) else None
+    )
+
+    def _to_utc_index(idx_like: object) -> pd.DatetimeIndex | None:
+        try:
+            if isinstance(idx_like, pd.DatetimeIndex) or pd.api.types.is_datetime64_any_dtype(
+                idx_like
+            ):
+                parsed = pd.DatetimeIndex(pd.to_datetime(idx_like, utc=True, errors="coerce"))
+                return parsed if parsed.notna().all() else None
+            # Only parse string/Timestamp sequences; never convert numeric RangeIndex to 1970 epoch.
+            sample = list(idx_like) if not isinstance(idx_like, pd.Index) else idx_like.tolist()
+            if sample and all(isinstance(v, str | datetime | pd.Timestamp) for v in sample):
+                parsed = pd.DatetimeIndex(pd.to_datetime(sample, utc=True, errors="coerce"))
+                return parsed if parsed.notna().all() else None
+        except Exception:
+            return None
+        return None
+
+    x_utc = _to_utc_index(x_idx)
 
     def _align_q(series_like: object) -> pd.Series | None:
         if series_like is None:
             return None
         try:
-            s = pd.Series(series_like).astype(float)
-            if isinstance(series_like, pd.Series) and len(series_like.index) == len(x_idx):
+            s = pd.to_numeric(pd.Series(series_like), errors="coerce").astype(float)
+            src_utc = None
+            if isinstance(series_like, pd.Series):
                 if series_like.index.equals(x_idx):
                     return s
-                try:
-                    reindexed = series_like.reindex(x_idx)
-                    if reindexed.notna().any():
-                        return reindexed.astype(float)
-                except Exception:
-                    pass
+                src_utc = _to_utc_index(series_like.index)
+            elif isinstance(q_timestamps, list | tuple | pd.Index) and len(q_timestamps) == len(s):
+                src_utc = _to_utc_index(q_timestamps)
+
+            if src_utc is not None and x_utc is not None:
+                timed = pd.Series(s.to_numpy(dtype=float), index=src_utc)
+                reindexed = timed.reindex(x_utc)
+                return pd.Series(reindexed.to_numpy(dtype=float), index=x_idx)
+
             if len(s) >= len(x_idx):
                 return pd.Series(s.iloc[: len(x_idx)].to_numpy(dtype=float), index=x_idx)
             if len(s) > 0:
@@ -4469,7 +4494,7 @@ def _build_pv_forecast_quantiles_figure(
     p50 = _align_q(pv_quantiles.get("p50")) if isinstance(pv_quantiles, dict) else None
     p90 = _align_q(pv_quantiles.get("p90")) if isinstance(pv_quantiles, dict) else None
 
-    if p90 is not None and p10 is not None:
+    if p90 is not None:
         fig.add_trace(
             go.Scatter(
                 x=x_idx,
@@ -4479,6 +4504,7 @@ def _build_pv_forecast_quantiles_figure(
                 mode="lines",
             )
         )
+    if p10 is not None and p90 is not None:
         fig.add_trace(
             go.Scatter(
                 x=x_idx,
@@ -4490,6 +4516,16 @@ def _build_pv_forecast_quantiles_figure(
                 mode="lines",
             )
         )
+        if p50 is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=x_idx,
+                    y=p50,
+                    name="PV P50 (median)",
+                    line={"color": "#f59e0b", "width": 2, "dash": "dash"},
+                    mode="lines",
+                )
+            )
     elif p50 is not None and p10 is not None:
         fig.add_trace(
             go.Scatter(
@@ -4511,14 +4547,35 @@ def _build_pv_forecast_quantiles_figure(
                 mode="lines",
             )
         )
-
-    if p50 is not None and p90 is not None:
+    elif p50 is not None and p90 is not None:
         fig.add_trace(
             go.Scatter(
                 x=x_idx,
                 y=p50,
                 name="PV P50 (median)",
                 line={"color": "#f59e0b", "width": 2, "dash": "dash"},
+                fill="tonexty",
+                fillcolor="rgba(245, 158, 11, 0.14)",
+                mode="lines",
+            )
+        )
+    elif p50 is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p50,
+                name="PV P50 (median)",
+                line={"color": "#f59e0b", "width": 2, "dash": "dash"},
+                mode="lines",
+            )
+        )
+    elif p10 is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p10,
+                name="PV P10 (conservative)",
+                line={"color": "rgba(180, 83, 9, 0.75)", "width": 1.5, "dash": "dot"},
                 mode="lines",
             )
         )
@@ -4717,6 +4774,13 @@ def _build_energy_pie_figure(df: pd.DataFrame) -> str | None:
         if pv_kwh > 1e-4:
             supply_labels.append("PV Generation")
             supply_values.append(round(pv_kwh, 3))
+    if "P_PV_curtailment" in df.columns:
+        curt_kwh = _sum_kwh(
+            pd.to_numeric(df["P_PV_curtailment"], errors="coerce").astype(float).clip(lower=0.0)
+        )
+        if curt_kwh > 1e-4:
+            demand_labels.append("PV Curtailment")
+            demand_values.append(round(curt_kwh, 3))
 
     if "P_grid" in df.columns:
         grid = pd.to_numeric(df["P_grid"], errors="coerce").astype(float).fillna(0.0)
@@ -4904,11 +4968,11 @@ def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | N
     )
 
     subtitle = f"Method: {method} | Mean: {pred.mean():.0f} W | Peak: {pred.max():.0f} W"
+    matched_baseline = False
     if isinstance(hist_raw, dict) and "values" in hist_raw and "timestamps" in hist_raw:
         try:
-            hist_raw = pd.Series(
-                hist_raw["values"], index=pd.to_datetime(hist_raw["timestamps"], errors="coerce")
-            )
+            hist_ts = pd.to_datetime(hist_raw["timestamps"], errors="coerce", utc=True)
+            hist_raw = pd.Series(hist_raw["values"], index=hist_ts)
         except Exception:
             hist_raw = None
     if isinstance(hist_raw, pd.Series) and len(hist_raw.dropna()) >= 4:
@@ -4916,6 +4980,13 @@ def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | N
         try:
             hist_idx = pd.DatetimeIndex(hist_clean.index)
             fcst_idx = pd.DatetimeIndex(x_idx)
+            if fcst_idx.tz is not None:
+                if hist_idx.tz is None:
+                    hist_idx = hist_idx.tz_localize("UTC")
+                hist_idx = hist_idx.tz_convert(fcst_idx.tz)
+            elif hist_idx.tz is not None:
+                hist_idx = hist_idx.tz_convert("UTC")
+                fcst_idx = fcst_idx.tz_localize("UTC")
             # Align by (hour, minute) diurnal median + IQR band as benchmark
             slot_df = pd.DataFrame(
                 {"val": hist_clean.to_numpy(dtype=float), "hm": list(zip(hist_idx.hour, hist_idx.minute, strict=True))}
@@ -4931,6 +5002,7 @@ def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | N
             q75 = pd.Series([q75_map.get(k, np.nan) for k in fcst_hm], index=x_idx)
 
             if baseline.notna().sum() >= 2:
+                matched_baseline = True
                 fig.add_trace(
                     go.Scatter(
                         x=x_idx,
@@ -4971,7 +5043,7 @@ def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | N
                 )
         except Exception:
             pass
-    else:
+    if not matched_baseline:
         win = min(6, max(2, len(pred_full)))
         rolling_mean = pred_full.rolling(window=win, min_periods=1).mean()
         fig.add_trace(
@@ -5176,6 +5248,9 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
+    # Keep unrounded float powers for analytical figures while rounding integer Watts for main display/table.
+    df_num = df.copy()
+    df_num[cols_else] = df_num[cols_else].round(3)
     all_power_cols = [i for i in df.columns.to_list() if "P_" in i]
     df[all_power_cols] = df[all_power_cols].round().astype("Int64")
     df[cols_else] = df[cols_else].round(3)
@@ -5199,7 +5274,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
 
     # Figure PV Forecast Quantiles / Overview
     image_path_pv_forecast = _build_pv_forecast_quantiles_figure(
-        df, ui_meta.get("pv_quantiles"), ui_meta.get("optim_conf")
+        df_num, ui_meta.get("pv_quantiles"), ui_meta.get("optim_conf")
     )
 
     # Figure 1: Battery SOC (Optional)
@@ -5230,7 +5305,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         image_path_1 = _fig_to_html(fig_1, include_plotlyjs=False)
 
     # Figure Battery Sources (Optional, when battery power is present)
-    image_path_battery_sources = _build_battery_sources_figure(df)
+    image_path_battery_sources = _build_battery_sources_figure(df_num)
 
     # Figure Thermal: Temperatures (Optional)
     cols_temp = [
@@ -5276,11 +5351,11 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     image_path_2 = _fig_to_html(fig_2, include_plotlyjs=False)
 
     # Advanced analytical figures
-    image_path_energy_pie = _build_energy_pie_figure(df)
-    image_path_histograms = _build_histograms_figure(df)
-    image_path_heatmap = _build_heatmap_figure(df, cols_p)
-    image_path_load_eff = _build_load_effectiveness_figure(df, ui_meta)
-    fed_figures = _build_federated_figures(df)
+    image_path_energy_pie = _build_energy_pie_figure(df_num)
+    image_path_histograms = _build_histograms_figure(df_num)
+    image_path_heatmap = _build_heatmap_figure(df_num, cols_p)
+    image_path_load_eff = _build_load_effectiveness_figure(df_num, ui_meta)
+    fed_figures = _build_federated_figures(df_num)
     image_path_stage_times = _build_stage_times_figure(ui_meta)
 
     # Scalar federated metrics go into Summary Table 2 instead of repeating across rows in Table 1
@@ -5345,7 +5420,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             "<li><strong>System Power Matrix Heatmap:</strong> Displays the 2D time-by-channel flow intensity "
             "(red/positive = supply/import/discharge, blue/negative = export/battery charging).</li>"
             "<li><strong>Load Forecast Effectiveness:</strong> Compares predicted base load against your "
-            "historical diurnal median and IQR band (with MAE, RMSE, MAPE, and R² accuracy metrics).</li>"
+            "historical diurnal median and IQR band (with MAE, RMSE, MAPE, and R² baseline-deviation metrics "
+            "relative to that historical baseline).</li>"
             "</ul></div>"
         )
     if image_path_energy_pie is not None:
@@ -5540,37 +5616,66 @@ def get_injection_dict_forecast_calibration(result: dict) -> dict:
     return injection_dict
 
 
+MIN_THERMAL_ROWS = 6
+_THERMAL_ENTITY_ID_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?$")
+
+
 def _emhass_thermal_step_delta(
     inputs: tuple[np.ndarray, np.ndarray, np.ndarray],
     alpha_h: float,
     gamma_c: float,
     dt_hours: float,
     nominal_power: float,
+    sense: str = "heat",
 ) -> np.ndarray:
-    """First-order EMHASS thermal balance step delta: alpha*dt*(P/P_nom) - gamma*dt*(Tin - Tout)."""
+    """First-order EMHASS thermal balance step delta."""
     p_def, t_in, t_out = inputs
-    return alpha_h * dt_hours * (p_def / nominal_power) - gamma_c * dt_hours * (t_in - t_out)
+    sign = 1.0 if sense == "heat" else -1.0
+    return (
+        sign * alpha_h * dt_hours * (p_def / nominal_power)
+        - gamma_c * dt_hours * (t_in - t_out)
+    )
 
 
 def _simulate_thermal_trajectory(
-    t_init: float,
+    t_init_or_actual: float | np.ndarray,
     p_shifted: np.ndarray,
     t_out: np.ndarray,
     alpha_h: float,
     gamma_c: float,
     dt_hours: float,
     nominal_power: float,
+    observed_mask: np.ndarray | None = None,
+    step_contiguous: np.ndarray | None = None,
+    sense: str = "heat",
 ) -> np.ndarray:
-    """Simulate closed-loop multi-step indoor temperature trajectory over horizon."""
+    """Simulate closed-loop multi-step indoor temperature trajectory over contiguous segments."""
     n = len(p_shifted)
-    t_sim = np.empty(n, dtype=float)
-    t_sim[0] = t_init
-    for i in range(n - 1):
-        delta = (
-            alpha_h * dt_hours * (p_shifted[i] / nominal_power)
-            - gamma_c * dt_hours * (t_sim[i] - t_out[i])
-        )
-        t_sim[i + 1] = t_sim[i] + delta
+    sign = 1.0 if sense == "heat" else -1.0
+    if np.ndim(t_init_or_actual) == 0:
+        t_actual = np.full(n, float(t_init_or_actual), dtype=float)
+    else:
+        t_actual = np.asarray(t_init_or_actual, dtype=float)
+    obs = np.ones(n, dtype=bool) if observed_mask is None else np.asarray(observed_mask, dtype=bool)
+    if step_contiguous is None:
+        contig = np.ones(n, dtype=bool)
+        if n > 0:
+            contig[-1] = False
+    else:
+        contig = np.asarray(step_contiguous, dtype=bool)
+
+    t_sim = np.full(n, np.nan, dtype=float)
+    for i in range(n):
+        if not obs[i]:
+            continue
+        if i == 0 or not obs[i - 1] or not contig[i - 1] or not np.isfinite(t_sim[i]):
+            t_sim[i] = t_actual[i]
+        if contig[i] and i + 1 < n and obs[i + 1]:
+            delta = (
+                sign * alpha_h * dt_hours * (p_shifted[i] / nominal_power)
+                - gamma_c * dt_hours * (t_sim[i] - t_out[i])
+            )
+            t_sim[i + 1] = t_sim[i] + delta
     return t_sim
 
 
@@ -5599,6 +5704,15 @@ async def _fetch_influx_thermal_window(
     password = os.getenv("INFLUXDB_PASSWORD") or str(rh_conf.get("influxdb_password") or "")
     auth = aiohttp.BasicAuth(user, password) if user else None
 
+    def _valid_eid(eid: str) -> str | None:
+        cleaned = str(eid or "").strip()
+        if not cleaned:
+            return None
+        if not _THERMAL_ENTITY_ID_RE.match(cleaned):
+            logger.warning("Ignoring invalid thermal entity_id for InfluxDB query: %r", cleaned)
+            return None
+        return cleaned
+
     async def _run_q(session: aiohttp.ClientSession, query: str) -> pd.DataFrame:
         async with session.get(
             base_url, params={"db": db, "q": query}, auth=auth, ssl=verify_ssl
@@ -5618,29 +5732,31 @@ async def _fetch_influx_thermal_window(
         return pd.concat(frames).sort_index() if frames else pd.DataFrame()
 
     async def _find_meas(session: aiohttp.ClientSession, eid: str) -> str | None:
-        if not eid:
+        valid = _valid_eid(eid)
+        if not valid:
             return None
-        bare = eid.split(".", 1)[-1]
-        for target_id in (eid, bare):
+        bare = valid.split(".", 1)[-1]
+        for target_id in (valid, bare):
             df_s = await _run_q(session, f"SHOW SERIES WHERE \"entity_id\" = '{target_id}'")
             if not df_s.empty:
                 return str(df_s.iloc[0, 0]).split(",")[0]
-        df_s = await _run_q(session, f'SHOW SERIES WHERE "entity_id" =~ /{bare}/')
-        if not df_s.empty:
-            return str(df_s.iloc[0, 0]).split(",")[0]
         return None
 
     async def _fetch_num(session: aiohttp.ClientSession, eid: str) -> pd.Series:
-        meas = await _find_meas(session, eid)
+        valid = _valid_eid(eid)
+        if not valid:
+            return pd.Series(dtype=float)
+        meas = await _find_meas(session, valid)
         if not meas:
             return pd.Series(dtype=float)
-        bare = eid.split(".", 1)[-1]
+        bare = valid.split(".", 1)[-1]
+        meas_esc = meas.replace("\\", "\\\\").replace('"', '\\"')
         q = (
-            f'SELECT mean("value") AS "val" FROM "{meas}" '
-            f"WHERE (\"entity_id\" = '{eid}' OR \"entity_id\" = '{bare}') "
+            f'SELECT mean("value") AS "val" FROM "{meas_esc}" '
+            f"WHERE (\"entity_id\" = '{valid}' OR \"entity_id\" = '{bare}') "
             f"AND time >= '{start_utc.strftime('%Y-%m-%d %H:%M:%S')}' "
             f"AND time <= '{end_utc.strftime('%Y-%m-%d %H:%M:%S')}' "
-            f"GROUP BY time({dt_minutes}m) fill(linear)"
+            f"GROUP BY time({dt_minutes}m) fill(none)"
         )
         res = await _run_q(session, q)
         return pd.to_numeric(res["val"], errors="coerce") if not res.empty else pd.Series(dtype=float)
@@ -5648,14 +5764,18 @@ async def _fetch_influx_thermal_window(
     async def _fetch_switch(
         session: aiohttp.ClientSession, eid: str, target_index: pd.DatetimeIndex
     ) -> pd.Series:
-        meas = await _find_meas(session, eid)
+        valid = _valid_eid(eid)
+        if not valid:
+            return pd.Series(1.0, index=target_index)
+        meas = await _find_meas(session, valid)
         if not meas:
             return pd.Series(1.0, index=target_index)
-        bare = eid.split(".", 1)[-1]
+        bare = valid.split(".", 1)[-1]
+        meas_esc = meas.replace("\\", "\\\\").replace('"', '\\"')
         lookback = (start_utc - pd.Timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
         q = (
-            f'SELECT * FROM "{meas}" '
-            f"WHERE (\"entity_id\" = '{eid}' OR \"entity_id\" = '{bare}') "
+            f'SELECT * FROM "{meas_esc}" '
+            f"WHERE (\"entity_id\" = '{valid}' OR \"entity_id\" = '{bare}') "
             f"AND time >= '{lookback}' AND time <= '{end_utc.strftime('%Y-%m-%d %H:%M:%S')}'"
         )
         res = await _run_q(session, q)
@@ -5696,7 +5816,7 @@ async def _fetch_influx_thermal_window(
         frame["P_def"] = sw_duty.reindex(frame.index).fillna(1.0) * clim_duty * nominal_power
     else:
         frame["P_def"] = sw_duty.reindex(frame.index).fillna(0.0) * nominal_power
-    logger.info("Loaded %d InfluxDB rows for thermal model tuning", len(frame.dropna()))
+    logger.info("Loaded %d InfluxDB rows for thermal model tuning", len(frame.dropna(subset=["T_in", "T_out", "P_def"])))
     return frame.dropna(subset=["T_in", "T_out", "P_def"])
 
 
@@ -5808,6 +5928,9 @@ async def compute_thermal_model_calibration(
     curr_alpha = float(rt.get("current_heating_rate") or tc.get("heating_rate") or 5.0)
     curr_gamma = float(rt.get("current_cooling_constant") or tc.get("cooling_constant") or 0.1)
     curr_inertia = float(rt.get("current_thermal_inertia") or tc.get("thermal_inertia") or 0.0)
+    sense = str(rt.get("sense") or tc.get("sense") or "heat").strip().lower()
+    if sense not in ("heat", "cool"):
+        raise ValueError(f"Unsupported thermal sense: {sense!r} (expected 'heat' or 'cool')")
     lookback_hours = max(4, int(rt.get("lookback_hours", 24) or 24))
 
     entity_t_in = str(rt.get("entity_t_in") or "sensor.temp_air_in").strip()
@@ -5815,6 +5938,22 @@ async def compute_thermal_model_calibration(
     entity_power = str(rt.get("entity_power") or f"sensor.p_deferrable{load_index}").strip()
     entity_t_pred = str(rt.get("entity_t_pred") or f"sensor.temp_predicted_{load_index}_proxy").strip()
     entity_switch = str(rt.get("entity_switch") or "switch.floor_heater_switch").strip()
+
+    date_ranges = rt.get("date_ranges")
+    has_explicit_window = False
+    if (
+        isinstance(date_ranges, list)
+        and date_ranges
+        and isinstance(date_ranges[0], list | tuple)
+        and len(date_ranges[0]) >= 2
+    ):
+        start_s, end_s = date_ranges[0][0], date_ranges[0][1]
+        start_utc = pd.to_datetime(start_s, utc=True)
+        end_utc = pd.to_datetime(end_s, utc=True)
+        has_explicit_window = True
+    else:
+        end_utc = pd.Timestamp.now(tz="UTC")
+        start_utc = end_utc - pd.Timedelta(hours=lookback_hours)
 
     df_win = pd.DataFrame()
     data_source = "offline_demo"
@@ -5827,14 +5966,14 @@ async def compute_thermal_model_calibration(
         t_in_arr = pd.to_numeric(pd.Series(rt["indoor_temperature"]), errors="coerce")
         t_out_arr = pd.to_numeric(pd.Series(rt["outdoor_temperature"]), errors="coerce")
         n = min(len(t_in_arr), len(t_out_arr))
-        if n >= 6:
+        if n >= MIN_THERMAL_ROWS:
             end_ts = pd.Timestamp.now(tz="UTC").floor(f"{dt_minutes}min")
             idx = pd.date_range(end=end_ts, periods=n, freq=f"{dt_minutes}min")
             if isinstance(rt.get("heater_power"), list) and len(rt["heater_power"]) >= n:
                 p_arr = pd.to_numeric(pd.Series(rt["heater_power"][:n]), errors="coerce").fillna(0.0)
             else:
                 p_arr = pd.Series(0.0, index=idx)
-            df_win = pd.DataFrame(
+            candidate_df = pd.DataFrame(
                 {
                     "T_in": t_in_arr.iloc[:n].to_numpy(dtype=float),
                     "T_out": t_out_arr.iloc[:n].to_numpy(dtype=float),
@@ -5843,24 +5982,18 @@ async def compute_thermal_model_calibration(
                 index=idx,
             )
             if isinstance(rt.get("predicted_temperature"), list) and len(rt["predicted_temperature"]) >= n:
-                df_win["T_set"] = pd.to_numeric(
+                candidate_df["T_set"] = pd.to_numeric(
                     pd.Series(rt["predicted_temperature"][:n]), errors="coerce"
                 ).to_numpy(dtype=float)
-            df_win = df_win.dropna(subset=["T_in", "T_out", "P_def"])
-            data_source = "runtime_payload"
+            candidate_df = candidate_df.dropna(subset=["T_in", "T_out", "P_def"])
+            if len(candidate_df) >= MIN_THERMAL_ROWS:
+                df_win = candidate_df
+                data_source = "runtime_payload"
 
     # 2. Direct InfluxDB retrieval if enabled
     if df_win.empty and not get_data_from_file and rh_conf.get("use_influxdb"):
-        date_ranges = rt.get("date_ranges")
-        if isinstance(date_ranges, list) and date_ranges:
-            start_s, end_s = date_ranges[0][0], date_ranges[0][1]
-            start_utc = pd.to_datetime(start_s, utc=True)
-            end_utc = pd.to_datetime(end_s, utc=True)
-        else:
-            end_utc = pd.Timestamp.now(tz="UTC")
-            start_utc = end_utc - pd.Timedelta(hours=lookback_hours)
         try:
-            df_win = await _fetch_influx_thermal_window(
+            candidate_df = await _fetch_influx_thermal_window(
                 rh_conf,
                 entity_t_in,
                 entity_t_out,
@@ -5873,7 +6006,8 @@ async def compute_thermal_model_calibration(
                 nominal_power,
                 logger,
             )
-            if len(df_win) >= 6:
+            if len(candidate_df) >= MIN_THERMAL_ROWS:
+                df_win = candidate_df
                 data_source = "influxdb"
         except Exception as exc:
             logger.warning("InfluxDB thermal history retrieval failed (%s); falling back", exc)
@@ -5887,82 +6021,190 @@ async def compute_thermal_model_calibration(
         try:
             from emhass.retrieve_hass import RetrieveHass
 
+            ha_params = dict(params_dict)
+            ha_rh_conf = dict(rh_conf)
+            # Bypass InfluxDB/VictoriaMetrics on this fallback so RetrieveHass uses HA REST/WS directly.
+            ha_rh_conf["use_influxdb"] = False
+            ha_rh_conf["use_victoriametrics"] = False
+            ha_params["retrieve_hass_conf"] = ha_rh_conf
+
             rh = RetrieveHass(
                 rh_conf["hass_url"],
                 rh_conf.get("long_lived_token", ""),
                 pd.Timedelta(minutes=dt_minutes),
                 rh_conf.get("time_zone", pytz.UTC),
-                params or {},
+                ha_params,
                 emhass_conf,
                 logger,
             )
-            days_list = get_days_list(max(1, math.ceil(lookback_hours / 24)))
-            var_list = [v for v in (entity_t_in, entity_t_out, entity_power) if v]
-            if await rh.get_data(days_list, var_list, minimal_response=False) and rh.df_final is not None:
-                df_ha = rh.df_final
-                if entity_t_in in df_ha.columns and entity_t_out in df_ha.columns:
-                    p_series = (
-                        pd.to_numeric(df_ha[entity_power], errors="coerce").fillna(0.0)
-                        if entity_power in df_ha.columns
-                        else pd.Series(0.0, index=df_ha.index)
+            try:
+                days_span = (
+                    max(
+                        1,
+                        math.ceil(
+                            (pd.Timestamp.now(tz="UTC") - start_utc).total_seconds() / 86400.0
+                        ),
                     )
-                    df_win = pd.DataFrame(
-                        {
-                            "T_in": pd.to_numeric(df_ha[entity_t_in], errors="coerce"),
-                            "T_out": pd.to_numeric(df_ha[entity_t_out], errors="coerce"),
-                            "P_def": p_series.clip(lower=0.0),
-                        },
-                        index=df_ha.index,
-                    ).dropna()
-                    if len(df_win) >= 6:
-                        df_win = df_win.iloc[-max(6, int(round(lookback_hours / dt_hours))) :]
-                        data_source = "home_assistant"
-            await rh.close()
+                    if has_explicit_window
+                    else max(1, math.ceil(lookback_hours / 24))
+                )
+                days_list = get_days_list(days_span)
+                var_list = [v for v in (entity_t_in, entity_t_out, entity_power) if v]
+                if (
+                    await rh.get_data(days_list, var_list, minimal_response=False)
+                    and rh.df_final is not None
+                ):
+                    df_ha = rh.df_final
+                    if entity_t_in in df_ha.columns and entity_t_out in df_ha.columns:
+                        p_series = (
+                            pd.to_numeric(df_ha[entity_power], errors="coerce").fillna(0.0)
+                            if entity_power in df_ha.columns
+                            else pd.Series(0.0, index=df_ha.index)
+                        )
+                        candidate_df = pd.DataFrame(
+                            {
+                                "T_in": pd.to_numeric(df_ha[entity_t_in], errors="coerce"),
+                                "T_out": pd.to_numeric(df_ha[entity_t_out], errors="coerce"),
+                                "P_def": p_series.clip(lower=0.0),
+                            },
+                            index=df_ha.index,
+                        ).dropna()
+                        if has_explicit_window:
+                            idx_utc = pd.to_datetime(candidate_df.index, utc=True)
+                            mask = (idx_utc >= start_utc) & (idx_utc <= end_utc)
+                            candidate_df = candidate_df.loc[mask]
+                        elif len(candidate_df) >= MIN_THERMAL_ROWS:
+                            candidate_df = candidate_df.iloc[
+                                -max(MIN_THERMAL_ROWS, int(round(lookback_hours / dt_hours))) :
+                            ]
+                        if len(candidate_df) >= MIN_THERMAL_ROWS:
+                            df_win = candidate_df
+                            data_source = "home_assistant"
+            finally:
+                await rh.close()
         except Exception as exc:
             logger.warning("HA thermal history retrieval failed (%s); using offline demo", exc)
 
     # 4. Offline synthetic demo fallback so local venv testing always renders full validation plots
-    if df_win.empty or len(df_win) < 6:
+    if df_win.empty or len(df_win) < MIN_THERMAL_ROWS:
         df_win = _build_offline_demo_thermal_frame(dt_hours, nominal_power, lookback_hours)
         data_source = "offline_demo"
 
     df_win = df_win.sort_index().copy()
+    step_td = pd.Timedelta(minutes=dt_minutes)
+    if isinstance(df_win.index, pd.DatetimeIndex) and len(df_win) >= 2:
+        full_grid = pd.date_range(
+            start=df_win.index.min(), end=df_win.index.max(), freq=f"{dt_minutes}min"
+        )
+        if len(full_grid) <= max(len(df_win) * 4, 2000):
+            df_win = df_win.reindex(full_grid)
+        next_diff = df_win.index.to_series().shift(-1) - df_win.index.to_series()
+        step_contiguous = (next_diff == step_td).fillna(False).to_numpy(dtype=bool)
+    else:
+        step_contiguous = np.ones(len(df_win), dtype=bool)
+        if len(step_contiguous) > 0:
+            step_contiguous[-1] = False
+
+    observed_mask = (
+        df_win["T_in"].notna() & df_win["T_out"].notna() & df_win["P_def"].notna()
+    ).to_numpy(dtype=bool)
     df_win["dT_actual"] = df_win["T_in"].shift(-1) - df_win["T_in"]
+    df_win.loc[~step_contiguous | ~observed_mask, "dT_actual"] = np.nan
 
     lag_rows = []
     trajectories_by_lag: dict[int, np.ndarray] = {}
     t_in_vals = df_win["T_in"].to_numpy(dtype=float)
     t_out_vals = df_win["T_out"].to_numpy(dtype=float)
+    p_raw_vals = df_win["P_def"].to_numpy(dtype=float)
+    observed_p = p_raw_vals[observed_mask]
+    has_heating_excitation = bool(observed_p.size > 0 and np.any(observed_p > 0.0))
+
+    n_rows = len(df_win)
+    dt_valid_mask = df_win["dT_actual"].notna().to_numpy(dtype=bool)
 
     for lag_steps in (0, 1, 2, 3, 4):
-        p_shifted = df_win["P_def"].shift(lag_steps).fillna(0.0).to_numpy(dtype=float)
-        valid = df_win["dT_actual"].notna().to_numpy()
+        p_shifted = np.full(n_rows, np.nan, dtype=float)
+        p_valid = np.zeros(n_rows, dtype=bool)
+        for i in range(n_rows):
+            if not observed_mask[i]:
+                continue
+            if i < lag_steps:
+                if np.all(observed_mask[: i + 1]):
+                    p_shifted[i] = 0.0
+                    p_valid[i] = True
+            elif lag_steps == 0:
+                p_shifted[i] = p_raw_vals[i]
+                p_valid[i] = True
+            else:
+                expected_span = (
+                    (df_win.index[i] - df_win.index[i - lag_steps] == lag_steps * step_td)
+                    if isinstance(df_win.index, pd.DatetimeIndex)
+                    else True
+                )
+                if expected_span and np.all(observed_mask[i - lag_steps : i + 1]):
+                    p_shifted[i] = p_raw_vals[i - lag_steps]
+                    p_valid[i] = True
+
+        valid = dt_valid_mask & p_valid & observed_mask
+        p_sim = np.nan_to_num(p_shifted, nan=0.0)
         x_data = (p_shifted[valid], t_in_vals[valid], t_out_vals[valid])
         y_data = df_win["dT_actual"].to_numpy(dtype=float)[valid]
         try:
-            popt, _ = curve_fit(
-                lambda x, a, g: _emhass_thermal_step_delta(x, a, g, dt_hours, nominal_power),
-                x_data,
-                y_data,
-                p0=[max(0.05, min(curr_alpha, 5.0)), max(0.005, min(curr_gamma, 0.5))],
-                bounds=(0.0005, [15.0, 1.5]),
-                maxfev=5000,
-            )
-            alpha_opt, gamma_opt = float(popt[0]), float(popt[1])
+            if not has_heating_excitation:
+                alpha_opt = curr_alpha
+                popt_g, _ = curve_fit(
+                    lambda delta_t, g: -g * dt_hours * delta_t,
+                    t_in_vals[valid] - t_out_vals[valid],
+                    y_data,
+                    p0=[max(0.005, min(curr_gamma, 0.5))],
+                    bounds=(0.0005, 1.5),
+                    maxfev=5000,
+                )
+                gamma_opt = float(popt_g[0])
+            else:
+                popt, _ = curve_fit(
+                    lambda x, a, g: _emhass_thermal_step_delta(
+                        x, a, g, dt_hours, nominal_power, sense=sense
+                    ),
+                    x_data,
+                    y_data,
+                    p0=[max(0.05, min(curr_alpha, 5.0)), max(0.005, min(curr_gamma, 0.5))],
+                    bounds=(0.0005, [15.0, 1.5]),
+                    maxfev=5000,
+                )
+                alpha_opt, gamma_opt = float(popt[0]), float(popt[1])
         except Exception:
             alpha_opt, gamma_opt = curr_alpha, curr_gamma
 
-        y_pred_step = _emhass_thermal_step_delta(x_data, alpha_opt, gamma_opt, dt_hours, nominal_power)
-        rmse_step = float(np.sqrt(np.mean((y_data - y_pred_step) ** 2))) if len(y_data) else float("nan")
-        t_sim = _simulate_thermal_trajectory(
-            float(t_in_vals[0]), p_shifted, t_out_vals, alpha_opt, gamma_opt, dt_hours, nominal_power
+        y_pred_step = _emhass_thermal_step_delta(
+            x_data, alpha_opt, gamma_opt, dt_hours, nominal_power, sense=sense
         )
-        rmse_traj = float(np.sqrt(np.mean((t_in_vals - t_sim) ** 2)))
+        rmse_step = (
+            float(np.sqrt(np.mean((y_data - y_pred_step) ** 2))) if len(y_data) else float("nan")
+        )
+        t_sim = _simulate_thermal_trajectory(
+            t_in_vals,
+            p_sim,
+            t_out_vals,
+            alpha_opt,
+            gamma_opt,
+            dt_hours,
+            nominal_power,
+            observed_mask=observed_mask,
+            step_contiguous=step_contiguous,
+            sense=sense,
+        )
+        obs_both = observed_mask & np.isfinite(t_sim)
+        rmse_traj = (
+            float(np.sqrt(np.mean((t_in_vals[obs_both] - t_sim[obs_both]) ** 2)))
+            if obs_both.any()
+            else float("nan")
+        )
         trajectories_by_lag[lag_steps] = t_sim
         lag_rows.append(
             {
                 "lag_steps": lag_steps,
-                "thermal_inertia_h": round(lag_steps * dt_hours, 2),
+                "thermal_inertia_h": round(lag_steps * dt_hours, 4),
                 "heating_rate": round(alpha_opt, 4),
                 "cooling_constant": round(gamma_opt, 4),
                 "rmse_step_c": round(rmse_step, 4),
@@ -5971,29 +6213,48 @@ async def compute_thermal_model_calibration(
         )
 
     lag_table = pd.DataFrame(lag_rows)
-    best_row = min(lag_rows, key=lambda r: r["rmse_trajectory_c"])
+    curr_lag = max(0, min(4, round(curr_inertia / dt_hours)))
+    if not has_heating_excitation:
+        best_row = next((r for r in lag_rows if int(r["lag_steps"]) == curr_lag), lag_rows[0])
+    else:
+        best_row = min(lag_rows, key=lambda r: r["rmse_trajectory_c"])
     best_lag = int(best_row["lag_steps"])
 
-    curr_lag = max(0, min(4, round(curr_inertia / dt_hours)))
-    p_curr_shifted = df_win["P_def"].shift(curr_lag).fillna(0.0).to_numpy(dtype=float)
-    t_sim_current = _simulate_thermal_trajectory(
-        float(t_in_vals[0]), p_curr_shifted, t_out_vals, curr_alpha, curr_gamma, dt_hours, nominal_power
+    p_curr_shifted = np.nan_to_num(
+        df_win["P_def"].shift(curr_lag).fillna(0.0).to_numpy(dtype=float), nan=0.0
     )
-    rmse_traj_current = float(np.sqrt(np.mean((t_in_vals - t_sim_current) ** 2)))
+    t_sim_current = _simulate_thermal_trajectory(
+        t_in_vals,
+        p_curr_shifted,
+        t_out_vals,
+        curr_alpha,
+        curr_gamma,
+        dt_hours,
+        nominal_power,
+        observed_mask=observed_mask,
+        step_contiguous=step_contiguous,
+        sense=sense,
+    )
+    obs_curr = observed_mask & np.isfinite(t_sim_current)
+    rmse_traj_current = (
+        float(np.sqrt(np.mean((t_in_vals[obs_curr] - t_sim_current[obs_curr]) ** 2)))
+        if obs_curr.any()
+        else float("nan")
+    )
 
     df_win["T_pred_current"] = np.round(t_sim_current, 3)
     df_win["T_pred_tuned"] = np.round(trajectories_by_lag[best_lag], 3)
+    p_best_shifted = np.nan_to_num(
+        df_win["P_def"].shift(best_lag).fillna(0.0).to_numpy(dtype=float), nan=0.0
+    )
     df_win["dT_pred_tuned"] = np.round(
         _emhass_thermal_step_delta(
-            (
-                df_win["P_def"].shift(best_lag).fillna(0.0).to_numpy(dtype=float),
-                t_in_vals,
-                t_out_vals,
-            ),
+            (p_best_shifted, t_in_vals, t_out_vals),
             best_row["heating_rate"],
             best_row["cooling_constant"],
             dt_hours,
             nominal_power,
+            sense=sense,
         ),
         4,
     )
@@ -6003,6 +6264,8 @@ async def compute_thermal_model_calibration(
         "load_index": load_index,
         "dt_hours": dt_hours,
         "nominal_power": nominal_power,
+        "sense": sense,
+        "cooling_only": not has_heating_excitation,
         "current_params": {
             "heating_rate": curr_alpha,
             "cooling_constant": curr_gamma,
@@ -6012,7 +6275,7 @@ async def compute_thermal_model_calibration(
         "best_params": {
             "heating_rate": best_row["heating_rate"],
             "cooling_constant": best_row["cooling_constant"],
-            "thermal_inertia": best_row["thermal_inertia_h"],
+            "thermal_inertia": float(best_lag * dt_hours),
             "lag_steps": best_lag,
             "rmse_trajectory_c": best_row["rmse_trajectory_c"],
         },
@@ -6046,11 +6309,12 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
         ),
         secondary_y=False,
     )
+    best_inertia_display = round(float(best["thermal_inertia"]), 4)
     fig_traj.add_trace(
         go.Scatter(
             x=series_df.index,
             y=series_df["T_pred_tuned"],
-            name=f"Predicted (Tuned: α={best['heating_rate']}, γ={best['cooling_constant']}, lag={best['thermal_inertia']}h)",
+            name=f"Predicted (Tuned: α={best['heating_rate']}, γ={best['cooling_constant']}, lag={best_inertia_display}h)",
             line={"color": "#16a34a", "width": 2.5},
             mode="lines",
         ),
@@ -6170,15 +6434,24 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
         yaxis_title="ΔT per Timestep (°C)",
     )
 
+    best_inertia_json = round(float(best["thermal_inertia"]), 4)
     recommended_json = html.escape(
         orjson.dumps(
             {
                 "heating_rate": best["heating_rate"],
                 "cooling_constant": best["cooling_constant"],
-                "thermal_inertia": best["thermal_inertia"],
+                "thermal_inertia": best_inertia_json,
             },
             option=orjson.OPT_INDENT_2,
         ).decode("utf-8")
+    )
+    cooling_only_note = (
+        '<p class="muted-hint"><strong>Note (cooling-only window):</strong> '
+        "Heater power remained 0 W across the selected history, so only "
+        "<code>cooling_constant</code> was fitted; <code>heating_rate</code> and "
+        "<code>thermal_inertia</code> remain at your current values.</p>"
+        if result.get("cooling_only")
+        else ""
     )
     summary_banner = (
         '<div class="analytics-explainer-card">'
@@ -6187,9 +6460,10 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
         '<div class="plot-method-badges">'
         f'<span class="method-badge method-load">heating_rate: <strong>{best["heating_rate"]} °C/h</strong></span>'
         f'<span class="method-badge method-pv">cooling_constant: <strong>{best["cooling_constant"]} 1/h</strong></span>'
-        f'<span class="method-badge method-bias">thermal_inertia: <strong>{best["thermal_inertia"]} h ({best["lag_steps"]} steps)</strong></span>'
+        f'<span class="method-badge method-bias">thermal_inertia: <strong>{best_inertia_json} h ({best["lag_steps"]} steps)</strong></span>'
         f'<span class="method-badge method-costfun">RMSE Improvement: <strong>{curr["rmse_trajectory_c"]:.3f}°C → {best["rmse_trajectory_c"]:.3f}°C</strong></span>'
         "</div>"
+        f"{cooling_only_note}"
         f"<pre>{recommended_json}</pre>"
         "</div>"
     )
