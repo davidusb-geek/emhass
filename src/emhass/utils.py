@@ -4455,6 +4455,31 @@ def _battery_power_total(df: pd.DataFrame) -> pd.Series | None:
     )
 
 
+def _battery_charge_discharge(df: pd.DataFrame) -> tuple[pd.Series, pd.Series] | None:
+    """Return (charge_w, discharge_w) using indexed P_batt_<k> columns when present, else P_batt.
+
+    Separating charge and discharge per battery before summing preserves simultaneous
+    opposing flows across multi-battery banks.
+    """
+    multi_cols = [
+        c for c in df.columns if c.startswith("P_batt_") and c[len("P_batt_") :].isdigit()
+    ]
+    if multi_cols:
+        mat = df[multi_cols].apply(pd.to_numeric, errors="coerce").astype(float)
+        if not mat.notna().any().any():
+            return None
+        charge_w = (-mat).clip(lower=0.0).fillna(0.0).sum(axis=1)
+        discharge_w = mat.clip(lower=0.0).fillna(0.0).sum(axis=1)
+        return charge_w, discharge_w
+    if "P_batt" in df.columns:
+        p_batt = pd.to_numeric(df["P_batt"], errors="coerce").astype(float)
+        if not p_batt.notna().any():
+            return None
+        batt = p_batt.fillna(0.0)
+        return (-batt).clip(lower=0.0), batt.clip(lower=0.0)
+    return None
+
+
 _PV_P50_LABEL = "PV P50 (median)"
 _PV_P10_LABEL = "PV P10 (conservative)"
 _PLOTLY_LINES_MARKERS = "lines+markers"
@@ -4706,19 +4731,55 @@ def _build_pv_forecast_quantiles_figure(
     return badges_html + chart_html
 
 
+def _attribute_battery_charging(
+    df: pd.DataFrame,
+    charge_w: pd.Series,
+    pv_w: pd.Series,
+    total_load_w: pd.Series,
+    grid_import_w: pd.Series,
+    is_hybrid: bool,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Attribute battery charging power to PV, grid, or unknown/other bus flows."""
+    if "P_hybrid_inverter" in df.columns:
+        # Hybrid topology: P_hybrid_inverter == ac_out - ac_in (negative means AC->DC charging).
+        p_inv = pd.to_numeric(df["P_hybrid_inverter"], errors="coerce").astype(float).fillna(0.0)
+        ac_to_dc = (-p_inv).clip(lower=0.0)
+        dc_to_ac = p_inv.clip(lower=0.0)
+        pv_for_batt = (pv_w - dc_to_ac).clip(lower=0.0)
+        charge_from_pv = np.minimum(charge_w, pv_for_batt)
+        rem_charge = (charge_w - charge_from_pv).clip(lower=0.0)
+        charge_from_grid = np.minimum(rem_charge, np.minimum(ac_to_dc, grid_import_w))
+        charge_from_other = (rem_charge - charge_from_grid).clip(lower=0.0)
+        return charge_from_pv, charge_from_grid, charge_from_other
+
+    if is_hybrid:
+        # Hybrid inverter configured without P_hybrid_inverter flow column: cannot prove AC->DC source.
+        charge_from_pv = np.minimum(charge_w, pv_w)
+        charge_from_grid = pd.Series(0.0, index=df.index)
+        charge_from_other = (charge_w - charge_from_pv).clip(lower=0.0)
+        return charge_from_pv, charge_from_grid, charge_from_other
+
+    pv_excess = (pv_w - total_load_w).clip(lower=0.0)
+    charge_from_pv = np.minimum(charge_w, pv_excess)
+    rem_charge = (charge_w - charge_from_pv).clip(lower=0.0)
+    charge_from_grid = np.minimum(rem_charge, grid_import_w)
+    charge_from_other = (rem_charge - charge_from_grid).clip(lower=0.0)
+    return charge_from_pv, charge_from_grid, charge_from_other
+
+
 def _build_battery_sources_figure(df: pd.DataFrame, ui_meta: dict | None = None) -> str | None:
     """Build colored bar chart attributing battery charging sources and discharge destinations."""
-    p_batt = _battery_power_total(df)
-    if p_batt is None or not p_batt.notna().any():
+    batt_flows = _battery_charge_discharge(df)
+    if batt_flows is None:
         return None
+    charge_w, discharge_w = batt_flows
 
     optim_conf = (ui_meta.get("optim_conf") or {}) if isinstance(ui_meta, dict) else {}
+    plant_conf = (ui_meta.get("plant_conf") or {}) if isinstance(ui_meta, dict) else {}
     no_discharge_to_grid = bool(optim_conf.get("set_nodischarge_to_grid", False))
-
-    batt = p_batt.fillna(0.0)
-    # Convention verified in optimization.py: P_batt < 0 = charging, P_batt > 0 = discharging.
-    charge_w = (-batt).clip(lower=0.0)
-    discharge_w = batt.clip(lower=0.0)
+    is_hybrid = bool(
+        plant_conf.get("inverter_is_hybrid", optim_conf.get("inverter_is_hybrid", False))
+    )
 
     pv_w = (
         pd.to_numeric(df["P_PV"], errors="coerce").astype(float).fillna(0.0).clip(lower=0.0)
@@ -4748,11 +4809,9 @@ def _build_battery_sources_figure(df: pd.DataFrame, ui_meta: dict | None = None)
     grid_import_w = grid_w.clip(lower=0.0)
     grid_export_w = (-grid_w).clip(lower=0.0)
 
-    pv_excess = (pv_w - total_load_w).clip(lower=0.0)
-    charge_from_pv = np.minimum(charge_w, pv_excess)
-    rem_charge = (charge_w - charge_from_pv).clip(lower=0.0)
-    charge_from_grid = np.minimum(rem_charge, grid_import_w)
-    charge_from_other = (rem_charge - charge_from_grid).clip(lower=0.0)
+    charge_from_pv, charge_from_grid, charge_from_other = _attribute_battery_charging(
+        df, charge_w, pv_w, total_load_w, grid_import_w, is_hybrid
+    )
 
     if no_discharge_to_grid:
         discharge_to_grid = pd.Series(0.0, index=df.index)
@@ -4858,14 +4917,11 @@ def _collect_energy_supply_and_demand(
             demand_labels, demand_values, "Grid Export", (-grid).clip(lower=0.0), dt_h
         )
 
-    p_batt = _battery_power_total(df)
-    if p_batt is not None:
-        _append_positive_kwh(
-            supply_labels, supply_values, "Battery Discharge", p_batt.clip(lower=0.0), dt_h
-        )
-        _append_positive_kwh(
-            demand_labels, demand_values, "Battery Charge", (-p_batt).clip(lower=0.0), dt_h
-        )
+    batt_flows = _battery_charge_discharge(df)
+    if batt_flows is not None:
+        charge_w, discharge_w = batt_flows
+        _append_positive_kwh(supply_labels, supply_values, "Battery Discharge", discharge_w, dt_h)
+        _append_positive_kwh(demand_labels, demand_values, "Battery Charge", charge_w, dt_h)
 
     if "P_Load" in df.columns:
         base = pd.to_numeric(df["P_Load"], errors="coerce").astype(float).clip(lower=0.0)
@@ -4880,6 +4936,12 @@ def _collect_energy_supply_and_demand(
             def_s,
             dt_h,
         )
+
+    # Account for inverter / DC-AC conversion losses when supply exceeds allocated AC/DC demand.
+    unallocated_kwh = round(sum(supply_values) - sum(demand_values), 3)
+    if ("P_hybrid_inverter" in df.columns or batt_flows is not None) and unallocated_kwh > 1e-3:
+        demand_labels.append("Inverter / Conversion Loss")
+        demand_values.append(unallocated_kwh)
 
     return supply_labels, supply_values, demand_labels, demand_values
 
@@ -4985,6 +5047,21 @@ def _build_histograms_figure(df: pd.DataFrame) -> str | None:
     return _fig_to_html(fig, include_plotlyjs=False)
 
 
+def _build_heatmap_axis(index: pd.Index) -> tuple[list, list[str]]:
+    """Build unique UTC-safe x-coordinates and local-with-offset display labels for heatmaps."""
+    x_utc = _to_utc_index(index)
+    display_labels: list[str] = []
+    for ts in index:
+        if hasattr(ts, "strftime"):
+            fmt = "%m-%d %H:%M %z" if getattr(ts, "tzinfo", None) is not None else "%m-%d %H:%M"
+            display_labels.append(ts.strftime(fmt))
+        else:
+            display_labels.append(str(ts))
+    if x_utc is not None:
+        return [ts.isoformat() for ts in x_utc], display_labels
+    return display_labels, display_labels
+
+
 def _build_heatmap_figure(df: pd.DataFrame, cols_p: list[str]) -> str | None:
     """Build 2D schedule heatmap of system powers across timesteps."""
     hm_cols = [c for c in cols_p if c in df.columns][:10]
@@ -4994,28 +5071,31 @@ def _build_heatmap_figure(df: pd.DataFrame, cols_p: list[str]) -> str | None:
     if not matrix_df.notna().any().any():
         return None
 
-    try:
-        x_labels = [
-            ts.strftime("%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts) for ts in df.index
-        ]
-    except Exception:
-        x_labels = [str(ts) for ts in df.index]
-
+    x_coords, x_labels = _build_heatmap_axis(df.index)
     fig = go.Figure(
         data=go.Heatmap(
             z=matrix_df.T.to_numpy(dtype=float),
-            x=x_labels,
+            x=x_coords,
             y=hm_cols,
+            customdata=[x_labels for _ in hm_cols],
+            hovertemplate="Time: %{customdata}<br>Channel: %{y}<br>Power: %{z:.1f} W<extra></extra>",
             colorscale="RdBu",
             zmid=0,
             colorbar={"title": "W"},
         )
     )
+    tick_step = max(1, len(x_coords) // 12)
     fig.update_layout(
         title="System Power Matrix Heatmap",
         template="presentation",
         xaxis_title="Timestamp",
         yaxis_title="Channel",
+        xaxis={
+            "type": "category",
+            "tickmode": "array",
+            "tickvals": x_coords[::tick_step],
+            "ticktext": x_labels[::tick_step],
+        },
     )
     return _fig_to_html(fig, include_plotlyjs=False)
 
@@ -5801,7 +5881,13 @@ async def _run_influx_query(
     ) as resp:
         resp.raise_for_status()
         payload = await resp.json()
-    series_list = payload.get("results", [{}])[0].get("series", [])
+    if not isinstance(payload, dict) or payload.get("error"):
+        raise RuntimeError("InfluxDB query returned a top-level error")
+    results = payload.get("results") or [{}]
+    first_result = results[0] if isinstance(results[0], dict) else {}
+    if first_result.get("error"):
+        raise RuntimeError("InfluxDB query returned a statement error")
+    series_list = first_result.get("series", [])
     if not series_list:
         return pd.DataFrame()
     frames = []
@@ -5863,6 +5949,86 @@ async def _fetch_influx_numeric_series(
     return pd.to_numeric(res["val"], errors="coerce") if not res.empty else pd.Series(dtype=float)
 
 
+def _bucket_on_fraction(ev_ns: np.ndarray, ev_vals: np.ndarray, b0: int, dt_ns: int) -> float:
+    """Compute time-weighted ON fraction in [b0, b0 + dt_ns) from sorted event arrays."""
+    b1 = b0 + dt_ns
+    idx_before = int(np.searchsorted(ev_ns, b0, side="right")) - 1
+    idx_end = int(np.searchsorted(ev_ns, b1, side="left"))
+    if idx_before < 0 and idx_end <= 0:
+        return float("nan")
+    state = float(ev_vals[idx_before]) if idx_before >= 0 else 0.0
+    cursor = b0
+    on_ns = 0.0
+    for k in range(max(0, idx_before + 1), idx_end):
+        t_ev = int(ev_ns[k])
+        if state > 0.0:
+            on_ns += t_ev - cursor
+        cursor = t_ev
+        state = float(ev_vals[k])
+    if state > 0.0:
+        on_ns += b1 - cursor
+    return on_ns / dt_ns
+
+
+def _integrate_switch_duty(
+    duty: pd.Series,
+    target_index: pd.DatetimeIndex,
+    dt_minutes: int,
+) -> pd.Series:
+    """Compute time-weighted on-duty fraction per bucket by carrying each switch state forward."""
+    clean = duty.dropna().sort_index()
+    if clean.empty or len(target_index) == 0:
+        return pd.Series(dtype=float)
+    ev_ns = pd.DatetimeIndex(pd.to_datetime(clean.index, utc=True)).asi8
+    ev_vals = clean.to_numpy(dtype=float)
+    tgt_ns = pd.DatetimeIndex(pd.to_datetime(target_index, utc=True)).asi8
+    dt_ns = int(pd.Timedelta(minutes=dt_minutes).value)
+    out = np.array(
+        [_bucket_on_fraction(ev_ns, ev_vals, int(b0), dt_ns) for b0 in tgt_ns], dtype=float
+    )
+    return pd.Series(out, index=target_index, dtype=float)
+
+
+def _bucket_on_fraction(ev_ns: np.ndarray, ev_vals: np.ndarray, b0: int, dt_ns: int) -> float:
+    """Compute time-weighted ON fraction in [b0, b0 + dt_ns) from sorted event arrays."""
+    b1 = b0 + dt_ns
+    idx_before = int(np.searchsorted(ev_ns, b0, side="right")) - 1
+    idx_end = int(np.searchsorted(ev_ns, b1, side="left"))
+    if idx_before < 0 and idx_end <= 0:
+        return float("nan")
+    state = float(ev_vals[idx_before]) if idx_before >= 0 else 0.0
+    cursor = b0
+    on_ns = 0.0
+    for k in range(max(0, idx_before + 1), idx_end):
+        t_ev = int(ev_ns[k])
+        if state > 0.0:
+            on_ns += t_ev - cursor
+        cursor = t_ev
+        state = float(ev_vals[k])
+    if state > 0.0:
+        on_ns += b1 - cursor
+    return on_ns / dt_ns
+
+
+def _integrate_switch_duty(
+    duty: pd.Series,
+    target_index: pd.DatetimeIndex,
+    dt_minutes: int,
+) -> pd.Series:
+    """Compute time-weighted on-duty fraction per bucket by carrying each switch state forward."""
+    clean = duty.dropna().sort_index()
+    if clean.empty or len(target_index) == 0:
+        return pd.Series(dtype=float)
+    ev_ns = pd.DatetimeIndex(pd.to_datetime(clean.index, utc=True)).asi8
+    ev_vals = clean.to_numpy(dtype=float)
+    tgt_ns = pd.DatetimeIndex(pd.to_datetime(target_index, utc=True)).asi8
+    dt_ns = int(pd.Timedelta(minutes=dt_minutes).value)
+    out = np.array(
+        [_bucket_on_fraction(ev_ns, ev_vals, int(b0), dt_ns) for b0 in tgt_ns], dtype=float
+    )
+    return pd.Series(out, index=target_index, dtype=float)
+
+
 async def _fetch_influx_switch_duty(
     session: aiohttp.ClientSession,
     conn: dict,
@@ -5873,14 +6039,13 @@ async def _fetch_influx_switch_duty(
     target_index: pd.DatetimeIndex,
     logger: logging.Logger,
 ) -> pd.Series:
-    """Fetch heater switch on/off duty cycle from InfluxDB aligned onto target_index."""
-    default_duty = pd.Series(1.0, index=target_index)
+    """Fetch time-weighted heater switch on/off duty cycle from InfluxDB, or empty if absent."""
     valid = _valid_thermal_entity_id(eid, logger)
     if not valid:
-        return default_duty
+        return pd.Series(dtype=float)
     meas = await _find_influx_measurement(session, conn, valid, logger)
     if not meas:
-        return default_duty
+        return pd.Series(dtype=float)
     bare = valid.split(".", 1)[-1]
     meas_esc = meas.replace("\\", "\\\\").replace('"', '\\"')
     lookback = (start_utc - pd.Timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
@@ -5891,21 +6056,14 @@ async def _fetch_influx_switch_duty(
     )
     res = await _run_influx_query(session, conn, q)
     if res.empty:
-        return default_duty
+        return pd.Series(dtype=float)
     if "state" in res.columns and res["state"].notna().any():
         duty = (res["state"].astype(str).str.lower() == "on").astype(float)
     elif "value" in res.columns:
         duty = (pd.to_numeric(res["value"], errors="coerce").fillna(0.0) > 0).astype(float)
     else:
-        return default_duty
-    return (
-        duty.resample(f"{dt_minutes}min")
-        .mean()
-        .ffill()
-        .reindex(target_index, method="ffill")
-        .bfill()
-        .fillna(1.0)
-    )
+        return pd.Series(dtype=float)
+    return _integrate_switch_duty(duty, target_index, dt_minutes)
 
 
 def _assemble_influx_thermal_frame(
@@ -5917,10 +6075,11 @@ def _assemble_influx_thermal_frame(
     nominal_power: float,
     sense: str,
 ) -> pd.DataFrame:
-    """Combine InfluxDB thermal series into a clean calibration DataFrame."""
+    """Combine InfluxDB thermal series into a clean calibration DataFrame without fabricating power."""
     frame = pd.DataFrame({"T_in": t_in, "T_out": t_out})
     if not t_set.empty:
         frame["T_set"] = t_set
+    has_sw = not sw_duty.empty and sw_duty.notna().any()
     if not p_direct.empty and p_direct.notna().sum() >= 2:
         frame["P_def"] = p_direct.reindex(frame.index).fillna(0.0).clip(lower=0.0)
     elif "T_set" in frame.columns:
@@ -5929,9 +6088,12 @@ def _assemble_influx_thermal_frame(
             if sense == "cool"
             else (frame["T_set"] > frame["T_in"]).astype(float)
         )
-        frame["P_def"] = sw_duty.reindex(frame.index).fillna(1.0) * clim_duty * nominal_power
+        sw_aligned = sw_duty.reindex(frame.index) if has_sw else pd.Series(1.0, index=frame.index)
+        frame["P_def"] = sw_aligned * clim_duty * nominal_power
+    elif has_sw:
+        frame["P_def"] = sw_duty.reindex(frame.index) * nominal_power
     else:
-        frame["P_def"] = sw_duty.reindex(frame.index).fillna(0.0) * nominal_power
+        return pd.DataFrame()
     return frame.dropna(subset=["T_in", "T_out", "P_def"])
 
 
@@ -5951,7 +6113,12 @@ async def _fetch_influx_thermal_window(
 ) -> pd.DataFrame:
     """Query historical thermal series directly from InfluxDB using user entities."""
     host = str(rh_conf.get("influxdb_host") or "localhost")
-    port = int(rh_conf.get("influxdb_port") or 8086)
+    raw_port = rh_conf.get("influxdb_port")
+    port_val = 8086 if raw_port in (None, "") else raw_port
+    if not is_valid_db_host(host) or not is_valid_db_port(port_val):
+        logger.warning("Refusing InfluxDB thermal query due to invalid host/port configuration")
+        return pd.DataFrame()
+    port = int(port_val)
     use_ssl = bool(rh_conf.get("influxdb_use_ssl", False))
     user = os.getenv("INFLUXDB_USERNAME") or str(rh_conf.get("influxdb_username") or "")
     password = os.getenv("INFLUXDB_PASSWORD") or str(rh_conf.get("influxdb_password") or "")
@@ -5999,25 +6166,33 @@ async def _fetch_influx_thermal_window(
 
 
 def _build_offline_demo_thermal_frame(
-    dt_hours: float, nominal_power: float, lookback_hours: int
+    dt_hours: float, nominal_power: float, lookback_hours: int, sense: str = "heat"
 ) -> pd.DataFrame:
     """Build a realistic synthetic thermal validation dataset for offline testing."""
     n_steps = max(16, int(round(max(lookback_hours, 12) / dt_hours)))
     end_ts = pd.Timestamp.now(tz="UTC").floor(f"{int(round(dt_hours * 60))}min")
     idx = pd.date_range(end=end_ts, periods=n_steps, freq=f"{int(round(dt_hours * 60))}min")
+    is_cool = sense == "cool"
+    t_out_base = 28.5 if is_cool else 8.5
     t_out = np.array(
         [
-            8.5 + 4.5 * math.sin((i / max(n_steps, 1) - 0.25) * 2.0 * math.pi)
+            t_out_base + 4.5 * math.sin((i / max(n_steps, 1) - 0.25) * 2.0 * math.pi)
             for i in range(n_steps)
         ],
         dtype=float,
     )
     t_set = np.array(
-        [21.0 if 0.25 <= (i / max(n_steps, 1)) <= 0.85 else 18.5 for i in range(n_steps)],
+        [
+            (22.0 if 0.25 <= (i / max(n_steps, 1)) <= 0.85 else 25.0)
+            if is_cool
+            else (21.0 if 0.25 <= (i / max(n_steps, 1)) <= 0.85 else 18.5)
+            for i in range(n_steps)
+        ],
         dtype=float,
     )
-    # Two heating blocks with true plant alpha=0.85 C/h, gamma=0.035 /h, lag=2 steps (1.0h at 0.5h step)
+    # Two active blocks with true plant alpha=0.85 C/h, gamma=0.035 /h, lag=2 steps (1.0h at 0.5h step)
     true_alpha, true_gamma, true_lag = 0.85, 0.035, 2
+    sign = -1.0 if is_cool else 1.0
     p_def = np.zeros(n_steps, dtype=float)
     for i in range(n_steps):
         frac = i / max(n_steps, 1)
@@ -6026,10 +6201,10 @@ def _build_offline_demo_thermal_frame(
 
     rng = np.random.default_rng(42)
     t_in = np.empty(n_steps, dtype=float)
-    t_in[0] = 19.2
+    t_in[0] = 24.8 if is_cool else 19.2
     for i in range(n_steps - 1):
         p_eff = p_def[i - true_lag] if i >= true_lag else 0.0
-        dt_val = true_alpha * dt_hours * (p_eff / nominal_power) - true_gamma * dt_hours * (
+        dt_val = sign * true_alpha * dt_hours * (p_eff / nominal_power) - true_gamma * dt_hours * (
             t_in[i] - t_out[i]
         )
         t_in[i + 1] = t_in[i] + dt_val + float(rng.normal(0.0, 0.02))
@@ -6227,18 +6402,17 @@ async def _load_thermal_from_ha(
         logger,
     )
     try:
-        days_span = (
-            max(
-                1,
-                math.ceil(
-                    (pd.Timestamp.now(tz="UTC") - cfg["start_utc"]).total_seconds() / 86400.0
-                ),
+        if cfg["has_explicit_window"]:
+            days_list = pd.date_range(
+                start=cfg["start_utc"].floor("D"),
+                end=cfg["end_utc"].floor("D"),
+                freq="D",
+                tz="UTC",
             )
-            if cfg["has_explicit_window"]
-            else max(1, math.ceil(cfg["lookback_hours"] / 24))
-        )
+        else:
+            days_list = get_days_list(max(1, math.ceil(cfg["lookback_hours"] / 24)))
         var_list = [v for v in (cfg["entity_t_in"], cfg["entity_t_out"], cfg["entity_power"]) if v]
-        ok = await rh.get_data(get_days_list(days_span), var_list, minimal_response=False)
+        ok = await rh.get_data(days_list, var_list, minimal_response=False, keep_partial_days=True)
         if not ok or rh.df_final is None:
             return pd.DataFrame()
         df_ha = rh.df_final
@@ -6315,7 +6489,7 @@ async def _load_thermal_calibration_frame(
 
     return (
         _build_offline_demo_thermal_frame(
-            cfg["dt_hours"], cfg["nominal_power"], cfg["lookback_hours"]
+            cfg["dt_hours"], cfg["nominal_power"], cfg["lookback_hours"], sense=cfg["sense"]
         ),
         "offline_demo",
     )
@@ -6328,10 +6502,12 @@ def _prepare_thermal_grid(
     df_sorted = df_win.sort_index().copy()
     step_td = pd.Timedelta(minutes=dt_minutes)
     if isinstance(df_sorted.index, pd.DatetimeIndex) and len(df_sorted) >= 2:
-        full_grid = pd.date_range(
-            start=df_sorted.index.min(), end=df_sorted.index.max(), freq=f"{dt_minutes}min"
-        )
-        if len(full_grid) <= max(len(df_sorted) * 4, 2000):
+        max_grid = max(len(df_sorted) * 4, 2000)
+        span_steps = int((df_sorted.index.max() - df_sorted.index.min()) // step_td) + 1
+        if 0 < span_steps <= max_grid:
+            full_grid = pd.date_range(
+                start=df_sorted.index.min(), end=df_sorted.index.max(), freq=f"{dt_minutes}min"
+            )
             df_sorted = df_sorted.reindex(full_grid)
         next_diff = df_sorted.index.to_series().shift(-1) - df_sorted.index.to_series()
         step_contiguous = (next_diff == step_td).fillna(False).to_numpy(dtype=bool)
@@ -6381,10 +6557,12 @@ def _simulate_and_score_thermal(
     alpha_val: float,
     gamma_val: float,
     cfg: dict,
+    common_p_ok: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
     """Simulate contiguous transitions with known lagged power and score non-anchor steps."""
     observed_mask = grid["observed_mask"]
-    trans_ok = grid["step_contiguous"] & p_ok
+    effective_p_ok = p_ok if common_p_ok is None else (p_ok & common_p_ok)
+    trans_ok = grid["step_contiguous"] & effective_p_ok
     t_in_vals = grid["t_in_vals"]
     t_sim = _simulate_thermal_trajectory(
         t_in_vals,
@@ -6411,18 +6589,35 @@ def _simulate_and_score_thermal(
     return t_sim, rmse_val
 
 
+def _is_thermal_fit_identifiable(
+    p_vals: np.ndarray,
+    dt_diff: np.ndarray,
+    has_heating_excitation: bool,
+    min_fit_transitions: int,
+) -> bool:
+    """Return True only when usable transition rows can identify the fitted thermal parameters."""
+    if len(dt_diff) < min_fit_transitions:
+        return False
+    has_temp_grad = bool(np.any(np.abs(dt_diff) > 1e-6))
+    if not has_heating_excitation:
+        return has_temp_grad
+    return has_temp_grad and bool(np.any(p_vals > 0.0))
+
+
 def _fit_thermal_lag_candidate(
     lag_steps: int,
+    p_shifted: np.ndarray,
+    p_valid: np.ndarray,
+    common_p_ok: np.ndarray,
     grid: dict,
     cfg: dict,
     curve_fit_fn,
 ) -> tuple[dict, np.ndarray]:
     """Fit heating/cooling constants for one candidate thermal inertia lag."""
-    p_shifted, p_valid = _build_lagged_power_series(
-        grid["p_raw_vals"], grid["observed_mask"], grid["index"], lag_steps, grid["step_td"]
-    )
     valid = grid["dt_valid_mask"] & p_valid & grid["observed_mask"]
-    x_data = (p_shifted[valid], grid["t_in_vals"][valid], grid["t_out_vals"][valid])
+    p_use = p_shifted[valid]
+    dt_diff = grid["t_in_vals"][valid] - grid["t_out_vals"][valid]
+    x_data = (p_use, grid["t_in_vals"][valid], grid["t_out_vals"][valid])
     y_data = grid["dt_actual_vals"][valid]
     fit_ok = False
     alpha_opt, gamma_opt = cfg["curr_alpha"], cfg["curr_gamma"]
@@ -6430,12 +6625,14 @@ def _fit_thermal_lag_candidate(
     nominal_power = cfg["nominal_power"]
     sense = cfg["sense"]
 
-    if int(valid.sum()) >= grid["min_fit_transitions"]:
+    if _is_thermal_fit_identifiable(
+        p_use, dt_diff, grid["has_heating_excitation"], grid["min_fit_transitions"]
+    ):
         try:
             if not grid["has_heating_excitation"]:
                 popt_g, _ = curve_fit_fn(
                     lambda delta_t, g: -g * dt_hours * delta_t,
-                    grid["t_in_vals"][valid] - grid["t_out_vals"][valid],
+                    dt_diff,
                     y_data,
                     p0=[max(0.005, min(gamma_opt, 0.5))],
                     bounds=(0.0005, 1.5),
@@ -6464,7 +6661,7 @@ def _fit_thermal_lag_candidate(
         )
         rmse_step = float(np.sqrt(np.mean((y_data - y_pred_step) ** 2)))
         t_sim, rmse_traj = _simulate_and_score_thermal(
-            grid, p_shifted, p_valid, alpha_opt, gamma_opt, cfg
+            grid, p_shifted, p_valid, alpha_opt, gamma_opt, cfg, common_p_ok=common_p_ok
         )
     else:
         rmse_step = float("nan")
@@ -6548,43 +6745,65 @@ async def compute_thermal_model_calibration(
         "min_fit_transitions": 2 if not has_heating_excitation else 3,
     }
 
-    lag_rows: list[dict] = []
-    trajectories_by_lag: dict[int, np.ndarray] = {}
-    for lag_steps in (0, 1, 2, 3, 4):
-        row, t_sim = _fit_thermal_lag_candidate(lag_steps, grid, cfg, curve_fit)
-        trajectories_by_lag[lag_steps] = t_sim
-        lag_rows.append(row)
-
     n_rows = len(df_win)
     # Match optimization.py truncation & horizon bound: L = max(0, min(int(inertia / dt), n - 1))
     curr_lag = max(0, min(int(cfg["curr_inertia"] / cfg["dt_hours"]), max(0, n_rows - 1)))
+    candidate_lags = (0, 1, 2, 3, 4)
+    lagged_by_step = {
+        lag: _build_lagged_power_series(
+            p_raw_vals, observed_mask, df_win.index, lag, grid["step_td"]
+        )
+        for lag in (*candidate_lags, curr_lag)
+    }
+    # Score all candidate lags and the current model on the exact same shared transition set.
+    common_p_ok = observed_mask.copy()
+    for lag in candidate_lags:
+        common_p_ok &= lagged_by_step[lag][1]
+    if curr_lag not in candidate_lags:
+        common_p_ok &= lagged_by_step[curr_lag][1]
+
+    lag_rows: list[dict] = []
+    trajectories_by_lag: dict[int, np.ndarray] = {}
+    for lag_steps in candidate_lags:
+        p_shifted, p_valid = lagged_by_step[lag_steps]
+        row, t_sim = _fit_thermal_lag_candidate(
+            lag_steps, p_shifted, p_valid, common_p_ok, grid, cfg, curve_fit
+        )
+        trajectories_by_lag[lag_steps] = t_sim
+        lag_rows.append(row)
+
     best_row, best_lag, recommended_inertia, fit_succeeded = _select_best_thermal_lag(
         lag_rows, curr_lag, cfg["curr_inertia"], cfg["dt_hours"], has_heating_excitation
     )
 
-    p_curr_shifted, p_curr_valid = _build_lagged_power_series(
-        p_raw_vals, observed_mask, df_win.index, curr_lag, grid["step_td"]
-    )
+    p_curr_shifted, p_curr_valid = lagged_by_step[curr_lag]
     t_sim_current, rmse_traj_current = _simulate_and_score_thermal(
-        grid, p_curr_shifted, p_curr_valid, cfg["curr_alpha"], cfg["curr_gamma"], cfg
+        grid,
+        p_curr_shifted,
+        p_curr_valid,
+        cfg["curr_alpha"],
+        cfg["curr_gamma"],
+        cfg,
+        common_p_ok=common_p_ok,
     )
 
-    p_best_shifted, p_best_valid = _build_lagged_power_series(
-        p_raw_vals, observed_mask, df_win.index, best_lag, grid["step_td"]
-    )
-    if best_lag in trajectories_by_lag and has_heating_excitation:
+    p_best_shifted, p_best_valid = lagged_by_step[best_lag]
+    if best_lag in trajectories_by_lag and has_heating_excitation and fit_succeeded:
         t_sim_tuned = trajectories_by_lag[best_lag]
+        rmse_traj_tuned = float(best_row["rmse_trajectory_c"])
     elif fit_succeeded:
-        t_sim_tuned, _ = _simulate_and_score_thermal(
+        t_sim_tuned, rmse_traj_tuned = _simulate_and_score_thermal(
             grid,
             p_best_shifted,
             p_best_valid,
             best_row["heating_rate"],
             best_row["cooling_constant"],
             cfg,
+            common_p_ok=common_p_ok,
         )
     else:
         t_sim_tuned = np.full(n_rows, np.nan, dtype=float)
+        rmse_traj_tuned = float("nan")
 
     df_win["T_pred_current"] = np.round(t_sim_current, 3)
     df_win["T_pred_tuned"] = np.round(t_sim_tuned, 3)
@@ -6626,7 +6845,9 @@ async def compute_thermal_model_calibration(
             "cooling_constant": best_row["cooling_constant"],
             "thermal_inertia": recommended_inertia,
             "lag_steps": best_lag,
-            "rmse_trajectory_c": best_row["rmse_trajectory_c"],
+            "rmse_trajectory_c": (
+                round(rmse_traj_tuned, 4) if np.isfinite(rmse_traj_tuned) else float("nan")
+            ),
         },
         "lag_table": pd.DataFrame(lag_rows).drop(columns=["fit_ok"]),
         "series": df_win,
@@ -6709,10 +6930,16 @@ def get_injection_dict_thermal_calibration(result: dict) -> dict:
         ),
         secondary_y=True,
     )
+    curr_rmse_txt = (
+        f"{curr['rmse_trajectory_c']:.3f}°C" if np.isfinite(curr["rmse_trajectory_c"]) else "n/a"
+    )
+    best_rmse_txt = (
+        f"{best['rmse_trajectory_c']:.3f}°C" if np.isfinite(best["rmse_trajectory_c"]) else "n/a"
+    )
     fig_traj.update_layout(
         title=(
             f"Predicted vs Actual Indoor Temperature Trajectory"
-            f"<br><sup>Source: {html.escape(source_label)} | Trajectory RMSE: Current={curr['rmse_trajectory_c']:.3f}°C → Tuned={best['rmse_trajectory_c']:.3f}°C</sup>"
+            f"<br><sup>Source: {html.escape(source_label)} | Trajectory RMSE: Current={curr_rmse_txt} → Tuned={best_rmse_txt}</sup>"
         ),
         template="presentation",
         height=500,

@@ -1931,10 +1931,11 @@ function getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, timeZone) {
   }
   const baseDate = firstStepDate instanceof Date ? firstStepDate : new Date();
   const startMs = baseDate.getTime();
+  const wholeDays = Math.max(1, Math.floor(days));
   const endDate = new Date(
     baseDate.getFullYear(),
     baseDate.getMonth(),
-    baseDate.getDate() + Math.round(days),
+    baseDate.getDate() + wholeDays,
     baseDate.getHours(),
     baseDate.getMinutes(),
     0,
@@ -1946,7 +1947,7 @@ function getDstAdjustedHorizonSteps(stepMin, days, firstStepDate, timeZone) {
   if (timeZone && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
     try {
       const targetHour = getLocalHourInTimeZone(baseDate, timeZone);
-      let guessMs = startMs + Math.round(days) * 24 * 3600 * 1000;
+      let guessMs = startMs + wholeDays * 24 * 3600 * 1000;
       for (const offsetMin of [0, -60, 60, -30, 30]) {
         const cand = new Date(guessMs + offsetMin * 60000);
         if (Math.abs(getLocalHourInTimeZone(cand, timeZone) - targetHour) < 1e-3) {
