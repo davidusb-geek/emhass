@@ -2270,6 +2270,328 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         mock_get_ws.side_effect = None
         self.rh.use_websocket = False
 
+    # --- #1073: staleness aux series for battery identification ----------------
+    @staticmethod
+    def _ha_rows(entity_id, rows):
+        """HA history payload for one (day, sensor) from (iso timestamp, state) pairs."""
+        return [
+            [
+                {
+                    "entity_id": entity_id,
+                    "state": state,
+                    "attributes": {},
+                    "last_changed": ts,
+                    "last_updated": ts,
+                }
+                for ts, state in rows
+            ]
+        ]
+
+    def _staleness_payloads(self):
+        """Two days of a battery power sensor plus a SoC sensor created mid-day.
+
+        Day 1 power: the start-of-day row HA carries into the period (00:00),
+        a real reading at 00:40, a reading then an ``unavailable`` row in the
+        01:00 bucket, nothing in 01:30, readings at 02:10 and 23:40.
+        Day 2 power: the carried row is ``unavailable``, a real reading at 00:50.
+        SoC first reports at 05:10 on day 1 (no carried row: it did not exist),
+        then once on day 2 at 00:00 exactly (a real change stamped at the start,
+        which HA cannot tell apart from the carried row) and at 00:40.
+        """
+        p, s = "sensor.batt_power", "sensor.batt_soc"
+        return (
+            p,
+            s,
+            {
+                ("2024-01-01", p): self._ha_rows(
+                    p,
+                    [
+                        ("2024-01-01T00:00:00+00:00", "500"),
+                        ("2024-01-01T00:40:00+00:00", "600"),
+                        ("2024-01-01T01:05:00+00:00", "700"),
+                        ("2024-01-01T01:20:00+00:00", "unavailable"),
+                        ("2024-01-01T02:10:00+00:00", "800"),
+                        ("2024-01-01T23:40:00+00:00", "1000"),
+                    ],
+                ),
+                ("2024-01-02", p): self._ha_rows(
+                    p,
+                    [
+                        ("2024-01-02T00:00:00+00:00", "unavailable"),
+                        ("2024-01-02T00:50:00+00:00", "1100"),
+                    ],
+                ),
+                ("2024-01-01", s): self._ha_rows(
+                    s,
+                    [("2024-01-01T05:10:00+00:00", "40"), ("2024-01-01T23:50:00+00:00", "45")],
+                ),
+                ("2024-01-02", s): self._ha_rows(
+                    s,
+                    [("2024-01-02T00:00:00+00:00", "46"), ("2024-01-02T00:40:00+00:00", "47")],
+                ),
+            },
+        )
+
+    async def _rest_with_payloads(self, payloads, **kwargs):
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_list = sorted({var for _, var in payloads})
+        with aioresponses() as mocked:
+            for (date, var), payload in payloads.items():
+                mocked.get(
+                    self._partial_day_url(pd.Timestamp(date, tz="UTC"), var),
+                    payload=payload,
+                    status=200,
+                    repeat=True,
+                )
+            ok = await self.rh.get_data(
+                days_list,
+                var_list,
+                minimal_response=False,
+                significant_changes_only=False,
+                **kwargs,
+            )
+        self.assertTrue(ok)
+        return self.rh.df_final.copy()
+
+    @staticmethod
+    def _staleness_kwargs(rh):
+        """The get_data keywords for a battery_id style retrieval."""
+        return {"keep_partial_days": True, "record_staleness": True}
+
+    async def test_record_staleness_records_last_real_state_and_marker_buckets(self):
+        """Only the flagged retrieval records anything."""
+        p, s, payloads = self._staleness_payloads()
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        last = getattr(self.rh, "bucket_last_state", {})
+        markers = getattr(self.rh, "marker_buckets", {})
+        self.assertIn(p, last)
+
+        def t(hhmm, day="2024-01-01"):
+            return pd.Timestamp(f"{day} {hhmm}", tz="UTC")
+
+        lp = last[p]
+        # The carried start-of-day row is no real reading: its bucket has none.
+        self.assertTrue(np.isnan(lp[t("00:00")]))
+        self.assertEqual(lp[t("00:30")], 600.0)
+        # Last REAL state of a bucket whose last row is a marker.
+        self.assertEqual(lp[t("01:00")], 700.0)
+        self.assertTrue(np.isnan(lp[t("01:30")]))
+        self.assertEqual(lp[t("02:00")], 800.0)
+        self.assertEqual(lp[t("23:30")], 1000.0)
+        self.assertTrue(np.isnan(lp[t("00:00", "2024-01-02")]))
+        self.assertEqual(lp[t("00:30", "2024-01-02")], 1100.0)
+        # The marker rows' buckets, the carried unavailable row included, and the
+        # observed 01:00 bucket that also holds one.
+        self.assertEqual(list(markers[p]), [t("01:00"), t("00:00", "2024-01-02")])
+        # SoC: a first row not stamped at the day start is a real reading; the
+        # first row stamped exactly at the start is treated as carried.
+        ls = last[s]
+        self.assertEqual(ls[t("05:00")], 40.0)
+        self.assertTrue(np.isnan(ls[t("00:00", "2024-01-02")]))
+        self.assertEqual(len(markers[s]), 0)
+        # Real readings per bucket: the carried row and marker rows do not count.
+        counts = getattr(self.rh, "bucket_row_count", {})
+        self.assertIn(p, counts)
+        cp = counts[p]
+        self.assertTrue(cp.index.equals(lp.index))
+        self.assertEqual(cp[t("00:00")], 0)
+        self.assertEqual(cp[t("00:30")], 1)
+        self.assertEqual(cp[t("01:00")], 1)
+        self.assertEqual(cp[t("01:30")], 0)
+        self.assertEqual(cp[t("00:00", "2024-01-02")], 0)
+        self.assertEqual(cp[t("00:30", "2024-01-02")], 1)
+        self.assertEqual(int(counts[s].sum()), 3)
+        # The aux sits on df_final's grid (UTC), like the frame it describes.
+        for series in last.values():
+            self.assertTrue(series.index.isin(self.rh.df_final.index).all())
+
+    async def test_record_staleness_counts_each_reading_once(self):
+        """Several readings in a
+        bucket are counted, rows sharing a timestamp (an attribute-only update)
+        once, and neither the carried start-of-day row nor a marker row counts."""
+        p = "sensor.batt_power"
+        payloads = {
+            ("2024-01-01", p): self._ha_rows(
+                p,
+                [
+                    ("2024-01-01T00:00:00+00:00", "500"),
+                    ("2024-01-01T00:05:00+00:00", "600"),
+                    ("2024-01-01T00:10:00+00:00", "650"),
+                    ("2024-01-01T00:10:00+00:00", "650"),
+                    ("2024-01-01T00:20:00+00:00", "unavailable"),
+                    ("2024-01-01T00:40:00+00:00", "700"),
+                    ("2024-01-01T23:40:00+00:00", "800"),
+                ],
+            ),
+            ("2024-01-02", p): self._ha_rows(
+                p,
+                [
+                    ("2024-01-02T00:00:00+00:00", "800"),
+                    ("2024-01-02T00:35:00+00:00", "900"),
+                    ("2024-01-02T23:40:00+00:00", "950"),
+                ],
+            ),
+        }
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        counts = getattr(self.rh, "bucket_row_count", {}).get(p)
+        self.assertIsNotNone(counts)
+        self.assertEqual(counts[pd.Timestamp("2024-01-01 00:00", tz="UTC")], 2)
+        self.assertEqual(counts[pd.Timestamp("2024-01-01 00:30", tz="UTC")], 1)
+        self.assertEqual(counts[pd.Timestamp("2024-01-02 00:00", tz="UTC")], 0)
+        self.assertEqual(counts[pd.Timestamp("2024-01-02 00:30", tz="UTC")], 1)
+        self.assertEqual(int(counts.sum()), 6)
+
+    async def test_record_staleness_keeps_aux_on_df_final_grid_for_non_divisor_step(self):
+        """Regression: with a step that does not divide a day (7 min), each day is
+        resampled from its own midnight, so day 2 sits 5 minutes off day 1's grid
+        and the final cleanup keeps the days on day 1's grid. The aux must keep to the labels
+        df_final holds; with day 2's off-grid labels in it, the fill rejected the
+        whole series, day 1's eligible silence included."""
+        from emhass.battery_identification import apply_staleness_fill
+
+        p, s, load = "sensor.batt_power", "sensor.batt_soc", "sensor.load"
+
+        def rows(day, entries):
+            return [(f"{day}T{hhmm}:00+00:00", v) for hhmm, v in entries]
+
+        # Day 1 on a 7-min grid from 00:00: power reads twice in buckets 0, 1, 4
+        # and 5 and is silent in buckets 2 and 3 (00:14-00:28); SoC and the load
+        # read in every bucket, so the silence is witnessed.
+        d1_power = [("00:01", "100"), ("00:03", "110"), ("00:08", "120"), ("00:10", "130")]
+        d1_power += [("00:29", "200"), ("00:31", "210"), ("00:36", "220"), ("00:38", "230")]
+        d1_soc = [(f"00:{m:02d}", str(50 + m)) for m in (1, 3, 8, 10, 15, 17, 22, 24, 29, 31)]
+        d1_soc += [("00:36", "90"), ("00:38", "91")]
+        d1_load = [(f"00:{m:02d}", "500") for m in (2, 9, 16, 23, 30, 37)]
+        payloads = {
+            ("2024-01-01", p): self._ha_rows(p, rows("2024-01-01", d1_power)),
+            ("2024-01-01", s): self._ha_rows(s, rows("2024-01-01", d1_soc)),
+            ("2024-01-01", load): self._ha_rows(load, rows("2024-01-01", d1_load)),
+        }
+        for var, value in ((p, "300"), (s, "60"), (load, "400")):
+            payloads[("2024-01-02", var)] = self._ha_rows(
+                var, rows("2024-01-02", [("00:20", value), ("00:40", value)])
+            )
+        self.rh.freq = pd.Timedelta(minutes=7)
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        final = self.rh.df_final
+        self.assertEqual(final.index.freq, pd.Timedelta(minutes=7))
+        for aux in (self.rh.bucket_last_state, self.rh.bucket_row_count):
+            for var in (p, s, load):
+                self.assertTrue(aux[var].index.isin(final.index).all(), var)
+        for markers in self.rh.marker_buckets.values():
+            self.assertTrue(markers.isin(final.index).all())
+        # Day 1's silence (buckets 00:14 and 00:21) is held at 130 W.
+        out = apply_staleness_fill(
+            final,
+            p,
+            s,
+            self.rh.bucket_last_state,
+            self.rh.marker_buckets,
+            self.rh.freq,
+            row_counts=self.rh.bucket_row_count,
+        )
+        t0 = pd.Timestamp("2024-01-01 00:00", tz="UTC")
+        held = out.loc[[t0 + pd.Timedelta(minutes=14), t0 + pd.Timedelta(minutes=21)], p]
+        self.assertEqual(list(held), [130.0, 130.0])
+
+    async def test_record_staleness_does_not_change_df_final(self):
+        """The flag only records aux: df_final is identical with and without it,
+        and a call without it leaves both attributes empty."""
+        _, _, payloads = self._staleness_payloads()
+        with_flag = await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        without = await self._rest_with_payloads(payloads, keep_partial_days=True)
+        pd.testing.assert_frame_equal(with_flag, without)
+        self.assertEqual(getattr(self.rh, "bucket_last_state", {}), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", {}), {})
+        self.assertEqual(getattr(self.rh, "marker_buckets", {}), {})
+
+    async def test_default_retrieval_byte_identical_with_and_without_record_staleness(self):
+        """Default-is-a-true-no-op: a non-battery_id retrieval (no keep_partial_days,
+        no record_staleness) gets the same df_final as the same retrieval with
+        record_staleness on."""
+        _, _, payloads = self._staleness_payloads()
+        default = await self._rest_with_payloads(payloads)
+        flagged = await self._rest_with_payloads(payloads, record_staleness=True)
+        self.assertTrue(default.equals(flagged))
+
+    async def test_staleness_aux_reset_on_every_get_data(self):
+        """An earlier REST call's aux never leaks into a later retrieval through
+        another backend (websocket here), so the consumer is a no-op there."""
+        _, _, payloads = self._staleness_payloads()
+        await self._rest_with_payloads(payloads, **self._staleness_kwargs(self.rh))
+        self.rh.use_websocket = True
+        try:
+            with patch.object(self.rh, "get_data_websocket", AsyncMock(return_value=True)):
+                ok = await self.rh.get_data(
+                    pd.date_range("2024-01-01", periods=1, freq="D", tz="UTC"),
+                    ["sensor.batt_power"],
+                    **self._staleness_kwargs(self.rh),
+                )
+        finally:
+            self.rh.use_websocket = False
+        self.assertTrue(ok)
+        self.assertEqual(getattr(self.rh, "bucket_last_state", {}), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", {}), {})
+        self.assertEqual(getattr(self.rh, "marker_buckets", {}), {})
+
+    async def test_retrieve_from_hass_record_staleness_plumbing(self):
+        """_retrieve_from_hass asks for the aux only for battery_id."""
+        from emhass.command_line import _retrieve_from_hass
+
+        retrieve_hass_conf = dict(self.retrieve_hass_conf)
+        retrieve_hass_conf["historic_days_to_retrieve"] = 1
+        retrieve_hass_conf["sensor_power_battery"] = "sensor.power_battery"
+        retrieve_hass_conf["sensor_battery_state_of_charge"] = "sensor.battery_soc"
+        mock_rh = MagicMock()
+        mock_rh.get_data = AsyncMock(return_value=True)
+
+        await _retrieve_from_hass("battery_id", retrieve_hass_conf, {}, mock_rh, logger)
+        self.assertTrue(mock_rh.get_data.call_args.kwargs.get("record_staleness"))
+        for set_type in ("perfect-optim", "naive-mpc-optim", "adjust_pv", "dayahead-optim"):
+            mock_rh.get_data.reset_mock()
+            await _retrieve_from_hass(set_type, retrieve_hass_conf, {}, mock_rh, logger)
+            self.assertFalse(mock_rh.get_data.call_args.kwargs.get("record_staleness", False))
+
+    @patch("emhass.retrieve_hass.get_websocket_client", new_callable=AsyncMock)
+    @patch("emhass.retrieve_hass.RetrieveHass._get_data_rest_api")
+    async def test_get_data_websocket_fallback_threads_record_staleness(
+        self, mock_rest_fallback, mock_get_ws
+    ):
+        """When the websocket path fails and falls back to REST, record_staleness
+        reaches that fallback call too (like keep_partial_days)."""
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        self.rh.use_websocket = True
+        mock_get_ws.side_effect = Exception("Connection refused")
+        mock_rest_fallback.return_value = True
+        try:
+            success = await self.rh.get_data(
+                days_list, ["sensor.batt_power"], **self._staleness_kwargs(self.rh)
+            )
+        finally:
+            self.rh.use_websocket = False
+        self.assertTrue(success)
+        mock_rest_fallback.assert_called_once()
+        self.assertTrue(mock_rest_fallback.call_args.kwargs.get("record_staleness"))
+
+    async def test_websocket_retrieval_records_no_staleness_aux(self):
+        """#1360 boundary: the websocket statistics path has fixed-cadence rows and
+        no raw states, so it records no aux and the battery_id fill stays a no-op
+        there (its forward fill is #1360's subject, unchanged here)."""
+        self.rh.use_websocket = True
+        try:
+            with patch.object(self.rh, "get_data_websocket", AsyncMock(return_value=True)):
+                ok = await self.rh.get_data(
+                    pd.date_range("2024-01-01", periods=1, freq="D", tz="UTC"),
+                    ["sensor.batt_power", "sensor.batt_soc"],
+                    **self._staleness_kwargs(self.rh),
+                )
+        finally:
+            self.rh.use_websocket = False
+        self.assertTrue(ok)
+        self.assertEqual(getattr(self.rh, "bucket_last_state", None), {})
+        self.assertEqual(getattr(self.rh, "bucket_row_count", None), {})
+        self.assertEqual(getattr(self.rh, "marker_buckets", None), {})
+
     @patch("aiofiles.open")
     async def test_post_data_extended(self, mock_aio_open):
         self.rh.get_data_from_file = False

@@ -23,7 +23,7 @@ import pandas as pd
 from emhass import last_run, plan_store, utils
 from emhass.atomic_file import atomic_write
 from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
-from emhass.battery_identification import BatteryIdentification
+from emhass.battery_identification import BatteryIdentification, apply_staleness_fill
 from emhass.forecast import Forecast
 from emhass.forecast_calibration import (
     CALIBRATION_DEFAULT_DAYS,
@@ -699,6 +699,9 @@ async def _retrieve_from_hass(
         # A stale battery's sensor shouldn't cost a healthy battery days it did
         # have data for; each battery's fit only reads its own two columns (#1061).
         keep_partial_days=(set_type == "battery_id"),
+        # Lets battery identification hold short silences of its sensors at the
+        # last recorded state (#1073); every other set_type is unchanged.
+        record_staleness=(set_type == "battery_id"),
     )
     return success, days_list
 
@@ -1742,6 +1745,16 @@ async def _identify_battery_impl(
             )
             return
         configured_capacity_wh = float(plant_conf.get("battery_nominal_energy_capacity", 0) or 0)
+        df = apply_staleness_fill(
+            df,
+            power_col,
+            soc_col,
+            getattr(rh, "bucket_last_state", {}),
+            getattr(rh, "marker_buckets", {}),
+            retrieve_hass_conf.get("optimization_time_step"),
+            logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
+        )
         result = BatteryIdentification(
             logger, time_step=retrieve_hass_conf.get("optimization_time_step")
         ).identify(df, power_col, soc_col, configured_capacity_wh)
@@ -1947,9 +1960,21 @@ async def _identify_battery_impl(
         configured_capacity_wh = float(
             _batt_conf_val(plant_conf.get("battery_nominal_energy_capacity", 0), k) or 0
         )
+        # Only this battery's two columns change; the shared frame stays as
+        # retrieved for the other batteries.
+        df_k = apply_staleness_fill(
+            df,
+            power_col,
+            soc_col,
+            getattr(rh, "bucket_last_state", {}),
+            getattr(rh, "marker_buckets", {}),
+            retrieve_hass_conf.get("optimization_time_step"),
+            logger,
+            row_counts=getattr(rh, "bucket_row_count", {}),
+        )
         result = BatteryIdentification(
             logger, time_step=retrieve_hass_conf.get("optimization_time_step")
-        ).identify(df, power_col, soc_col, configured_capacity_wh)
+        ).identify(df_k, power_col, soc_col, configured_capacity_wh)
         for msg in result.messages:
             logger.info("Battery %d identification: %s", k, msg)
         if not result.is_ok:
