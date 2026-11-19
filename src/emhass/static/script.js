@@ -302,6 +302,7 @@ async function getTemplate() {
   htmlTemplateData = await new Response(blob).text(); //obtain html from blob
   let templateDiv = document.getElementById("template"); //get template container element to override
   clearStickyTables();
+  resultsTemplateVersion += 1;
   templateDiv.innerHTML = htmlTemplateData; //override container inner html with new data
   let scripts = Array.from(templateDiv.getElementsByTagName("script")); //replace script tags manually
   for (const script of scripts) {
@@ -813,6 +814,10 @@ function resizeVisiblePlotlyPlots(container) {
 }
 
 let activeResultsTab = "schedule";
+let resultsTemplateVersion = 0;
+let lastSpecialReportVersion = -1;
+let lastRunRequestSeq = 0;
+let lastRunAbortController = null;
 
 function initResultsTabs() {
   const tabBar = document.getElementById("results-tabs");
@@ -874,7 +879,8 @@ function initResultsTabs() {
     !templateDiv.querySelector('[data-plot-key="figure_2"]') &&
     counts.tables > 0 &&
     counts.schedule > 0;
-  if (isSpecialReport) {
+  if (isSpecialReport && lastSpecialReportVersion !== resultsTemplateVersion) {
+    lastSpecialReportVersion = resultsTemplateVersion;
     activeResultsTab = "all";
   } else if (counts[activeResultsTab] === 0 && activeResultsTab !== "all") {
     activeResultsTab = counts.schedule > 0 ? "schedule" : "all";
@@ -1012,16 +1018,32 @@ async function refreshLastRunBanner() {
   ) {
     return;
   }
+  const reqId = ++lastRunRequestSeq;
+  if (lastRunAbortController && typeof lastRunAbortController.abort === "function") {
+    try {
+      lastRunAbortController.abort();
+    } catch (_err) {
+      // ignore abort error
+    }
+  }
+  const controller =
+    typeof AbortController !== "undefined" ? new AbortController() : null;
+  lastRunAbortController = controller;
   try {
-    const opts =
-      typeof AbortSignal !== "undefined" && AbortSignal.timeout
-        ? { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
-        : {};
+    let opts = {};
+    if (controller) {
+      opts = { signal: controller.signal };
+    } else if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+      opts = { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+    }
     const response = await fetch("api/v1/last-run", opts);
-    if (!response.ok) {
+    if (reqId !== lastRunRequestSeq || !response.ok) {
       return;
     }
     const data = await response.json();
+    if (reqId !== lastRunRequestSeq) {
+      return;
+    }
     const versionBadge = document.getElementById("emhass-version-badge");
     if (versionBadge && data && data.emhass_version) {
       versionBadge.textContent = "EMHASS v" + String(data.emhass_version);

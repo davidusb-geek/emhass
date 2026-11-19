@@ -823,21 +823,32 @@ def _attach_ui_metadata(
     retrieve_hass_conf = input_data_dict.get("retrieve_hass_conf") or {}
     fcst = input_data_dict.get("fcst")
     data_path = emhass_conf.get("data_path")
-    last_run_snap = last_run.read(data_path) if data_path is not None else None
-    if last_run_snap is None and input_data_dict.get("stage_times"):
-        top_level_stages = [
-            float(v)
-            for k, v in input_data_dict["stage_times"].items()
-            if "." not in str(k) and isinstance(v, int | float)
-        ]
-        last_run_snap = {
-            "status": "ok",
-            "action": action_name,
-            "stage_times": dict(input_data_dict["stage_times"]),
-            "duration_total_seconds": sum(top_level_stages),
-            "emhass_version": last_run.emhass_version(),
-            "schema_version": EMHASS_SCHEMA_VERSION,
-        }
+    persisted_snap = last_run.read(data_path) if data_path is not None else None
+    cur_stages = input_data_dict.get("stage_times")
+    if isinstance(cur_stages, dict) and cur_stages:
+        cur_stages_dict = dict(cur_stages)
+        if (
+            isinstance(persisted_snap, dict)
+            and persisted_snap.get("action") == action_name
+            and persisted_snap.get("stage_times") == cur_stages_dict
+        ):
+            last_run_snap = persisted_snap
+        else:
+            top_level_stages = [
+                float(v)
+                for k, v in cur_stages_dict.items()
+                if "." not in str(k) and isinstance(v, int | float)
+            ]
+            last_run_snap = {
+                "status": "ok",
+                "action": action_name,
+                "stage_times": cur_stages_dict,
+                "duration_total_seconds": sum(top_level_stages),
+                "emhass_version": last_run.emhass_version(),
+                "schema_version": EMHASS_SCHEMA_VERSION,
+            }
+    else:
+        last_run_snap = persisted_snap
 
     load_history_meta = None
     df_hist = input_data_dict.get("df_input_data")
@@ -876,14 +887,24 @@ def _attach_ui_metadata(
             else:
                 pv_quantiles_meta[q_key] = None
 
+    raw_step = retrieve_hass_conf.get("optimization_time_step")
+    step_hours = None
+    if hasattr(raw_step, "total_seconds"):
+        step_hours = float(raw_step.total_seconds() / 3600.0)
+    elif isinstance(raw_step, int | float) and raw_step > 0:
+        step_hours = float(raw_step) / 60.0
+
     opt_res.attrs["emhass_ui_meta"] = {
         "emhass_version": last_run.emhass_version(),
         "last_run": last_run_snap,
+        "optimization_time_step_hours": step_hours,
         "optim_conf": {
             key: optim_conf.get(key)
             for key in (
                 "set_use_pv",
                 "set_use_battery",
+                "set_nodischarge_to_grid",
+                "is_electric_load",
                 "number_of_deferrable_loads",
                 "load_forecast_method",
                 "weather_forecast_method",
