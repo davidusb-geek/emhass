@@ -1773,6 +1773,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Load Forecast Effectiveness", injection_dict["figure_load_effectiveness"])
 
     def test_get_injection_dict_pv_quantiles_load_history_and_stage_times(self):
+        from emhass import web_server
+
         df = self.df.copy()
         n = len(df)
         hist_idx = pd.date_range(
@@ -1782,19 +1784,28 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         df.attrs["emhass_ui_meta"] = {
             "optim_conf": {"load_forecast_method": "naive"},
             "pv_quantiles": {
-                "p50": pd.Series(np.full(n, 1500.0), index=df.index),
-                "p10": pd.Series(np.full(n, 900.0), index=df.index),
-                "p90": pd.Series(np.full(n, 2100.0), index=df.index),
+                "timestamps": [str(ts) for ts in df.index],
+                "p50": np.full(n, 1500.0).tolist(),
+                "p10": np.full(n, 900.0).tolist(),
+                "p90": np.full(n, 2100.0).tolist(),
                 "bias": 0.4,
                 "source": "solcast",
             },
             "load_history_series": load_hist,
             "last_run": {
-                "stage_times": {"pv_forecast": 0.12, "load_forecast": 0.08, "optim_solve": 0.35},
+                "stage_times": {
+                    "pv_forecast": 0.12,
+                    "load_forecast": 0.08,
+                    "optim_solve.build": 0.05,
+                    "optim_solve": 0.35,
+                },
                 "duration_total_seconds": 0.55,
             },
         }
-        injection_dict = utils.get_injection_dict(df)
+        # Slice result horizon to verify timestamp-based quantile reindexing instead of positional shift
+        df_sliced = df.iloc[2:].copy()
+        df_sliced.attrs["emhass_ui_meta"] = df.attrs["emhass_ui_meta"]
+        injection_dict = utils.get_injection_dict(df_sliced)
         self.assertIn("figure_pv_forecast", injection_dict)
         self.assertIn("Solcast", injection_dict["figure_pv_forecast"])
         self.assertIn("P10", injection_dict["figure_pv_forecast"])
@@ -1803,6 +1814,33 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("figure_stage_times", injection_dict)
         self.assertIn("Pipeline Stage Execution Times", injection_dict["figure_stage_times"])
         self.assertIn("optim_solve", injection_dict["figure_stage_times"])
+
+        # Also test _attach_ui_metadata double-count guard and timestamp serialization
+        class _FakeFcst:
+            last_pv_quantiles = {
+                "p50": pd.Series(np.arange(n, dtype=float) * 100.0, index=df.index),
+                "p10": pd.Series(np.arange(n, dtype=float) * 60.0, index=df.index),
+                "p90": None,
+                "bias": 0.25,
+                "source": "solcast",
+            }
+
+        df_attached = df_sliced.copy()
+        web_server._attach_ui_metadata(
+            df_attached,
+            {
+                "optim_conf": {"load_forecast_method": "naive"},
+                "fcst": _FakeFcst(),
+                "stage_times": {"pv_forecast": 0.1, "optim_solve.build": 0.05, "optim_solve": 0.3},
+            },
+            action_name="dayahead-optim",
+        )
+        attached_meta = df_attached.attrs["emhass_ui_meta"]
+        self.assertIn("timestamps", attached_meta["pv_quantiles"])
+        if attached_meta.get("last_run"):
+            self.assertLess(attached_meta["last_run"].get("duration_total_seconds", 0.0), 0.45)
+        attached_inj = utils.get_injection_dict(df_attached)
+        self.assertIn("PV P50", attached_inj["figure_pv_forecast"])
 
     def test_get_injection_dict_federated_figures_and_scalar_summary(self):
         df = self.df.copy()
@@ -1905,6 +1943,54 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertIn(key, inj)
         self.assertIn("Predicted vs Actual Indoor Temperature Trajectory", inj["figure_0"])
+
+        # 5-minute timestep with 1-step lag preserves sub-0.1h inertia precision for optimizer conversion
+        dt_5m = 5.0 / 60.0
+        n_5m = 48
+        p_5m = np.array([p_nom if 6 <= i < 20 or 30 <= i < 40 else 0.0 for i in range(n_5m)], dtype=float)
+        t_out_5m = np.full(n_5m, 8.0, dtype=float)
+        t_in_5m = np.empty(n_5m, dtype=float)
+        t_in_5m[0] = 19.0
+        for i in range(n_5m - 1):
+            p_eff = p_5m[i - 1] if i >= 1 else 0.0
+            t_in_5m[i + 1] = t_in_5m[i] + alpha_true * dt_5m * (p_eff / p_nom) - gamma_true * dt_5m * (t_in_5m[i] - t_out_5m[i])
+        res_5m = await utils.compute_thermal_model_calibration(
+            emhass_conf,
+            {"retrieve_hass_conf": {"optimization_time_step": 5}},
+            {
+                "nominal_power": p_nom,
+                "indoor_temperature": t_in_5m.tolist(),
+                "outdoor_temperature": t_out_5m.tolist(),
+                "heater_power": p_5m.tolist(),
+            },
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertEqual(res_5m["best_params"]["lag_steps"], 1)
+        self.assertGreaterEqual(int(res_5m["best_params"]["thermal_inertia"] / dt_5m), 1)
+
+        # Cooling-only window when heater power is identically zero
+        t_cool = np.empty(24, dtype=float)
+        t_cool[0] = 21.0
+        for i in range(23):
+            t_cool[i + 1] = t_cool[i] - 0.08 * dt_h * (t_cool[i] - 8.0)
+        res_cool = await utils.compute_thermal_model_calibration(
+            emhass_conf,
+            None,
+            {
+                "nominal_power": p_nom,
+                "indoor_temperature": t_cool.tolist(),
+                "outdoor_temperature": [8.0] * 24,
+                "heater_power": [0.0] * 24,
+                "current_heating_rate": 2.5,
+                "current_thermal_inertia": 0.5,
+            },
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(res_cool["cooling_only"])
+        self.assertEqual(res_cool["best_params"]["heating_rate"], 2.5)
+        self.assertAlmostEqual(res_cool["best_params"]["cooling_constant"], 0.08, places=3)
 
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration

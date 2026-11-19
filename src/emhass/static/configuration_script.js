@@ -320,10 +320,22 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   applyConfigFilters();
   updateConfigSystemOverviewBadges(config);
   const cfgContainer = document.getElementById("configuration-container");
-  if (cfgContainer && !cfgContainer.dataset.boundOverviewBadges) {
-    cfgContainer.dataset.boundOverviewBadges = "1";
-    cfgContainer.addEventListener("change", () => updateConfigSystemOverviewBadges(config));
-    cfgContainer.addEventListener("input", () => updateConfigSystemOverviewBadges(config));
+  if (
+    cfgContainer &&
+    typeof cfgContainer.addEventListener === "function" &&
+    !cfgContainer._boundOverviewBadges &&
+    (!cfgContainer.dataset || !cfgContainer.dataset.boundOverviewBadges)
+  ) {
+    cfgContainer._boundOverviewBadges = true;
+    if (cfgContainer.dataset) {
+      cfgContainer.dataset.boundOverviewBadges = "1";
+    }
+    cfgContainer.addEventListener("change", () =>
+      updateConfigSystemOverviewBadges(lastLoadedConfig)
+    );
+    cfgContainer.addEventListener("input", () =>
+      updateConfigSystemOverviewBadges(lastLoadedConfig)
+    );
   }
 }
 
@@ -879,9 +891,12 @@ function headerElement(element, param_definitions, config) {
           "number_of_batteries",
         ]);
         element.checked = true;
+        setupDynamicVisibility();
       } else {
         param_container.innerHTML = "";
+        applyConfigFilters();
       }
+      updateConfigSystemOverviewBadges(lastLoadedConfig || config);
       break;
 
     //if set_use_pv, add or remove PV section (inc. related params)
@@ -892,9 +907,12 @@ function headerElement(element, param_definitions, config) {
           "set_use_pv",
         ]);
         element.checked = true;
+        setupDynamicVisibility();
       } else {
         param_container.innerHTML = "";
+        applyConfigFilters();
       }
+      updateConfigSystemOverviewBadges(lastLoadedConfig || config);
       break;
 
     //if number_of_deferrable_loads, the number of inputs in the "Deferrable Loads" section should add up to number_of_deferrable_loads value in header
@@ -1288,13 +1306,18 @@ async function saveConfiguration(param_definitions) {
         }
       }
     }
-    const builtThermalList = buildThermalLoadsConfig();
+    const builtThermalList =
+      typeof buildThermalLoadsConfig === "function"
+        ? buildThermalLoadsConfig()
+        : null;
     if (builtThermalList !== null) {
       const hasThermalModel = builtThermalList.some(
         (entry) => entry && Object.keys(entry).length > 0
       );
       const hadExistingThermal =
-        lastLoadedConfig && Array.isArray(lastLoadedConfig.def_load_config);
+        typeof lastLoadedConfig !== "undefined" &&
+        lastLoadedConfig &&
+        Array.isArray(lastLoadedConfig.def_load_config);
       if (hasThermalModel || hadExistingThermal) {
         config["def_load_config"] = builtThermalList;
       }
@@ -1388,19 +1411,26 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   //remove contents of current view
   configuration_container.innerHTML = "";
   //build new view
-  const filterBar = document.querySelector(".config-filter-bar");
+  const filterBar =
+    typeof document.querySelector === "function"
+      ? document.querySelector(".config-filter-bar")
+      : null;
   switch (selected) {
     case "box":
       //load list
       loadConfigurationListView(param_definitions, config, list_html);
       yaml_button.style.display = "none";
-      if (filterBar) filterBar.style.display = "";
+      if (filterBar) {
+        filterBar.style.display = "";
+      }
       break;
     case "list":
       //load box
       loadConfigurationBoxPage(config);
       yaml_button.style.display = "block";
-      if (filterBar) filterBar.style.display = "none";
+      if (filterBar) {
+        filterBar.style.display = "none";
+      }
       break;
   }
 }
@@ -1418,11 +1448,23 @@ async function loadConfigurationBoxPage(config) {
       `;
   //set created textarea box with retrieved config
   //.value, not innerHTML: a textarea's HTML parsing would decode &amp; etc. in the data (#1290)
-  document.getElementById("config-box").value = JSON.stringify(
-    config,
-    null,
-    2
-  );
+  const box = document.getElementById("config-box");
+  box.value = JSON.stringify(config, null, 2);
+  lastLoadedConfig = config;
+  updateConfigSystemOverviewBadges(config);
+  if (typeof box.addEventListener === "function") {
+    box.addEventListener("input", () => {
+      try {
+        const parsed = JSON.parse(box.value);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          lastLoadedConfig = parsed;
+          updateConfigSystemOverviewBadges(parsed);
+        }
+      } catch (_err) {
+        // ignore incomplete JSON/YAML while editing
+      }
+    });
+  }
 }
 
 //function in control of status icons and alert box from a fetch request
@@ -1434,6 +1476,7 @@ async function showChangeStatus(status, logJson) {
   }
   if (status === 200 || status === 201) {
     //if status is 200 or 201, then show a tick
+    loading.classList.remove("loading");
     loading.innerHTML = `<p class=tick>&#x2713;</p>`;
     //a request that succeeds ends the failure shown for the one before it
     document.getElementById("alert").style.display = "none";
@@ -1541,6 +1584,9 @@ const BASIC_PARAM_IDS = new Set([
 let activeConfigTab = "all";
 
 function initConfigTabs() {
+  if (typeof document.querySelectorAll !== "function") {
+    return;
+  }
   const buttons = Array.from(document.querySelectorAll(".config-tab-btn"));
   const cards = Array.from(document.querySelectorAll(".section-card"));
   if (!buttons.length || !cards.length) {
@@ -1671,26 +1717,45 @@ function setupDynamicVisibility() {
     },
     {
       controller: "inverter_is_hybrid",
-      targets: [
-        "inverter_ac_input_max",
-        "inverter_efficiency_ac_dc",
-        "inverter_power_curve_ac_dc",
-      ],
+      targets: ["inverter_ac_input_max", "inverter_efficiency_ac_dc"],
       when: (el) => Boolean(el.checked),
     },
+    {
+      controller: "inverter_is_hybrid",
+      targets: ["inverter_power_curve_ac_dc"],
+      when: (el) => {
+        const count = parseInverterCount(paramInputOf("number_of_inverters")?.value);
+        return Boolean(el.checked) || (count !== null && count > 1);
+      },
+    },
+    {
+      controller: "number_of_inverters",
+      targets: ["inverter_power_curve_ac_dc"],
+      when: (el) => {
+        const count = parseInverterCount(el.value);
+        const hybrid = Boolean(paramInputOf("inverter_is_hybrid")?.checked);
+        return hybrid || (count !== null && count > 1);
+      },
+    },
   ];
+
+  function resolveControllerInput(controllerId) {
+    const controllerDiv = document.getElementById(controllerId);
+    if (!controllerDiv) {
+      return null;
+    }
+    if (controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT") {
+      return controllerDiv;
+    }
+    return typeof controllerDiv.querySelector === "function"
+      ? controllerDiv.querySelector("input, select")
+      : null;
+  }
 
   function evaluateAllRules() {
     const targetVisibility = new Map();
     rules.forEach((rule) => {
-      const controllerDiv = document.getElementById(rule.controller);
-      if (!controllerDiv) {
-        return;
-      }
-      const ctrl =
-        controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT"
-          ? controllerDiv
-          : controllerDiv.querySelector("input, select");
+      const ctrl = resolveControllerInput(rule.controller);
       if (!ctrl) {
         return;
       }
@@ -1707,7 +1772,7 @@ function setupDynamicVisibility() {
 
     targetVisibility.forEach((visible, targetId) => {
       const el = document.getElementById(targetId);
-      if (!el) {
+      if (!el || !el.dataset) {
         return;
       }
       el.dataset.dynamicHidden = visible ? "0" : "1";
@@ -1720,26 +1785,31 @@ function setupDynamicVisibility() {
     if (boundControllers.has(rule.controller)) {
       return;
     }
-    const controllerDiv = document.getElementById(rule.controller);
-    if (!controllerDiv) {
-      return;
-    }
-    const ctrl =
-      controllerDiv.tagName === "INPUT" || controllerDiv.tagName === "SELECT"
-        ? controllerDiv
-        : controllerDiv.querySelector("input, select");
+    const ctrl = resolveControllerInput(rule.controller);
     if (!ctrl) {
       return;
     }
     boundControllers.add(rule.controller);
-    ctrl.addEventListener("change", evaluateAllRules);
-    ctrl.addEventListener("input", evaluateAllRules);
+    const alreadyBound =
+      Boolean(ctrl._boundDynVis) ||
+      Boolean(ctrl.dataset && ctrl.dataset.boundDynVis === "1");
+    if (!alreadyBound && typeof ctrl.addEventListener === "function") {
+      ctrl._boundDynVis = true;
+      if (ctrl.dataset) {
+        ctrl.dataset.boundDynVis = "1";
+      }
+      ctrl.addEventListener("change", evaluateAllRules);
+      ctrl.addEventListener("input", evaluateAllRules);
+    }
   });
 
   evaluateAllRules();
 }
 
 function applyConfigFilters() {
+  if (typeof document.querySelectorAll !== "function") {
+    return;
+  }
   const searchEl = document.getElementById("config-search-input");
   const levelEl = document.getElementById("config-level-filter");
   const query = searchEl ? searchEl.value.trim().toLowerCase() : "";
@@ -1749,7 +1819,9 @@ function applyConfigFilters() {
   params.forEach((paramDiv) => {
     const paramId = paramDiv.id || "";
     const text = paramDiv.textContent ? paramDiv.textContent.toLowerCase() : "";
-    const dynHidden = paramDiv.dataset.dynamicHidden === "1";
+    const dynHidden = Boolean(
+      paramDiv.dataset && paramDiv.dataset.dynamicHidden === "1"
+    );
     const matchQuery = !query || paramId.toLowerCase().includes(query) || text.includes(query);
     const matchLevel = level === "all" || BASIC_PARAM_IDS.has(paramId);
 
@@ -1806,15 +1878,19 @@ function getConfiguredHorizonSteps() {
   const daysEl = paramInputOf("delta_forecast_daily");
   const stepMin = stepEl ? Number(stepEl.value) || 30 : 30;
   const days = daysEl ? Number(daysEl.value) || 1 : 1;
-  return Math.max(1, Math.min(288, Math.round((days * 24 * 60) / stepMin)));
+  return Math.max(1, Math.round((days * 24 * 60) / stepMin));
 }
 
 function buildDayNightTempArrays(opts) {
   const stepEl = paramInputOf("optimization_time_step");
   const stepMin = stepEl ? Number(stepEl.value) || 30 : 30;
   const horizon = Math.max(1, Number(opts.horizon) || getConfiguredHorizonSteps());
-  const startH = Number(opts.dayStartHour) || 7;
-  const endH = Number(opts.dayEndHour) || 22;
+  const rawStart = Number(opts.dayStartHour);
+  const rawEnd = Number(opts.dayEndHour);
+  const rawFirst = Number(opts.firstStepHour);
+  const startH = Number.isFinite(rawStart) ? rawStart : 7;
+  const endH = Number.isFinite(rawEnd) ? rawEnd : 22;
+  const firstStepHour = Number.isFinite(rawFirst) ? rawFirst : 0;
   const minDay = Number(opts.minDay);
   const minNight = Number(opts.minNight);
   const maxDay = Number(opts.maxDay);
@@ -1823,7 +1899,7 @@ function buildDayNightTempArrays(opts) {
   const minArr = [];
   const maxArr = [];
   for (let i = 0; i < horizon; i++) {
-    const hour = ((i * stepMin) / 60) % 24;
+    const hour = (((firstStepHour * 60 + i * stepMin) / 60) % 24 + 24) % 24;
     const isDay =
       startH <= endH ? hour >= startH && hour < endH : hour >= startH || hour < endH;
     minArr.push(isDay ? minDay : minNight);
@@ -1834,13 +1910,13 @@ function buildDayNightTempArrays(opts) {
 
 function renderThermalLoadCards(builderEl, count) {
   while (thermalLoadStates.length < count) {
-    thermalLoadStates.push({ kind: "standard" });
+    thermalLoadStates.push({ kind: "standard", extra: {} });
   }
 
   let html = '<div class="thermal-builder-header">';
   html += "<h4>Thermal &amp; Heat Pump Model Configurator (<code>def_load_config</code>)</h4>";
   html +=
-    '<p class="section-hint">Configure Simple Thermal Models (<code>thermal_config</code>) or Heat Pumps (<code>thermal_battery</code>) per load with a Day/Night comfort schedule generator instead of writing curl JSON payloads.</p>';
+    '<p class="section-hint">Configure Simple Thermal Models (<code>thermal_config</code>) or Heat Pumps (<code>thermal_battery</code>) per load with a Day/Night comfort schedule generator anchored to your first optimization step hour.</p>';
   html += "</div>";
 
   if (count <= 0) {
@@ -1851,9 +1927,10 @@ function renderThermalLoadCards(builderEl, count) {
 
   html += '<div class="thermal-cards-grid">';
   for (let idx = 0; idx < count; idx++) {
-    const state = thermalLoadStates[idx] || { kind: "standard" };
+    const state = thermalLoadStates[idx] || { kind: "standard", extra: {} };
     const tc = state.thermal_config || {};
     const tb = state.thermal_battery || {};
+    const extraKeys = state.extra ? Object.keys(state.extra) : [];
     const horizon = getConfiguredHorizonSteps();
 
     html += `<div class="thermal-load-card" data-load-index="${idx}">`;
@@ -1862,9 +1939,16 @@ function renderThermalLoadCards(builderEl, count) {
     html += `<option value="standard"${state.kind === "standard" ? " selected" : ""}>Standard Deferrable Load ({})</option>`;
     html += `<option value="thermal_config"${state.kind === "thermal_config" ? " selected" : ""}>Simple Thermal Load (thermal_config)</option>`;
     html += `<option value="thermal_battery"${state.kind === "thermal_battery" ? " selected" : ""}>Heat Pump / Thermal Battery (thermal_battery)</option>`;
+    if (state.kind === "passthrough") {
+      html += `<option value="passthrough" selected>Custom / Preserved Entry (${escapeHtml(extraKeys.join(", "))})</option>`;
+    }
     html += "</select></div>";
 
-    if (state.kind === "standard") {
+    if (state.kind === "passthrough") {
+      html += `<p class="muted-hint">Preserving existing configuration keys: <code>${escapeHtml(
+        extraKeys.join(", ")
+      )}</code>. Switch model type above only if you intend to replace them.</p>`;
+    } else if (state.kind === "standard") {
       html +=
         '<p class="muted-hint">Standard electrical load (no thermal envelope simulation attached; exports as <code>{}</code>).</p>';
     } else if (state.kind === "thermal_config") {
@@ -1884,6 +1968,7 @@ function renderThermalLoadCards(builderEl, count) {
       html += `<div class="thermal-schedule-helper">
         <span>Day/Night Comfort Schedule (${horizon} steps):</span>
         <div class="thermal-schedule-inputs">
+          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
           <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
           <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
           Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
@@ -1916,6 +2001,7 @@ function renderThermalLoadCards(builderEl, count) {
       html += `<div class="thermal-schedule-helper">
         <span>Day/Night Comfort Schedule (${horizon} steps):</span>
         <div class="thermal-schedule-inputs">
+          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
           <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
           <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
           Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
@@ -1938,11 +2024,15 @@ function renderThermalLoadCards(builderEl, count) {
     sel.addEventListener("change", () => {
       const i = Number(sel.getAttribute("data-load-index"));
       const kind = sel.value;
-      if (kind === "standard") {
-        thermalLoadStates[i] = { kind: "standard" };
+      const existingExtra = thermalLoadStates[i] ? thermalLoadStates[i].extra || {} : {};
+      if (kind === "passthrough") {
+        thermalLoadStates[i] = { kind: "passthrough", extra: existingExtra };
+      } else if (kind === "standard") {
+        thermalLoadStates[i] = { kind: "standard", extra: {} };
       } else if (kind === "thermal_config") {
         thermalLoadStates[i] = {
           kind: "thermal_config",
+          extra: existingExtra,
           thermal_config: thermalLoadStates[i].thermal_config || {
             heating_rate: 5.0,
             cooling_constant: 0.1,
@@ -1956,6 +2046,7 @@ function renderThermalLoadCards(builderEl, count) {
       } else {
         thermalLoadStates[i] = {
           kind: "thermal_battery",
+          extra: existingExtra,
           thermal_battery: thermalLoadStates[i].thermal_battery || {
             supply_temperature: 35.0,
             volume: 14.91,
@@ -1971,6 +2062,7 @@ function renderThermalLoadCards(builderEl, count) {
         };
       }
       renderThermalLoadCards(builderEl, count);
+      updateConfigSystemOverviewBadges(lastLoadedConfig);
     });
   });
 
@@ -1988,6 +2080,7 @@ function renderThermalLoadCards(builderEl, count) {
         const maxVal = Number(card.querySelector(".sched-max-day").value);
         const { minArr, maxArr } = buildDayNightTempArrays({
           horizon: getConfiguredHorizonSteps(),
+          firstStepHour: Number(card.querySelector(".sched-first-hour")?.value ?? 0),
           dayStartHour: Number(card.querySelector(".sched-day-start").value),
           dayEndHour: Number(card.querySelector(".sched-day-end").value),
           minDay,
@@ -1997,8 +2090,12 @@ function renderThermalLoadCards(builderEl, count) {
         });
         const minInput = card.querySelector('[data-field="min_temperatures"]');
         const maxInput = card.querySelector('[data-field="max_temperatures"]');
-        if (minInput) minInput.value = minArr.join(", ");
-        if (maxInput) maxInput.value = maxArr.join(", ");
+        if (minInput) {
+          minInput.value = minArr.join(", ");
+        }
+        if (maxInput) {
+          maxInput.value = maxArr.join(", ");
+        }
         syncSingleThermalState(card, idx);
       });
     }
@@ -2007,7 +2104,7 @@ function renderThermalLoadCards(builderEl, count) {
 
 function syncSingleThermalState(card, idx) {
   const state = thermalLoadStates[idx];
-  if (!state || state.kind === "standard") {
+  if (!state || state.kind === "standard" || state.kind === "passthrough") {
     return;
   }
   const bucket = state[state.kind] || {};
@@ -2039,24 +2136,43 @@ function setupThermalLoadsBuilder(config) {
   thermalLoadStates = [];
   for (let i = 0; i < Math.max(count, rawList.length); i++) {
     const item = rawList[i];
+    const extra = {};
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      Object.keys(item).forEach((k) => {
+        if (k !== "thermal_config" && k !== "thermal_battery") {
+          extra[k] = item[k];
+        }
+      });
+    }
     if (item && typeof item === "object" && item.thermal_battery) {
       thermalLoadStates.push({
         kind: "thermal_battery",
+        extra,
         thermal_battery: { ...item.thermal_battery },
       });
     } else if (item && typeof item === "object" && item.thermal_config) {
       thermalLoadStates.push({
         kind: "thermal_config",
+        extra,
         thermal_config: { ...item.thermal_config },
       });
+    } else if (Object.keys(extra).length > 0) {
+      thermalLoadStates.push({ kind: "passthrough", extra });
     } else {
-      thermalLoadStates.push({ kind: "standard" });
+      thermalLoadStates.push({ kind: "standard", extra: {} });
     }
   }
   renderThermalLoadCards(builderEl, count);
 
-  if (!countInput.dataset.boundThermalBuilder) {
-    countInput.dataset.boundThermalBuilder = "1";
+  if (
+    typeof countInput.addEventListener === "function" &&
+    !countInput._boundThermalBuilder &&
+    (!countInput.dataset || !countInput.dataset.boundThermalBuilder)
+  ) {
+    countInput._boundThermalBuilder = true;
+    if (countInput.dataset) {
+      countInput.dataset.boundThermalBuilder = "1";
+    }
     countInput.addEventListener("input", () => {
       const nextCount = Math.max(0, Number.parseInt(countInput.value, 10) || 0);
       renderThermalLoadCards(builderEl, nextCount);
@@ -2080,11 +2196,19 @@ function buildThermalLoadsConfig() {
   for (let i = 0; i < count; i++) {
     const state = thermalLoadStates[i];
     if (state && state.kind === "thermal_config") {
-      result.push({ thermal_config: { ...(state.thermal_config || {}) } });
+      result.push({
+        ...(state.extra || {}),
+        thermal_config: { ...(state.thermal_config || {}) },
+      });
     } else if (state && state.kind === "thermal_battery") {
-      result.push({ thermal_battery: { ...(state.thermal_battery || {}) } });
+      result.push({
+        ...(state.extra || {}),
+        thermal_battery: { ...(state.thermal_battery || {}) },
+      });
+    } else if (state && state.kind === "passthrough") {
+      result.push({ ...(state.extra || {}) });
     } else {
-      result.push({});
+      result.push({ ...(state?.extra || {}) });
     }
   }
   return result;
@@ -2146,8 +2270,20 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
     cls: "sys-neutral",
     text: nInv > 1 ? nInv + " Inverters" : readBool("inverter_is_hybrid", false) ? "Hybrid Inverter" : "1 Inverter",
   });
-  const capCost = readNum("capacity_cost_per_kw", 0);
-  if (capCost > 0) {
+  const capContainer = document.getElementById("capacity_cost_per_kw");
+  let hasCapTariff = false;
+  if (capContainer && typeof capContainer.getElementsByClassName === "function") {
+    const capInputs = Array.from(capContainer.getElementsByClassName("param_input"));
+    if (capInputs.length > 0) {
+      hasCapTariff = capInputs.some((inp) => Number(inp.value) > 0);
+    }
+  } else if (fallbackConfig && "capacity_cost_per_kw" in fallbackConfig) {
+    const rawCap = fallbackConfig.capacity_cost_per_kw;
+    hasCapTariff = Array.isArray(rawCap)
+      ? rawCap.some((v) => Number(v) > 0)
+      : Number(rawCap) > 0;
+  }
+  if (hasCapTariff) {
     badges.push({ cls: "sys-tariff", text: "Capacity Tariff" });
   }
   badges.push({ cls: "sys-neutral", text: "Objective: " + readStr("costfun", "profit") });
@@ -2156,7 +2292,9 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
   if (readStr("optimization_backend", "cvxpy") === "dantzig_wolfe") {
     badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
   }
-  strip.innerHTML = badges
-    .map((b) => `<span class="sys-badge ${b.cls}">${escapeHtml(b.text)}</span>`)
-    .join("");
+  strip.innerHTML =
+    '<span class="system-overview-title">Configured system:</span>' +
+    badges
+      .map((b) => `<span class="sys-badge ${b.cls}">${escapeHtml(b.text)}</span>`)
+      .join("");
 }

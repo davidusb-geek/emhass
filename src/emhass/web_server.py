@@ -825,11 +825,16 @@ def _attach_ui_metadata(
     data_path = emhass_conf.get("data_path")
     last_run_snap = last_run.read(data_path) if data_path is not None else None
     if last_run_snap is None and input_data_dict.get("stage_times"):
+        top_level_stages = [
+            float(v)
+            for k, v in input_data_dict["stage_times"].items()
+            if "." not in str(k) and isinstance(v, int | float)
+        ]
         last_run_snap = {
             "status": "ok",
             "action": action_name,
             "stage_times": dict(input_data_dict["stage_times"]),
-            "duration_total_seconds": sum(input_data_dict["stage_times"].values()),
+            "duration_total_seconds": sum(top_level_stages),
             "emhass_version": last_run.emhass_version(),
             "schema_version": EMHASS_SCHEMA_VERSION,
         }
@@ -859,6 +864,8 @@ def _attach_ui_metadata(
         }
         for q_key in ("p50", "p10", "p90"):
             q_val = raw_q.get(q_key)
+            if isinstance(q_val, pd.Series) and "timestamps" not in pv_quantiles_meta:
+                pv_quantiles_meta["timestamps"] = [str(ts) for ts in q_val.index]
             if isinstance(q_val, list | tuple | pd.Series) or (
                 hasattr(q_val, "tolist") and not isinstance(q_val, str | bytes)
             ):
@@ -1418,7 +1425,7 @@ async def _action_call_unlocked(action_name: str):
         msg, status = await _handle_action_dispatch(
             action_name, None, emhass_conf, params, runtimeparams, app.logger
         )
-        if status == 400:
+        if status == 400 or action_name in ("pv-bias-calibration", "thermal-model-calibration"):
             return await make_response(msg, status)
 
         # Check logs for these specific actions

@@ -1010,6 +1010,30 @@ class Forecast:
             else await self._get_cached_forecast_or_none(w_forecast_cache_path)
         )
         if cached_data is not None:
+            cached_q = cached_data.attrs.get("emhass_pv_quantiles")
+            if isinstance(cached_q, dict) and cached_q.get("p50") is not None:
+                q_timestamps = cached_q.get("timestamps")
+                if q_timestamps:
+                    q_index = pd.DatetimeIndex(pd.to_datetime(q_timestamps, utc=True))
+                    if self.forecast_dates.tz is not None:
+                        q_index = q_index.tz_convert(self.forecast_dates.tz)
+                    else:
+                        q_index = q_index.tz_localize(None)
+                else:
+                    q_index = self.forecast_dates
+                reconstructed: dict[str, object] = {
+                    "bias": self._parse_pv_quantile_bias(),
+                    "source": cached_q.get("source") or "solcast",
+                }
+                for q_key in ("p50", "p10", "p90"):
+                    raw_vals = cached_q.get(q_key)
+                    if raw_vals is not None and len(raw_vals) == len(q_index):
+                        reconstructed[q_key] = pd.Series(
+                            np.asarray(raw_vals, dtype=float), index=q_index
+                        ).reindex(cached_data.index)
+                    else:
+                        reconstructed[q_key] = None
+                self.last_pv_quantiles = reconstructed
             return cached_data
         if self.dry_run:
             self.logger.warning(dry_run_no_saved_forecast, "Solcast")
@@ -1059,6 +1083,8 @@ class Forecast:
         p50_total: pd.Series | None = None
         p10_total: pd.Series | None = None
         p90_total: pd.Series | None = None
+        any_roof_has_p10 = False
+        any_roof_has_p90 = False
 
         # Conservative-bias blend factor, read once before the roof loop.
         # Default 0.0 = pure P50 (no-op). See _parse_pv_quantile_bias for the
@@ -1125,6 +1151,8 @@ class Forecast:
                             source_p90 = []
                             has_p10 = any(elm.get("pv_estimate10") is not None for elm in data["forecasts"])
                             has_p90 = any(elm.get("pv_estimate90") is not None for elm in data["forecasts"])
+                            any_roof_has_p10 = any_roof_has_p10 or has_p10
+                            any_roof_has_p90 = any_roof_has_p90 or has_p90
                             for elm in data["forecasts"]:
                                 p50 = elm["pv_estimate"]
                                 p10 = elm.get("pv_estimate10")
@@ -1135,10 +1163,8 @@ class Forecast:
                                     est = p50
                                 source_power.append(est * 1000)
                                 source_p50.append(p50 * 1000)
-                                if has_p10:
-                                    source_p10.append((p50 if p10 is None else p10) * 1000)
-                                if has_p90:
-                                    source_p90.append((p50 if p90 is None else p90) * 1000)
+                                source_p10.append((p50 if p10 is None else p10) * 1000)
+                                source_p90.append((p50 if p90 is None else p90) * 1000)
                             yhat = _solcast_overlap_average(
                                 solcast_period_starts,
                                 solcast_period_ends,
@@ -1157,30 +1183,28 @@ class Forecast:
                                 index=self.forecast_dates,
                             )
                             p50_total = p50_yhat if p50_total is None else (p50_total + p50_yhat)
-                            if has_p10:
-                                p10_yhat = pd.Series(
-                                    _solcast_overlap_average(
-                                        solcast_period_starts,
-                                        solcast_period_ends,
-                                        np.asarray(source_p10, dtype="float64"),
-                                        self.forecast_dates,
-                                        self.freq,
-                                    ),
-                                    index=self.forecast_dates,
-                                )
-                                p10_total = p10_yhat if p10_total is None else (p10_total + p10_yhat)
-                            if has_p90:
-                                p90_yhat = pd.Series(
-                                    _solcast_overlap_average(
-                                        solcast_period_starts,
-                                        solcast_period_ends,
-                                        np.asarray(source_p90, dtype="float64"),
-                                        self.forecast_dates,
-                                        self.freq,
-                                    ),
-                                    index=self.forecast_dates,
-                                )
-                                p90_total = p90_yhat if p90_total is None else (p90_total + p90_yhat)
+                            p10_yhat = pd.Series(
+                                _solcast_overlap_average(
+                                    solcast_period_starts,
+                                    solcast_period_ends,
+                                    np.asarray(source_p10, dtype="float64"),
+                                    self.forecast_dates,
+                                    self.freq,
+                                ),
+                                index=self.forecast_dates,
+                            )
+                            p10_total = p10_yhat if p10_total is None else (p10_total + p10_yhat)
+                            p90_yhat = pd.Series(
+                                _solcast_overlap_average(
+                                    solcast_period_starts,
+                                    solcast_period_ends,
+                                    np.asarray(source_p90, dtype="float64"),
+                                    self.forecast_dates,
+                                    self.freq,
+                                ),
+                                index=self.forecast_dates,
+                            )
+                            p90_total = p90_yhat if p90_total is None else (p90_total + p90_yhat)
                             data_tmp = pd.DataFrame({"yhat": yhat}, index=self.forecast_dates)
                         if len(total_data) == 0:
                             total_data = data_tmp.copy()
@@ -1219,15 +1243,25 @@ class Forecast:
                         self.logger.info("Retrying Solcast fetch in %ss", backoff)
                         await asyncio.sleep(backoff)
 
+        resolved_p10 = p10_total if any_roof_has_p10 else None
+        resolved_p90 = p90_total if any_roof_has_p90 else None
         if p50_total is not None:
             self.last_pv_quantiles = {
                 "p50": p50_total,
-                "p10": p10_total,
-                "p90": p90_total,
+                "p10": resolved_p10,
+                "p90": resolved_p90,
                 "bias": bias,
                 "source": "solcast",
             }
         data = self._with_pv_plant_columns(total_data, roof_series)
+        if p50_total is not None:
+            data.attrs["emhass_pv_quantiles"] = {
+                "timestamps": [str(ts) for ts in p50_total.index],
+                "p50": p50_total.tolist(),
+                "p10": resolved_p10.tolist() if resolved_p10 is not None else None,
+                "p90": resolved_p90.tolist() if resolved_p90 is not None else None,
+                "source": "solcast",
+            }
         if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
             "passed_data"
         ].get("weather_forecast_cache_only", False):
@@ -1317,6 +1351,30 @@ class Forecast:
             return False
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
         if cached_data is not None:
+            cached_q = cached_data.attrs.get("emhass_pv_quantiles")
+            if isinstance(cached_q, dict) and cached_q.get("p50") is not None:
+                q_timestamps = cached_q.get("timestamps")
+                if q_timestamps:
+                    q_index = pd.DatetimeIndex(pd.to_datetime(q_timestamps, utc=True))
+                    if self.forecast_dates.tz is not None:
+                        q_index = q_index.tz_convert(self.forecast_dates.tz)
+                    else:
+                        q_index = q_index.tz_localize(None)
+                else:
+                    q_index = self.forecast_dates
+                reconstructed: dict[str, object] = {
+                    "bias": self._parse_pv_quantile_bias(),
+                    "source": cached_q.get("source") or "solcast",
+                }
+                for q_key in ("p50", "p10", "p90"):
+                    raw_vals = cached_q.get(q_key)
+                    if raw_vals is not None and len(raw_vals) == len(q_index):
+                        reconstructed[q_key] = pd.Series(
+                            np.asarray(raw_vals, dtype=float), index=q_index
+                        ).reindex(cached_data.index)
+                    else:
+                        reconstructed[q_key] = None
+                self.last_pv_quantiles = reconstructed
             return cached_data
         if self.dry_run:
             self.logger.warning(dry_run_no_saved_forecast, "solar.forecast")
@@ -1602,6 +1660,9 @@ class Forecast:
                 )
                 return None
         series = []
+        p50_raw_series = []
+        p10_raw_series = []
+        any_inverter_p10 = False
         for inverter in pv_inverters:
             p50 = nested[inverter]
             p10 = None if nested_p10 is None else nested_p10[inverter]
@@ -1639,6 +1700,27 @@ class Forecast:
                 )
                 return None
             series.append(pd.Series(array))
+            p50_raw_arr = np.asarray(p50[:n_steps], dtype=float)
+            p50_raw_series.append(pd.Series(p50_raw_arr))
+            if p10 is not None:
+                any_inverter_p10 = True
+                p10_raw_series.append(pd.Series(np.asarray(p10[:n_steps], dtype=float)))
+            else:
+                p10_raw_series.append(pd.Series(p50_raw_arr))
+        if any_inverter_p10:
+            self.last_pv_quantiles = {
+                "p50": pd.Series(
+                    self._sum_in_order(p50_raw_series).to_numpy(),
+                    index=self.forecast_dates_tz,
+                ),
+                "p10": pd.Series(
+                    self._sum_in_order(p10_raw_series).to_numpy(),
+                    index=self.forecast_dates_tz,
+                ),
+                "p90": None,
+                "bias": self._parse_pv_quantile_bias(),
+                "source": "external",
+            }
         data = pd.DataFrame(
             {"yhat": self._sum_in_order(series).to_numpy()},
             index=pd.Index(self.forecast_dates_tz, name="ts"),
@@ -1737,6 +1819,7 @@ class Forecast:
         w_forecast_cache_path = os.path.abspath(
             self.emhass_conf["data_path"] / "weather_forecast_data.pkl"
         )
+        self.last_pv_quantiles = {}
         self.logger.info("Retrieving weather forecast data using method = " + method)
         if method == "scrapper":
             self.logger.warning(

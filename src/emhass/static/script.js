@@ -309,7 +309,12 @@ async function getTemplate() {
     TempScript.innerHTML = script.innerHTML;
     script.parentElement.appendChild(TempScript);
   }
-  if (!document.getElementById("stage-times-client-fallback")) {
+  if (
+    document.getElementById("results-tabs") &&
+    !document.getElementById("stage-times-client-fallback") &&
+    typeof document.createElement === "function" &&
+    typeof templateDiv.appendChild === "function"
+  ) {
     const fallbackDiv = document.createElement("div");
     fallbackDiv.id = "stage-times-client-fallback";
     fallbackDiv.className = "table_div";
@@ -317,7 +322,9 @@ async function getTemplate() {
     fallbackDiv.style.display = "none";
     templateDiv.appendChild(fallbackDiv);
   }
-  initStickyTables();
+  if (typeof document.querySelectorAll === "function") {
+    initStickyTables();
+  }
   initResultsTabs();
   refreshLastRunBanner();
 }
@@ -738,6 +745,9 @@ function initRuntimePresets() {
       if (box) {
         box.value = JSON.stringify(RUNTIME_PRESETS[key], null, 2);
         saveStorage();
+        if (key === "raw_json" && testStorage()) {
+          localStorage.setItem("input_container_content", "{}");
+        }
       }
     }
     presetSelect.value = "";
@@ -807,7 +817,12 @@ let activeResultsTab = "schedule";
 function initResultsTabs() {
   const tabBar = document.getElementById("results-tabs");
   const templateDiv = document.getElementById("template");
-  if (!tabBar || !templateDiv) {
+  if (
+    !tabBar ||
+    !templateDiv ||
+    typeof tabBar.querySelectorAll !== "function" ||
+    typeof templateDiv.querySelectorAll !== "function"
+  ) {
     return;
   }
   const items = Array.prototype.slice.call(
@@ -868,13 +883,19 @@ function initResultsTabs() {
 
   function applyTabSelection(selectedTab) {
     activeResultsTab = selectedTab;
-    buttons.forEach(function (btn) {
+    const currentButtons = Array.prototype.slice.call(
+      tabBar.querySelectorAll(".results-tab-btn")
+    );
+    const currentItems = Array.prototype.slice.call(
+      templateDiv.querySelectorAll(".table_div[data-plot-key]")
+    );
+    currentButtons.forEach(function (btn) {
       btn.classList.toggle(
         "active",
         btn.getAttribute("data-results-tab") === selectedTab
       );
     });
-    items.forEach(function (item) {
+    currentItems.forEach(function (item) {
       const key = item.getAttribute("data-plot-key") || "";
       if (
         key === "figure_stage_times_client" &&
@@ -888,14 +909,21 @@ function initResultsTabs() {
       item.style.display = show ? "" : "none";
     });
     resizeVisiblePlotlyPlots(templateDiv);
-    initStickyTables();
+    if (typeof document.querySelectorAll === "function") {
+      initStickyTables();
+    }
   }
 
+  tabBar._applyTabSelection = applyTabSelection;
   buttons.forEach(function (btn) {
     if (!btn.dataset.boundResultsTab) {
       btn.dataset.boundResultsTab = "1";
       btn.addEventListener("click", function () {
-        applyTabSelection(btn.getAttribute("data-results-tab") || "schedule");
+        if (typeof tabBar._applyTabSelection === "function") {
+          tabBar._applyTabSelection(
+            btn.getAttribute("data-results-tab") || "schedule"
+          );
+        }
       });
     }
   });
@@ -1140,7 +1168,7 @@ function renderSystemOverviewBadges(config) {
     badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
   }
 
-  let html = "";
+  let html = '<span class="system-overview-title">Configured system:</span>';
   for (let j = 0; j < badges.length; j++) {
     html += '<span class="sys-badge ' + badges[j].cls + '">' + badges[j].text + "</span>";
   }
