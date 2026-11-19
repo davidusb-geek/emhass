@@ -62,7 +62,9 @@ class ScenarioSpec:
     runtime_params: dict[str, Any]
 
 
-def _make_daily_curve(n_steps: int, base: float, amp: float, peak_frac: float = 0.52) -> list[float]:
+def _make_daily_curve(
+    n_steps: int, base: float, amp: float, peak_frac: float = 0.52
+) -> list[float]:
     x = np.linspace(0.0, 1.0, n_steps, endpoint=False)
     bump = np.exp(-((x - peak_frac) ** 2) / 0.025)
     return [round(float(max(0.0, base + amp * val)), 2) for val in bump]
@@ -268,7 +270,9 @@ SCENARIOS: dict[str, ScenarioSpec] = {
                         "thermal_inertia": 0.5,
                         "start_temperature": 20.5,
                         "sense": "heat",
-                        "min_temperatures": [19.0 if (i % 48) < 14 or (i % 48) >= 44 else 20.5 for i in range(48)],
+                        "min_temperatures": [
+                            19.0 if (i % 48) < 14 or (i % 48) >= 44 else 20.5 for i in range(48)
+                        ],
                         "max_temperatures": [24.0] * 48,
                     }
                 },
@@ -470,7 +474,10 @@ def _build_system_badges_html(config: dict[str, Any]) -> str:
         badges.append(("sys-muted", "No Battery"))
     ndef = int(config.get("number_of_deferrable_loads") or 0)
     badges.append(
-        ("sys-loads" if ndef > 0 else "sys-muted", f"{ndef} Deferrable Load{'s' if ndef != 1 else ''}")
+        (
+            "sys-loads" if ndef > 0 else "sys-muted",
+            f"{ndef} Deferrable Load{'s' if ndef != 1 else ''}",
+        )
     )
     def_cfgs = config.get("def_load_config") or []
     thermal_n = len(
@@ -656,9 +663,7 @@ async def _prepare_scenario_workspace(
     }
     base_config = orjson.loads(emhass_conf["defaults_path"].read_bytes())
     full_config = {**base_config, "time_zone": "Europe/Paris", **spec.config_overrides}
-    (scen_dir / "config.json").write_bytes(
-        orjson.dumps(full_config, option=orjson.OPT_INDENT_2)
-    )
+    (scen_dir / "config.json").write_bytes(orjson.dumps(full_config, option=orjson.OPT_INDENT_2))
     params = await utils.build_params(
         emhass_conf,
         {
@@ -818,7 +823,7 @@ def _write_index_html(
   <h1>EMHASS WebUI Offline Scenario Previews</h1>
   <p>Launch interactive WebUI for any scenario with:
      <code>python scripts/webui_test_scenarios.py --scenario &lt;name&gt; --serve --port 5000</code></p>
-  <ul>{''.join(cards)}</ul>
+  <ul>{"".join(cards)}</ul>
 </body>
 </html>
 """,
@@ -870,7 +875,9 @@ def main() -> int:
         default="pv_battery",
         help="Scenario to run (default: pv_battery).",
     )
-    parser.add_argument("--all", action="store_true", help="Run all scenarios and build index.html.")
+    parser.add_argument(
+        "--all", action="store_true", help="Run all scenarios and build index.html."
+    )
     parser.add_argument(
         "--serve",
         action="store_true",

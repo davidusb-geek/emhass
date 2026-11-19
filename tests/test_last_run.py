@@ -248,3 +248,14 @@ def test_record_is_thread_safe(data_path):
     assert snap["status"] == "ok"
     assert "t" in snap["stage_times"]
     assert isinstance(snap["stage_times"]["t"], float)
+
+
+def test_emhass_version_falls_back_when_package_metadata_missing(monkeypatch):
+    import emhass
+
+    monkeypatch.setattr(
+        last_run,
+        "version",
+        lambda _pkg: (_ for _ in ()).throw(last_run.PackageNotFoundError("emhass")),
+    )
+    assert last_run.emhass_version() == emhass.__version__

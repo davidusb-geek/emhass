@@ -5836,6 +5836,7 @@ async def _fetch_influx_thermal_window(
         return (
             duty.resample(f"{dt_minutes}min")
             .mean()
+            .ffill()
             .reindex(target_index, method="ffill")
             .bfill()
             .fillna(1.0)
@@ -5977,7 +5978,10 @@ async def compute_thermal_model_calibration(
 
     curr_alpha = float(rt.get("current_heating_rate") or tc.get("heating_rate") or 5.0)
     curr_gamma = float(rt.get("current_cooling_constant") or tc.get("cooling_constant") or 0.1)
-    curr_inertia = float(rt.get("current_thermal_inertia") or tc.get("thermal_inertia") or 0.0)
+    raw_curr_inertia = rt.get("current_thermal_inertia")
+    if raw_curr_inertia is None:
+        raw_curr_inertia = tc.get("thermal_inertia")
+    curr_inertia = float(0.0 if raw_curr_inertia is None else raw_curr_inertia)
     sense = str(rt.get("sense") or tc.get("sense") or "heat").strip().lower()
     if sense not in ("heat", "cool"):
         raise ValueError(f"Unsupported thermal sense: {sense!r} (expected 'heat' or 'cool')")
@@ -6181,14 +6185,10 @@ async def compute_thermal_model_calibration(
         for i in range(n_rows):
             if not observed_mask[i]:
                 continue
-            if i < lag:
-                if np.all(observed_mask[: i + 1]):
-                    p_arr[i] = 0.0
-                    p_ok[i] = True
-            elif lag == 0:
+            if lag == 0:
                 p_arr[i] = p_raw_vals[i]
                 p_ok[i] = True
-            else:
+            elif i >= lag:
                 expected_span = (
                     (df_win.index[i] - df_win.index[i - lag] == lag * step_td)
                     if isinstance(df_win.index, pd.DatetimeIndex)
