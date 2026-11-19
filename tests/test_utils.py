@@ -1859,7 +1859,13 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("figure_fed_shares", injection_dict)
         self.assertIn("figure_fed_nodes", injection_dict)
         self.assertNotIn("fed_node_power_0", injection_dict["figure_0"])
-        for scalar_col in ("fed_share_battery", "fed_share_loads", "fed_lower_bound", "fed_gap", "fed_iterations"):
+        for scalar_col in (
+            "fed_share_battery",
+            "fed_share_loads",
+            "fed_lower_bound",
+            "fed_gap",
+            "fed_iterations",
+        ):
             self.assertNotIn(scalar_col, injection_dict["table1"])
             self.assertIn(scalar_col, injection_dict["table2"])
 
@@ -1885,17 +1891,37 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
     def test_get_injection_dict_forecast_calibration_builds_two_figures(self):
         idx = pd.date_range("2026-11-01 00:00", periods=6, freq="30min", tz="UTC")
         plot_df = pd.DataFrame(
-            {"actual": [500.0, 600.0, 550.0, 700.0, 650.0, 500.0], "naive": [510.0, 590.0, 560.0, 680.0, 640.0, 520.0]},
+            {
+                "actual": [500.0, 600.0, 550.0, 700.0, 650.0, 500.0],
+                "naive": [510.0, 590.0, 560.0, 680.0, 640.0, 520.0],
+            },
             index=idx,
         )
         table_df = pd.DataFrame(
             [
-                {"method": "naive", "test_mae": 45.2, "val_mae": 40.1, "test_rmse": 60.0, "val_rmse": 55.0},
-                {"method": "typical", "test_mae": 38.0, "val_mae": 35.4, "test_rmse": 50.0, "val_rmse": 48.0},
+                {
+                    "method": "naive",
+                    "test_mae": 45.2,
+                    "val_mae": 40.1,
+                    "test_rmse": 60.0,
+                    "val_rmse": 55.0,
+                },
+                {
+                    "method": "typical",
+                    "test_mae": 38.0,
+                    "val_mae": 35.4,
+                    "test_rmse": 50.0,
+                    "val_rmse": 48.0,
+                },
             ]
         )
         inj = utils.get_injection_dict_forecast_calibration(
-            {"plot": plot_df, "table": table_df, "val_window": ("2026-11-01", "2026-11-02"), "caveats": "None"}
+            {
+                "plot": plot_df,
+                "table": table_df,
+                "val_window": ("2026-11-01", "2026-11-02"),
+                "caveats": "None",
+            }
         )
         self.assertIn("figure_0", inj)
         self.assertIn("figure_calibration_metrics", inj)
@@ -1908,13 +1934,19 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         p_nom = 3000.0
         alpha_true, gamma_true = 1.2, 0.05
         n = 32
-        p_def = np.array([p_nom if 4 <= i < 14 or 20 <= i < 26 else 0.0 for i in range(n)], dtype=float)
+        p_def = np.array(
+            [p_nom if 4 <= i < 14 or 20 <= i < 26 else 0.0 for i in range(n)], dtype=float
+        )
         t_out = np.full(n, 8.0, dtype=float)
         t_in = np.empty(n, dtype=float)
         t_in[0] = 19.0
         for i in range(n - 1):
             p_eff = p_def[i - 1] if i >= 1 else 0.0
-            t_in[i + 1] = t_in[i] + alpha_true * dt_h * (p_eff / p_nom) - gamma_true * dt_h * (t_in[i] - t_out[i])
+            t_in[i + 1] = (
+                t_in[i]
+                + alpha_true * dt_h * (p_eff / p_nom)
+                - gamma_true * dt_h * (t_in[i] - t_out[i])
+            )
 
         payload = {
             "nominal_power": p_nom,
@@ -1947,13 +1979,19 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # 5-minute timestep with 1-step lag preserves sub-0.1h inertia precision for optimizer conversion
         dt_5m = 5.0 / 60.0
         n_5m = 48
-        p_5m = np.array([p_nom if 6 <= i < 20 or 30 <= i < 40 else 0.0 for i in range(n_5m)], dtype=float)
+        p_5m = np.array(
+            [p_nom if 6 <= i < 20 or 30 <= i < 40 else 0.0 for i in range(n_5m)], dtype=float
+        )
         t_out_5m = np.full(n_5m, 8.0, dtype=float)
         t_in_5m = np.empty(n_5m, dtype=float)
         t_in_5m[0] = 19.0
         for i in range(n_5m - 1):
             p_eff = p_5m[i - 1] if i >= 1 else 0.0
-            t_in_5m[i + 1] = t_in_5m[i] + alpha_true * dt_5m * (p_eff / p_nom) - gamma_true * dt_5m * (t_in_5m[i] - t_out_5m[i])
+            t_in_5m[i + 1] = (
+                t_in_5m[i]
+                + alpha_true * dt_5m * (p_eff / p_nom)
+                - gamma_true * dt_5m * (t_in_5m[i] - t_out_5m[i])
+            )
         res_5m = await utils.compute_thermal_model_calibration(
             emhass_conf,
             {"retrieve_hass_conf": {"optimization_time_step": 5}},
@@ -2008,7 +2046,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 {
                     "optim_conf": {
                         "nominal_power_of_deferrable_loads": [p_nom],
-                        "def_load_config": [{"thermal_config": {"thermal_inertia": 1.0, "sense": "cool"}}],
+                        "def_load_config": [
+                            {"thermal_config": {"thermal_inertia": 1.0, "sense": "cool"}}
+                        ],
                     },
                     "retrieve_hass_conf": {"optimization_time_step": "0 days 00:30:00"},
                 }
@@ -2077,30 +2117,71 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             def get(self, _url, params=None, **_kwargs):
                 q = (params or {}).get("q", "")
                 if q.startswith("SHOW SERIES"):
-                    return _FakeResp({"results": [{"series": [{"columns": ["key"], "values": [["°C,entity_id=x"]]}]}]})
+                    return _FakeResp(
+                        {
+                            "results": [
+                                {"series": [{"columns": ["key"], "values": [["°C,entity_id=x"]]}]}
+                            ]
+                        }
+                    )
                 if "SELECT *" in q:
                     if self.mode == "switch_val":
                         return _FakeResp(
-                            {"results": [{"series": [{"columns": ["time", "value"], "values": [[ts_list[0], 1], [ts_list[5], 0]]}]}]}
+                            {
+                                "results": [
+                                    {
+                                        "series": [
+                                            {
+                                                "columns": ["time", "value"],
+                                                "values": [[ts_list[0], 1], [ts_list[5], 0]],
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
                         )
                     return _FakeResp(
-                        {"results": [{"series": [{"columns": ["time", "state"], "values": [[ts_list[0], "on"], [ts_list[5], "off"]]}]}]}
+                        {
+                            "results": [
+                                {
+                                    "series": [
+                                        {
+                                            "columns": ["time", "state"],
+                                            "values": [[ts_list[0], "on"], [ts_list[5], "off"]],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
                     )
                 if "temp_air_in" in q:
                     vals = [[t, 20.0 + 0.1 * i] for i, t in enumerate(ts_list)]
                 elif "outdoor_temperature" in q:
                     vals = [[t, 10.0] for t in ts_list]
                 elif "p_deferrable" in q:
-                    vals = [[t, 2000.0 if i < 5 else 0.0] for i, t in enumerate(ts_list)] if self.mode == "direct" else []
+                    vals = (
+                        [[t, 2000.0 if i < 5 else 0.0] for i, t in enumerate(ts_list)]
+                        if self.mode == "direct"
+                        else []
+                    )
                 elif "temp_predicted" in q:
-                    vals = [[t, 22.0] for t in ts_list] if self.mode in ("setpoint_heat", "setpoint_cool") else []
+                    vals = (
+                        [[t, 22.0] for t in ts_list]
+                        if self.mode in ("setpoint_heat", "setpoint_cool")
+                        else []
+                    )
                 else:
                     vals = []
                 series = [{"columns": ["time", "val"], "values": vals}] if vals else []
                 return _FakeResp({"results": [{"series": series}]})
 
         rh_conf = {"influxdb_host": "localhost", "influxdb_port": 8086, "influxdb_database": "ha"}
-        for mode, sense in (("direct", "heat"), ("setpoint_heat", "heat"), ("setpoint_cool", "cool"), ("switch_val", "heat")):
+        for mode, sense in (
+            ("direct", "heat"),
+            ("setpoint_heat", "heat"),
+            ("setpoint_cool", "cool"),
+            ("switch_val", "heat"),
+        ):
             with patch("emhass.utils.aiohttp.ClientSession", return_value=_FakeSession(mode)):
                 df_inf = await utils._fetch_influx_thermal_window(
                     rh_conf,
@@ -2177,7 +2258,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # Single-row timestep inference via freq, ui_meta, and default
         self.assertEqual(utils._infer_timestep_hours(idx[:1]), 0.5)
         self.assertEqual(
-            utils._infer_timestep_hours(pd.Index(["2026-11-19 00:00"]), {"optimization_time_step_hours": 0.25}),
+            utils._infer_timestep_hours(
+                pd.Index(["2026-11-19 00:00"]), {"optimization_time_step_hours": 0.25}
+            ),
             0.25,
         )
         self.assertEqual(utils._infer_timestep_hours(pd.Index(["single"])), 0.5)
@@ -2213,7 +2296,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Discharged to Grid Export", batt_html)
         self.assertIn("Charged from Other", batt_html)
 
-        batt_export_html = utils._build_battery_sources_figure(df, {"optim_conf": {"set_nodischarge_to_grid": False}})
+        batt_export_html = utils._build_battery_sources_figure(
+            df, {"optim_conf": {"set_nodischarge_to_grid": False}}
+        )
         self.assertIn("Discharged to Grid Export (est.", batt_export_html)
 
         pie_html = utils._build_energy_pie_figure(df, meta_no_export)
@@ -2227,13 +2312,17 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             ({"p50": [100.0] * 6}, "PV P50"),
             ({"p10": [80.0] * 6}, "PV P10"),
         ):
-            q_html = utils._build_pv_forecast_quantiles_figure(df, q_dict, meta_no_export["optim_conf"])
+            q_html = utils._build_pv_forecast_quantiles_figure(
+                df, q_dict, meta_no_export["optim_conf"]
+            )
             self.assertIn(expected, q_html)
 
         # Load effectiveness with dict history + rolling-mean fallback
         eff_dict = utils._build_load_effectiveness_figure(df, meta_no_export)
         self.assertIn("Historical Diurnal Median", eff_dict)
-        eff_roll = utils._build_load_effectiveness_figure(df, {"optim_conf": {"load_forecast_method": "naive"}})
+        eff_roll = utils._build_load_effectiveness_figure(
+            df, {"optim_conf": {"load_forecast_method": "naive"}}
+        )
         self.assertIn("Rolling Mean", eff_roll)
 
     async def test_forecast_solcast_cache_quantiles_and_per_inverter_quantiles(self):
@@ -2269,19 +2358,29 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 "modules_per_string": [10, 10],
                 "strings_per_inverter": [1, 1],
             }
-            local_conf = {"data_path": tmp_path, "root_path": Path(utils.get_root(__file__, 2)) / "src" / "emhass"}
+            local_conf = {
+                "data_path": tmp_path,
+                "root_path": Path(utils.get_root(__file__, 2)) / "src" / "emhass",
+            }
             fcst = Forecast(
                 rh_conf,
                 optim_conf,
                 plant_conf,
-                {"passed_data": {"weather_forecast_cache": False, "weather_forecast_cache_only": True}},
+                {
+                    "passed_data": {
+                        "weather_forecast_cache": False,
+                        "weather_forecast_cache_only": True,
+                    }
+                },
                 local_conf,
                 logger,
                 opt_time_delta=6,
             )
             # Write a Solcast cache carrying stored bias=0.45 and provider="solcast"
             cache_path = str(tmp_path / "weather_forecast_data.pkl")
-            cached_df = pd.DataFrame({"yhat": [500.0] * len(fcst.forecast_dates)}, index=fcst.forecast_dates)
+            cached_df = pd.DataFrame(
+                {"yhat": [500.0] * len(fcst.forecast_dates)}, index=fcst.forecast_dates
+            )
             cached_df.attrs["emhass_weather_provider"] = "solcast"
             cached_df.attrs["emhass_pv_quantiles"] = {
                 "timestamps": [str(t) for t in fcst.forecast_dates],
@@ -2301,7 +2400,10 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             # Per-inverter list PV quantiles populate site-wide last_pv_quantiles
             n_steps = len(fcst.forecast_dates_tz)
             fcst.params["passed_data"]["pv_power_forecast"] = [[100.0] * n_steps, [200.0] * n_steps]
-            fcst.params["passed_data"]["pv_power_forecast_p10"] = [[60.0] * n_steps, [140.0] * n_steps]
+            fcst.params["passed_data"]["pv_power_forecast_p10"] = [
+                [60.0] * n_steps,
+                [140.0] * n_steps,
+            ]
             inv_df = fcst._get_weather_list_per_inverter([0, 1])
             self.assertIsNotNone(inv_df)
             self.assertEqual(fcst.last_pv_quantiles["source"], "external")
