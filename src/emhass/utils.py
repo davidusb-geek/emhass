@@ -8,6 +8,7 @@ import html
 import itertools
 import logging
 import math
+import numbers
 import os
 import pathlib
 import re
@@ -547,6 +548,37 @@ def cop_from_tank_temperature(
     return np.clip(np.asarray(cops, dtype=float), cop_bounds[0], cop_bounds[1])
 
 
+def _supply_temperature_profile(values, length, outdoor_temperature_forecast) -> np.ndarray:
+    """`supply_temperature` given as a per-timestep list, as a float array.
+
+    A single value is broadcast (so ``[30]`` and ``30`` mean the same thing).
+    A longer list is truncated to the horizon, matching how the COP array is
+    truncated; a shorter one raises instead of inventing a supply temperature
+    for the remaining steps.
+    """
+    if isinstance(values, pd.Series):
+        values = values.to_numpy()
+    if isinstance(values, np.ndarray):
+        if values.ndim != 1:
+            raise ValueError(
+                f"thermal_battery 'supply_temperature' must be a number or a flat list, "
+                f"got shape {values.shape}"
+            )
+        values = values.tolist()
+    # _numeric_series rejects strings ("30"), booleans (True reads as 1.0), non-finite
+    # values and nested entries, so a typo cannot silently price a timestep.
+    arr = np.asarray(_numeric_series(values, "thermal_battery 'supply_temperature'"), dtype=float)
+    target = length if length is not None else len(np.asarray(outdoor_temperature_forecast))
+    if arr.size == 1:
+        return np.full(target, float(arr[0]))
+    if arr.size < target:
+        raise ValueError(
+            f"thermal_battery 'supply_temperature' has {arr.size} values but the horizon "
+            f"has {target} timesteps"
+        )
+    return arr[:target]
+
+
 def resolve_thermal_battery_cop(
     hc: dict,
     outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series | None,
@@ -596,6 +628,11 @@ def resolve_thermal_battery_cop(
         raise ValueError(
             "resolve_thermal_battery_cop in heat-pump mode requires outdoor_temperature_forecast"
         )
+    # Cut the driving forecast to the requested horizon: a per-step supply profile is
+    # truncated to `length`, and the Carnot lift subtracts the two, so a longer
+    # forecast would broadcast (length,) against (len,) and raise.
+    if length is not None and np.ndim(outdoor_temperature_forecast) > 0:
+        outdoor_temperature_forecast = np.asarray(outdoor_temperature_forecast)[:length]
     sense = normalize_heat_cool_mode(
         hc.get("sense") or "heat", field_name="sense", context="thermal_battery"
     )
@@ -618,6 +655,14 @@ def resolve_thermal_battery_cop(
                 "thermal_battery requires either 'efficiency' (constant-efficiency mode), "
                 "'supply_temperature' (constant heat-pump mode), or a "
                 "'heating_curve'/'cooling_curve' (weather-compensated heat-pump mode)"
+            )
+        # A per-timestep supply profile (issue #1327): the temperature the executor
+        # will actually run at each step, which no curve can express. The Carnot
+        # helper already broadcasts an array; only the length has to be pinned to
+        # the horizon here.
+        if np.ndim(supply_temperature) > 0:
+            supply_temperature = _supply_temperature_profile(
+                supply_temperature, length, outdoor_temperature_forecast
             )
     cops = calculate_cop_heatpump(
         supply_temperature=supply_temperature,
@@ -683,12 +728,13 @@ def calculate_surface_solar_gain(
 def _numeric_series(value, path: str) -> list[float]:
     """A list of finite numbers (not booleans or strings), as floats, or a
     ValueError naming ``path``. A string is rejected rather than read as a list
-    of characters."""
+    of characters. NumPy real scalars are numbers like their Python equivalents:
+    the same values in an array already pass through ``tolist()``."""
     if not isinstance(value, list | tuple):
         raise ValueError(f"{path} must be a list of numbers, got {type(value).__name__}")
     out = []
     for i, v in enumerate(value):
-        if isinstance(v, bool) or not isinstance(v, int | float):
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
             raise ValueError(f"{path}[{i}] must be a number, got {v!r}")
         try:
             f = float(v)
