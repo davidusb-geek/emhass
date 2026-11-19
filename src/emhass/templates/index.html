@@ -1,87 +1,196 @@
-<!-- Index page html -->
 <!DOCTYPE html>
-<html lang="en" class="adaptive">
-
-<head>
-    <meta charset="UTF-8"> <title>EMHASS: Energy Management Optimization for Home Assistant</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="static/style.css?version=3">
-    <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
-    <script src="static/script.js?version=2"></script>
-</head>
-
-<body style="margin: auto; align-items:center; text-align:center;">
-
-    <div>
-        <!-- Icons by feather https://github.com/feathericons/feather -->
-        <div id="top-links">
-            <!-- configuration page  -->
-            <a href="configuration" title="Configuration Page" style="margin-right: 12px; cursor: pointer; z-index: 1">
-                <svg class="feather" aria-hidden="true">
-                    <use class="feather" href="static/img/feather-sprite.svg#settings" />
-                </svg>
-            </a>
-            {% if api_token_link %}
-            <!-- API token (Home Assistant ingress only, for a token EMHASS generated) -->
-            <a href="api-token" title="API token" style="margin-right: 12px; cursor: pointer; z-index: 1">
-                <svg class="feather" aria-hidden="true">
-                    <use class="feather" href="static/img/feather-sprite.svg#key" />
-                </svg>
-            </a>
-            {% endif %}
-            <!-- advanced or basic page switch -->
-            <button type="button" id="basicOrAdvanced" class="icon-button" title="Advanced Toggle" style="margin-right: 24px; cursor: pointer; z-index: 1">
-                <svg class="feather" aria-hidden="true">
-                    <use class="feather" href="static/img/feather-sprite.svg#tool" />
-                </svg>
-            </button>
-            <a href="https://emhass.readthedocs.io/en/latest/" title="EMHASS Docs">
-                <svg class="feather" aria-hidden="true" style="margin-right: 12px;" ;>
-                    <use class="feather" href="static/img/feather-sprite.svg#book" />
-                </svg>
-            </a>
-            <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer" title="EMHASS Git repo">
-                <svg class="feather" aria-hidden="true" style="margin-right: 0px;">
-                    <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
-                </svg>
-            </a>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EMHASS — Energy Management System</title>
+    <link rel="icon" type="image/png" href="static/img/emhass_icon.png" />
+    <link rel="stylesheet" href="static/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-group">
+        <img
+          src="static/img/emhass_logo_short.svg"
+          alt="EMHASS logo"
+          class="brand-logo"
+        />
+        <div class="brand-text">
+          <h1 class="app-title">EMHASS</h1>
+          <span class="app-subtitle">Energy Management &amp; MILP Optimization</span>
         </div>
-        <!-- Title -->
-        <img src="static/img/emhass_icon.png" alt="">
-        <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
-    </div>
+      </div>
 
+      <div class="header-badges">
+        <span id="emhass-version-badge" class="badge version-badge" title="Installed EMHASS version">
+          {% if emhass_version %}EMHASS v{{ emhass_version }}{% else %}EMHASS{% endif %}
+        </span>
+        <span id="last-run-pill" class="badge status-badge" title="Latest execution duration and action">
+          Ready
+        </span>
+        <span id="optim-status-pill" class="badge status-badge" title="Latest optimization solver status" style="display: none"></span>
+      </div>
 
-    <div class="center">
-        <div id=TabSelection class="form">
-            <!-- Basic and Advance pages will be dynamically loaded here  -->
+      <div id="top-links" class="top-links">
+        <button
+          id="basicOrAdvanced"
+          type="button"
+          class="icon icon-btn"
+          title="Switch basic or advanced view"
+        >
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="4" y1="21" x2="4" y2="14"></line>
+            <line x1="4" y1="10" x2="4" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12" y2="3"></line>
+            <line x1="20" y1="21" x2="20" y2="16"></line>
+            <line x1="20" y1="12" x2="20" y2="3"></line>
+            <line x1="1" y1="14" x2="7" y2="14"></line>
+            <line x1="9" y1="8" x2="15" y2="8"></line>
+            <line x1="17" y1="16" x2="23" y2="16"></line>
+          </svg>
+          <span id="mode-pill-label" class="icon-btn-label">Mode</span>
+        </button>
+
+        <a href="configuration" class="icon icon-btn" title="Open configuration page">
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+          <span class="icon-btn-label">Config</span>
+        </a>
+
+        {% if api_token_link %}
+        <a href="api-token" class="icon icon-btn" title="API token">
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
+            ></path>
+          </svg>
+          <span class="icon-btn-label">API Token</span>
+        </a>
+        {% endif %}
+
+        <a
+          href="https://emhass.readthedocs.io/en/latest/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="icon icon-btn"
+          title="Open EMHASS documentation"
+        >
+          <svg
+            class="feather"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+          <span class="icon-btn-label">Docs</span>
+        </a>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <div id="system-overview-badges" class="system-overview-strip" aria-label="Configured system overview"></div>
+      <div id="TabSelection" class="card control-card"></div>
+
+      <div id="alert" class="alert" style="display: none">
+        <span class="closebtn" onclick="this.parentElement.style.display='none';">&times;</span>
+        <p id="alert-text"></p>
+      </div>
+
+      <section class="card results-shell" aria-label="Optimization results">
+        <nav id="results-tabs" class="results-tabs" aria-label="Optimization result views">
+          <button type="button" class="results-tab-btn active" data-results-tab="schedule">
+            Main Schedule <span class="tab-count"></span>
+          </button>
+          <button type="button" class="results-tab-btn" data-results-tab="analytics">
+            Advanced Analytics <span class="tab-count"></span>
+          </button>
+          <button type="button" class="results-tab-btn" data-results-tab="federated">
+            Federated Coordinator <span class="tab-count"></span>
+          </button>
+          <button type="button" class="results-tab-btn" data-results-tab="performance">
+            Performance &amp; Times <span class="tab-count"></span>
+          </button>
+          <button type="button" class="results-tab-btn" data-results-tab="tables">
+            Data Tables <span class="tab-count"></span>
+          </button>
+          <button type="button" class="results-tab-btn" data-results-tab="all">
+            All View <span class="tab-count"></span>
+          </button>
+        </nav>
+
+        <div id="template" class="template-results">
+          {% if injection_dict %}
+            {% for plot in injection_dict %}
+              <div class="table_div" data-plot-key="{{ plot }}">
+                {{ injection_dict[plot] | safe }}
+              </div>
+            {% endfor %}
+          {% endif %}
+          <div
+            id="stage-times-client-fallback"
+            class="table_div"
+            data-plot-key="figure_stage_times_client"
+            style="display: none"
+          ></div>
         </div>
-    </div>
-    <!-- alert box element -->
-    <div style="display: none;" id="alert" class="alert">
-        <div>
-            <button type="button" class="close-btn" onclick="this.parentElement.parentElement.style.display='none';" aria-label="Close">
-  &times;
-</button>
-            <p id="alert-text"></p>
-        </div>
-    </div>
-    <br>
+      </section>
+    </main>
 
-    <!-- dynamic table/diagram elements section -->
-    </div>
-    <div id="template"> <!-- table/diagram container element  -->
-        {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
-        <div class="table_div">
-            {{injection_dict[plot] | mark_safe}}
-        </div>
-        {% endfor %}
-        <div>
+    <footer id="footer" class="app-footer">
+      <p>
+        &copy; Copyright 2021-<span id="current-year">{{ current_year | default(2026) }}</span>
+        David HERNANDEZ &bull; EMHASS
+        <span class="footer-version">{% if emhass_version %}v{{ emhass_version }}{% endif %}</span>
+        &bull; MIT License
+      </p>
+    </footer>
 
-            <footer class="footer">
-                <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2025 David
-                    HERNANDEZ</p>
-            </footer>
-</body>
-
+    <script src="static/script.js"></script>
+  </body>
 </html>

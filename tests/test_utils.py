@@ -1721,6 +1721,695 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         if "optim_status" in self.df.columns:
             self.assertIn("optim_status", df.columns)
 
+    def test_get_injection_dict_drops_grid_pos_neg_and_max_grid_caps(self):
+        df = self.df.copy()
+        df["P_grid_pos"] = 100.0
+        df["P_grid_neg"] = -50.0
+        df["maximum_power_from_grid"] = 9000.0
+        df["maximum_power_to_grid"] = 5000.0
+        injection_dict = utils.get_injection_dict(df)
+        self.assertNotIn("P_grid_pos", injection_dict["figure_0"])
+        self.assertNotIn("P_grid_neg", injection_dict["figure_0"])
+        for col in (
+            "P_grid_pos",
+            "P_grid_neg",
+            "maximum_power_from_grid",
+            "maximum_power_to_grid",
+        ):
+            self.assertNotIn(col, injection_dict["table1"])
+
+    def test_get_injection_dict_overhaul_analytics_and_battery_sources(self):
+        idx = pd.date_range("2026-06-01 00:00", periods=6, freq="30min", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "P_PV": [0.0, 2000.0, 4000.0, 100.0, 0.0, 0.0],
+                "P_Load": [400.0, 500.0, 600.0, 800.0, 900.0, 500.0],
+                "P_grid": [400.0, -500.0, 0.0, 1200.0, 100.0, -300.0],
+                "P_batt": [0.0, -1000.0, -3400.0, -500.0, 800.0, 800.0],
+                "P_deferrable0": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                "SOC_opt": [0.4, 0.5, 0.7, 0.75, 0.65, 0.55],
+                "unit_load_cost": [0.15] * 6,
+                "cost_fun_profit": [-0.1] * 6,
+                "optim_status": ["Optimal"] * 6,
+            },
+            index=idx,
+        )
+        injection_dict = utils.get_injection_dict(df)
+        for key in (
+            "figure_pv_forecast",
+            "figure_battery_sources",
+            "figure_energy_pie",
+            "figure_histograms",
+            "figure_heatmap",
+            "figure_load_effectiveness",
+        ):
+            self.assertIn(key, injection_dict)
+        self.assertIn("Battery Charging Sources", injection_dict["figure_battery_sources"])
+        self.assertIn("Charged from Excess PV", injection_dict["figure_battery_sources"])
+        self.assertIn("Discharged to Home Loads", injection_dict["figure_battery_sources"])
+        self.assertIn("Energy Balance", injection_dict["figure_energy_pie"])
+        self.assertIn("Power Distribution Histograms", injection_dict["figure_histograms"])
+        self.assertIn("System Power Matrix Heatmap", injection_dict["figure_heatmap"])
+        self.assertIn("Load Forecast Effectiveness", injection_dict["figure_load_effectiveness"])
+
+    def test_get_injection_dict_pv_quantiles_load_history_and_stage_times(self):
+        from emhass import web_server
+
+        df = self.df.copy()
+        n = len(df)
+        hist_idx = pd.date_range(
+            df.index[0] - pd.Timedelta(days=1), periods=n, freq="30min", tz=df.index.tz
+        )
+        load_hist = pd.Series(np.full(n, 450.0), index=hist_idx)
+        df.attrs["emhass_ui_meta"] = {
+            "optim_conf": {"load_forecast_method": "naive"},
+            "pv_quantiles": {
+                "timestamps": [str(ts) for ts in df.index],
+                "p50": np.full(n, 1500.0).tolist(),
+                "p10": np.full(n, 900.0).tolist(),
+                "p90": np.full(n, 2100.0).tolist(),
+                "bias": 0.4,
+                "source": "solcast",
+            },
+            "load_history_series": load_hist,
+            "last_run": {
+                "stage_times": {
+                    "pv_forecast": 0.12,
+                    "load_forecast": 0.08,
+                    "optim_solve.build": 0.05,
+                    "optim_solve": 0.35,
+                },
+                "duration_total_seconds": 0.55,
+            },
+        }
+        # Slice result horizon to verify timestamp-based quantile reindexing instead of positional shift
+        df_sliced = df.iloc[2:].copy()
+        df_sliced.attrs["emhass_ui_meta"] = df.attrs["emhass_ui_meta"]
+        injection_dict = utils.get_injection_dict(df_sliced)
+        self.assertIn("figure_pv_forecast", injection_dict)
+        self.assertIn("Solcast", injection_dict["figure_pv_forecast"])
+        self.assertIn("P10", injection_dict["figure_pv_forecast"])
+        self.assertIn("P90", injection_dict["figure_pv_forecast"])
+        self.assertIn("MAE=", injection_dict["figure_load_effectiveness"])
+        self.assertIn("figure_stage_times", injection_dict)
+        self.assertIn("Pipeline Stage Execution Times", injection_dict["figure_stage_times"])
+        self.assertIn("optim_solve", injection_dict["figure_stage_times"])
+
+        # Also test _attach_ui_metadata double-count guard and timestamp serialization
+        class _FakeFcst:
+            last_pv_quantiles = {
+                "p50": pd.Series(np.arange(n, dtype=float) * 100.0, index=df.index),
+                "p10": pd.Series(np.arange(n, dtype=float) * 60.0, index=df.index),
+                "p90": None,
+                "bias": 0.25,
+                "source": "solcast",
+            }
+
+        df_attached = df_sliced.copy()
+        web_server._attach_ui_metadata(
+            df_attached,
+            {
+                "optim_conf": {"load_forecast_method": "naive"},
+                "fcst": _FakeFcst(),
+                "stage_times": {"pv_forecast": 0.1, "optim_solve.build": 0.05, "optim_solve": 0.3},
+            },
+            action_name="dayahead-optim",
+        )
+        attached_meta = df_attached.attrs["emhass_ui_meta"]
+        self.assertIn("timestamps", attached_meta["pv_quantiles"])
+        if attached_meta.get("last_run"):
+            self.assertLess(attached_meta["last_run"].get("duration_total_seconds", 0.0), 0.45)
+        attached_inj = utils.get_injection_dict(df_attached)
+        self.assertIn("PV P50", attached_inj["figure_pv_forecast"])
+
+    def test_get_injection_dict_federated_figures_and_scalar_summary(self):
+        df = self.df.copy()
+        n = len(df)
+        df["fed_meter_price"] = np.linspace(0.1, 0.3, n)
+        df["fed_local_price_0"] = np.linspace(0.12, 0.28, n)
+        df["fed_node_power_0"] = np.linspace(100.0, 500.0, n)
+        df["fed_share_battery"] = -0.45
+        df["fed_share_loads"] = 1.25
+        df["fed_lower_bound"] = 0.8
+        df["fed_gap"] = 0.001
+        df["fed_iterations"] = 7
+        df["backend_used"] = "dantzig_wolfe"
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_fed_prices", injection_dict)
+        self.assertIn("figure_fed_shares", injection_dict)
+        self.assertIn("figure_fed_nodes", injection_dict)
+        self.assertNotIn("fed_node_power_0", injection_dict["figure_0"])
+        for scalar_col in (
+            "fed_share_battery",
+            "fed_share_loads",
+            "fed_lower_bound",
+            "fed_gap",
+            "fed_iterations",
+        ):
+            self.assertNotIn(scalar_col, injection_dict["table1"])
+            self.assertIn(scalar_col, injection_dict["table2"])
+
+    def test_get_injection_dict_method_badges_and_analytics_intro(self):
+        df = self.df.copy()
+        df.attrs["emhass_ui_meta"] = {
+            "optim_conf": {
+                "set_use_pv": True,
+                "weather_forecast_method": "solcast",
+                "load_forecast_method": "mlforecaster",
+                "costfun": "profit",
+            },
+            "pv_quantiles": {"bias": 0.4, "source": "solcast", "p50": [100.0] * len(df)},
+        }
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("analytics_intro", injection_dict)
+        self.assertIn("How to Read Advanced Analytics", injection_dict["analytics_intro"])
+        self.assertIn("PV Forecast Method:", injection_dict["figure_pv_forecast"])
+        self.assertIn("solcast", injection_dict["figure_pv_forecast"])
+        self.assertIn("Load Forecast Method:", injection_dict["figure_pv_forecast"])
+        self.assertIn("mlforecaster", injection_dict["figure_pv_forecast"])
+
+    def test_get_injection_dict_forecast_calibration_builds_two_figures(self):
+        idx = pd.date_range("2026-11-01 00:00", periods=6, freq="30min", tz="UTC")
+        plot_df = pd.DataFrame(
+            {
+                "actual": [500.0, 600.0, 550.0, 700.0, 650.0, 500.0],
+                "naive": [510.0, 590.0, 560.0, 680.0, 640.0, 520.0],
+            },
+            index=idx,
+        )
+        table_df = pd.DataFrame(
+            [
+                {
+                    "method": "naive",
+                    "test_mae": 45.2,
+                    "val_mae": 40.1,
+                    "test_rmse": 60.0,
+                    "val_rmse": 55.0,
+                },
+                {
+                    "method": "typical",
+                    "test_mae": 38.0,
+                    "val_mae": 35.4,
+                    "test_rmse": 50.0,
+                    "val_rmse": 48.0,
+                },
+            ]
+        )
+        inj = utils.get_injection_dict_forecast_calibration(
+            {
+                "plot": plot_df,
+                "table": table_df,
+                "val_window": ("2026-11-01", "2026-11-02"),
+                "caveats": "None",
+            }
+        )
+        self.assertIn("figure_0", inj)
+        self.assertIn("figure_calibration_metrics", inj)
+        self.assertIn("Forecast Error Comparison Across Methods", inj["figure_calibration_metrics"])
+        self.assertIn("table1", inj)
+
+    async def test_compute_and_render_thermal_model_calibration(self):
+        # Generate noiseless 1-step-lag synthetic thermal trajectory and recover parameters
+        dt_h = 0.5
+        p_nom = 3000.0
+        alpha_true, gamma_true = 1.2, 0.05
+        n = 32
+        p_def = np.array(
+            [p_nom if 4 <= i < 14 or 20 <= i < 26 else 0.0 for i in range(n)], dtype=float
+        )
+        t_out = np.full(n, 8.0, dtype=float)
+        t_in = np.empty(n, dtype=float)
+        t_in[0] = 19.0
+        for i in range(n - 1):
+            p_eff = p_def[i - 1] if i >= 1 else 0.0
+            t_in[i + 1] = (
+                t_in[i]
+                + alpha_true * dt_h * (p_eff / p_nom)
+                - gamma_true * dt_h * (t_in[i] - t_out[i])
+            )
+
+        payload = {
+            "nominal_power": p_nom,
+            "indoor_temperature": t_in.tolist(),
+            "outdoor_temperature": t_out.tolist(),
+            "heater_power": p_def.tolist(),
+            "current_heating_rate": 0.5,
+            "current_cooling_constant": 0.1,
+            "current_thermal_inertia": 0.0,
+        }
+        result = await utils.compute_thermal_model_calibration(
+            emhass_conf, None, payload, logger, get_data_from_file=True
+        )
+        self.assertEqual(result["data_source"], "runtime_payload")
+        self.assertEqual(result["best_params"]["lag_steps"], 1)
+        self.assertAlmostEqual(result["best_params"]["heating_rate"], alpha_true, places=2)
+        self.assertAlmostEqual(result["best_params"]["cooling_constant"], gamma_true, places=3)
+
+        inj = utils.get_injection_dict_thermal_calibration(result)
+        for key in (
+            "figure_0",
+            "figure_thermal_lag_comparison",
+            "figure_thermal_scatter",
+            "table1",
+            "table2",
+        ):
+            self.assertIn(key, inj)
+        self.assertIn("Predicted vs Actual Indoor Temperature Trajectory", inj["figure_0"])
+
+        # 5-minute timestep with 1-step lag preserves sub-0.1h inertia precision for optimizer conversion
+        dt_5m = 5.0 / 60.0
+        n_5m = 48
+        p_5m = np.array(
+            [p_nom if 6 <= i < 20 or 30 <= i < 40 else 0.0 for i in range(n_5m)], dtype=float
+        )
+        t_out_5m = np.full(n_5m, 8.0, dtype=float)
+        t_in_5m = np.empty(n_5m, dtype=float)
+        t_in_5m[0] = 19.0
+        for i in range(n_5m - 1):
+            p_eff = p_5m[i - 1] if i >= 1 else 0.0
+            t_in_5m[i + 1] = (
+                t_in_5m[i]
+                + alpha_true * dt_5m * (p_eff / p_nom)
+                - gamma_true * dt_5m * (t_in_5m[i] - t_out_5m[i])
+            )
+        res_5m = await utils.compute_thermal_model_calibration(
+            emhass_conf,
+            {"retrieve_hass_conf": {"optimization_time_step": 5}},
+            {
+                "nominal_power": p_nom,
+                "indoor_temperature": t_in_5m.tolist(),
+                "outdoor_temperature": t_out_5m.tolist(),
+                "heater_power": p_5m.tolist(),
+            },
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertEqual(res_5m["best_params"]["lag_steps"], 1)
+        self.assertGreaterEqual(int(res_5m["best_params"]["thermal_inertia"] / dt_5m), 1)
+
+        # Cooling-only window when heater power is identically zero
+        t_cool = np.empty(24, dtype=float)
+        t_cool[0] = 21.0
+        for i in range(23):
+            t_cool[i + 1] = t_cool[i] - 0.08 * dt_h * (t_cool[i] - 8.0)
+        res_cool = await utils.compute_thermal_model_calibration(
+            emhass_conf,
+            None,
+            {
+                "nominal_power": p_nom,
+                "indoor_temperature": t_cool.tolist(),
+                "outdoor_temperature": [8.0] * 24,
+                "heater_power": [0.0] * 24,
+                "current_heating_rate": 2.5,
+                "current_thermal_inertia": 0.5,
+            },
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(res_cool["cooling_only"])
+        self.assertEqual(res_cool["best_params"]["heating_rate"], 2.5)
+        self.assertEqual(res_cool["best_params"]["thermal_inertia"], 0.5)
+        self.assertAlmostEqual(res_cool["best_params"]["cooling_constant"], 0.08, places=3)
+        inj_cool = utils.get_injection_dict_thermal_calibration(res_cool)
+        self.assertIn("cooling-only window", inj_cool["subsubtitle0"])
+        self.assertNotIn("thermal_inertia", inj_cool["subsubtitle0"].split("<pre>")[1])
+
+        # Explicit current_thermal_inertia=0.0 overrides tc thermal_inertia; sense="cool" works
+        t_ac = np.empty(20, dtype=float)
+        t_ac[0] = 26.0
+        p_ac = np.array([p_nom if 4 <= i < 14 else 0.0 for i in range(20)], dtype=float)
+        for i in range(19):
+            t_ac[i + 1] = t_ac[i] - 1.5 * dt_h * (p_ac[i] / p_nom) - 0.04 * dt_h * (t_ac[i] - 30.0)
+        res_ac = await utils.compute_thermal_model_calibration(
+            emhass_conf,
+            orjson.dumps(
+                {
+                    "optim_conf": {
+                        "nominal_power_of_deferrable_loads": [p_nom],
+                        "def_load_config": [
+                            {"thermal_config": {"thermal_inertia": 1.0, "sense": "cool"}}
+                        ],
+                    },
+                    "retrieve_hass_conf": {"optimization_time_step": "0 days 00:30:00"},
+                }
+            ).decode("utf-8"),
+            orjson.dumps(
+                {
+                    "indoor_temperature": t_ac.tolist(),
+                    "outdoor_temperature": [30.0] * 20,
+                    "heater_power": p_ac.tolist(),
+                    "current_thermal_inertia": 0.0,
+                }
+            ).decode("utf-8"),
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertEqual(res_ac["sense"], "cool")
+        self.assertEqual(res_ac["current_params"]["thermal_inertia"], 0.0)
+        self.assertAlmostEqual(res_ac["best_params"]["heating_rate"], 1.5, places=2)
+
+        # Invalid sense raises ValueError
+        with self.assertRaises(ValueError):
+            await utils.compute_thermal_model_calibration(
+                emhass_conf, None, {"sense": "invalid"}, logger, get_data_from_file=True
+            )
+
+        # Offline synthetic demo fallback & malformed JSON runtimeparams
+        res_demo = await utils.compute_thermal_model_calibration(
+            emhass_conf, None, "{not-valid-json", logger, get_data_from_file=True
+        )
+        self.assertEqual(res_demo["data_source"], "offline_demo")
+        self.assertTrue(res_demo["fit_succeeded"])
+
+    async def test_thermal_calibration_influx_and_ha_fallbacks(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Test _fetch_influx_thermal_window directly with mocked aiohttp session
+        idx = pd.date_range("2026-11-19 00:00", periods=10, freq="30min", tz="UTC")
+        ts_list = [ts.isoformat() for ts in idx]
+
+        class _FakeResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            async def json(self):
+                return self._payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class _FakeSession:
+            def __init__(self, mode="direct"):
+                self.mode = mode
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def get(self, _url, params=None, **_kwargs):
+                q = (params or {}).get("q", "")
+                if q.startswith("SHOW SERIES"):
+                    return _FakeResp(
+                        {
+                            "results": [
+                                {"series": [{"columns": ["key"], "values": [["°C,entity_id=x"]]}]}
+                            ]
+                        }
+                    )
+                if "SELECT *" in q:
+                    if self.mode == "switch_val":
+                        return _FakeResp(
+                            {
+                                "results": [
+                                    {
+                                        "series": [
+                                            {
+                                                "columns": ["time", "value"],
+                                                "values": [[ts_list[0], 1], [ts_list[5], 0]],
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        )
+                    return _FakeResp(
+                        {
+                            "results": [
+                                {
+                                    "series": [
+                                        {
+                                            "columns": ["time", "state"],
+                                            "values": [[ts_list[0], "on"], [ts_list[5], "off"]],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    )
+                if "temp_air_in" in q:
+                    vals = [[t, 20.0 + 0.1 * i] for i, t in enumerate(ts_list)]
+                elif "outdoor_temperature" in q:
+                    vals = [[t, 10.0] for t in ts_list]
+                elif "p_deferrable" in q:
+                    vals = (
+                        [[t, 2000.0 if i < 5 else 0.0] for i, t in enumerate(ts_list)]
+                        if self.mode == "direct"
+                        else []
+                    )
+                elif "temp_predicted" in q:
+                    vals = (
+                        [[t, 22.0] for t in ts_list]
+                        if self.mode in ("setpoint_heat", "setpoint_cool")
+                        else []
+                    )
+                else:
+                    vals = []
+                series = [{"columns": ["time", "val"], "values": vals}] if vals else []
+                return _FakeResp({"results": [{"series": series}]})
+
+        rh_conf = {"influxdb_host": "localhost", "influxdb_port": 8086, "influxdb_database": "ha"}
+        for mode, sense in (
+            ("direct", "heat"),
+            ("setpoint_heat", "heat"),
+            ("setpoint_cool", "cool"),
+            ("switch_val", "heat"),
+        ):
+            with patch("emhass.utils.aiohttp.ClientSession", return_value=_FakeSession(mode)):
+                df_inf = await utils._fetch_influx_thermal_window(
+                    rh_conf,
+                    "sensor.temp_air_in",
+                    "sensor.outdoor_temperature",
+                    "sensor.p_deferrable0" if mode == "direct" else "",
+                    "sensor.temp_predicted_0" if "setpoint" in mode else "",
+                    "switch.heater",
+                    idx[0],
+                    idx[-1],
+                    30,
+                    3000.0,
+                    logger,
+                    sense=sense,
+                )
+            self.assertEqual(len(df_inf), 10)
+
+        # Invalid entity ID returns empty DataFrame without raising
+        with patch("emhass.utils.aiohttp.ClientSession", return_value=_FakeSession("direct")):
+            df_bad = await utils._fetch_influx_thermal_window(
+                rh_conf,
+                "sensor.bad'; DROP",
+                "sensor.outdoor_temperature",
+                "",
+                "",
+                "",
+                idx[0],
+                idx[-1],
+                30,
+                3000.0,
+                logger,
+            )
+        self.assertTrue(df_bad.empty)
+
+        # HA RetrieveHass fallback closes rh in finally and honors date_ranges
+        df_ha = pd.DataFrame(
+            {
+                "sensor.temp_air_in": [20.0 + 0.2 * i for i in range(10)],
+                "sensor.outdoor_temperature": [8.0] * 10,
+                "sensor.p_deferrable0": [3000.0 if i < 5 else 0.0 for i in range(10)],
+            },
+            index=idx,
+        )
+        fake_rh = MagicMock()
+        fake_rh.get_data = AsyncMock(return_value=True)
+        fake_rh.close = AsyncMock()
+        fake_rh.df_final = df_ha
+        with (
+            patch("emhass.utils._fetch_influx_thermal_window", side_effect=RuntimeError("db down")),
+            patch("emhass.retrieve_hass.RetrieveHass", return_value=fake_rh) as rh_cls,
+        ):
+            res_ha = await utils.compute_thermal_model_calibration(
+                emhass_conf,
+                {
+                    "retrieve_hass_conf": {
+                        "use_influxdb": True,
+                        "hass_url": "http://ha.local/api",
+                        "long_lived_token": "tok",
+                        "optimization_time_step": 30,
+                    }
+                },
+                {"date_ranges": [[idx[0].isoformat(), idx[-1].isoformat()]]},
+                logger,
+                get_data_from_file=False,
+            )
+        self.assertEqual(res_ha["data_source"], "home_assistant")
+        fake_rh.close.assert_awaited_once()
+        # Verify use_influxdb was forced False on the RetrieveHass fallback params
+        passed_params = rh_cls.call_args[0][4]
+        self.assertFalse(passed_params["retrieve_hass_conf"]["use_influxdb"])
+
+    def test_ui_charts_edge_cases_and_quantile_variants(self):
+        idx = pd.date_range("2026-11-19 00:00", periods=6, freq="30min", tz="UTC")
+        # Single-row timestep inference via freq, ui_meta, and default
+        self.assertEqual(utils._infer_timestep_hours(idx[:1]), 0.5)
+        self.assertEqual(
+            utils._infer_timestep_hours(
+                pd.Index(["2026-11-19 00:00"]), {"optimization_time_step_hours": 0.25}
+            ),
+            0.25,
+        )
+        self.assertEqual(utils._infer_timestep_hours(pd.Index(["single"])), 0.5)
+
+        # Multi-battery + curtailment + non-electric deferrable + set_nodischarge_to_grid + charge_from_other
+        df = pd.DataFrame(
+            {
+                "P_PV": [0.0, 500.0, 2000.0, 2000.0, 0.0, 0.0],
+                "P_PV_curtailment": [0.0, 0.0, 200.0, 100.0, 0.0, 0.0],
+                "P_Load": [400.0, 400.0, 400.0, 400.0, 800.0, 600.0],
+                "P_grid": [400.0, 0.0, -500.0, -400.0, 200.0, -300.0],
+                "P_batt_0": [-500.0, -200.0, -600.0, 0.0, 400.0, 600.0],
+                "P_batt_1": [-300.0, 0.0, -200.0, 0.0, 200.0, 300.0],
+                "P_deferrable0": [1000.0, 1000.0, 0.0, 0.0, 0.0, 0.0],
+                "P_deferrable1": [200.0, 200.0, 200.0, 0.0, 0.0, 0.0],
+            },
+            index=idx,
+        )
+        meta_no_export = {
+            "optim_conf": {
+                "set_nodischarge_to_grid": True,
+                "is_electric_load": [False, True],
+                "weather_forecast_pv_quantile_bias": 0.2,
+                "load_forecast_method": "naive",
+            },
+            "load_history_series": {
+                "timestamps": [str(t) for t in (idx - pd.Timedelta(days=1))],
+                "values": [450.0] * 6,
+            },
+        }
+        batt_html = utils._build_battery_sources_figure(df, meta_no_export)
+        self.assertIsNotNone(batt_html)
+        self.assertNotIn("Discharged to Grid Export", batt_html)
+        self.assertIn("Charged from Other", batt_html)
+
+        batt_export_html = utils._build_battery_sources_figure(
+            df, {"optim_conf": {"set_nodischarge_to_grid": False}}
+        )
+        self.assertIn("Discharged to Grid Export (est.", batt_export_html)
+
+        pie_html = utils._build_energy_pie_figure(df, meta_no_export)
+        self.assertIn("PV Curtailment", pie_html)
+        self.assertNotIn("Deferrable Load 0", pie_html)
+        self.assertIn("Deferrable Load 1", pie_html)
+
+        # Quantile combinations: P50+P90, P50-only, P10-only, and RangeIndex
+        for q_dict, expected in (
+            ({"p50": [100.0] * 6, "p90": [150.0] * 6}, "PV P90"),
+            ({"p50": [100.0] * 6}, "PV P50"),
+            ({"p10": [80.0] * 6}, "PV P10"),
+        ):
+            q_html = utils._build_pv_forecast_quantiles_figure(
+                df, q_dict, meta_no_export["optim_conf"]
+            )
+            self.assertIn(expected, q_html)
+
+        # Load effectiveness with dict history + rolling-mean fallback
+        eff_dict = utils._build_load_effectiveness_figure(df, meta_no_export)
+        self.assertIn("Historical Diurnal Median", eff_dict)
+        eff_roll = utils._build_load_effectiveness_figure(
+            df, {"optim_conf": {"load_forecast_method": "naive"}}
+        )
+        self.assertIn("Rolling Mean", eff_roll)
+
+    async def test_forecast_solcast_cache_quantiles_and_per_inverter_quantiles(self):
+        import tempfile
+        from pathlib import Path
+
+        from emhass.forecast import Forecast
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            rh_conf = {
+                "optimization_time_step": pd.Timedelta(minutes=30),
+                "time_zone": pytz.UTC,
+                "method_ts_round": "nearest",
+                "sensor_power_photovoltaics": "sensor.pv",
+                "sensor_power_photovoltaics_forecast": "sensor.pv_fcst",
+                "sensor_power_load_no_var_loads": "sensor.load",
+                "Latitude": 45.0,
+                "Longitude": 5.0,
+            }
+            optim_conf = {
+                "delta_forecast_daily": pd.Timedelta(days=1),
+                "weather_forecast_pv_quantile_bias": 0.2,
+                "number_of_deferrable_loads": 0,
+            }
+            plant_conf = {
+                "number_of_inverters": 2,
+                "pv_module_model": ["m1", "m2"],
+                "pv_inverter_model": ["i1", "i2"],
+                "pv_plant_inverter_index": [0, 1],
+                "surface_tilt": [30, 30],
+                "surface_azimuth": [180, 180],
+                "modules_per_string": [10, 10],
+                "strings_per_inverter": [1, 1],
+            }
+            local_conf = {
+                "data_path": tmp_path,
+                "root_path": Path(utils.get_root(__file__, 2)) / "src" / "emhass",
+            }
+            fcst = Forecast(
+                rh_conf,
+                optim_conf,
+                plant_conf,
+                {
+                    "passed_data": {
+                        "weather_forecast_cache": False,
+                        "weather_forecast_cache_only": True,
+                    }
+                },
+                local_conf,
+                logger,
+                opt_time_delta=6,
+            )
+            # Write a Solcast cache carrying stored bias=0.45 and provider="solcast"
+            cache_path = str(tmp_path / "weather_forecast_data.pkl")
+            cached_df = pd.DataFrame(
+                {"yhat": [500.0] * len(fcst.forecast_dates)}, index=fcst.forecast_dates
+            )
+            cached_df.attrs["emhass_weather_provider"] = "solcast"
+            cached_df.attrs["emhass_pv_quantiles"] = {
+                "timestamps": [str(t) for t in fcst.forecast_dates],
+                "p50": [600.0] * len(fcst.forecast_dates),
+                "p10": [300.0] * len(fcst.forecast_dates),
+                "p90": [800.0] * len(fcst.forecast_dates),
+                "bias": 0.45,
+                "source": "solcast",
+            }
+            await fcst.set_cached_forecast_data(cache_path, cached_df)
+            fcst.weather_forecast_method = "solcast"
+            hit = await fcst._get_weather_solcast(cache_path)
+            self.assertIsInstance(hit, pd.DataFrame)
+            self.assertEqual(fcst.last_pv_quantiles["bias"], 0.45)
+            self.assertEqual(fcst.last_pv_quantiles["source"], "solcast")
+
+            # Per-inverter list PV quantiles populate site-wide last_pv_quantiles
+            n_steps = len(fcst.forecast_dates_tz)
+            fcst.params["passed_data"]["pv_power_forecast"] = [[100.0] * n_steps, [200.0] * n_steps]
+            fcst.params["passed_data"]["pv_power_forecast_p10"] = [
+                [60.0] * n_steps,
+                [140.0] * n_steps,
+            ]
+            inv_df = fcst._get_weather_list_per_inverter([0, 1])
+            self.assertIsNotNone(inv_df)
+            self.assertEqual(fcst.last_pv_quantiles["source"], "external")
+            self.assertAlmostEqual(float(fcst.last_pv_quantiles["p50"].iloc[0]), 300.0)
+            self.assertAlmostEqual(float(fcst.last_pv_quantiles["p10"].iloc[0]), 200.0)
+
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)

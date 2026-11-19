@@ -340,20 +340,6 @@
       "default_value": "temp_air",
       "unit": "none"
     },
-    "set_total_pv_sell": {
-      "friendly_name": "PV straight to grid",
-      "Description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.",
-      "input": "boolean",
-      "default_value": false,
-      "unit": "none"
-    },
-    "publish_deferrable_load_states": {
-      "friendly_name": "Publish deferrable load command states",
-      "Description": "When true, EMHASS additionally publishes one interpretable command sensor per deferrable load (sensor.p_deferrableN_state) whose state is 'on', 'off' or 'variable' for the current timestep, with the full optimized on/off/variable plan as a 'schedule' attribute. This lets automations act on a clear command instead of thresholding the power forecast themselves. Defaults to false.",
-      "input": "boolean",
-      "default_value": false,
-      "unit": "none"
-    },
     "num_threads": {
       "friendly_name": "Number of threads to use for the LP solver",
       "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
@@ -374,28 +360,6 @@
       "input": "float",
       "default_value": 0.01,
       "unit": "fraction"
-    },
-    "weather_forecast_method": {
-      "friendly_name": "Weather forecast method",
-      "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
-      "input": "select",
-      "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
-      "default_value": "open-meteo",
-      "unit": "none"
-    },
-    "weather_forecast_pv_quantile_bias": {
-      "friendly_name": "PV forecast conservative bias",
-      "Description": "Blend factor that biases a central P50 PV forecast toward its conservative P10 (low) companion. 0 (default) uses P50, preserving existing behaviour. 1 uses P10. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. With weather_forecast_method set to solcast, EMHASS uses Solcast pv_estimate/pv_estimate10. For caller-supplied forecasts, the same blend applies when pv_power_forecast_p10 is supplied alongside pv_power_forecast; without that companion the existing P50-only path is unchanged. Defaults to 0.",
-      "input": "float",
-      "default_value": 0.0,
-      "unit": "none"
-    },
-    "open_meteo_cache_max_age": {
-      "friendly_name": "Open-Meteo Cache Max Age",
-      "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
-      "input": "int",
-      "default_value": 30,
-      "unit": "min"
     },
     "maximum_power_from_grid": {
       "friendly_name": "Max power from grid",
@@ -605,12 +569,55 @@
       "requires": {
         "production_price_forecast_method": "constant"
       }
+    },
+    "capacity_cost_per_kw": {
+      "friendly_name": "Capacity (demand) charge cost",
+      "Description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. A list of two or more rates prices that many independent capacity/demand components in one optimisation (see docs/cookbook/tariff_demand_charge.md, issue #540).",
+      "input": "array.float",
+      "default_value": 0.0,
+      "unit": "¤/kW"
+    },
+    "capacity_charge_interval_timesteps": {
+      "friendly_name": "Capacity charge tariff measurement interval",
+      "Description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. If capacity_cost_per_kw is a list of K rates, this is a single shared value or a list of exactly K; any other length is rejected (see docs/cookbook/tariff_demand_charge.md, issue #540).",
+      "input": "array.int",
+      "default_value": 1,
+      "unit": "timesteps"
     }
   },
   "Solar System (PV)": {
     "set_use_pv": {
       "friendly_name": "Enable PV system",
       "Description": "Set to True if we should consider an solar PV system. Defaults to False",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "weather_forecast_method": {
+      "friendly_name": "Weather forecast method",
+      "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
+      "input": "select",
+      "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
+      "default_value": "open-meteo",
+      "unit": "none"
+    },
+    "weather_forecast_pv_quantile_bias": {
+      "friendly_name": "PV forecast conservative bias",
+      "Description": "Blend factor that biases a central P50 PV forecast toward its conservative P10 (low) companion. 0 (default) uses P50, preserving existing behaviour. 1 uses P10. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. With weather_forecast_method set to solcast, EMHASS uses Solcast pv_estimate/pv_estimate10. For caller-supplied forecasts, the same blend applies when pv_power_forecast_p10 is supplied alongside pv_power_forecast; without that companion the existing P50-only path is unchanged. Defaults to 0.",
+      "input": "float",
+      "default_value": 0.0,
+      "unit": "none"
+    },
+    "open_meteo_cache_max_age": {
+      "friendly_name": "Open-Meteo Cache Max Age",
+      "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
+      "input": "int",
+      "default_value": 30,
+      "unit": "min"
+    },
+    "set_total_pv_sell": {
+      "friendly_name": "PV straight to grid",
+      "Description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.",
       "input": "boolean",
       "default_value": false,
       "unit": "none"
@@ -653,28 +660,6 @@
     "adjusted_pv_model_max_age": {
       "friendly_name": "Adjusted PV model maximum age",
       "Description": "Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
-      "input": "int",
-      "default_value": 24,
-      "unit": "h"
-    },
-    "set_use_battery_identification": {
-      "friendly_name": "Use battery self-identification",
-      "Description": "Opt-in, default off. When enabled, EMHASS learns the battery usable capacity and round-trip efficiency from Home Assistant history (signed battery power and measured state of charge) instead of relying only on the hand-entered values. It requires set_use_battery to be true and the sensor_power_battery and sensor_battery_state_of_charge sensors. In v1 this is advisory only: it never changes the configured battery values used by the optimizer. Defaults to false.",
-      "input": "boolean",
-      "default_value": false,
-      "unit": "none"
-    },
-    "battery_identification_trust_tier": {
-      "friendly_name": "Battery identification trust tier",
-      "Description": "Controls what battery self-identification does with its estimate. 'observe' (default) writes the estimate to a JSON file and the log only. 'suggest' additionally publishes two read-only Home Assistant sensors (identified capacity and round-trip efficiency) and logs a recommendation. Neither tier changes the configured battery values used by the optimizer. Defaults to 'observe'.",
-      "input": "select",
-      "select_options": ["observe", "suggest"],
-      "default_value": "observe",
-      "unit": "none"
-    },
-    "battery_identification_model_max_age": {
-      "friendly_name": "Battery identification model maximum age",
-      "Description": "Maximum age in hours before the battery identification estimate is re-fitted from fresh Home Assistant history. If the saved result is older than this value, a new estimate is produced. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
       "input": "int",
       "default_value": 24,
       "unit": "h"
@@ -833,6 +818,13 @@
       "input": "array.int",
       "default_value": 0,
       "unit": "timesteps"
+    },
+    "publish_deferrable_load_states": {
+      "friendly_name": "Publish deferrable load command states",
+      "Description": "When true, EMHASS additionally publishes one interpretable command sensor per deferrable load (sensor.p_deferrableN_state) whose state is 'on', 'off' or 'variable' for the current timestep, with the full optimized on/off/variable plan as a 'schedule' attribute. This lets automations act on a clear command instead of thresholding the power forecast themselves. Defaults to false.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
     }
   },
   "Battery": {
@@ -851,6 +843,28 @@
       "minimum": 1,
       "maximum": 100,
       "unit": "count"
+    },
+    "set_use_battery_identification": {
+      "friendly_name": "Use battery self-identification",
+      "Description": "Opt-in, default off. When enabled, EMHASS learns the battery usable capacity and round-trip efficiency from Home Assistant history (signed battery power and measured state of charge) instead of relying only on the hand-entered values. It requires set_use_battery to be true and the sensor_power_battery and sensor_battery_state_of_charge sensors. In v1 this is advisory only: it never changes the configured battery values used by the optimizer. Defaults to false.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "battery_identification_trust_tier": {
+      "friendly_name": "Battery identification trust tier",
+      "Description": "Controls what battery self-identification does with its estimate. 'observe' (default) writes the estimate to a JSON file and the log only. 'suggest' additionally publishes two read-only Home Assistant sensors (identified capacity and round-trip efficiency) and logs a recommendation. Neither tier changes the configured battery values used by the optimizer. Defaults to 'observe'.",
+      "input": "select",
+      "select_options": ["observe", "suggest"],
+      "default_value": "observe",
+      "unit": "none"
+    },
+    "battery_identification_model_max_age": {
+      "friendly_name": "Battery identification model maximum age",
+      "Description": "Maximum age in hours before the battery identification estimate is re-fitted from fresh Home Assistant history. If the saved result is older than this value, a new estimate is produced. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
+      "input": "int",
+      "default_value": 24,
+      "unit": "h"
     },
     "set_nocharge_from_grid": {
       "friendly_name": "Forbid charging battery from grid",
@@ -1042,20 +1056,6 @@
       "requires": {
         "set_use_battery": true
       }
-    },
-    "capacity_cost_per_kw": {
-      "friendly_name": "Capacity (demand) charge cost",
-      "Description": "Cost in currency per kW applied once to the modelled capacity/demand peak. 0 (default) disables the feature. With capacity_charge_interval_timesteps=1 the peak is the highest eligible positive-import timestep; with N>1 it is the highest eligible completed tariff-interval average. Set this to the marginal billed cost of increasing the applicable peak by 1 kW. A list of two or more rates prices that many independent capacity/demand components in one optimisation (see docs/cookbook/tariff_demand_charge.md, issue #540).",
-      "input": "array.float",
-      "default_value": 0.0,
-      "unit": "¤/kW"
-    },
-    "capacity_charge_interval_timesteps": {
-      "friendly_name": "Capacity charge tariff measurement interval",
-      "Description": "Number of native optimisation timesteps in one tariff demand-measurement interval. 1 (default) preserves per-timestep capacity charging; N>1 prices completed N-timestep average import. Example: 30-minute demand with a 5-minute optimisation step uses 6. Only effective when capacity_cost_per_kw > 0. If capacity_cost_per_kw is a list of K rates, this is a single shared value or a list of exactly K; any other length is rejected (see docs/cookbook/tariff_demand_charge.md, issue #540).",
-      "input": "array.int",
-      "default_value": 1,
-      "unit": "timesteps"
     },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",

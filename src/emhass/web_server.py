@@ -61,12 +61,14 @@ from emhass.utils import (
     build_params,
     build_secrets,
     compile_heat_topology,
+    compute_thermal_model_calibration,
     config_value_faults,
     dry_run_request_problem,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
+    get_injection_dict_thermal_calibration,
     inverter_config_faults,
     inverter_power_curve_faults,
     param_to_config,
@@ -427,7 +429,10 @@ async def index():
     template = templates.get_template("index.html")
     return await make_response(
         template.render(
-            injection_dict=injection_dict, api_token_link=api_auth.token_page_available()
+            injection_dict=injection_dict,
+            api_token_link=api_auth.token_page_available(),
+            emhass_version=last_run.emhass_version(),
+            current_year=datetime.now().year,
         )
     )
 
@@ -452,7 +457,13 @@ async def configuration():
         params = {}
 
     template = templates.get_template("configuration.html")
-    return await make_response(template.render(config=params))
+    return await make_response(
+        template.render(
+            config=params,
+            emhass_version=last_run.emhass_version(),
+            current_year=datetime.now().year,
+        )
+    )
 
 
 @app.route("/template", methods=["GET"])
@@ -804,6 +815,110 @@ async def _load_params(emhass_conf, logger):
     return params, costfun
 
 
+def _attach_ui_metadata(
+    opt_res: pd.DataFrame, input_data_dict: dict, action_name: str = ""
+) -> None:
+    """Attach optional runtime metadata onto ``opt_res.attrs`` for ``get_injection_dict``."""
+    optim_conf = input_data_dict.get("optim_conf") or {}
+    retrieve_hass_conf = input_data_dict.get("retrieve_hass_conf") or {}
+    fcst = input_data_dict.get("fcst")
+    data_path = emhass_conf.get("data_path")
+    persisted_snap = last_run.read(data_path) if data_path is not None else None
+    cur_stages = input_data_dict.get("stage_times")
+    if isinstance(cur_stages, dict) and cur_stages:
+        cur_stages_dict = dict(cur_stages)
+        if (
+            isinstance(persisted_snap, dict)
+            and persisted_snap.get("action") == action_name
+            and persisted_snap.get("stage_times") == cur_stages_dict
+        ):
+            last_run_snap = persisted_snap
+        else:
+            top_level_stages = [
+                float(v)
+                for k, v in cur_stages_dict.items()
+                if "." not in str(k) and isinstance(v, int | float)
+            ]
+            last_run_snap = {
+                "status": "ok",
+                "action": action_name,
+                "stage_times": cur_stages_dict,
+                "duration_total_seconds": sum(top_level_stages),
+                "emhass_version": last_run.emhass_version(),
+                "schema_version": EMHASS_SCHEMA_VERSION,
+            }
+    else:
+        last_run_snap = persisted_snap
+
+    load_history_meta = None
+    df_hist = input_data_dict.get("df_input_data")
+    if isinstance(df_hist, pd.DataFrame) and not df_hist.empty:
+        var_load = retrieve_hass_conf.get(
+            "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+        )
+        for col in (f"{var_load}_positive", var_load):
+            if col in df_hist.columns:
+                hist_s = pd.to_numeric(df_hist[col], errors="coerce").dropna()
+                if not hist_s.empty:
+                    load_history_meta = {
+                        "timestamps": [str(ts) for ts in hist_s.index],
+                        "values": [float(v) for v in hist_s.to_numpy()],
+                    }
+                break
+
+    raw_q = getattr(fcst, "last_pv_quantiles", None) if fcst is not None else None
+    pv_quantiles_meta = None
+    if isinstance(raw_q, dict):
+        pv_quantiles_meta = {
+            "bias": raw_q.get("bias"),
+            "source": raw_q.get("source"),
+        }
+        for q_key in ("p50", "p10", "p90"):
+            q_val = raw_q.get(q_key)
+            if isinstance(q_val, pd.Series) and "timestamps" not in pv_quantiles_meta:
+                pv_quantiles_meta["timestamps"] = [str(ts) for ts in q_val.index]
+            if isinstance(q_val, list | tuple | pd.Series) or (
+                hasattr(q_val, "tolist") and not isinstance(q_val, str | bytes)
+            ):
+                arr = pd.to_numeric(pd.Series(q_val), errors="coerce")
+                pv_quantiles_meta[q_key] = [
+                    float(v) if pd.notna(v) else None for v in arr.to_numpy()
+                ]
+            else:
+                pv_quantiles_meta[q_key] = None
+
+    raw_step = retrieve_hass_conf.get("optimization_time_step")
+    step_hours = None
+    if hasattr(raw_step, "total_seconds"):
+        step_hours = float(raw_step.total_seconds() / 3600.0)
+    elif isinstance(raw_step, int | float) and raw_step > 0:
+        step_hours = float(raw_step) / 60.0
+
+    opt_res.attrs["emhass_ui_meta"] = {
+        "emhass_version": last_run.emhass_version(),
+        "last_run": last_run_snap,
+        "optimization_time_step_hours": step_hours,
+        "optim_conf": {
+            key: optim_conf.get(key)
+            for key in (
+                "set_use_pv",
+                "set_use_battery",
+                "set_nodischarge_to_grid",
+                "is_electric_load",
+                "number_of_deferrable_loads",
+                "load_forecast_method",
+                "weather_forecast_method",
+                "weather_forecast_pv_quantile_bias",
+                "optimization_backend",
+                "costfun",
+            )
+            if key in optim_conf
+        },
+        "pv_quantiles": pv_quantiles_meta,
+        "load_history_series": load_history_meta,
+    }
+
+
 async def _handle_action_dispatch(
     action_name, input_data_dict, emhass_conf, params, runtimeparams, logger
 ):
@@ -823,6 +938,20 @@ async def _handle_action_dispatch(
             logger.error("PV bias calibration: %s", exc)
             return {"error": str(exc)}, 400
         return result, 200
+
+    if action_name == "thermal-model-calibration":
+        action_str = " >> Performing thermal-model-calibration..."
+        logger.info(action_str)
+        try:
+            result = await compute_thermal_model_calibration(
+                emhass_conf, params, runtimeparams, logger
+            )
+            injection_dict = get_injection_dict_thermal_calibration(result)
+            await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        except Exception as exc:
+            logger.error("Thermal model calibration failed: %s", exc)
+            return f"EMHASS >> ERROR: Thermal model calibration failed ({exc})\n", 400
+        return "EMHASS >> Action thermal-model-calibration executed... \n", 200
 
     if action_name == "weather-forecast-cache":
         action_str = " >> Performing weather forecast, try to caching result"
@@ -884,6 +1013,8 @@ async def _handle_action_dispatch(
         # runtime forecast (#1135); there is no plan to render.
         if isinstance(opt_res, bool) and not opt_res:
             return await grab_log(action_str), 400
+        if isinstance(opt_res, pd.DataFrame):
+            _attach_ui_metadata(opt_res, input_data_dict, action_name=action_name)
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return f"EMHASS >> Action {action_name} executed... \n", 200
@@ -1310,11 +1441,12 @@ async def _action_call_unlocked(action_name: str):
         "weather-forecast-cache",
         "export-influxdb-to-csv",
         "pv-bias-calibration",
+        "thermal-model-calibration",
     ]:
         msg, status = await _handle_action_dispatch(
             action_name, None, emhass_conf, params, runtimeparams, app.logger
         )
-        if status == 400:
+        if status == 400 or action_name in ("pv-bias-calibration", "thermal-model-calibration"):
             return await make_response(msg, status)
 
         # Check logs for these specific actions
