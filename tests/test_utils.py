@@ -1721,6 +1721,191 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         if "optim_status" in self.df.columns:
             self.assertIn("optim_status", df.columns)
 
+    def test_get_injection_dict_drops_grid_pos_neg_and_max_grid_caps(self):
+        df = self.df.copy()
+        df["P_grid_pos"] = 100.0
+        df["P_grid_neg"] = -50.0
+        df["maximum_power_from_grid"] = 9000.0
+        df["maximum_power_to_grid"] = 5000.0
+        injection_dict = utils.get_injection_dict(df)
+        self.assertNotIn("P_grid_pos", injection_dict["figure_0"])
+        self.assertNotIn("P_grid_neg", injection_dict["figure_0"])
+        for col in (
+            "P_grid_pos",
+            "P_grid_neg",
+            "maximum_power_from_grid",
+            "maximum_power_to_grid",
+        ):
+            self.assertNotIn(col, injection_dict["table1"])
+
+    def test_get_injection_dict_overhaul_analytics_and_battery_sources(self):
+        idx = pd.date_range("2026-06-01 00:00", periods=6, freq="30min", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "P_PV": [0.0, 2000.0, 4000.0, 100.0, 0.0, 0.0],
+                "P_Load": [400.0, 500.0, 600.0, 800.0, 900.0, 500.0],
+                "P_grid": [400.0, -500.0, 0.0, 1200.0, 100.0, -300.0],
+                "P_batt": [0.0, -1000.0, -3400.0, -500.0, 800.0, 800.0],
+                "P_deferrable0": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                "SOC_opt": [0.4, 0.5, 0.7, 0.75, 0.65, 0.55],
+                "unit_load_cost": [0.15] * 6,
+                "cost_fun_profit": [-0.1] * 6,
+                "optim_status": ["Optimal"] * 6,
+            },
+            index=idx,
+        )
+        injection_dict = utils.get_injection_dict(df)
+        for key in (
+            "figure_pv_forecast",
+            "figure_battery_sources",
+            "figure_energy_pie",
+            "figure_histograms",
+            "figure_heatmap",
+            "figure_load_effectiveness",
+        ):
+            self.assertIn(key, injection_dict)
+        self.assertIn("Battery Charging Sources", injection_dict["figure_battery_sources"])
+        self.assertIn("Charged from Excess PV", injection_dict["figure_battery_sources"])
+        self.assertIn("Discharged to Home Loads", injection_dict["figure_battery_sources"])
+        self.assertIn("Energy Balance", injection_dict["figure_energy_pie"])
+        self.assertIn("Power Distribution Histograms", injection_dict["figure_histograms"])
+        self.assertIn("System Power Matrix Heatmap", injection_dict["figure_heatmap"])
+        self.assertIn("Load Forecast Effectiveness", injection_dict["figure_load_effectiveness"])
+
+    def test_get_injection_dict_pv_quantiles_load_history_and_stage_times(self):
+        df = self.df.copy()
+        n = len(df)
+        hist_idx = pd.date_range(
+            df.index[0] - pd.Timedelta(days=1), periods=n, freq="30min", tz=df.index.tz
+        )
+        load_hist = pd.Series(np.full(n, 450.0), index=hist_idx)
+        df.attrs["emhass_ui_meta"] = {
+            "optim_conf": {"load_forecast_method": "naive"},
+            "pv_quantiles": {
+                "p50": pd.Series(np.full(n, 1500.0), index=df.index),
+                "p10": pd.Series(np.full(n, 900.0), index=df.index),
+                "p90": pd.Series(np.full(n, 2100.0), index=df.index),
+                "bias": 0.4,
+                "source": "solcast",
+            },
+            "load_history_series": load_hist,
+            "last_run": {
+                "stage_times": {"pv_forecast": 0.12, "load_forecast": 0.08, "optim_solve": 0.35},
+                "duration_total_seconds": 0.55,
+            },
+        }
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_pv_forecast", injection_dict)
+        self.assertIn("Solcast", injection_dict["figure_pv_forecast"])
+        self.assertIn("P10", injection_dict["figure_pv_forecast"])
+        self.assertIn("P90", injection_dict["figure_pv_forecast"])
+        self.assertIn("MAE=", injection_dict["figure_load_effectiveness"])
+        self.assertIn("figure_stage_times", injection_dict)
+        self.assertIn("Pipeline Stage Execution Times", injection_dict["figure_stage_times"])
+        self.assertIn("optim_solve", injection_dict["figure_stage_times"])
+
+    def test_get_injection_dict_federated_figures_and_scalar_summary(self):
+        df = self.df.copy()
+        n = len(df)
+        df["fed_meter_price"] = np.linspace(0.1, 0.3, n)
+        df["fed_local_price_0"] = np.linspace(0.12, 0.28, n)
+        df["fed_node_power_0"] = np.linspace(100.0, 500.0, n)
+        df["fed_share_battery"] = -0.45
+        df["fed_share_loads"] = 1.25
+        df["fed_lower_bound"] = 0.8
+        df["fed_gap"] = 0.001
+        df["fed_iterations"] = 7
+        df["backend_used"] = "dantzig_wolfe"
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("figure_fed_prices", injection_dict)
+        self.assertIn("figure_fed_shares", injection_dict)
+        self.assertIn("figure_fed_nodes", injection_dict)
+        self.assertNotIn("fed_node_power_0", injection_dict["figure_0"])
+        for scalar_col in ("fed_share_battery", "fed_share_loads", "fed_lower_bound", "fed_gap", "fed_iterations"):
+            self.assertNotIn(scalar_col, injection_dict["table1"])
+            self.assertIn(scalar_col, injection_dict["table2"])
+
+    def test_get_injection_dict_method_badges_and_analytics_intro(self):
+        df = self.df.copy()
+        df.attrs["emhass_ui_meta"] = {
+            "optim_conf": {
+                "set_use_pv": True,
+                "weather_forecast_method": "solcast",
+                "load_forecast_method": "mlforecaster",
+                "costfun": "profit",
+            },
+            "pv_quantiles": {"bias": 0.4, "source": "solcast", "p50": [100.0] * len(df)},
+        }
+        injection_dict = utils.get_injection_dict(df)
+        self.assertIn("analytics_intro", injection_dict)
+        self.assertIn("How to Read Advanced Analytics", injection_dict["analytics_intro"])
+        self.assertIn("PV Forecast Method:", injection_dict["figure_pv_forecast"])
+        self.assertIn("solcast", injection_dict["figure_pv_forecast"])
+        self.assertIn("Load Forecast Method:", injection_dict["figure_pv_forecast"])
+        self.assertIn("mlforecaster", injection_dict["figure_pv_forecast"])
+
+    def test_get_injection_dict_forecast_calibration_builds_two_figures(self):
+        idx = pd.date_range("2026-11-01 00:00", periods=6, freq="30min", tz="UTC")
+        plot_df = pd.DataFrame(
+            {"actual": [500.0, 600.0, 550.0, 700.0, 650.0, 500.0], "naive": [510.0, 590.0, 560.0, 680.0, 640.0, 520.0]},
+            index=idx,
+        )
+        table_df = pd.DataFrame(
+            [
+                {"method": "naive", "test_mae": 45.2, "val_mae": 40.1, "test_rmse": 60.0, "val_rmse": 55.0},
+                {"method": "typical", "test_mae": 38.0, "val_mae": 35.4, "test_rmse": 50.0, "val_rmse": 48.0},
+            ]
+        )
+        inj = utils.get_injection_dict_forecast_calibration(
+            {"plot": plot_df, "table": table_df, "val_window": ("2026-11-01", "2026-11-02"), "caveats": "None"}
+        )
+        self.assertIn("figure_0", inj)
+        self.assertIn("figure_calibration_metrics", inj)
+        self.assertIn("Forecast Error Comparison Across Methods", inj["figure_calibration_metrics"])
+        self.assertIn("table1", inj)
+
+    async def test_compute_and_render_thermal_model_calibration(self):
+        # Generate noiseless 1-step-lag synthetic thermal trajectory and recover parameters
+        dt_h = 0.5
+        p_nom = 3000.0
+        alpha_true, gamma_true = 1.2, 0.05
+        n = 32
+        p_def = np.array([p_nom if 4 <= i < 14 or 20 <= i < 26 else 0.0 for i in range(n)], dtype=float)
+        t_out = np.full(n, 8.0, dtype=float)
+        t_in = np.empty(n, dtype=float)
+        t_in[0] = 19.0
+        for i in range(n - 1):
+            p_eff = p_def[i - 1] if i >= 1 else 0.0
+            t_in[i + 1] = t_in[i] + alpha_true * dt_h * (p_eff / p_nom) - gamma_true * dt_h * (t_in[i] - t_out[i])
+
+        payload = {
+            "nominal_power": p_nom,
+            "indoor_temperature": t_in.tolist(),
+            "outdoor_temperature": t_out.tolist(),
+            "heater_power": p_def.tolist(),
+            "current_heating_rate": 0.5,
+            "current_cooling_constant": 0.1,
+            "current_thermal_inertia": 0.0,
+        }
+        result = await utils.compute_thermal_model_calibration(
+            emhass_conf, None, payload, logger, get_data_from_file=True
+        )
+        self.assertEqual(result["data_source"], "runtime_payload")
+        self.assertEqual(result["best_params"]["lag_steps"], 1)
+        self.assertAlmostEqual(result["best_params"]["heating_rate"], alpha_true, places=2)
+        self.assertAlmostEqual(result["best_params"]["cooling_constant"], gamma_true, places=3)
+
+        inj = utils.get_injection_dict_thermal_calibration(result)
+        for key in (
+            "figure_0",
+            "figure_thermal_lag_comparison",
+            "figure_thermal_scatter",
+            "table1",
+            "table2",
+        ):
+            self.assertIn(key, inj)
+        self.assertIn("Predicted vs Actual Indoor Temperature Trajectory", inj["figure_0"])
+
     async def test_treat_runtimeparams_historic_days_to_retrieve(self):
         # Setup base configuration
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)

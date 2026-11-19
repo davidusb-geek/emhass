@@ -56,7 +56,14 @@ _ERROR_MESSAGE_MAX_LEN = 200
 
 
 def emhass_version() -> str:
-    """Return the installed emhass package version, or 'unknown'."""
+    """Return the package version from emhass.__version__ or installed metadata."""
+    try:
+        from emhass import __version__
+
+        if __version__:
+            return str(__version__)
+    except ImportError:
+        pass
     try:
         return version("emhass")
     except PackageNotFoundError:

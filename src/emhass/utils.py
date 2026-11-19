@@ -27,8 +27,10 @@ import numpy as np
 import orjson
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import pytz
 import yaml
+from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from emhass.coordinator.site import compile_site, site_problem
@@ -4359,6 +4361,779 @@ def get_yaml_parse(params: str | dict, logger: logging.Logger) -> tuple[dict, di
     return retrieve_hass_conf, optim_conf, plant_conf
 
 
+_UI_DROP_PLOT_POWER_COLS = frozenset({"P_grid_pos", "P_grid_neg"})
+_UI_DROP_TABLE_COLS = frozenset(
+    {"P_grid_pos", "P_grid_neg", "maximum_power_from_grid", "maximum_power_to_grid"}
+)
+
+
+def _fig_to_html(fig: go.Figure, *, include_plotlyjs: bool = False) -> str:
+    """Serialize a Plotly figure into responsive HTML suitable for the WebUI."""
+    layout_kwargs: dict = {
+        "autosize": True,
+        "font": {"size": 12},
+        "title": {"x": 0.01, "xanchor": "left", "y": 0.96, "yanchor": "top", "font": {"size": 15}},
+        "margin": {"l": 85, "r": 28, "t": 72, "b": 100},
+        "legend": {
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.22,
+            "xanchor": "left",
+            "x": 0,
+            "font": {"size": 11},
+            "title": {"text": ""},
+        },
+    }
+    if fig.layout.height is None:
+        layout_kwargs["height"] = 460
+    fig.update_layout(**layout_kwargs)
+    fig.update_xaxes(automargin=True, title_standoff=14)
+    fig.update_yaxes(automargin=True, title_standoff=14)
+    return fig.to_html(
+        full_html=False,
+        include_plotlyjs=include_plotlyjs,
+        default_width="100%",
+        config={"responsive": True, "displaylogo": False},
+    )
+
+
+def _infer_timestep_hours(index: pd.Index) -> float:
+    """Infer timestep length in hours from a DataFrame index, defaulting to 0.5h."""
+    if len(index) < 2:
+        return 0.5
+    try:
+        dt_index = pd.DatetimeIndex(index)
+        diffs = dt_index.to_series().diff().dropna().dt.total_seconds()
+        positive_diffs = diffs[diffs > 0]
+        if not positive_diffs.empty:
+            return float(positive_diffs.median() / 3600.0)
+    except (TypeError, ValueError):
+        pass
+    return 0.5
+
+
+def _battery_power_total(df: pd.DataFrame) -> pd.Series | None:
+    """Return total battery power series (P_batt or sum of P_batt_<k>), or None."""
+    if "P_batt" in df.columns:
+        return pd.to_numeric(df["P_batt"], errors="coerce").astype(float)
+    multi_cols = [
+        c for c in df.columns if c.startswith("P_batt_") and c[len("P_batt_") :].isdigit()
+    ]
+    if not multi_cols:
+        return None
+    return df[multi_cols].apply(pd.to_numeric, errors="coerce").astype(float).sum(axis=1, min_count=1)
+
+
+def _build_pv_forecast_quantiles_figure(
+    df: pd.DataFrame,
+    pv_quantiles: dict | None,
+    optim_conf: dict | None = None,
+) -> str | None:
+    """Build PV & Load forecast chart with optional P10/P50/P90 uncertainty bands and method badges."""
+    has_pv = "P_PV" in df.columns
+    has_load = "P_Load" in df.columns
+    has_q = isinstance(pv_quantiles, dict) and (
+        pv_quantiles.get("p50") is not None or pv_quantiles.get("p10") is not None
+    )
+    if not (has_pv or has_load or has_q):
+        return None
+
+    fig = go.Figure()
+    x_idx = df.index
+
+    def _align_q(series_like: object) -> pd.Series | None:
+        if series_like is None:
+            return None
+        try:
+            s = pd.Series(series_like).astype(float)
+            if isinstance(series_like, pd.Series) and len(series_like.index) == len(x_idx):
+                if series_like.index.equals(x_idx):
+                    return s
+                try:
+                    reindexed = series_like.reindex(x_idx)
+                    if reindexed.notna().any():
+                        return reindexed.astype(float)
+                except Exception:
+                    pass
+            if len(s) >= len(x_idx):
+                return pd.Series(s.iloc[: len(x_idx)].to_numpy(dtype=float), index=x_idx)
+            if len(s) > 0:
+                padded = np.full(len(x_idx), np.nan, dtype=float)
+                padded[: len(s)] = s.to_numpy(dtype=float)
+                return pd.Series(padded, index=x_idx)
+        except (TypeError, ValueError):
+            return None
+        return None
+
+    p10 = _align_q(pv_quantiles.get("p10")) if isinstance(pv_quantiles, dict) else None
+    p50 = _align_q(pv_quantiles.get("p50")) if isinstance(pv_quantiles, dict) else None
+    p90 = _align_q(pv_quantiles.get("p90")) if isinstance(pv_quantiles, dict) else None
+
+    if p90 is not None and p10 is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p90,
+                name="PV P90 (optimistic)",
+                line={"color": "rgba(245, 158, 11, 0.55)", "width": 1.5, "dash": "dot"},
+                mode="lines",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p10,
+                name="PV P10 (conservative)",
+                line={"color": "rgba(217, 119, 6, 0.7)", "width": 1.5, "dash": "dot"},
+                fill="tonexty",
+                fillcolor="rgba(245, 158, 11, 0.16)",
+                mode="lines",
+            )
+        )
+    elif p50 is not None and p10 is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p50,
+                name="PV P50 (median)",
+                line={"color": "rgba(245, 158, 11, 0.85)", "width": 2, "dash": "dash"},
+                mode="lines",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p10,
+                name="PV P10 (conservative)",
+                line={"color": "rgba(180, 83, 9, 0.75)", "width": 1.5, "dash": "dot"},
+                fill="tonexty",
+                fillcolor="rgba(245, 158, 11, 0.18)",
+                mode="lines",
+            )
+        )
+
+    if p50 is not None and p90 is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=p50,
+                name="PV P50 (median)",
+                line={"color": "#f59e0b", "width": 2, "dash": "dash"},
+                mode="lines",
+            )
+        )
+
+    if has_pv:
+        pv_series = pd.to_numeric(df["P_PV"], errors="coerce").astype(float)
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=pv_series,
+                name="PV Forecast Used (P_PV)" if has_q else "PV Forecast (P_PV)",
+                line={"color": "#d97706", "width": 2.5, "shape": "hv"},
+                mode="lines",
+            )
+        )
+
+    if has_load:
+        load_series = pd.to_numeric(df["P_Load"], errors="coerce").astype(float)
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=load_series,
+                name="Base Load Forecast (P_Load)",
+                line={"color": "#2563eb", "width": 2, "shape": "hv"},
+                mode="lines",
+            )
+        )
+
+    title = "PV & Load Forecast Overview"
+    if has_q and isinstance(pv_quantiles, dict):
+        src = str(pv_quantiles.get("source") or "quantiles").capitalize()
+        bias = pv_quantiles.get("bias")
+        bias_txt = f", bias={bias}" if bias is not None else ""
+        title = f"PV & Load Forecast with Uncertainty Quantiles ({src}{bias_txt})"
+
+    fig.update_layout(
+        title=title,
+        template="presentation",
+        xaxis_title="Timestamp",
+        yaxis_title="Power (W)",
+    )
+    chart_html = _fig_to_html(fig, include_plotlyjs=False)
+
+    conf = optim_conf if isinstance(optim_conf, dict) else {}
+    badge_items: list[str] = []
+    if has_pv or conf.get("set_use_pv"):
+        pv_method = conf.get("weather_forecast_method") or (
+            pv_quantiles.get("source") if isinstance(pv_quantiles, dict) else None
+        )
+        if pv_method:
+            badge_items.append(
+                f'<span class="method-badge method-pv">PV Forecast Method: '
+                f"<strong>{html.escape(str(pv_method))}</strong></span>"
+            )
+    if isinstance(pv_quantiles, dict) and pv_quantiles.get("bias") is not None:
+        badge_items.append(
+            f'<span class="method-badge method-bias">PV Quantile Bias (P10/P50): '
+            f"<strong>{html.escape(str(pv_quantiles['bias']))}</strong></span>"
+        )
+    elif conf.get("weather_forecast_pv_quantile_bias"):
+        badge_items.append(
+            f'<span class="method-badge method-bias">PV Quantile Bias: '
+            f"<strong>{html.escape(str(conf['weather_forecast_pv_quantile_bias']))}</strong></span>"
+        )
+    if has_load and conf.get("load_forecast_method"):
+        badge_items.append(
+            f'<span class="method-badge method-load">Load Forecast Method: '
+            f"<strong>{html.escape(str(conf['load_forecast_method']))}</strong></span>"
+        )
+    if conf.get("costfun"):
+        badge_items.append(
+            f'<span class="method-badge method-costfun">Objective: '
+            f"<strong>{html.escape(str(conf['costfun']))}</strong></span>"
+        )
+    if badge_items:
+        badges_html = f'<div class="plot-method-badges">{"".join(badge_items)}</div>'
+        return badges_html + chart_html
+    return chart_html
+
+
+def _build_battery_sources_figure(df: pd.DataFrame) -> str | None:
+    """Build colored bar chart attributing battery charging sources and discharge destinations."""
+    p_batt = _battery_power_total(df)
+    if p_batt is None or not p_batt.notna().any():
+        return None
+
+    batt = p_batt.fillna(0.0)
+    # Convention verified in optimization.py: P_batt < 0 = charging, P_batt > 0 = discharging.
+    charge_w = (-batt).clip(lower=0.0)
+    discharge_w = batt.clip(lower=0.0)
+
+    pv_w = (
+        pd.to_numeric(df["P_PV"], errors="coerce").astype(float).fillna(0.0).clip(lower=0.0)
+        if "P_PV" in df.columns
+        else pd.Series(0.0, index=df.index)
+    )
+    load_cols = [c for c in df.columns if c == "P_Load" or c.startswith("P_deferrable")]
+    total_load_w = (
+        df[load_cols].apply(pd.to_numeric, errors="coerce").astype(float).fillna(0.0).sum(axis=1)
+        if load_cols
+        else pd.Series(0.0, index=df.index)
+    )
+    grid_w = (
+        pd.to_numeric(df["P_grid"], errors="coerce").astype(float).fillna(0.0)
+        if "P_grid" in df.columns
+        else pd.Series(0.0, index=df.index)
+    )
+    grid_import_w = grid_w.clip(lower=0.0)
+    grid_export_w = (-grid_w).clip(lower=0.0)
+
+    pv_excess = (pv_w - total_load_w).clip(lower=0.0)
+    charge_from_pv = np.minimum(charge_w, pv_excess)
+    rem_charge = (charge_w - charge_from_pv).clip(lower=0.0)
+    charge_from_grid = np.minimum(rem_charge, grid_import_w)
+    charge_from_other = (rem_charge - charge_from_grid).clip(lower=0.0)
+
+    discharge_to_grid = np.minimum(discharge_w, grid_export_w)
+    discharge_to_loads = (discharge_w - discharge_to_grid).clip(lower=0.0)
+
+    dt_h = _infer_timestep_hours(df.index)
+
+    def _kwh(series: pd.Series) -> float:
+        return float(series.sum() * dt_h / W_TO_KW)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=charge_from_pv,
+            name=f"Charged from Excess PV ({_kwh(charge_from_pv):.2f} kWh)",
+            marker_color="#16a34a",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=charge_from_grid,
+            name=f"Charged from Grid ({_kwh(charge_from_grid):.2f} kWh)",
+            marker_color="#ea580c",
+        )
+    )
+    if float(charge_from_other.sum()) > 1e-6:
+        fig.add_trace(
+            go.Bar(
+                x=df.index,
+                y=charge_from_other,
+                name=f"Charged from Other / DC Bus ({_kwh(charge_from_other):.2f} kWh)",
+                marker_color="#8b5cf6",
+            )
+        )
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=-discharge_to_loads,
+            name=f"Discharged to Home Loads ({_kwh(discharge_to_loads):.2f} kWh)",
+            marker_color="#2563eb",
+        )
+    )
+    if float(discharge_to_grid.sum()) > 1e-6:
+        fig.add_trace(
+            go.Bar(
+                x=df.index,
+                y=-discharge_to_grid,
+                name=f"Discharged to Grid Export ({_kwh(discharge_to_grid):.2f} kWh)",
+                marker_color="#0d9488",
+            )
+        )
+
+    fig.update_layout(
+        title="Battery Charging Sources & Discharging Destinations",
+        template="presentation",
+        barmode="relative",
+        xaxis_title="Timestamp",
+        yaxis_title="Battery Power (+ Charge / - Discharge, W)",
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
+def _build_energy_pie_figure(df: pd.DataFrame) -> str | None:
+    """Build side-by-side kWh supply vs demand donut charts."""
+    dt_h = _infer_timestep_hours(df.index)
+    present_core = [c for c in ("P_PV", "P_Load", "P_grid") if c in df.columns]
+    if len(present_core) < 2:
+        return None
+
+    def _sum_kwh(series: pd.Series) -> float:
+        return float(series.fillna(0.0).sum() * dt_h / W_TO_KW)
+
+    supply_labels: list[str] = []
+    supply_values: list[float] = []
+    demand_labels: list[str] = []
+    demand_values: list[float] = []
+
+    if "P_PV" in df.columns:
+        pv_kwh = _sum_kwh(pd.to_numeric(df["P_PV"], errors="coerce").astype(float).clip(lower=0.0))
+        if pv_kwh > 1e-4:
+            supply_labels.append("PV Generation")
+            supply_values.append(round(pv_kwh, 3))
+
+    if "P_grid" in df.columns:
+        grid = pd.to_numeric(df["P_grid"], errors="coerce").astype(float).fillna(0.0)
+        imp_kwh = _sum_kwh(grid.clip(lower=0.0))
+        exp_kwh = _sum_kwh((-grid).clip(lower=0.0))
+        if imp_kwh > 1e-4:
+            supply_labels.append("Grid Import")
+            supply_values.append(round(imp_kwh, 3))
+        if exp_kwh > 1e-4:
+            demand_labels.append("Grid Export")
+            demand_values.append(round(exp_kwh, 3))
+
+    p_batt = _battery_power_total(df)
+    if p_batt is not None:
+        dis_kwh = _sum_kwh(p_batt.clip(lower=0.0))
+        chg_kwh = _sum_kwh((-p_batt).clip(lower=0.0))
+        if dis_kwh > 1e-4:
+            supply_labels.append("Battery Discharge")
+            supply_values.append(round(dis_kwh, 3))
+        if chg_kwh > 1e-4:
+            demand_labels.append("Battery Charge")
+            demand_values.append(round(chg_kwh, 3))
+
+    if "P_Load" in df.columns:
+        base_kwh = _sum_kwh(pd.to_numeric(df["P_Load"], errors="coerce").astype(float).clip(lower=0.0))
+        if base_kwh > 1e-4:
+            demand_labels.append("Base Home Load")
+            demand_values.append(round(base_kwh, 3))
+
+    for col in sorted(c for c in df.columns if c.startswith("P_deferrable")):
+        def_kwh = _sum_kwh(pd.to_numeric(df[col], errors="coerce").astype(float).clip(lower=0.0))
+        if def_kwh > 1e-4:
+            demand_labels.append(col.replace("P_deferrable", "Deferrable Load "))
+            demand_values.append(round(def_kwh, 3))
+
+    if not supply_values and not demand_values:
+        return None
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "domain"}, {"type": "domain"}]],
+        subplot_titles=("Energy Supply Mix (kWh)", "Energy Allocation Mix (kWh)"),
+    )
+    if supply_values:
+        fig.add_trace(
+            go.Pie(
+                labels=supply_labels,
+                values=supply_values,
+                hole=0.42,
+                textinfo="percent",
+                textposition="inside",
+                hoverinfo="label+value+percent",
+                name="Supply",
+            ),
+            1,
+            1,
+        )
+    if demand_values:
+        fig.add_trace(
+            go.Pie(
+                labels=demand_labels,
+                values=demand_values,
+                hole=0.42,
+                textinfo="percent",
+                textposition="inside",
+                hoverinfo="label+value+percent",
+                name="Allocation",
+            ),
+            1,
+            2,
+        )
+    fig.update_annotations(font_size=13, yshift=10)
+    fig.update_layout(
+        title="Energy Balance & Allocation Breakdown (kWh)",
+        template="presentation",
+        height=480,
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
+def _build_histograms_figure(df: pd.DataFrame) -> str | None:
+    """Build overlaid distribution histograms for core system power series."""
+    candidate_cols = [
+        c
+        for c in df.columns
+        if c not in _UI_DROP_PLOT_POWER_COLS
+        and not c.startswith("fed_node_power_")
+        and (
+            c in ("P_PV", "P_Load", "P_grid", "P_batt")
+            or (c.startswith("P_batt_") and c[len("P_batt_") :].isdigit())
+            or c.startswith("P_deferrable")
+        )
+    ]
+    if not candidate_cols:
+        return None
+
+    fig = go.Figure()
+    plotted = 0
+    for col in candidate_cols[:6]:
+        vals = pd.to_numeric(df[col], errors="coerce").dropna()
+        if vals.empty:
+            continue
+        fig.add_trace(
+            go.Histogram(
+                x=vals,
+                name=col,
+                opacity=0.6,
+                nbinsx=min(24, max(8, len(vals) // 2)),
+            )
+        )
+        plotted += 1
+
+    if plotted == 0:
+        return None
+
+    fig.update_layout(
+        title="Power Distribution Histograms",
+        template="presentation",
+        barmode="overlay",
+        xaxis_title="Power (W)",
+        yaxis_title="Timestep Count",
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
+def _build_heatmap_figure(df: pd.DataFrame, cols_p: list[str]) -> str | None:
+    """Build 2D schedule heatmap of system powers across timesteps."""
+    hm_cols = [c for c in cols_p if c in df.columns][:10]
+    if len(df) < 2 or len(hm_cols) < 2:
+        return None
+    matrix_df = df[hm_cols].apply(pd.to_numeric, errors="coerce")
+    if not matrix_df.notna().any().any():
+        return None
+
+    try:
+        x_labels = [
+            ts.strftime("%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts) for ts in df.index
+        ]
+    except Exception:
+        x_labels = [str(ts) for ts in df.index]
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=matrix_df.T.to_numpy(dtype=float),
+            x=x_labels,
+            y=hm_cols,
+            colorscale="RdBu",
+            zmid=0,
+            colorbar={"title": "W"},
+        )
+    )
+    fig.update_layout(
+        title="System Power Matrix Heatmap",
+        template="presentation",
+        xaxis_title="Timestamp",
+        yaxis_title="Channel",
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
+def _build_load_effectiveness_figure(df: pd.DataFrame, ui_meta: dict) -> str | None:
+    """Build load forecast effectiveness & diurnal/statistical profile plot."""
+    if "P_Load" not in df.columns:
+        return None
+    pred = pd.to_numeric(df["P_Load"], errors="coerce").astype(float).dropna()
+    if pred.empty:
+        return None
+
+    optim_conf = ui_meta.get("optim_conf") or {}
+    method = str(optim_conf.get("load_forecast_method") or "configured")
+    hist_raw = ui_meta.get("load_history_series")
+
+    fig = go.Figure()
+    x_idx = df.index
+    pred_full = pd.to_numeric(df["P_Load"], errors="coerce").astype(float)
+    fig.add_trace(
+        go.Scatter(
+            x=x_idx,
+            y=pred_full,
+            name=f"Forecast P_Load ({method})",
+            line={"color": "#2563eb", "width": 2.5, "shape": "hv"},
+            mode="lines",
+        )
+    )
+
+    subtitle = f"Method: {method} | Mean: {pred.mean():.0f} W | Peak: {pred.max():.0f} W"
+    if isinstance(hist_raw, dict) and "values" in hist_raw and "timestamps" in hist_raw:
+        try:
+            hist_raw = pd.Series(
+                hist_raw["values"], index=pd.to_datetime(hist_raw["timestamps"], errors="coerce")
+            )
+        except Exception:
+            hist_raw = None
+    if isinstance(hist_raw, pd.Series) and len(hist_raw.dropna()) >= 4:
+        hist_clean = pd.to_numeric(hist_raw, errors="coerce").dropna()
+        try:
+            hist_idx = pd.DatetimeIndex(hist_clean.index)
+            fcst_idx = pd.DatetimeIndex(x_idx)
+            # Align by (hour, minute) diurnal median + IQR band as benchmark
+            slot_df = pd.DataFrame(
+                {"val": hist_clean.to_numpy(dtype=float), "hm": list(zip(hist_idx.hour, hist_idx.minute, strict=True))}
+            )
+            grouped = slot_df.groupby("hm")["val"]
+            med_map = grouped.median().to_dict()
+            q25_map = grouped.quantile(0.25).to_dict()
+            q75_map = grouped.quantile(0.75).to_dict()
+
+            fcst_hm = list(zip(fcst_idx.hour, fcst_idx.minute, strict=True))
+            baseline = pd.Series([med_map.get(k, np.nan) for k in fcst_hm], index=x_idx)
+            q25 = pd.Series([q25_map.get(k, np.nan) for k in fcst_hm], index=x_idx)
+            q75 = pd.Series([q75_map.get(k, np.nan) for k in fcst_hm], index=x_idx)
+
+            if baseline.notna().sum() >= 2:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_idx,
+                        y=q75,
+                        name="Historical IQR (75%)",
+                        line={"color": "rgba(100, 116, 139, 0.35)", "width": 1},
+                        mode="lines",
+                        showlegend=True,
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_idx,
+                        y=q25,
+                        name="Historical IQR (25%)",
+                        line={"color": "rgba(100, 116, 139, 0.35)", "width": 1},
+                        fill="tonexty",
+                        fillcolor="rgba(148, 163, 184, 0.22)",
+                        mode="lines",
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_idx,
+                        y=baseline,
+                        name="Historical Diurnal Median",
+                        line={"color": "#16a34a", "width": 2, "dash": "dash"},
+                        mode="lines",
+                    )
+                )
+                metrics = compute_forecast_metrics(baseline, pred_full)
+                mape_str = f"{metrics['mape']:.1f}%" if np.isfinite(metrics["mape"]) else "n/a"
+                r2_str = f"{metrics['r2']:.2f}" if np.isfinite(metrics["r2"]) else "n/a"
+                subtitle = (
+                    f"Method: {method} | vs Diurnal Baseline (n={metrics['n_samples']}): "
+                    f"MAE={metrics['mae']:.0f} W, RMSE={metrics['rmse']:.0f} W, "
+                    f"MAPE={mape_str}, R2={r2_str}"
+                )
+        except Exception:
+            pass
+    else:
+        win = min(6, max(2, len(pred_full)))
+        rolling_mean = pred_full.rolling(window=win, min_periods=1).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=x_idx,
+                y=rolling_mean,
+                name="Rolling Mean",
+                line={"color": "#0d9488", "width": 2, "dash": "dash"},
+                mode="lines",
+            )
+        )
+
+    fig.update_layout(
+        title=f"Load Forecast Effectiveness<br><sup>{subtitle}</sup>",
+        template="presentation",
+        xaxis_title="Timestamp",
+        yaxis_title="Load Power (W)",
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
+def _build_federated_figures(df: pd.DataFrame) -> dict[str, str]:
+    """Build dedicated Federated Coordinator figures when fed_* columns exist."""
+    fed_figs: dict[str, str] = {}
+
+    price_cols = [
+        c
+        for c in df.columns
+        if c == "fed_meter_price"
+        or c.startswith("fed_local_price_")
+        or c.startswith("fed_limit_price_")
+    ]
+    if price_cols:
+        price_df = df[price_cols].apply(pd.to_numeric, errors="coerce")
+        if price_df.notna().any().any():
+            fig_prices = px.line(
+                price_df,
+                title="Federated Coordinator Dual & Shadow Prices",
+                template="presentation",
+                line_shape="hv",
+                render_mode="svg",
+            )
+            fig_prices.update_layout(
+                xaxis_title="Timestamp",
+                yaxis_title="Shadow Price (currency/kWh)",
+            )
+            fed_figs["figure_fed_prices"] = _fig_to_html(fig_prices, include_plotlyjs=False)
+
+    share_cols = [c for c in df.columns if c.startswith("fed_share_")]
+    if share_cols:
+        shares = {
+            c.replace("fed_share_", ""): float(pd.to_numeric(df[c], errors="coerce").iloc[0])
+            for c in share_cols
+            if pd.to_numeric(df[c], errors="coerce").notna().any()
+        }
+        if shares:
+            meta_parts = []
+            for scalar_col, label in (
+                ("fed_iterations", "iters"),
+                ("fed_gap", "gap"),
+                ("fed_lower_bound", "LB"),
+            ):
+                if scalar_col in df.columns:
+                    val = pd.to_numeric(df[scalar_col], errors="coerce").iloc[0]
+                    if pd.notna(val):
+                        fmt = f"{int(val)}" if scalar_col == "fed_iterations" else f"{float(val):.4f}"
+                        meta_parts.append(f"{label}={fmt}")
+            meta_txt = f" ({', '.join(meta_parts)})" if meta_parts else ""
+            fig_shares = go.Figure(
+                data=go.Bar(
+                    x=list(shares.keys()),
+                    y=list(shares.values()),
+                    text=[f"{v:.4f}" for v in shares.values()],
+                    textposition="auto",
+                    marker_color="#0ea5e9",
+                )
+            )
+            fig_shares.update_layout(
+                title=f"Federated Device Cost / Value Shares{meta_txt}",
+                template="presentation",
+                xaxis_title="Device / Group",
+                yaxis_title="Allocated Cost / Share",
+            )
+            fed_figs["figure_fed_shares"] = _fig_to_html(fig_shares, include_plotlyjs=False)
+
+    node_cols = [c for c in df.columns if c.startswith("fed_node_power_")]
+    if node_cols:
+        node_df = df[node_cols].apply(pd.to_numeric, errors="coerce")
+        if node_df.notna().any().any():
+            fig_nodes = px.line(
+                node_df,
+                title="Federated Sub-Meter / Node Power Flows",
+                template="presentation",
+                line_shape="hv",
+                render_mode="svg",
+            )
+            fig_nodes.update_layout(xaxis_title="Timestamp", yaxis_title="Node Power (W)")
+            fed_figs["figure_fed_nodes"] = _fig_to_html(fig_nodes, include_plotlyjs=False)
+
+    return fed_figs
+
+
+def _build_stage_times_figure(ui_meta: dict) -> str | None:
+    """Build horizontal bar chart of pipeline stage execution timings from last_run metadata."""
+    last_run_snap = ui_meta.get("last_run")
+    if not isinstance(last_run_snap, dict):
+        return None
+    stage_times = last_run_snap.get("stage_times")
+    if not isinstance(stage_times, dict) or not stage_times:
+        return None
+
+    ordered_keys = [
+        "pv_forecast",
+        "load_forecast",
+        "price_prep",
+        "optim_solve.build",
+        "optim_solve.solve",
+        "optim_solve.extract",
+        "optim_solve",
+        "publish",
+    ]
+    labels: list[str] = []
+    values: list[float] = []
+    seen = set()
+    for key in ordered_keys + sorted(stage_times.keys()):
+        if key in seen or key not in stage_times:
+            continue
+        seen.add(key)
+        raw_val = stage_times[key]
+        if isinstance(raw_val, int | float) and math.isfinite(float(raw_val)):
+            labels.append(key)
+            values.append(float(raw_val))
+
+    if not labels:
+        return None
+
+    total_sec = last_run_snap.get("duration_total_seconds")
+    total_txt = (
+        f" — Total: {float(total_sec):.3f} s"
+        if isinstance(total_sec, int | float) and math.isfinite(float(total_sec))
+        else ""
+    )
+    colors = ["#0284c7" if "." in lbl else "#0f766e" for lbl in labels]
+    fig = go.Figure(
+        data=go.Bar(
+            x=values[::-1],
+            y=labels[::-1],
+            orientation="h",
+            text=[f"{v:.3f} s ({v * 1000:.0f} ms)" for v in values[::-1]],
+            textposition="auto",
+            marker_color=colors[::-1],
+        )
+    )
+    fig.update_layout(
+        title=f"Pipeline Stage Execution Times{total_txt}",
+        template="presentation",
+        xaxis_title="Duration (seconds)",
+        yaxis_title="Pipeline Stage",
+    )
+    return _fig_to_html(fig, include_plotlyjs=False)
+
+
 def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     Build a dictionary with graphs and tables for the webui.
@@ -4371,8 +5146,16 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     :rtype: dict
 
     """
+    ui_meta = dict(df.attrs.get("emhass_ui_meta") or {})
     df = df.copy()
-    cols_p = [i for i in df.columns.to_list() if "P_" in i]
+    # Clear attrs on the local copy before slicing/astype so pandas __finalize__
+    # never compares embedded pd.Series objects inside attrs (#attrs-bool-error).
+    df.attrs = {}
+    cols_p = [
+        i
+        for i in df.columns.to_list()
+        if "P_" in i and i not in _UI_DROP_PLOT_POWER_COLS and not i.startswith("fed_node_power_")
+    ]
     # Let's round the data in the DF
     if "optim_status" in df.columns:
         optim_status = df["optim_status"].iloc[0]
@@ -4393,10 +5176,12 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     cols_p = [i for i in cols_p if i not in text_cols]
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
-    df[cols_p] = df[cols_p].round().astype("Int64")
+    all_power_cols = [i for i in df.columns.to_list() if "P_" in i]
+    df[all_power_cols] = df[all_power_cols].round().astype("Int64")
     df[cols_else] = df[cols_else].round(3)
+
     # Create plots
-    # Figure 0: Systems Powers
+    # Figure 0: Systems Powers (loads Plotly.js once for all figures in the template)
     n_colors = len(cols_p)
     colors = px.colors.sample_colorscale(
         "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
@@ -4410,7 +5195,13 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
-    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
+    image_path_0 = _fig_to_html(fig_0, include_plotlyjs=True)
+
+    # Figure PV Forecast Quantiles / Overview
+    image_path_pv_forecast = _build_pv_forecast_quantiles_figure(
+        df, ui_meta.get("pv_quantiles"), ui_meta.get("optim_conf")
+    )
+
     # Figure 1: Battery SOC (Optional)
     # One trace per SOC column: the bare "SOC_opt" with one battery, or "SOC_opt_<k>" per
     # battery when number_of_batteries > 1 (#610), where no bare "SOC_opt" exists.
@@ -4436,9 +5227,12 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
-        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
+        image_path_1 = _fig_to_html(fig_1, include_plotlyjs=False)
+
+    # Figure Battery Sources (Optional, when battery power is present)
+    image_path_battery_sources = _build_battery_sources_figure(df)
+
     # Figure Thermal: Temperatures (Optional)
-    # Detect columns for predicted, target, min, or max temperatures
     cols_temp = [
         i
         for i in df.columns.to_list()
@@ -4462,7 +5256,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             render_mode="svg",
         )
         fig_temp.update_layout(xaxis_title="Timestamp", yaxis_title="Temperature (&deg;C)")
-        image_path_temp = fig_temp.to_html(full_html=False, default_width="75%")
+        image_path_temp = _fig_to_html(fig_temp, include_plotlyjs=False)
+
     # Figure 2: Costs
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
     n_colors = len(cols_cost)
@@ -4478,33 +5273,93 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
-    image_path_2 = fig_2.to_html(full_html=False, default_width="75%")
+    image_path_2 = _fig_to_html(fig_2, include_plotlyjs=False)
+
+    # Advanced analytical figures
+    image_path_energy_pie = _build_energy_pie_figure(df)
+    image_path_histograms = _build_histograms_figure(df)
+    image_path_heatmap = _build_heatmap_figure(df, cols_p)
+    image_path_load_eff = _build_load_effectiveness_figure(df, ui_meta)
+    fed_figures = _build_federated_figures(df)
+    image_path_stage_times = _build_stage_times_figure(ui_meta)
+
+    # Scalar federated metrics go into Summary Table 2 instead of repeating across rows in Table 1
+    fed_scalar_cols = [
+        c
+        for c in df.columns
+        if c in ("fed_lower_bound", "fed_gap", "fed_iterations") or c.startswith("fed_share_")
+    ]
+    summary_scalars = {c: df[c].iloc[0] for c in fed_scalar_cols if not df.empty}
+    drop_from_table1 = [
+        c for c in df.columns if c in _UI_DROP_TABLE_COLS or c in fed_scalar_cols
+    ]
+    df_table1 = df.drop(columns=drop_from_table1) if drop_from_table1 else df
+
     # Tables
-    table1 = df.reset_index().to_html(classes="mystyle", index=False)
+    table1 = df_table1.reset_index().to_html(classes="mystyle", index=False)
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
     table2["optim_status"] = optim_status
     for col, value in summary_text.items():
+        table2[col] = value
+    for col, value in summary_scalars.items():
         table2[col] = value
     table2 = (
         table2.to_frame(name="Value")
         .reset_index(names="Variable")
         .to_html(classes="mystyle", index=False)
     )
+
     # Construct Injection Dict
     injection_dict = {}
     injection_dict["title"] = "<h2>EMHASS optimization results</h2>"
     injection_dict["subsubtitle0"] = "<h4>Plotting latest optimization results</h4>"
-    # Add Powers
     injection_dict["figure_0"] = image_path_0
-    # Add Thermal
+    if image_path_pv_forecast is not None:
+        injection_dict["figure_pv_forecast"] = image_path_pv_forecast
     if image_path_temp is not None:
         injection_dict["figure_thermal"] = image_path_temp
-    # Add SOC
     if image_path_1 is not None:
         injection_dict["figure_1"] = image_path_1
-    # Add Costs
+    if image_path_battery_sources is not None:
+        injection_dict["figure_battery_sources"] = image_path_battery_sources
     injection_dict["figure_2"] = image_path_2
+    if any(
+        x is not None
+        for x in (
+            image_path_energy_pie,
+            image_path_histograms,
+            image_path_heatmap,
+            image_path_load_eff,
+        )
+    ):
+        injection_dict["analytics_intro"] = (
+            '<div class="analytics-explainer-card">'
+            "<h4>How to Read Advanced Analytics</h4>"
+            "<ul>"
+            "<li><strong>Energy Balance Donuts (kWh):</strong> Compares where energy came from "
+            "(PV generation, grid import, battery discharge) against where it was consumed or stored "
+            "(base home load, each deferrable load, battery charge, grid export) over the horizon.</li>"
+            "<li><strong>Power Distribution Histograms:</strong> Shows how frequently each asset operates "
+            "at given wattage levels—useful to spot standby base loads vs peak appliance plateaus.</li>"
+            "<li><strong>System Power Matrix Heatmap:</strong> Displays the 2D time-by-channel flow intensity "
+            "(red/positive = supply/import/discharge, blue/negative = export/battery charging).</li>"
+            "<li><strong>Load Forecast Effectiveness:</strong> Compares predicted base load against your "
+            "historical diurnal median and IQR band (with MAE, RMSE, MAPE, and R² accuracy metrics).</li>"
+            "</ul></div>"
+        )
+    if image_path_energy_pie is not None:
+        injection_dict["figure_energy_pie"] = image_path_energy_pie
+    if image_path_histograms is not None:
+        injection_dict["figure_histograms"] = image_path_histograms
+    if image_path_heatmap is not None:
+        injection_dict["figure_heatmap"] = image_path_heatmap
+    if image_path_load_eff is not None:
+        injection_dict["figure_load_effectiveness"] = image_path_load_eff
+    for fed_key, fed_html in fed_figures.items():
+        injection_dict[fed_key] = fed_html
+    if image_path_stage_times is not None:
+        injection_dict["figure_stage_times"] = image_path_stage_times
     injection_dict["subsubtitle1"] = "<h4>Last run optimization results table</h4>"
     injection_dict["table1"] = table1
     injection_dict["subsubtitle2"] = "<h4>Summary table for latest optimization results</h4>"
@@ -4595,7 +5450,7 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
     fig.layout.template = "presentation"
     fig.update_yaxes(title_text=mlf.model_type)
     fig.update_xaxes(title_text="Time")
-    image_path_0 = fig.to_html(full_html=False, default_width="75%")
+    image_path_0 = _fig_to_html(fig, include_plotlyjs=True)
     # The dict of plots
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
@@ -4613,21 +5468,60 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
 
 def get_injection_dict_forecast_calibration(result: dict) -> dict:
     """
-    Build the webui graph + metrics table for the forecast-calibration action.
+    Build the webui graphs + metrics table for the forecast-calibration action.
 
     :param result: The dict returned by ``compute_forecast_calibration``
         (keys: ``table``, ``plot``, ``val_window``, ``caveats``).
     :type result: dict
-    :return: A dictionary containing the graph and table in html format
+    :return: A dictionary containing the graphs and table in html format
     :rtype: dict
     """
     plot_df = result["plot"]
     fig = plot_df.plot()
-    fig.layout.template = "presentation"
-    fig.update_yaxes(title_text="Load")
-    fig.update_xaxes(title_text="Time")
-    figure_0 = fig.to_html(full_html=False, default_width="75%")
-    table1 = result["table"].to_html(classes="mystyle", index=False)
+    fig.update_layout(
+        title="Load Forecast Calibration — Actual vs Forecast Methods",
+        template="presentation",
+        xaxis_title="Timestamp",
+        yaxis_title="Load Power (W)",
+    )
+    figure_0 = _fig_to_html(fig, include_plotlyjs=True)
+
+    table_df = result["table"]
+    metrics_fig_html = None
+    if isinstance(table_df, pd.DataFrame) and not table_df.empty and "method" in table_df.columns:
+        metric_fig = go.Figure()
+        methods = table_df["method"].astype(str).tolist()
+        for col, label, color in (
+            ("test_mae", "Test MAE (W)", "#0284c7"),
+            ("val_mae", "Validation MAE (W)", "#0f766e"),
+            ("test_rmse", "Test RMSE (W)", "#f59e0b"),
+            ("val_rmse", "Validation RMSE (W)", "#dc2626"),
+        ):
+            if col not in table_df.columns:
+                continue
+            vals = pd.to_numeric(table_df[col], errors="coerce")
+            if vals.notna().any():
+                metric_fig.add_trace(
+                    go.Bar(
+                        x=methods,
+                        y=vals,
+                        name=label,
+                        marker_color=color,
+                        text=[f"{v:.1f}" if pd.notna(v) else "N/A" for v in vals],
+                        textposition="auto",
+                    )
+                )
+        if len(metric_fig.data) > 0:
+            metric_fig.update_layout(
+                title="Forecast Error Comparison Across Methods (MAE & RMSE)",
+                template="presentation",
+                barmode="group",
+                xaxis_title="Load Forecast Method",
+                yaxis_title="Error (W)",
+            )
+            metrics_fig_html = _fig_to_html(metric_fig, include_plotlyjs=False)
+
+    table1 = table_df.to_html(classes="mystyle", index=False)
     val_start, val_end = result["val_window"]
     injection_dict = {}
     injection_dict["title"] = "<h2>Load forecast calibration</h2>"
@@ -4636,12 +5530,685 @@ def get_injection_dict_forecast_calibration(result: dict) -> dict:
         + f"({val_start} to {val_end})</h4>"
     )
     injection_dict["figure_0"] = figure_0
+    if metrics_fig_html is not None:
+        injection_dict["figure_calibration_metrics"] = metrics_fig_html
     injection_dict["subsubtitle1"] = (
         "<h4>Accuracy metrics by method and split (train / test / val)</h4>"
     )
     injection_dict["table1"] = table1
-    injection_dict["subsubtitle2"] = "<h5>" + result["caveats"] + "</h5>"
+    injection_dict["subsubtitle2"] = "<h5>" + html.escape(str(result["caveats"])) + "</h5>"
     return injection_dict
+
+
+def _emhass_thermal_step_delta(
+    inputs: tuple[np.ndarray, np.ndarray, np.ndarray],
+    alpha_h: float,
+    gamma_c: float,
+    dt_hours: float,
+    nominal_power: float,
+) -> np.ndarray:
+    """First-order EMHASS thermal balance step delta: alpha*dt*(P/P_nom) - gamma*dt*(Tin - Tout)."""
+    p_def, t_in, t_out = inputs
+    return alpha_h * dt_hours * (p_def / nominal_power) - gamma_c * dt_hours * (t_in - t_out)
+
+
+def _simulate_thermal_trajectory(
+    t_init: float,
+    p_shifted: np.ndarray,
+    t_out: np.ndarray,
+    alpha_h: float,
+    gamma_c: float,
+    dt_hours: float,
+    nominal_power: float,
+) -> np.ndarray:
+    """Simulate closed-loop multi-step indoor temperature trajectory over horizon."""
+    n = len(p_shifted)
+    t_sim = np.empty(n, dtype=float)
+    t_sim[0] = t_init
+    for i in range(n - 1):
+        delta = (
+            alpha_h * dt_hours * (p_shifted[i] / nominal_power)
+            - gamma_c * dt_hours * (t_sim[i] - t_out[i])
+        )
+        t_sim[i + 1] = t_sim[i] + delta
+    return t_sim
+
+
+async def _fetch_influx_thermal_window(
+    rh_conf: dict,
+    entity_t_in: str,
+    entity_t_out: str,
+    entity_power: str,
+    entity_t_pred: str,
+    entity_switch: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+    dt_minutes: int,
+    nominal_power: float,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Query historical thermal series directly from InfluxDB using user entities."""
+    host = str(rh_conf.get("influxdb_host") or "localhost")
+    port = int(rh_conf.get("influxdb_port") or 8086)
+    db = str(rh_conf.get("influxdb_database") or "homeassistant")
+    use_ssl = bool(rh_conf.get("influxdb_use_ssl", False))
+    verify_ssl = bool(rh_conf.get("influxdb_verify_ssl", False))
+    scheme = "https" if use_ssl else "http"
+    base_url = f"{scheme}://{host}:{port}/query"
+    user = os.getenv("INFLUXDB_USERNAME") or str(rh_conf.get("influxdb_username") or "")
+    password = os.getenv("INFLUXDB_PASSWORD") or str(rh_conf.get("influxdb_password") or "")
+    auth = aiohttp.BasicAuth(user, password) if user else None
+
+    async def _run_q(session: aiohttp.ClientSession, query: str) -> pd.DataFrame:
+        async with session.get(
+            base_url, params={"db": db, "q": query}, auth=auth, ssl=verify_ssl
+        ) as resp:
+            resp.raise_for_status()
+            payload = await resp.json()
+        series_list = payload.get("results", [{}])[0].get("series", [])
+        if not series_list:
+            return pd.DataFrame()
+        frames = []
+        for s in series_list:
+            frame = pd.DataFrame(s.get("values", []), columns=s.get("columns", []))
+            if "time" in frame.columns:
+                frame["time"] = pd.to_datetime(frame["time"], utc=True)
+                frame = frame.set_index("time")
+            frames.append(frame)
+        return pd.concat(frames).sort_index() if frames else pd.DataFrame()
+
+    async def _find_meas(session: aiohttp.ClientSession, eid: str) -> str | None:
+        if not eid:
+            return None
+        bare = eid.split(".", 1)[-1]
+        for target_id in (eid, bare):
+            df_s = await _run_q(session, f"SHOW SERIES WHERE \"entity_id\" = '{target_id}'")
+            if not df_s.empty:
+                return str(df_s.iloc[0, 0]).split(",")[0]
+        df_s = await _run_q(session, f'SHOW SERIES WHERE "entity_id" =~ /{bare}/')
+        if not df_s.empty:
+            return str(df_s.iloc[0, 0]).split(",")[0]
+        return None
+
+    async def _fetch_num(session: aiohttp.ClientSession, eid: str) -> pd.Series:
+        meas = await _find_meas(session, eid)
+        if not meas:
+            return pd.Series(dtype=float)
+        bare = eid.split(".", 1)[-1]
+        q = (
+            f'SELECT mean("value") AS "val" FROM "{meas}" '
+            f"WHERE (\"entity_id\" = '{eid}' OR \"entity_id\" = '{bare}') "
+            f"AND time >= '{start_utc.strftime('%Y-%m-%d %H:%M:%S')}' "
+            f"AND time <= '{end_utc.strftime('%Y-%m-%d %H:%M:%S')}' "
+            f"GROUP BY time({dt_minutes}m) fill(linear)"
+        )
+        res = await _run_q(session, q)
+        return pd.to_numeric(res["val"], errors="coerce") if not res.empty else pd.Series(dtype=float)
+
+    async def _fetch_switch(
+        session: aiohttp.ClientSession, eid: str, target_index: pd.DatetimeIndex
+    ) -> pd.Series:
+        meas = await _find_meas(session, eid)
+        if not meas:
+            return pd.Series(1.0, index=target_index)
+        bare = eid.split(".", 1)[-1]
+        lookback = (start_utc - pd.Timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        q = (
+            f'SELECT * FROM "{meas}" '
+            f"WHERE (\"entity_id\" = '{eid}' OR \"entity_id\" = '{bare}') "
+            f"AND time >= '{lookback}' AND time <= '{end_utc.strftime('%Y-%m-%d %H:%M:%S')}'"
+        )
+        res = await _run_q(session, q)
+        if res.empty:
+            return pd.Series(1.0, index=target_index)
+        if "state" in res.columns and res["state"].notna().any():
+            duty = (res["state"].astype(str).str.lower() == "on").astype(float)
+        elif "value" in res.columns:
+            duty = (pd.to_numeric(res["value"], errors="coerce").fillna(0.0) > 0).astype(float)
+        else:
+            return pd.Series(1.0, index=target_index)
+        return (
+            duty.resample(f"{dt_minutes}min")
+            .mean()
+            .reindex(target_index, method="ffill")
+            .bfill()
+            .fillna(1.0)
+        )
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        t_in = await _fetch_num(session, entity_t_in)
+        if t_in.empty:
+            return pd.DataFrame()
+        t_out = await _fetch_num(session, entity_t_out)
+        if t_out.empty:
+            return pd.DataFrame()
+        p_direct = await _fetch_num(session, entity_power) if entity_power else pd.Series(dtype=float)
+        t_set = await _fetch_num(session, entity_t_pred) if entity_t_pred else pd.Series(dtype=float)
+        sw_duty = await _fetch_switch(session, entity_switch, t_in.index)
+
+    frame = pd.DataFrame({"T_in": t_in, "T_out": t_out})
+    if not t_set.empty:
+        frame["T_set"] = t_set
+    if not p_direct.empty and p_direct.notna().sum() >= 2:
+        frame["P_def"] = p_direct.reindex(frame.index).fillna(0.0).clip(lower=0.0)
+    elif "T_set" in frame.columns:
+        clim_duty = (frame["T_set"] > frame["T_in"]).astype(float)
+        frame["P_def"] = sw_duty.reindex(frame.index).fillna(1.0) * clim_duty * nominal_power
+    else:
+        frame["P_def"] = sw_duty.reindex(frame.index).fillna(0.0) * nominal_power
+    logger.info("Loaded %d InfluxDB rows for thermal model tuning", len(frame.dropna()))
+    return frame.dropna(subset=["T_in", "T_out", "P_def"])
+
+
+def _build_offline_demo_thermal_frame(
+    dt_hours: float, nominal_power: float, lookback_hours: int
+) -> pd.DataFrame:
+    """Build a realistic synthetic thermal validation dataset for offline testing."""
+    n_steps = max(16, int(round(max(lookback_hours, 12) / dt_hours)))
+    end_ts = pd.Timestamp.now(tz="UTC").floor(f"{int(round(dt_hours * 60))}min")
+    idx = pd.date_range(end=end_ts, periods=n_steps, freq=f"{int(round(dt_hours * 60))}min")
+    t_out = np.array(
+        [8.5 + 4.5 * math.sin((i / max(n_steps, 1) - 0.25) * 2.0 * math.pi) for i in range(n_steps)],
+        dtype=float,
+    )
+    t_set = np.array(
+        [21.0 if 0.25 <= (i / max(n_steps, 1)) <= 0.85 else 18.5 for i in range(n_steps)],
+        dtype=float,
+    )
+    # Two heating blocks with true plant alpha=0.85 C/h, gamma=0.035 /h, lag=2 steps (1.0h at 0.5h step)
+    true_alpha, true_gamma, true_lag = 0.85, 0.035, 2
+    p_def = np.zeros(n_steps, dtype=float)
+    for i in range(n_steps):
+        frac = i / max(n_steps, 1)
+        if (0.20 <= frac <= 0.42) or (0.60 <= frac <= 0.78):
+            p_def[i] = nominal_power
+
+    rng = np.random.default_rng(42)
+    t_in = np.empty(n_steps, dtype=float)
+    t_in[0] = 19.2
+    for i in range(n_steps - 1):
+        p_eff = p_def[i - true_lag] if i >= true_lag else 0.0
+        dt_val = true_alpha * dt_hours * (p_eff / nominal_power) - true_gamma * dt_hours * (
+            t_in[i] - t_out[i]
+        )
+        t_in[i + 1] = t_in[i] + dt_val + float(rng.normal(0.0, 0.02))
+
+    return pd.DataFrame(
+        {"T_in": t_in, "T_set": t_set, "T_out": t_out, "P_def": p_def},
+        index=idx,
+    )
+
+
+async def compute_thermal_model_calibration(
+    emhass_conf: dict,
+    params: dict | str | None,
+    runtimeparams: str | dict | None,
+    logger: logging.Logger,
+    get_data_from_file: bool = False,
+) -> dict:
+    """Validate predicted vs actual thermal trajectories and fit heating/cooling/inertia constants."""
+    from scipy.optimize import curve_fit
+
+    rt: dict = {}
+    if isinstance(runtimeparams, str) and runtimeparams.strip():
+        try:
+            loaded = orjson.loads(runtimeparams)
+            if isinstance(loaded, dict):
+                rt = loaded
+        except orjson.JSONDecodeError:
+            logger.warning("Ignoring malformed JSON runtimeparams in thermal-model-calibration")
+    elif isinstance(runtimeparams, dict):
+        rt = dict(runtimeparams)
+
+    params_dict: dict = {}
+    if isinstance(params, str) and params.strip():
+        try:
+            loaded_p = orjson.loads(params)
+            if isinstance(loaded_p, dict):
+                params_dict = loaded_p
+        except orjson.JSONDecodeError:
+            params_dict = {}
+    elif isinstance(params, dict):
+        params_dict = params
+
+    optim_conf = params_dict.get("optim_conf") or {}
+    rh_conf = params_dict.get("retrieve_hass_conf") or {}
+
+    load_index = int(rt.get("load_index", 0) or 0)
+    raw_step = rh_conf.get("optimization_time_step", 30)
+    if hasattr(raw_step, "total_seconds"):
+        dt_hours = float(raw_step.total_seconds() / 3600.0)
+    elif isinstance(raw_step, int | float):
+        dt_hours = float(raw_step) / 60.0
+    elif isinstance(raw_step, str) and raw_step.strip():
+        try:
+            dt_hours = float(pd.Timedelta(raw_step).total_seconds() / 3600.0)
+        except Exception:
+            dt_hours = float(rt.get("dt_hours", 0.5) or 0.5)
+    else:
+        dt_hours = float(rt.get("dt_hours", 0.5) or 0.5)
+    dt_hours = max(dt_hours, 1.0 / 60.0)
+    dt_minutes = max(1, int(round(dt_hours * 60.0)))
+
+    nom_list = optim_conf.get("nominal_power_of_deferrable_loads") or [3000.0]
+    default_p_nom = (
+        float(nom_list[load_index])
+        if isinstance(nom_list, list) and 0 <= load_index < len(nom_list)
+        else 3000.0
+    )
+    nominal_power = float(rt.get("nominal_power") or default_p_nom or 3000.0)
+
+    def_configs = optim_conf.get("def_load_config") or []
+    tc = {}
+    if isinstance(def_configs, list) and 0 <= load_index < len(def_configs):
+        entry = def_configs[load_index]
+        if isinstance(entry, dict) and isinstance(entry.get("thermal_config"), dict):
+            tc = entry["thermal_config"]
+
+    curr_alpha = float(rt.get("current_heating_rate") or tc.get("heating_rate") or 5.0)
+    curr_gamma = float(rt.get("current_cooling_constant") or tc.get("cooling_constant") or 0.1)
+    curr_inertia = float(rt.get("current_thermal_inertia") or tc.get("thermal_inertia") or 0.0)
+    lookback_hours = max(4, int(rt.get("lookback_hours", 24) or 24))
+
+    entity_t_in = str(rt.get("entity_t_in") or "sensor.temp_air_in").strip()
+    entity_t_out = str(rt.get("entity_t_out") or "sensor.outdoor_temperature").strip()
+    entity_power = str(rt.get("entity_power") or f"sensor.p_deferrable{load_index}").strip()
+    entity_t_pred = str(rt.get("entity_t_pred") or f"sensor.temp_predicted_{load_index}_proxy").strip()
+    entity_switch = str(rt.get("entity_switch") or "switch.floor_heater_switch").strip()
+
+    df_win = pd.DataFrame()
+    data_source = "offline_demo"
+
+    # 1. Explicit arrays in runtimeparams
+    if (
+        isinstance(rt.get("indoor_temperature"), list)
+        and isinstance(rt.get("outdoor_temperature"), list)
+    ):
+        t_in_arr = pd.to_numeric(pd.Series(rt["indoor_temperature"]), errors="coerce")
+        t_out_arr = pd.to_numeric(pd.Series(rt["outdoor_temperature"]), errors="coerce")
+        n = min(len(t_in_arr), len(t_out_arr))
+        if n >= 6:
+            end_ts = pd.Timestamp.now(tz="UTC").floor(f"{dt_minutes}min")
+            idx = pd.date_range(end=end_ts, periods=n, freq=f"{dt_minutes}min")
+            if isinstance(rt.get("heater_power"), list) and len(rt["heater_power"]) >= n:
+                p_arr = pd.to_numeric(pd.Series(rt["heater_power"][:n]), errors="coerce").fillna(0.0)
+            else:
+                p_arr = pd.Series(0.0, index=idx)
+            df_win = pd.DataFrame(
+                {
+                    "T_in": t_in_arr.iloc[:n].to_numpy(dtype=float),
+                    "T_out": t_out_arr.iloc[:n].to_numpy(dtype=float),
+                    "P_def": np.clip(p_arr.to_numpy(dtype=float), 0.0, None),
+                },
+                index=idx,
+            )
+            if isinstance(rt.get("predicted_temperature"), list) and len(rt["predicted_temperature"]) >= n:
+                df_win["T_set"] = pd.to_numeric(
+                    pd.Series(rt["predicted_temperature"][:n]), errors="coerce"
+                ).to_numpy(dtype=float)
+            df_win = df_win.dropna(subset=["T_in", "T_out", "P_def"])
+            data_source = "runtime_payload"
+
+    # 2. Direct InfluxDB retrieval if enabled
+    if df_win.empty and not get_data_from_file and rh_conf.get("use_influxdb"):
+        date_ranges = rt.get("date_ranges")
+        if isinstance(date_ranges, list) and date_ranges:
+            start_s, end_s = date_ranges[0][0], date_ranges[0][1]
+            start_utc = pd.to_datetime(start_s, utc=True)
+            end_utc = pd.to_datetime(end_s, utc=True)
+        else:
+            end_utc = pd.Timestamp.now(tz="UTC")
+            start_utc = end_utc - pd.Timedelta(hours=lookback_hours)
+        try:
+            df_win = await _fetch_influx_thermal_window(
+                rh_conf,
+                entity_t_in,
+                entity_t_out,
+                entity_power,
+                entity_t_pred,
+                entity_switch,
+                start_utc,
+                end_utc,
+                dt_minutes,
+                nominal_power,
+                logger,
+            )
+            if len(df_win) >= 6:
+                data_source = "influxdb"
+        except Exception as exc:
+            logger.warning("InfluxDB thermal history retrieval failed (%s); falling back", exc)
+
+    # 3. Fallback to Home Assistant REST/WS history when URL configured
+    if (
+        df_win.empty
+        and not get_data_from_file
+        and rh_conf.get("hass_url") not in (None, "", "empty")
+    ):
+        try:
+            from emhass.retrieve_hass import RetrieveHass
+
+            rh = RetrieveHass(
+                rh_conf["hass_url"],
+                rh_conf.get("long_lived_token", ""),
+                pd.Timedelta(minutes=dt_minutes),
+                rh_conf.get("time_zone", pytz.UTC),
+                params or {},
+                emhass_conf,
+                logger,
+            )
+            days_list = get_days_list(max(1, math.ceil(lookback_hours / 24)))
+            var_list = [v for v in (entity_t_in, entity_t_out, entity_power) if v]
+            if await rh.get_data(days_list, var_list, minimal_response=False) and rh.df_final is not None:
+                df_ha = rh.df_final
+                if entity_t_in in df_ha.columns and entity_t_out in df_ha.columns:
+                    p_series = (
+                        pd.to_numeric(df_ha[entity_power], errors="coerce").fillna(0.0)
+                        if entity_power in df_ha.columns
+                        else pd.Series(0.0, index=df_ha.index)
+                    )
+                    df_win = pd.DataFrame(
+                        {
+                            "T_in": pd.to_numeric(df_ha[entity_t_in], errors="coerce"),
+                            "T_out": pd.to_numeric(df_ha[entity_t_out], errors="coerce"),
+                            "P_def": p_series.clip(lower=0.0),
+                        },
+                        index=df_ha.index,
+                    ).dropna()
+                    if len(df_win) >= 6:
+                        df_win = df_win.iloc[-max(6, int(round(lookback_hours / dt_hours))) :]
+                        data_source = "home_assistant"
+            await rh.close()
+        except Exception as exc:
+            logger.warning("HA thermal history retrieval failed (%s); using offline demo", exc)
+
+    # 4. Offline synthetic demo fallback so local venv testing always renders full validation plots
+    if df_win.empty or len(df_win) < 6:
+        df_win = _build_offline_demo_thermal_frame(dt_hours, nominal_power, lookback_hours)
+        data_source = "offline_demo"
+
+    df_win = df_win.sort_index().copy()
+    df_win["dT_actual"] = df_win["T_in"].shift(-1) - df_win["T_in"]
+
+    lag_rows = []
+    trajectories_by_lag: dict[int, np.ndarray] = {}
+    t_in_vals = df_win["T_in"].to_numpy(dtype=float)
+    t_out_vals = df_win["T_out"].to_numpy(dtype=float)
+
+    for lag_steps in (0, 1, 2, 3, 4):
+        p_shifted = df_win["P_def"].shift(lag_steps).fillna(0.0).to_numpy(dtype=float)
+        valid = df_win["dT_actual"].notna().to_numpy()
+        x_data = (p_shifted[valid], t_in_vals[valid], t_out_vals[valid])
+        y_data = df_win["dT_actual"].to_numpy(dtype=float)[valid]
+        try:
+            popt, _ = curve_fit(
+                lambda x, a, g: _emhass_thermal_step_delta(x, a, g, dt_hours, nominal_power),
+                x_data,
+                y_data,
+                p0=[max(0.05, min(curr_alpha, 5.0)), max(0.005, min(curr_gamma, 0.5))],
+                bounds=(0.0005, [15.0, 1.5]),
+                maxfev=5000,
+            )
+            alpha_opt, gamma_opt = float(popt[0]), float(popt[1])
+        except Exception:
+            alpha_opt, gamma_opt = curr_alpha, curr_gamma
+
+        y_pred_step = _emhass_thermal_step_delta(x_data, alpha_opt, gamma_opt, dt_hours, nominal_power)
+        rmse_step = float(np.sqrt(np.mean((y_data - y_pred_step) ** 2))) if len(y_data) else float("nan")
+        t_sim = _simulate_thermal_trajectory(
+            float(t_in_vals[0]), p_shifted, t_out_vals, alpha_opt, gamma_opt, dt_hours, nominal_power
+        )
+        rmse_traj = float(np.sqrt(np.mean((t_in_vals - t_sim) ** 2)))
+        trajectories_by_lag[lag_steps] = t_sim
+        lag_rows.append(
+            {
+                "lag_steps": lag_steps,
+                "thermal_inertia_h": round(lag_steps * dt_hours, 2),
+                "heating_rate": round(alpha_opt, 4),
+                "cooling_constant": round(gamma_opt, 4),
+                "rmse_step_c": round(rmse_step, 4),
+                "rmse_trajectory_c": round(rmse_traj, 4),
+            }
+        )
+
+    lag_table = pd.DataFrame(lag_rows)
+    best_row = min(lag_rows, key=lambda r: r["rmse_trajectory_c"])
+    best_lag = int(best_row["lag_steps"])
+
+    curr_lag = max(0, min(4, round(curr_inertia / dt_hours)))
+    p_curr_shifted = df_win["P_def"].shift(curr_lag).fillna(0.0).to_numpy(dtype=float)
+    t_sim_current = _simulate_thermal_trajectory(
+        float(t_in_vals[0]), p_curr_shifted, t_out_vals, curr_alpha, curr_gamma, dt_hours, nominal_power
+    )
+    rmse_traj_current = float(np.sqrt(np.mean((t_in_vals - t_sim_current) ** 2)))
+
+    df_win["T_pred_current"] = np.round(t_sim_current, 3)
+    df_win["T_pred_tuned"] = np.round(trajectories_by_lag[best_lag], 3)
+    df_win["dT_pred_tuned"] = np.round(
+        _emhass_thermal_step_delta(
+            (
+                df_win["P_def"].shift(best_lag).fillna(0.0).to_numpy(dtype=float),
+                t_in_vals,
+                t_out_vals,
+            ),
+            best_row["heating_rate"],
+            best_row["cooling_constant"],
+            dt_hours,
+            nominal_power,
+        ),
+        4,
+    )
+
+    return {
+        "data_source": data_source,
+        "load_index": load_index,
+        "dt_hours": dt_hours,
+        "nominal_power": nominal_power,
+        "current_params": {
+            "heating_rate": curr_alpha,
+            "cooling_constant": curr_gamma,
+            "thermal_inertia": curr_inertia,
+            "rmse_trajectory_c": round(rmse_traj_current, 4),
+        },
+        "best_params": {
+            "heating_rate": best_row["heating_rate"],
+            "cooling_constant": best_row["cooling_constant"],
+            "thermal_inertia": best_row["thermal_inertia_h"],
+            "lag_steps": best_lag,
+            "rmse_trajectory_c": best_row["rmse_trajectory_c"],
+        },
+        "lag_table": lag_table,
+        "series": df_win,
+    }
+
+
+def get_injection_dict_thermal_calibration(result: dict) -> dict:
+    """Build WebUI plots and parameter recommendations for thermal model validation & tuning."""
+    series_df: pd.DataFrame = result["series"]
+    lag_df: pd.DataFrame = result["lag_table"]
+    curr = result["current_params"]
+    best = result["best_params"]
+    source_label = {
+        "influxdb": "InfluxDB History",
+        "home_assistant": "Home Assistant History",
+        "runtime_payload": "Runtime Payload",
+        "offline_demo": "Offline Synthetic Validation Demo (no live HA/InfluxDB connected)",
+    }.get(result["data_source"], result["data_source"])
+
+    # Figure 0: Predicted vs Actual Temperature Trajectory
+    fig_traj = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_traj.add_trace(
+        go.Scatter(
+            x=series_df.index,
+            y=series_df["T_in"],
+            name="Actual Indoor Temp (T_in)",
+            line={"color": "#0f172a", "width": 3},
+            mode="lines+markers",
+        ),
+        secondary_y=False,
+    )
+    fig_traj.add_trace(
+        go.Scatter(
+            x=series_df.index,
+            y=series_df["T_pred_tuned"],
+            name=f"Predicted (Tuned: α={best['heating_rate']}, γ={best['cooling_constant']}, lag={best['thermal_inertia']}h)",
+            line={"color": "#16a34a", "width": 2.5},
+            mode="lines",
+        ),
+        secondary_y=False,
+    )
+    fig_traj.add_trace(
+        go.Scatter(
+            x=series_df.index,
+            y=series_df["T_pred_current"],
+            name=f"Predicted (Current: α={curr['heating_rate']}, γ={curr['cooling_constant']}, lag={curr['thermal_inertia']}h)",
+            line={"color": "#ea580c", "width": 2, "dash": "dash"},
+            mode="lines",
+        ),
+        secondary_y=False,
+    )
+    if "T_set" in series_df.columns:
+        fig_traj.add_trace(
+            go.Scatter(
+                x=series_df.index,
+                y=series_df["T_set"],
+                name="Setpoint / Plan Temp Proxy (T_set)",
+                line={"color": "#8b5cf6", "width": 1.5, "dash": "dot"},
+                mode="lines",
+            ),
+            secondary_y=False,
+        )
+    fig_traj.add_trace(
+        go.Scatter(
+            x=series_df.index,
+            y=series_df["T_out"],
+            name="Outdoor Temp (T_out)",
+            line={"color": "#0284c7", "width": 1.5, "dash": "dashdot"},
+            mode="lines",
+        ),
+        secondary_y=False,
+    )
+    fig_traj.add_trace(
+        go.Bar(
+            x=series_df.index,
+            y=series_df["P_def"],
+            name="Heater Power (P_def, W)",
+            marker_color="rgba(234, 179, 8, 0.28)",
+        ),
+        secondary_y=True,
+    )
+    fig_traj.update_layout(
+        title=(
+            f"Predicted vs Actual Indoor Temperature Trajectory"
+            f"<br><sup>Source: {html.escape(source_label)} | Trajectory RMSE: Current={curr['rmse_trajectory_c']:.3f}°C → Tuned={best['rmse_trajectory_c']:.3f}°C</sup>"
+        ),
+        template="presentation",
+        height=500,
+    )
+    fig_traj.update_yaxes(title_text="Temperature (°C)", secondary_y=False)
+    fig_traj.update_yaxes(title_text="Heater Power (W)", secondary_y=True)
+    fig_traj.update_xaxes(title_text="Timestamp")
+
+    # Figure 1: RMSE & Fitted Constants Across Inertia Lags
+    fig_lags = make_subplots(specs=[[{"secondary_y": True}]])
+    x_lags = [f"{row['thermal_inertia_h']}h ({row['lag_steps']} steps)" for _, row in lag_df.iterrows()]
+    fig_lags.add_trace(
+        go.Bar(
+            x=x_lags,
+            y=lag_df["rmse_trajectory_c"],
+            name="Trajectory RMSE (°C)",
+            marker_color=[
+                "#16a34a" if int(r["lag_steps"]) == best["lag_steps"] else "#0284c7"
+                for _, r in lag_df.iterrows()
+            ],
+            text=[f"{v:.4f}" for v in lag_df["rmse_trajectory_c"]],
+            textposition="auto",
+        ),
+        secondary_y=False,
+    )
+    fig_lags.add_trace(
+        go.Scatter(
+            x=x_lags,
+            y=lag_df["heating_rate"],
+            name="Fitted heating_rate (°C/h)",
+            line={"color": "#ea580c", "width": 2.5},
+            mode="lines+markers",
+        ),
+        secondary_y=True,
+    )
+    fig_lags.update_layout(
+        title="Thermal Inertia Lag Sweep (0..4 steps)",
+        template="presentation",
+        xaxis_title="Thermal Inertia Lag",
+    )
+    fig_lags.update_yaxes(title_text="Trajectory RMSE (°C)", secondary_y=False)
+    fig_lags.update_yaxes(title_text="Fitted Heating Rate (°C/h)", secondary_y=True)
+
+    # Figure 2: Step-by-Step Temperature Delta (dT actual vs tuned model)
+    valid_delta = series_df.dropna(subset=["dT_actual"])
+    fig_step = go.Figure()
+    fig_step.add_trace(
+        go.Bar(
+            x=valid_delta.index,
+            y=valid_delta["dT_actual"],
+            name="Actual Step ΔT (°C)",
+            marker_color="rgba(37, 99, 235, 0.55)",
+        )
+    )
+    fig_step.add_trace(
+        go.Scatter(
+            x=valid_delta.index,
+            y=valid_delta["dT_pred_tuned"],
+            name="Tuned Model Step ΔT (°C)",
+            line={"color": "#16a34a", "width": 2.5},
+            mode="lines+markers",
+        )
+    )
+    fig_step.update_layout(
+        title="Per-Step Indoor Temperature Change (Actual ΔT vs Tuned Model ΔT)",
+        template="presentation",
+        xaxis_title="Timestamp",
+        yaxis_title="ΔT per Timestep (°C)",
+    )
+
+    recommended_json = html.escape(
+        orjson.dumps(
+            {
+                "heating_rate": best["heating_rate"],
+                "cooling_constant": best["cooling_constant"],
+                "thermal_inertia": best["thermal_inertia"],
+            },
+            option=orjson.OPT_INDENT_2,
+        ).decode("utf-8")
+    )
+    summary_banner = (
+        '<div class="analytics-explainer-card">'
+        f"<h4>Recommended <code>thermal_config</code> for Deferrable Load {result['load_index']} "
+        f"(Source: {html.escape(source_label)})</h4>"
+        '<div class="plot-method-badges">'
+        f'<span class="method-badge method-load">heating_rate: <strong>{best["heating_rate"]} °C/h</strong></span>'
+        f'<span class="method-badge method-pv">cooling_constant: <strong>{best["cooling_constant"]} 1/h</strong></span>'
+        f'<span class="method-badge method-bias">thermal_inertia: <strong>{best["thermal_inertia"]} h ({best["lag_steps"]} steps)</strong></span>'
+        f'<span class="method-badge method-costfun">RMSE Improvement: <strong>{curr["rmse_trajectory_c"]:.3f}°C → {best["rmse_trajectory_c"]:.3f}°C</strong></span>'
+        "</div>"
+        f"<pre>{recommended_json}</pre>"
+        "</div>"
+    )
+
+    preview_cols = [c for c in ("T_in", "T_pred_current", "T_pred_tuned", "T_out", "P_def", "dT_actual") if c in series_df.columns]
+    table1 = lag_df.to_html(classes="mystyle", index=False)
+    table2 = series_df[preview_cols].round(3).reset_index(names="Timestamp").to_html(classes="mystyle", index=False)
+
+    return {
+        "title": "<h2>Thermal Model Validation &amp; Parameter Auto-Tuning</h2>",
+        "subsubtitle0": summary_banner,
+        "figure_0": _fig_to_html(fig_traj, include_plotlyjs=True),
+        "figure_thermal_lag_comparison": _fig_to_html(fig_lags, include_plotlyjs=False),
+        "figure_thermal_scatter": _fig_to_html(fig_step, include_plotlyjs=False),
+        "subsubtitle1": "<h4>Thermal Inertia Lag Fitting Results (curve_fit)</h4>",
+        "table1": table1,
+        "subsubtitle2": "<h4>Predicted vs Actual Time-Series Sample</h4>",
+        "table2": table2,
+    }
 
 
 def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLForecaster) -> dict:
@@ -4659,7 +6226,7 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     fig.layout.template = "presentation"
     fig.update_yaxes(title_text=mlf.model_type)
     fig.update_xaxes(title_text="Time")
-    image_path_0 = fig.to_html(full_html=False, default_width="75%")
+    image_path_0 = _fig_to_html(fig, include_plotlyjs=True)
     # The dict of plots
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model tune</h2>"

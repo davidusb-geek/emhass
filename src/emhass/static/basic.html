@@ -1,14 +1,17 @@
-<!-- basic div, dynamically appended inside of index.html -->
-<!-- action button elements section -->
 <div class="loading-div" id="basic">
-    <h4>Use the button below to manually launch optimization task</h4>
-    <div id=loader></div> <!-- status dynamic element -->
-</div>
-<button type="button" id="dayahead-optim-basic" class="button button1">Day-ahead Optimization</button>
-<div class="info">
-    <p>The day-ahead optimization button will run once, based on the values entered into the configuration page.
-        </br>
-        After a few seconds, the charts and table below should be updated to reflect the optimization plan for the next
-        24 hours.
-    </p>
+  <div class="basic-hero">
+    <div class="basic-hero-text">
+      <h2>Quick Optimization</h2>
+      <p>
+        Run a complete Day-Ahead schedule using your saved plant and tariff configuration. Switch to
+        <strong>Advanced</strong> mode above for MPC cycles, ML training, or custom runtime payloads.
+      </p>
+    </div>
+    <div class="basic-hero-actions">
+      <button type="button" id="dayahead-optim-basic" class="action-btn primary-action">
+        Day-ahead Optimization
+      </button>
+      <div id="loader" class="loading" style="display: none"></div>
+    </div>
+  </div>
 </div>

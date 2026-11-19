@@ -1,51 +1,123 @@
-<!--  configuration list dynamically appended inside of configuration.html  -->
-<!--  configuration list view parameter sections  -->
+<div class="config-tabs" role="tablist" aria-label="Configuration sections">
+  <button type="button" class="config-tab-btn active" data-config-tab="all">All Sections</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Local">Home Assistant &amp; Data</button>
+  <button type="button" class="config-tab-btn" data-config-tab="System">System &amp; Forecast</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Tariff">Tariff</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Solar System (PV)">Solar (PV)</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Inverters">Inverters &amp; Grid</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Battery">Battery</button>
+  <button type="button" class="config-tab-btn" data-config-tab="Deferrable Loads">
+    Deferrable &amp; Thermal Loads
+  </button>
+</div>
+
 <div id="Local" class="section-card">
-  <div class="section-card-header">
-    <h4>Local</h4>
+  <div class="section-header">
+    <div>
+      <h2>Home Assistant &amp; Data Sources</h2>
+      <p class="section-hint">
+        Timezone, geolocation, Home Assistant entity sensors, and optional InfluxDB / VictoriaMetrics history backends.
+      </p>
+    </div>
   </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
+  <div class="section-body"></div>
 </div>
+
 <div id="System" class="section-card">
-  <div class="section-card-header">
-    <h4>System</h4>
+  <div class="section-header">
+    <div>
+      <h2>System, Solver &amp; Forecasting</h2>
+      <p class="section-hint">
+        Optimization timestep, cost function, load forecasting method, COP solver, and Centralized vs Federated coordinator backend.
+      </p>
+    </div>
   </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
+  <div class="section-body"></div>
 </div>
+
 <div id="Tariff" class="section-card">
-  <div class="section-card-header">
-    <h4>Tariff</h4>
+  <div class="section-header">
+    <div>
+      <h2>Tariff &amp; Pricing</h2>
+      <p class="section-hint">
+        Load electricity cost and PV feed-in production price methods, schedules, and peak/off-peak windows.
+      </p>
+    </div>
   </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
+  <div class="section-body"></div>
 </div>
-<div id="Deferrable Loads" class="section-card">
-  <div class="section-card-header">
-    <h4>Deferrable Loads</h4>
-    <!-- #1116: 0 is a valid deferrable-load count (EMHASS accepts num_def_loads=0) -->
-    <input id="number_of_deferrable_loads" min="0" type="number" aria-label="Number of deferrable loads">
-  </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
-</div>
+
 <div id="Solar System (PV)" class="section-card">
-  <div class="section-card-header">
-    <h4>Solar System (PV)</h4>
-    <label class="switch" for="set_use_pv"> <!-- switch connected to set_use_pv  -->
-      <input id="set_use_pv" type="checkbox" aria-label="Use a solar system (PV)">
-      <span class="slider"></span>
+  <div class="section-header">
+    <div>
+      <h2>Solar System (PV)</h2>
+      <p class="section-hint">
+        Enable PV production to show module arrays, azimuth/tilt, inverter sizing, and solar weather forecast providers.
+      </p>
+    </div>
+    <label class="toggle-pill" for="set_use_pv">
+      <span>Enable PV</span>
+      <input
+        id="set_use_pv"
+        type="checkbox"
+        aria-label="Enable Solar PV production system"
+      />
     </label>
   </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
+  <div class="section-body"></div>
 </div>
-<div id="Battery" class="section-card">
-  <div class="section-card-header">
-    <h4>Battery</h4>
-    <label class="switch" for="set_use_battery"> <!-- switch connected to set_use_battery  -->
-      <input id="set_use_battery" type="checkbox" aria-label="Use a battery">
-      <span class="slider"></span>
-    </label>
-    <!-- #610: mirrors number_of_deferrable_loads above - auto-syncs the 15 -->
-    <!-- per-battery array param lengths, see configuration_script.js -->
-    <input id="number_of_batteries" min="1" type="number" aria-label="Number of batteries">
+
+<div id="Inverters" class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Inverters &amp; Grid Connection</h2>
+      <p class="section-hint">
+        Grid import/export caps, hybrid DC/AC coupling topology, inverter count, efficiency, and PV curtailment.
+      </p>
+    </div>
   </div>
-  <div class="section-body"> </div> <!--  parameters will get generated here -->
+  <div class="section-body"></div>
+</div>
+
+<div id="Battery" class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Battery Storage</h2>
+      <p class="section-hint">
+        Enable battery storage to reveal capacity, SOC bounds, dynamic aging/cycling models, and battery parameter identification.
+      </p>
+    </div>
+    <div class="header-inline-controls">
+      <label class="toggle-pill" for="set_use_battery">
+        <span>Enable Battery</span>
+        <input
+          id="set_use_battery"
+          type="checkbox"
+          aria-label="Enable Battery storage system"
+        />
+      </label>
+      <label class="count-pill" for="number_of_batteries">
+        <span>Batteries</span>
+        <input id="number_of_batteries" type="number" min="1" step="1" value="1" aria-label="Number of batteries" />
+      </label>
+    </div>
+  </div>
+  <div class="section-body"></div>
+</div>
+
+<div id="Deferrable Loads" class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Deferrable &amp; Thermal Loads</h2>
+      <p class="section-hint">
+        Set the number of controllable loads (EV chargers, water heaters, heat pumps, HVAC) and customize thermal models below without crafting JSON manually.
+      </p>
+    </div>
+    <label class="count-pill" for="number_of_deferrable_loads">
+      <span>Number of Loads</span>
+      <input id="number_of_deferrable_loads" type="number" min="0" step="1" value="2" aria-label="Number of deferrable loads" />
+    </label>
+  </div>
+  <div class="section-body"></div>
+  <div id="thermal-loads-builder" class="thermal-builder-wrapper"></div>
 </div>

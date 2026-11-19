@@ -7,17 +7,22 @@
 
 //on page reload get saved data
 window.onload = async function () {
+  initStaticMeta();
   try {
     await loadBasicOrAdvanced();
   } catch (error) {
     showViewError(error);
   }
   initStickyTables();
+  initResultsTabs();
+  refreshLastRunBanner();
+  loadSystemOverviewBadges();
 
   //add listener for basic and advanced html switch
-  document
-    .getElementById("basicOrAdvanced")
-    .addEventListener("click", () => SwitchBasicOrAdvanced());
+  const switchBtn = document.getElementById("basicOrAdvanced");
+  if (switchBtn) {
+    switchBtn.addEventListener("click", () => SwitchBasicOrAdvanced());
+  }
 };
 
 //action buttons of the advanced view
@@ -66,6 +71,12 @@ async function loadButtons(page) {
       
       // Check if InfluxDB is enabled and show/hide export section
       checkInfluxDBAndShowExport(); //not awaited: it handles its own errors and must not delay the view setup
+      initAdvancedTabs();
+      initRuntimePresets();
+      const thermalCalibBtn = document.getElementById("thermal-model-calibration");
+      if (thermalCalibBtn) {
+        thermalCalibBtn.addEventListener("click", () => runThermalModelCalibration());
+      }
       break;
     case "basic":
       document
@@ -73,6 +84,7 @@ async function loadButtons(page) {
         .addEventListener("click", () => formAction("dayahead-optim", "basic"));
       break;
   }
+  updateModeBadge(page);
 }
 
 const VIEW_ERROR_PREFIX = "Unable to load the page view: ";
@@ -297,7 +309,17 @@ async function getTemplate() {
     TempScript.innerHTML = script.innerHTML;
     script.parentElement.appendChild(TempScript);
   }
+  if (!document.getElementById("stage-times-client-fallback")) {
+    const fallbackDiv = document.createElement("div");
+    fallbackDiv.id = "stage-times-client-fallback";
+    fallbackDiv.className = "table_div";
+    fallbackDiv.setAttribute("data-plot-key", "figure_stage_times_client");
+    fallbackDiv.style.display = "none";
+    templateDiv.appendChild(fallbackDiv);
+  }
   initStickyTables();
+  initResultsTabs();
+  refreshLastRunBanner();
 }
 
 let stickyTableCleanups = [];
@@ -619,6 +641,7 @@ async function checkInfluxDBAndShowExport() {
       if (thisCheck !== influxChecks) {
         return; //superseded by a newer check
       }
+      renderSystemOverviewBadges(config);
       const exportSection = document.getElementById("export-influxdb-section");
       if (exportSection) {
         // Show export if InfluxDB is configured (has host and port)
@@ -637,5 +660,579 @@ async function checkInfluxDBAndShowExport() {
     }
   } catch (error) {
     console.error("Error checking InfluxDB configuration:", error);
+  }
+}
+
+function initStaticMeta() {
+  const yearEl = document.getElementById("current-year");
+  if (yearEl) {
+    yearEl.textContent = String(new Date().getFullYear());
+  }
+}
+
+function updateModeBadge(mode) {
+  const labelEl = document.getElementById("mode-pill-label");
+  if (labelEl) {
+    labelEl.textContent = mode === "basic" ? "Basic" : "Advanced";
+  }
+}
+
+function initAdvancedTabs() {
+  const buttons = Array.prototype.slice.call(
+    document.querySelectorAll(".action-tab-btn")
+  );
+  const panels = Array.prototype.slice.call(
+    document.querySelectorAll(".action-tab-panel")
+  );
+  if (!buttons.length || !panels.length) {
+    return;
+  }
+  buttons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const target = btn.getAttribute("data-action-tab");
+      buttons.forEach(function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+      panels.forEach(function (panel) {
+        const match = panel.getAttribute("data-action-panel") === target;
+        panel.classList.toggle("active", match);
+        panel.style.display = match ? "block" : "none";
+      });
+    });
+  });
+}
+
+const RUNTIME_PRESETS = {
+  mpc_horizon: {
+    prediction_horizon: 10,
+    soc_init: 0.45,
+    soc_final: 0.5,
+  },
+  pv_quantiles: {
+    pv_power_forecast: [0, 0, 120, 480, 1100, 1850, 2400, 2200, 1500, 700, 150, 0],
+    pv_power_forecast_p10: [0, 0, 80, 320, 780, 1300, 1750, 1600, 1050, 460, 90, 0],
+  },
+  deferrable_window: {
+    operating_hours_of_each_deferrable_load: [4, 2],
+    start_timesteps_of_each_deferrable_load: [2, 0],
+    end_timesteps_of_each_deferrable_load: [20, 16],
+  },
+  raw_json: {},
+};
+
+function initRuntimePresets() {
+  const presetSelect = document.getElementById("runtime-preset-select");
+  if (!presetSelect) {
+    return;
+  }
+  presetSelect.addEventListener("change", function () {
+    const key = presetSelect.value;
+    if (!key || !Object.prototype.hasOwnProperty.call(RUNTIME_PRESETS, key)) {
+      return;
+    }
+    const modeSelect = document.getElementById("input-select");
+    if (modeSelect) {
+      modeSelect.value = "Box";
+      dictInputs();
+      const box = document.getElementById("text-area");
+      if (box) {
+        box.value = JSON.stringify(RUNTIME_PRESETS[key], null, 2);
+        saveStorage();
+      }
+    }
+    presetSelect.value = "";
+  });
+}
+
+const RESULTS_TAB_GROUPS = {
+  schedule: [
+    "title",
+    "subsubtitle0",
+    "figure_0",
+    "figure_pv_forecast",
+    "figure_thermal",
+    "figure_1",
+    "figure_battery_sources",
+    "figure_2",
+    "figure_calibration_metrics",
+    "figure_thermal_lag_comparison",
+    "figure_thermal_scatter",
+  ],
+  analytics: [
+    "analytics_intro",
+    "figure_energy_pie",
+    "figure_histograms",
+    "figure_heatmap",
+    "figure_load_effectiveness",
+  ],
+  performance: ["figure_stage_times", "figure_stage_times_client"],
+  tables: ["subsubtitle1", "table1", "subsubtitle2", "table2"],
+};
+
+function getResultsTabForKey(plotKey) {
+  if (!plotKey) {
+    return "schedule";
+  }
+  if (plotKey.indexOf("figure_fed_") === 0) {
+    return "federated";
+  }
+  const categories = Object.keys(RESULTS_TAB_GROUPS);
+  for (let i = 0; i < categories.length; i++) {
+    const cat = categories[i];
+    if (RESULTS_TAB_GROUPS[cat].indexOf(plotKey) !== -1) {
+      return cat;
+    }
+  }
+  return "schedule";
+}
+
+function resizeVisiblePlotlyPlots(container) {
+  if (!container) {
+    return;
+  }
+  const plotlyDivs = container.querySelectorAll(".js-plotly-plot");
+  if (typeof window !== "undefined" && window.Plotly && window.Plotly.Plots && plotlyDivs.length) {
+    for (let i = 0; i < plotlyDivs.length; i++) {
+      try {
+        window.Plotly.Plots.resize(plotlyDivs[i]);
+      } catch (_err) {
+        // ignore detached or hidden plots
+      }
+    }
+  }
+}
+
+let activeResultsTab = "schedule";
+
+function initResultsTabs() {
+  const tabBar = document.getElementById("results-tabs");
+  const templateDiv = document.getElementById("template");
+  if (!tabBar || !templateDiv) {
+    return;
+  }
+  const items = Array.prototype.slice.call(
+    templateDiv.querySelectorAll(".table_div[data-plot-key]")
+  );
+  const counts = {
+    schedule: 0,
+    analytics: 0,
+    federated: 0,
+    performance: 0,
+    tables: 0,
+    all: 0,
+  };
+
+  items.forEach(function (item) {
+    const key = item.getAttribute("data-plot-key") || "";
+    if (
+      key === "figure_stage_times_client" &&
+      (!item.innerHTML || !item.innerHTML.trim())
+    ) {
+      return;
+    }
+    const isCountableItem =
+      key.indexOf("figure_") === 0 || key.indexOf("table") === 0;
+    const tab = getResultsTabForKey(key);
+    if (isCountableItem && Object.prototype.hasOwnProperty.call(counts, tab)) {
+      counts[tab] += 1;
+      counts.all += 1;
+    }
+  });
+
+  const buttons = Array.prototype.slice.call(
+    tabBar.querySelectorAll(".results-tab-btn")
+  );
+  buttons.forEach(function (btn) {
+    const tab = btn.getAttribute("data-results-tab");
+    const countSpan = btn.querySelector(".tab-count");
+    const c = Object.prototype.hasOwnProperty.call(counts, tab) ? counts[tab] : 0;
+    if (countSpan) {
+      countSpan.textContent = c > 0 ? String(c) : "";
+    }
+    if (tab === "federated" || tab === "performance" || tab === "analytics") {
+      btn.style.display = c > 0 ? "" : "none";
+    }
+  });
+
+  const isSpecialReport =
+    items.length > 0 &&
+    !templateDiv.querySelector('[data-plot-key="figure_2"]') &&
+    counts.tables > 0 &&
+    counts.schedule > 0;
+  if (isSpecialReport) {
+    activeResultsTab = "all";
+  } else if (counts[activeResultsTab] === 0 && activeResultsTab !== "all") {
+    activeResultsTab = counts.schedule > 0 ? "schedule" : "all";
+  }
+  updateOptimStatusFromDom(templateDiv);
+
+  function applyTabSelection(selectedTab) {
+    activeResultsTab = selectedTab;
+    buttons.forEach(function (btn) {
+      btn.classList.toggle(
+        "active",
+        btn.getAttribute("data-results-tab") === selectedTab
+      );
+    });
+    items.forEach(function (item) {
+      const key = item.getAttribute("data-plot-key") || "";
+      if (
+        key === "figure_stage_times_client" &&
+        (!item.innerHTML || !item.innerHTML.trim())
+      ) {
+        item.style.display = "none";
+        return;
+      }
+      const itemTab = getResultsTabForKey(key);
+      const show = selectedTab === "all" || itemTab === selectedTab;
+      item.style.display = show ? "" : "none";
+    });
+    resizeVisiblePlotlyPlots(templateDiv);
+    initStickyTables();
+  }
+
+  buttons.forEach(function (btn) {
+    if (!btn.dataset.boundResultsTab) {
+      btn.dataset.boundResultsTab = "1";
+      btn.addEventListener("click", function () {
+        applyTabSelection(btn.getAttribute("data-results-tab") || "schedule");
+      });
+    }
+  });
+
+  applyTabSelection(activeResultsTab);
+}
+
+function renderStageTimesFallback(lastRun) {
+  const fallbackEl = document.getElementById("stage-times-client-fallback");
+  if (!fallbackEl) {
+    return;
+  }
+  const hasServerPlot = Boolean(
+    document.querySelector('#template [data-plot-key="figure_stage_times"]')
+  );
+  if (
+    hasServerPlot ||
+    !lastRun ||
+    !lastRun.stage_times ||
+    typeof lastRun.stage_times !== "object"
+  ) {
+    fallbackEl.innerHTML = "";
+    fallbackEl.style.display = "none";
+    return;
+  }
+
+  const entries = Object.keys(lastRun.stage_times)
+    .map(function (k) {
+      return { name: k, val: Number(lastRun.stage_times[k]) };
+    })
+    .filter(function (item) {
+      return Number.isFinite(item.val) && item.val >= 0;
+    });
+
+  if (!entries.length) {
+    fallbackEl.innerHTML = "";
+    fallbackEl.style.display = "none";
+    return;
+  }
+
+  const maxVal = entries.reduce(function (m, item) {
+    return item.val > m ? item.val : m;
+  }, 0.0001);
+  const totalSec =
+    typeof lastRun.duration_total_seconds === "number"
+      ? lastRun.duration_total_seconds
+      : entries.reduce(function (sum, item) {
+          return item.name.indexOf(".") === -1 ? sum + item.val : sum;
+        }, 0);
+
+  let html = '<div class="stage-times-card">';
+  html +=
+    "<h3>Pipeline Stage Execution Times (total: " +
+    totalSec.toFixed(3) +
+    " s)</h3>";
+  html += '<div class="stage-bars">';
+  entries.forEach(function (entry) {
+    const pct = Math.max(2, Math.min(100, (entry.val / maxVal) * 100));
+    const ms = Math.round(entry.val * 1000);
+    html += '<div class="stage-bar-row">';
+    html += '<span class="stage-label">' + entry.name + "</span>";
+    html +=
+      '<div class="stage-track"><div class="stage-fill" style="width:' +
+      pct.toFixed(1) +
+      '%"></div></div>';
+    html +=
+      '<span class="stage-value">' +
+      entry.val.toFixed(3) +
+      " s (" +
+      ms +
+      " ms)</span>";
+    html += "</div>";
+  });
+  html += "</div></div>";
+  fallbackEl.innerHTML = html;
+}
+
+async function refreshLastRunBanner() {
+  if (typeof fetch !== "function") {
+    return;
+  }
+  if (
+    !document.getElementById("last-run-pill") &&
+    !document.getElementById("emhass-version-badge") &&
+    !document.getElementById("stage-times-client-fallback")
+  ) {
+    return;
+  }
+  try {
+    const opts =
+      typeof AbortSignal !== "undefined" && AbortSignal.timeout
+        ? { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+        : {};
+    const response = await fetch("api/v1/last-run", opts);
+    if (!response.ok) {
+      return;
+    }
+    const data = await response.json();
+    const versionBadge = document.getElementById("emhass-version-badge");
+    if (versionBadge && data && data.emhass_version) {
+      versionBadge.textContent = "EMHASS v" + String(data.emhass_version);
+    }
+    const statusPill = document.getElementById("last-run-pill");
+    if (statusPill && data) {
+      statusPill.classList.remove("status-ok", "status-warn", "status-error");
+      if (data.status === "ok" && !data.infeasible) {
+        const dur =
+          typeof data.duration_total_seconds === "number"
+            ? " • " + data.duration_total_seconds.toFixed(2) + "s"
+            : "";
+        const act = data.action ? String(data.action) + dur : "OK" + dur;
+        statusPill.textContent = act;
+        statusPill.classList.add("status-ok");
+      } else if (data.infeasible) {
+        statusPill.textContent = "Infeasible";
+        statusPill.classList.add("status-warn");
+      } else if (data.status === "error") {
+        statusPill.textContent = "Last run error";
+        statusPill.classList.add("status-error");
+      } else {
+        statusPill.textContent = "No run recorded";
+      }
+    }
+    const optimPill = document.getElementById("optim-status-pill");
+    if (optimPill && data && (!optimPill.textContent || optimPill.style.display === "none")) {
+      optimPill.classList.remove("status-ok", "status-warn", "status-error");
+      if (data.status === "ok" && !data.infeasible) {
+        optimPill.textContent = "Solver: Optimal";
+        optimPill.classList.add("status-ok");
+        optimPill.style.display = "";
+      } else if (data.infeasible) {
+        optimPill.textContent = "Solver: Infeasible";
+        optimPill.classList.add("status-warn");
+        optimPill.style.display = "";
+      } else if (data.status === "error") {
+        optimPill.textContent = "Solver: Error";
+        optimPill.classList.add("status-error");
+        optimPill.style.display = "";
+      }
+    }
+    renderStageTimesFallback(data);
+    initResultsTabs();
+  } catch (_error) {
+    // non-fatal status poll
+  }
+}
+
+function updateOptimStatusFromDom(templateDiv) {
+  const optimPill = document.getElementById("optim-status-pill");
+  if (!optimPill || !templateDiv) {
+    return;
+  }
+  const summaryDiv = templateDiv.querySelector('[data-plot-key="table2"]');
+  if (!summaryDiv) {
+    return;
+  }
+  const rows = summaryDiv.querySelectorAll("tr");
+  for (let i = 0; i < rows.length; i++) {
+    const cells = rows[i].querySelectorAll("td");
+    if (cells.length >= 2 && cells[0].textContent.trim() === "optim_status") {
+      const val = cells[1].textContent.trim();
+      optimPill.classList.remove("status-ok", "status-warn", "status-error");
+      optimPill.textContent = "Solver: " + val;
+      if (val.indexOf("Optimal") === 0) {
+        optimPill.classList.add("status-ok");
+      } else if (val.indexOf("Infeasible") !== -1) {
+        optimPill.classList.add("status-warn");
+      } else {
+        optimPill.classList.add("status-error");
+      }
+      optimPill.style.display = "";
+      return;
+    }
+  }
+}
+
+function renderSystemOverviewBadges(config) {
+  const strip = document.getElementById("system-overview-badges");
+  if (!strip || !config || typeof config !== "object") {
+    return;
+  }
+  const badges = [];
+  if (config.set_use_pv) {
+    const wf = config.weather_forecast_method ? " (" + String(config.weather_forecast_method) + ")" : "";
+    badges.push({ cls: "sys-pv", text: "PV Plant" + wf });
+  } else {
+    badges.push({ cls: "sys-muted", text: "No PV" });
+  }
+
+  if (config.set_use_battery) {
+    const nb = Number(config.number_of_batteries) || 1;
+    badges.push({ cls: "sys-batt", text: nb > 1 ? nb + " Batteries" : "1 Battery" });
+  } else {
+    badges.push({ cls: "sys-muted", text: "No Battery" });
+  }
+
+  const ndef = Number(config.number_of_deferrable_loads);
+  const defCount = Number.isFinite(ndef) ? ndef : 0;
+  badges.push({
+    cls: defCount > 0 ? "sys-loads" : "sys-muted",
+    text: defCount + " Deferrable Load" + (defCount === 1 ? "" : "s"),
+  });
+
+  if (Array.isArray(config.def_load_config)) {
+    let thermalCount = 0;
+    for (let i = 0; i < config.def_load_config.length; i++) {
+      const item = config.def_load_config[i];
+      if (item && (item.thermal_config || item.thermal_battery)) {
+        thermalCount += 1;
+      }
+    }
+    if (thermalCount > 0) {
+      badges.push({
+        cls: "sys-thermal",
+        text: thermalCount + " Thermal Load" + (thermalCount === 1 ? "" : "s"),
+      });
+    }
+  }
+
+  const nInv = Number(config.number_of_inverters) || 1;
+  badges.push({
+    cls: "sys-neutral",
+    text: nInv > 1 ? nInv + " Inverters" : config.inverter_is_hybrid ? "Hybrid Inverter" : "1 Inverter",
+  });
+
+  const capCost = Array.isArray(config.capacity_cost_per_kw)
+    ? config.capacity_cost_per_kw.some(function (v) { return Number(v) > 0; })
+    : Number(config.capacity_cost_per_kw) > 0;
+  if (capCost) {
+    badges.push({ cls: "sys-tariff", text: "Capacity Tariff" });
+  }
+  if (config.costfun) {
+    badges.push({ cls: "sys-neutral", text: "Objective: " + String(config.costfun) });
+  }
+  if (config.load_forecast_method) {
+    badges.push({ cls: "sys-load", text: "Load: " + String(config.load_forecast_method) });
+  }
+  if (config.optimization_time_step) {
+    badges.push({ cls: "sys-neutral", text: String(config.optimization_time_step) + " min step" });
+  }
+  if (config.optimization_backend === "dantzig_wolfe") {
+    badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
+  }
+
+  let html = "";
+  for (let j = 0; j < badges.length; j++) {
+    html += '<span class="sys-badge ' + badges[j].cls + '">' + badges[j].text + "</span>";
+  }
+  strip.innerHTML = html;
+}
+
+async function loadSystemOverviewBadges() {
+  if (typeof fetch !== "function" || !document.getElementById("system-overview-badges")) {
+    return;
+  }
+  try {
+    const opts =
+      typeof AbortSignal !== "undefined" && AbortSignal.timeout
+        ? { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+        : {};
+    const response = await fetch("get-config", opts);
+    if (response.ok) {
+      renderSystemOverviewBadges(await response.json());
+    }
+  } catch (_err) {
+    // non-fatal badge fetch
+  }
+}
+
+async function runThermalModelCalibration() {
+  const payload = {};
+  const extra = inputToJson();
+  if (extra === 0) {
+    return;
+  }
+  if (extra && typeof extra === "object") {
+    Object.keys(extra).forEach(function (k) {
+      payload[k] = extra[k];
+    });
+  }
+  const numField = function (id, key, isInt) {
+    const el = document.getElementById(id);
+    if (el && el.value !== "") {
+      const parsed = isInt ? parseInt(el.value, 10) : parseFloat(el.value);
+      if (Number.isFinite(parsed)) {
+        payload[key] = parsed;
+      }
+    }
+  };
+  const strField = function (id, key) {
+    const el = document.getElementById(id);
+    if (el && el.value && el.value.trim()) {
+      payload[key] = el.value.trim();
+    }
+  };
+  numField("thermal-tune-load-index", "load_index", true);
+  numField("thermal-tune-p-nom", "nominal_power", false);
+  numField("thermal-tune-lookback-hours", "lookback_hours", true);
+  numField("thermal-tune-current-alpha", "current_heating_rate", false);
+  numField("thermal-tune-current-gamma", "current_cooling_constant", false);
+  numField("thermal-tune-current-inertia", "current_thermal_inertia", false);
+  strField("thermal-tune-entity-tin", "entity_t_in");
+  strField("thermal-tune-entity-tout", "entity_t_out");
+  strField("thermal-tune-entity-power", "entity_power");
+  strField("thermal-tune-entity-setpoint", "entity_t_pred");
+  strField("thermal-tune-entity-switch", "entity_switch");
+
+  const startEl = document.getElementById("thermal-tune-date-start");
+  const endEl = document.getElementById("thermal-tune-date-end");
+  if (startEl && endEl && startEl.value.trim() && endEl.value.trim()) {
+    payload.date_ranges = [[startEl.value.trim(), endEl.value.trim()]];
+  }
+
+  showChangeStatus("loading");
+  try {
+    const response = await fetch("action/thermal-model-calibration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) {
+      const loaderEl = document.getElementById("loader");
+      if (loaderEl) {
+        loaderEl.classList.remove("loading");
+      }
+      await getTemplate();
+      showChangeStatus(response.status, {});
+    } else {
+      let msg = "";
+      try {
+        msg = await response.text();
+      } catch (_e) {
+        msg = "HTTP " + String(response.status);
+      }
+      showChangeStatus(response.status, [msg]);
+    }
+  } catch (error) {
+    showChangeStatus(0, [String(error)]);
   }
 }
