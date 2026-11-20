@@ -351,7 +351,7 @@ test('no number_of_inverters row: nothing to sync, nothing thrown', () => {
 
 test('the list view runs the sync once the sections are built', () => {
   const calls = [];
-  const container = { innerHTML: '' };
+  const container = { innerHTML: '', replaceChildren() {} };
   const ctx = { window: {}, console: { ...console, debug() {}, log() {} },
     document: { getElementById: id => (id === 'configuration-container' ? container : null) } };
   vm.createContext(ctx); vm.runInContext(source, ctx);
@@ -359,7 +359,7 @@ test('the list view runs the sync once the sections are built', () => {
   ctx.setupInverterSync = (definitions, config) => calls.push(['sync', definitions, config]);
   const config = { number_of_inverters: 2 };
   const definitions = { Local: {}, System: {} };
-  ctx.loadConfigurationListView(definitions, config, '<div></div>');
+  ctx.loadConfigurationListView(definitions, config, { content: { cloneNode: () => ({}) } });
   assert.deepEqual(calls.map(c => c[0]), ['build', 'build', 'sync']);
   assert.equal(calls[2][1], definitions);
   assert.equal(calls[2][2], config);
