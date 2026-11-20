@@ -36,6 +36,17 @@ def _data_path(tmp_path):
     web_server.emhass_conf = saved
 
 
+@pytest.fixture(autouse=True)
+def _app_logger_level():
+    """Do not rely on the ambient level: another test module lowers the
+    "emhass" logger to CRITICAL at import, which a full run inherits and which
+    would drop the ERROR record the dry-run response collects."""
+    saved = web_server.app.logger.level
+    web_server.app.logger.setLevel(logging.INFO)
+    yield
+    web_server.app.logger.setLevel(saved)
+
+
 @pytest.fixture
 def logged():
     capture = _Capture()
