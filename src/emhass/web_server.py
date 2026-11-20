@@ -437,6 +437,24 @@ async def index():
     )
 
 
+_CONFIGURATION_LIST_PATH = Path(__file__).resolve().parent / "static" / "configuration_list.html"
+
+
+async def _read_configuration_list_markup() -> Markup:
+    """Return the packaged configuration list fragment, marked safe for Jinja.
+
+    Only this fragment, which ships with EMHASS, is ever marked safe; it is never built from
+    request data. If it cannot be read, an empty fragment is returned so the page still
+    renders and the client-side template validation shows a recovery message with Save disabled.
+    """
+    try:
+        async with aiofiles.open(str(_CONFIGURATION_LIST_PATH), encoding="utf-8") as fp:
+            return Markup(await fp.read())  # noqa: S704 - packaged static markup only
+    except (OSError, UnicodeDecodeError) as e:
+        app.logger.error("Unable to read the packaged configuration list template: %s", e)
+        return Markup("")
+
+
 @app.route("/configuration", methods=["GET"])
 async def configuration():
     """
@@ -460,6 +478,7 @@ async def configuration():
     return await make_response(
         template.render(
             config=params,
+            configuration_list_markup=await _read_configuration_list_markup(),
             emhass_version=last_run.emhass_version(),
             current_year=datetime.now().year,
         )
