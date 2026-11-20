@@ -18,7 +18,7 @@ function timeoutSignal(ms) {
   setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms);
   return controller.signal;
 }
-function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
+function setup(getConfigReply, { box = '{}', staticReply = () => undefined, templateAvailable = true } = {}) {
   const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
   const nodes = {};
@@ -29,7 +29,7 @@ function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {
   nodes['configuration-container'].getElementsByClassName = () => (state.view === 'list' ? [{}] : []);
   // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
   const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => timeoutSignal(40) },
-    document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
+    document: { getElementById: id => (id === 'config-box' ? boxEl : id === 'configuration-list-template' ? (templateAvailable ? { content: { cloneNode: () => ({}) } } : null) : nodes[id]),
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
       calls.push({ url, method: options && options.method, signal: options && options.signal, cache: options && options.cache });
@@ -179,8 +179,6 @@ for (const [name, staticReply] of [
   ['a stalled definitions request', url => (url.includes('param_definitions') ? STALL : undefined)],
   ['an HTTP 404 for the definitions', url => (url.includes('param_definitions') ? new Response('nf', { status: 404 }) : undefined)],
   ['a rejected definitions request', url => { if (url.includes('param_definitions')) throw new TypeError('Failed to fetch'); }],
-  ['a stalled list template request', url => (url.includes('configuration_list') ? STALL : undefined)],
-  ['an HTTP 404 for the list template', url => (url.includes('configuration_list') ? new Response('nf', { status: 404 }) : undefined)],
 ]) {
   test(`${name} fails closed: no form, Save disabled and not attached, nothing written`, async () => {
     const s = setup(() => json(200, saved), { staticReply });
@@ -203,7 +201,7 @@ test('every configuration request is made with a timeout signal', async () => {
   await s.ctx.ToggleView({}, '<div></div>', true);
   const { s: t } = await save(() => json(200, []));
   const calls = [...s.calls, ...t.calls].filter(c => /get-config|set-config|static/.test(c.url));
-  assert.ok(calls.length >= 5);
+  assert.ok(calls.length >= 4);
   for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`);
 });
 test('a stalled Defaults request keeps the form and a second Defaults click recovers', async () => {
