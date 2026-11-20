@@ -2504,9 +2504,15 @@ function updateConfigSystemOverviewBadges(fallbackConfig) {
   if (readStr("optimization_backend", "cvxpy") === "dantzig_wolfe") {
     badges.push({ cls: "sys-fed", text: "Federated Coordinator" });
   }
-  strip.innerHTML =
-    '<span class="system-overview-title">Configured system:</span>' +
-    badges
-      .map((b) => `<span class="sys-badge ${b.cls}">${escapeHtml(b.text)}</span>`)
-      .join("");
+  // Build badges as DOM nodes: configuration values are text, never HTML.
+  const heading = document.createElement("span");
+  heading.className = "system-overview-title";
+  heading.textContent = "Configured system:";
+  const badgeNodes = badges.map((badge) => {
+    const element = document.createElement("span");
+    element.className = `sys-badge ${badge.cls}`;
+    element.textContent = badge.text;
+    return element;
+  });
+  strip.replaceChildren(heading, ...badgeNodes);
 }
