@@ -10023,9 +10023,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         target_energy = 24 * 3000
 
         # Allow small numerical tolerance (e.g. 1%)
-        self.assertAlmostEqual(
-            total_energy_delivered, target_energy, delta=target_energy * 0.01
-        )
+        self.assertAlmostEqual(total_energy_delivered, target_energy, delta=target_energy * 0.01)
 
         # Active-step count and peak power are invariants of the integer
         # (MILP) solution only. When the solver falls back to a relaxed LP,
