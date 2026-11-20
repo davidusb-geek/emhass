@@ -7369,7 +7369,7 @@ class Optimization:
         semi_cont = optim_conf["treat_deferrable_load_as_semi_cont"]
         nominal = optim_conf["nominal_power_of_deferrable_loads"]
         configs = optim_conf.get("def_load_config") or []
-        load_config = configs[k] if len(configs) > k else {}
+        load_config = configs[k] if 0 <= k < len(configs) else {}
         if shared_tank_membership is None:
             shared_tank_membership = self._load_shared_tank_membership()
         return bool(

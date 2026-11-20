@@ -12,6 +12,7 @@ import platform
 import re
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -252,6 +253,16 @@ def _live_optim_slot() -> Path:
     """One live optimization at a time across workers sharing a data folder."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
     return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+
+
+@asynccontextmanager
+async def _open_lock_slot(path: Path):
+    """Open a lock-slot file off the event loop and close it on exit."""
+    slot = await asyncio.to_thread(open, path, "a+")
+    try:
+        yield slot
+    finally:
+        await asyncio.to_thread(slot.close)
 
 
 # Add custom filter for trusted HTML content
@@ -751,7 +762,7 @@ async def parameter_set():
     # Each file is replaced whole, so an action reading params.pkl meanwhile sees the
     # old file or the new one. The lock keeps two saves, on this worker or another,
     # from leaving config.json from one next to params.pkl from the other.
-    with open(_config_save_slot(), "a+") as slot:
+    async with _open_lock_slot(_config_save_slot()) as slot:
         if not await _wait_for_lock(slot, CONFIG_SAVE_LOCK_WAIT_S):
             app.logger.error("Another configuration save is running. Nothing was saved")
             response = await make_response(
@@ -1219,7 +1230,7 @@ async def api_v1_dry_run(action_name: str):
         # One dry run at a time: a burst of them, which cold-solve, must never
         # queue ahead of the live MPC run. One that arrives while another runs,
         # on this worker or another, gets 429.
-        with open(_dry_run_slot(), "a+") as slot:
+        async with _open_lock_slot(_dry_run_slot()) as slot:
             if not try_lock_file(slot):
                 app.logger.error(
                     "Another dry run is running, and one runs at a time. Retry shortly. "
@@ -1396,7 +1407,7 @@ async def action_call(action_name: str):
         return await _action_call_unlocked(action_name)
 
     try:
-        slot = open(_live_optim_slot(), "a+")
+        slot = await asyncio.to_thread(open, _live_optim_slot(), "a+")
     except OSError as exc:
         # Fail closed: without the lock an overlapping run could not be told apart,
         # so nothing is loaded, solved or written. The caller may retry.
@@ -1411,7 +1422,7 @@ async def action_call(action_name: str):
         response.headers["Retry-After"] = "2"
         return response
 
-    with slot:
+    try:
         if not try_lock_file(slot):
             # Warning only, and no " >> ": an ERROR line in the shared action log
             # would make the in-flight request incorrectly report a failure.
@@ -1429,6 +1440,8 @@ async def action_call(action_name: str):
             return await _action_call_unlocked(action_name)
         finally:
             unlock_file(slot)
+    finally:
+        await asyncio.to_thread(slot.close)
 
 
 async def _action_call_unlocked(action_name: str):
