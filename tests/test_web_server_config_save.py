@@ -291,3 +291,41 @@ def test_replace_file_still_replaces_when_owner_or_mode_cannot_be_copied(tmp_pat
     with patch.object(utils.os, call, refuse):
         asyncio.run(utils.replace_file(target, "new"))
     assert target.read_text() == "new"
+
+
+def _get_configuration(web):
+    async def go():
+        r = await web.ws.app.test_client().get("/configuration")
+        return r.status_code, await r.get_data(as_text=True)
+
+    return asyncio.run(go())
+
+
+def test_an_empty_save_is_refused_and_leaves_both_files_as_they_were(web):
+    before = web.files()
+    status, _ = web.post("")
+    assert status == 400
+    assert web.files() == before
+
+
+def test_the_configuration_page_embeds_the_packaged_list_template(web):
+    status, html = _get_configuration(web)
+    assert status == 200
+    assert '<template id="configuration-list-template">' in html
+    assert 'id="Deferrable Loads" class="section-card"' in html
+
+
+@pytest.mark.parametrize("failure", ["missing", "directory", "not_utf8"])
+def test_an_unreadable_packaged_template_still_renders_the_page_with_an_empty_template(
+    web, monkeypatch, tmp_path, failure
+):
+    path = tmp_path / "configuration_list.html"
+    if failure == "directory":
+        path.mkdir()
+    elif failure == "not_utf8":
+        path.write_bytes(b"\xff\xfe\x00<div>")
+    monkeypatch.setattr(web.ws, "_CONFIGURATION_LIST_PATH", path)
+    status, html = _get_configuration(web)
+    assert status == 200
+    assert '<template id="configuration-list-template"></template>' in html
+    assert "section-card" not in html.split("</template>")[0].split("<template", 1)[-1]

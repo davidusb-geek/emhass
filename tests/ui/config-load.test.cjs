@@ -18,7 +18,12 @@ function timeoutSignal(ms) {
   setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms);
   return controller.signal;
 }
-function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {}) {
+const SECTIONS = ['Local', 'System', 'Tariff', 'Solar System (PV)', 'Inverters', 'Battery', 'Deferrable Loads'];
+// a template-shaped fixture: <template>.content with the section cards the loader requires
+const makeTemplate = (ids = SECTIONS, { body = true } = {}) => ({ content: {
+  querySelectorAll: () => ids.map(id => ({ id, querySelector: () => (body ? {} : null) })),
+  cloneNode: () => ({}) } });
+function setup(getConfigReply, { box = '{}', staticReply = () => undefined, template = makeTemplate() } = {}) {
   const el = () => ({ style: {}, innerHTML: '', textContent: '', disabled: false, listeners: {},
     classList: { add() {}, remove() {} }, addEventListener(type, fn) { this.listeners[type] = fn; } });
   const nodes = {};
@@ -29,7 +34,7 @@ function setup(getConfigReply, { box = '{}', staticReply = () => undefined } = {
   nodes['configuration-container'].getElementsByClassName = () => (state.view === 'list' ? [{}] : []);
   // a short timeout keeps the stalled-request tests fast; the signal is the real AbortSignal
   const ctx = { window: {}, console, setTimeout: () => 0, Response, AbortSignal: { timeout: () => timeoutSignal(40) },
-    document: { getElementById: id => (id === 'config-box' ? boxEl : nodes[id]),
+    document: { getElementById: id => (id === 'config-box' ? boxEl : id === 'configuration-list-template' ? template : nodes[id]),
       getElementsByClassName: () => (state.view === 'list' ? [{}] : []) },
     fetch: async (url, options) => {
       calls.push({ url, method: options && options.method, signal: options && options.signal, cache: options && options.cache });
@@ -95,7 +100,7 @@ test('HTTP 200 renders the saved configuration and attaches the buttons', async 
 test('List/Box toggle keeps the current view when GET /get-config fails', async () => {
   const s = setup(() => json(500, ['failed to retrieve default config file']));
   s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-  await s.ctx.ToggleView({}, '<div></div>', false);
+  await s.ctx.ToggleView({}, makeTemplate(), false);
   assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['alert-text'].textContent, /failed to retrieve default config file/);
@@ -103,7 +108,7 @@ test('List/Box toggle keeps the current view when GET /get-config fails', async 
 test('Defaults keeps the current form when GET /get-config/defaults fails with a JSON error', async () => {
   const s = setup(() => json(500, ['failed to retrieve default config file']));
   s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['alert-text'].textContent, /failed to retrieve default config file/);
@@ -112,7 +117,7 @@ test('Defaults keeps the current form when GET /get-config/defaults fails with a
 test('Defaults keeps the current form when GET /get-config/defaults fails with an HTML body', async () => {
   const s = setup(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
   s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['alert-text'].textContent, /HTTP 502/);
@@ -120,7 +125,7 @@ test('Defaults keeps the current form when GET /get-config/defaults fails with a
 test('Defaults keeps the current form when the GET /get-config/defaults request is rejected', async () => {
   const s = setup(() => { throw new TypeError('Failed to fetch'); });
   s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['alert-text'].textContent, /Failed to fetch/);
@@ -130,7 +135,7 @@ for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', 
   test(`Defaults keeps the current form when GET /get-config/defaults returns 200 with ${name}`, async () => {
     const s = setup(() => new Response(body, { status: 200 }));
     s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-    await s.ctx.ToggleView({}, '<div></div>', true);
+    await s.ctx.ToggleView({}, makeTemplate(), true);
     assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
     assert.equal(s.state.rendered, undefined);
     assert.equal(s.nodes.alert.style.display, 'block');
@@ -139,7 +144,7 @@ for (const [name, body] of [['malformed JSON', '{"costfun":'], ['a JSON array', 
 }
 test('List/Box toggle still switches views when GET /get-config succeeds', async () => {
   const s = setup(() => json(200, saved));
-  await s.ctx.ToggleView({}, '<div></div>', false);
+  await s.ctx.ToggleView({}, makeTemplate(), false);
   assert.equal(s.state.rendered, undefined);
   assert.match(s.nodes['configuration-container'].innerHTML, /config-box/);
   assert.deepEqual(JSON.parse(s.boxEl.value), saved);
@@ -179,8 +184,6 @@ for (const [name, staticReply] of [
   ['a stalled definitions request', url => (url.includes('param_definitions') ? STALL : undefined)],
   ['an HTTP 404 for the definitions', url => (url.includes('param_definitions') ? new Response('nf', { status: 404 }) : undefined)],
   ['a rejected definitions request', url => { if (url.includes('param_definitions')) throw new TypeError('Failed to fetch'); }],
-  ['a stalled list template request', url => (url.includes('configuration_list') ? STALL : undefined)],
-  ['an HTTP 404 for the list template', url => (url.includes('configuration_list') ? new Response('nf', { status: 404 }) : undefined)],
 ]) {
   test(`${name} fails closed: no form, Save disabled and not attached, nothing written`, async () => {
     const s = setup(() => json(200, saved), { staticReply });
@@ -191,30 +194,44 @@ for (const [name, staticReply] of [
     assert.deepEqual(setConfigCalls(s), []);
   });
 }
-for (const [name, body] of [['an empty body', ''], ['a blank body', ' '+String.fromCharCode(10)+' ']]) {
-  test(`an HTTP 200 list template with ${name} fails closed with a visible, actionable error`, async () => {
-    const s = setup(() => json(200, saved), { staticReply: url => (url.includes('configuration_list') ? new Response(body, { status: 200 }) : undefined) });
+for (const [name, template, message] of [
+  ['missing', null, /configuration list template/],
+  ['without content', {}, /configuration list template/],
+  ['empty', makeTemplate([]), /incomplete.*Local.*Deferrable Loads/],
+  ['one section only', makeTemplate(['Local']), /incomplete.*System.*Inverters/],
+  ['missing one required section', makeTemplate(SECTIONS.filter(id => id !== 'Battery')), /incomplete.*Battery/],
+  ['sections without a section-body', makeTemplate(SECTIONS, { body: false }), /incomplete/],
+]) {
+  test(`a ${name} packaged template fails closed with a recovery message`, async () => {
+    const s = setup(() => json(200, saved), { template });
     await s.load(); failClosed(s);
-    assert.match(s.nodes['alert-text'].textContent, /configuration_list\.html.*empty/);
+    assert.match(s.nodes['alert-text'].textContent, message);
   });
 }
+test('a complete packaged template is accepted', async () => {
+  const s = setup(() => json(200, saved));
+  await s.load();
+  assert.deepEqual(s.state.rendered, saved);
+  assert.equal(s.nodes.save.disabled, false);
+});
+
 test('every configuration request is made with a timeout signal', async () => {
   const s = setup(() => json(200, saved)); await s.load();
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   const { s: t } = await save(() => json(200, []));
   const calls = [...s.calls, ...t.calls].filter(c => /get-config|set-config|static/.test(c.url));
-  assert.ok(calls.length >= 5);
+  assert.ok(calls.length >= 4);
   for (const c of calls) assert.ok(c.signal instanceof AbortSignal, `${c.url} has no timeout signal`);
 });
 test('a stalled Defaults request keeps the form and a second Defaults click recovers', async () => {
   let stall = true;
   const s = setup(() => (stall ? STALL : json(200, saved)));
   s.nodes['configuration-container'].innerHTML = 'EDITED FORM';
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.equal(s.nodes['configuration-container'].innerHTML, 'EDITED FORM');
   assert.match(s.nodes['alert-text'].textContent, /abort|time/i); assert.deepEqual(setConfigCalls(s), []);
   stall = false;
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.deepEqual(s.state.rendered, saved);
 });
 test('a stalled /set-config is reported and a later save succeeds', async () => {
@@ -230,10 +247,10 @@ test('a stalled /set-config is reported and a later save succeeds', async () => 
 test('a successful request clears the error shown for the failed one before it', async () => {
   let fail = true;
   const s = setup(() => (fail ? json(500, ['failed to retrieve default config file']) : json(200, saved)));
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.equal(s.nodes.alert.style.display, 'block');
   fail = false;
-  await s.ctx.ToggleView({}, '<div></div>', true);
+  await s.ctx.ToggleView({}, makeTemplate(), true);
   assert.deepEqual(s.state.rendered, saved); assert.equal(s.nodes.alert.style.display, 'none');
 });
 test('a successful save clears the error of a save that timed out', async () => {
@@ -244,13 +261,13 @@ test('a successful save clears the error of a save that timed out', async () => 
   stall = false; await s.ctx.saveConfiguration({});
   assert.equal(s.nodes.alert.style.display, 'none');
 });
-test('the definitions and the list template are revalidated, not served from the 12 h static cache', async () => {
+test('definitions are revalidated; the packaged template requires no network fetch', async () => {
   const s = setup(() => json(200, saved)); await s.load();
-  for (const name of ['param_definitions', 'configuration_list']) {
-    const call = s.calls.find(c => c.url.includes(name));
-    assert.equal(call.cache, 'no-cache', `${name} may be served stale after an upgrade`);
-  }
+  const call = s.calls.find(c => c.url.includes('param_definitions'));
+  assert.equal(call.cache, 'no-cache');
+  assert.ok(!s.calls.some(c => c.url.includes('configuration_list')));
 });
+
 test('a timed-out save is reported as an unknown outcome whichever error the browser aborts with', async () => {
   const s = setup(() => STALL_ABORT_ERROR); s.state.view = 'box';
   const out = []; s.ctx.showChangeStatus = (st, log) => out.push(log.join(' '));
