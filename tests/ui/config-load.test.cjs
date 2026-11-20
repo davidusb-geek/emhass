@@ -189,13 +189,12 @@ for (const [name, staticReply] of [
     assert.deepEqual(setConfigCalls(s), []);
   });
 }
-for (const [name, body] of [['an empty body', ''], ['a blank body', ' '+String.fromCharCode(10)+' ']]) {
-  test(`an HTTP 200 list template with ${name} fails closed with a visible, actionable error`, async () => {
-    const s = setup(() => json(200, saved), { staticReply: url => (url.includes('configuration_list') ? new Response(body, { status: 200 }) : undefined) });
-    await s.load(); failClosed(s);
-    assert.match(s.nodes['alert-text'].textContent, /configuration_list\.html.*empty/);
-  });
-}
+test('a missing packaged template fails closed with a recovery message', async () => {
+  const s = setup(() => json(200, saved), { templateAvailable: false });
+  await s.load(); failClosed(s);
+  assert.match(s.nodes['alert-text'].textContent, /configuration list template/);
+});
+
 test('every configuration request is made with a timeout signal', async () => {
   const s = setup(() => json(200, saved)); await s.load();
   await s.ctx.ToggleView({}, '<div></div>', true);
@@ -242,13 +241,13 @@ test('a successful save clears the error of a save that timed out', async () => 
   stall = false; await s.ctx.saveConfiguration({});
   assert.equal(s.nodes.alert.style.display, 'none');
 });
-test('the definitions and the list template are revalidated, not served from the 12 h static cache', async () => {
+test('definitions are revalidated; the packaged template requires no network fetch', async () => {
   const s = setup(() => json(200, saved)); await s.load();
-  for (const name of ['param_definitions', 'configuration_list']) {
-    const call = s.calls.find(c => c.url.includes(name));
-    assert.equal(call.cache, 'no-cache', `${name} may be served stale after an upgrade`);
-  }
+  const call = s.calls.find(c => c.url.includes('param_definitions'));
+  assert.equal(call.cache, 'no-cache');
+  assert.ok(!s.calls.some(c => c.url.includes('configuration_list')));
 });
+
 test('a timed-out save is reported as an unknown outcome whichever error the browser aborts with', async () => {
   const s = setup(() => STALL_ABORT_ERROR); s.state.view = 'box';
   const out = []; s.ctx.showChangeStatus = (st, log) => out.push(log.join(' '));
