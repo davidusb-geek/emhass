@@ -112,3 +112,75 @@ def test_response_body_still_reports_the_failure():
     assert response.status_code == 500
     assert body["status"] == "not-run"
     assert any("boom" in e for e in body["errors"])
+
+
+class _Formatted(logging.Handler):
+    """Collects each record as a real formatter writes it, traceback included."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.setFormatter(logging.Formatter("%(levelname)s - %(name)s - %(message)s"))
+        self.records: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(self.format(record))
+
+
+@pytest.fixture
+def formatted():
+    handler = _Formatted()
+    saved = web_server.app.logger.level
+    web_server.app.logger.addHandler(handler)
+    web_server.app.logger.setLevel(logging.DEBUG)
+    try:
+        yield handler.records
+    finally:
+        web_server.app.logger.removeHandler(handler)
+        web_server.app.logger.setLevel(saved)
+
+
+def _failing_dry_run(exc: BaseException):
+    with patch.object(web_server, "_dry_run", AsyncMock(side_effect=exc)):
+        return _post("naive-mpc-optim")
+
+
+def test_formatted_traceback_cannot_be_forged_by_exception_text(formatted):
+    """logger.exception() appends 'ValueError: <message>' to the record; a
+    hostile message must not add physical lines or control characters there."""
+    _failing_dry_run(ValueError("benign"))
+    benign = formatted[-1]
+    formatted.clear()
+    _failing_dry_run(ValueError(HOSTILE * 80))
+    assert len(formatted) == 1, "one ERROR record per failure"
+    hostile = formatted[0]
+    assert hostile.splitlines() == hostile.split("\n"), "only \n separates lines"
+    for special in SPECIALS[:1] + SPECIALS[2:]:
+        assert special not in hostile, repr(special)
+    assert len(hostile.splitlines()) == len(benign.splitlines())
+    assert not any(line.startswith("ERROR - forged") for line in hostile.splitlines())
+    assert len(hostile) < len(benign) + 1500
+
+
+def test_formatted_traceback_drops_hostile_chained_exception_text(formatted):
+    try:
+        try:
+            raise OSError(HOSTILE)
+        except OSError as inner:
+            raise RuntimeError("outer") from inner
+    except RuntimeError as exc:
+        chained = exc
+    _failing_dry_run(chained)
+    text = formatted[0]
+    for special in SPECIALS[:1] + SPECIALS[2:]:
+        assert special not in text, repr(special)
+    assert "forged" not in text.replace("\u001b", "") or "\nERROR - forged" not in text
+
+
+def test_ordinary_exception_keeps_type_message_and_frames(formatted):
+    _failing_dry_run(KeyError("sensor_x"))
+    text = formatted[0]
+    assert text.startswith("ERROR - emhass.web_server - Dry run of naive-mpc-optim failed: ")
+    assert "Traceback (most recent call last):" in text
+    assert "web_server.py" in text and "api_v1_dry_run" in text
+    assert text.splitlines()[-1] == "KeyError: 'sensor_x'"
+    assert len(formatted) == 1
