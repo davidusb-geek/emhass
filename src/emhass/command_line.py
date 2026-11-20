@@ -291,16 +291,16 @@ class OptimizationCache:
                 return None
             return val.total_seconds() if hasattr(val, "total_seconds") else float(val)
 
-        def to_tuple(val):
+        def to_tuple(val) -> tuple:
             """Convert lists/arrays to tuples for hashability."""
             if val is None:
-                return ()
-            if hasattr(val, "tolist"):
-                val = val.tolist()
-            if isinstance(val, list | tuple):
-                # Handle nested lists (e.g., nominal_power with sequences)
-                return tuple(tuple(v) if isinstance(v, list | tuple) else v for v in val)
-            return (val,)
+                items = []
+            else:
+                if hasattr(val, "tolist"):
+                    val = val.tolist()
+                items = val if isinstance(val, list | tuple) else [val]
+            # Handle nested lists (e.g., nominal_power with sequences)
+            return tuple(tuple(v) if isinstance(v, list | tuple) else v for v in items)
 
         def config_hash(cfg: dict, exclude_keys: set | None = None) -> str:
             """Create a stable hash of config dict for cache key comparison.
@@ -1679,8 +1679,8 @@ async def _identify_battery_impl(
             json_path, max_age_hours, logger, label="Battery identification model"
         ):
             try:
-                with open(json_path, "rb") as inp:
-                    payload = json.loads(inp.read())
+                async with aiofiles.open(json_path, "rb") as inp:
+                    payload = json.loads(await inp.read())
             except (KeyError, ValueError, OSError) as e:
                 logger.warning(
                     f"Battery identification result unreadable ({type(e).__name__}); will re-fit."
@@ -5080,82 +5080,68 @@ async def main():
     # Perform selected action
     if args.action == "perfect-optim":
         opt_res = await perfect_forecast_optim(input_data_dict, logger, debug=args.debug)
+        action_result = opt_res
     elif args.action == "dayahead-optim":
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=args.debug)
+        action_result = opt_res
     elif args.action == "naive-mpc-optim":
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=args.debug)
+        action_result = opt_res
     elif args.action == "forecast-model-fit":
-        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
-            input_data_dict, logger, debug=args.debug
-        )
+        action_result = await forecast_model_fit(input_data_dict, logger, debug=args.debug)
         opt_res = None
     elif args.action == "forecast-model-predict":
         if args.debug:
             _, _, mlf = await forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred = await forecast_model_predict(input_data_dict, logger, debug=args.debug, mlf=mlf)
+        action_result = await forecast_model_predict(
+            input_data_dict, logger, debug=args.debug, mlf=mlf
+        )
         opt_res = None
     elif args.action == "forecast-model-tune":
         if args.debug:
             _, _, mlf = await forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred_optim, mlf = await forecast_model_tune(
+        action_result = await forecast_model_tune(
             input_data_dict, logger, debug=args.debug, mlf=mlf
         )
         opt_res = None
     elif args.action == "forecast-calibration":
         await forecast_calibration(input_data_dict, logger)
         opt_res = None
+        action_result = opt_res
     elif args.action == "regressor-model-fit":
-        mlr = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
+        action_result = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
         opt_res = None
     elif args.action == "regressor-model-predict":
         if args.debug:
             mlr = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlr = None
-        prediction = await regressor_model_predict(
+        action_result = await regressor_model_predict(
             input_data_dict, logger, debug=args.debug, mlr=mlr
         )
         opt_res = None
     elif args.action == "export-influxdb-to-csv":
-        success = await export_influxdb_to_csv(input_data_dict, logger)
+        action_result = await export_influxdb_to_csv(input_data_dict, logger)
         opt_res = None
     elif args.action == "publish-data":
         opt_res = await publish_data(input_data_dict, logger)
+        action_result = opt_res
     else:
         logger.error("The passed action argument is not valid")
         logger.error(
             "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, forecast-calibration, pv-bias-calibration, export-influxdb-to-csv or publish-data"
         )
         opt_res = None
+        action_result = opt_res
     logger.info(opt_res)
     # Flush the logger
     ch.close()
     logger.removeHandler(ch)
-    if (
-        args.action == "perfect-optim"
-        or args.action == "dayahead-optim"
-        or args.action == "naive-mpc-optim"
-        or args.action == "publish-data"
-    ):
-        return opt_res
-    elif args.action == "forecast-model-fit":
-        return df_fit_pred, df_fit_pred_backtest, mlf
-    elif args.action == "forecast-model-predict":
-        return df_pred
-    elif args.action == "regressor-model-fit":
-        return mlr
-    elif args.action == "regressor-model-predict":
-        return prediction
-    elif args.action == "export-influxdb-to-csv":
-        return success
-    elif args.action == "forecast-model-tune":
-        return df_pred_optim, mlf
-    else:
-        return opt_res
+    return action_result
 
 
 def main_sync():

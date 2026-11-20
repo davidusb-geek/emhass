@@ -94,7 +94,7 @@ class _NormalEquations:
     ) -> None:
         self.m, self.n = m, n
         nnz = np.bincount(cols, minlength=n)
-        dense_cols = np.where(nnz > 3)[0]  # the plan columns
+        dense_cols = np.nonzero(nnz > 3)[0]  # the plan columns
         self.dense_cols = dense_cols
         is_dense = np.zeros(n, bool)
         is_dense[dense_cols] = True
@@ -108,7 +108,7 @@ class _NormalEquations:
         ends = np.searchsorted(c, np.arange(n), side="right")
         cnt = ends - starts
         for k in (1, 2, 3):
-            js = np.where(cnt == k)[0]
+            js = np.nonzero(cnt == k)[0]
             if js.size == 0:
                 continue
             idx = starts[js][:, None] + np.arange(k)[None, :]

@@ -3649,23 +3649,23 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # This should not raise NonExistentTimeError
         try:
             p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
-            # Check that index is properly timezone-aware
-            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
-            logger.info("DST forward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST forward transition: {e}")
+        self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+        self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
+        # Check that index is properly timezone-aware
+        self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
+        logger.info("DST forward transition test for naive method: PASSED")
 
         # Test typical load forecast during DST transition
         try:
             p_load_forecast_typical = await dst_fcst.get_load_forecast(method="typical")
-            self.assertIsInstance(p_load_forecast_typical, pd.core.series.Series)
-            self.assertEqual(len(p_load_forecast_typical), len(dst_fcst.forecast_dates))
-            self.assertEqual(p_load_forecast_typical.index.tz, sydney_tz)
-            logger.info("DST forward transition test for typical method: PASSED")
         except Exception as e:
             self.fail(f"Typical forecast failed during DST forward transition: {e}")
+        self.assertIsInstance(p_load_forecast_typical, pd.core.series.Series)
+        self.assertEqual(len(p_load_forecast_typical), len(dst_fcst.forecast_dates))
+        self.assertEqual(p_load_forecast_typical.index.tz, sydney_tz)
+        logger.info("DST forward transition test for typical method: PASSED")
 
         # Test case 2: Test tz_localize with nonexistent times directly
         # Create naive timestamps that include the nonexistent 2:00 AM on DST forward day
@@ -3678,35 +3678,34 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             localized_times = naive_times.tz_localize(
                 sydney_tz, ambiguous="infer", nonexistent="shift_forward"
             )
-            # Verify that nonexistent times were shifted forward
-            self.assertEqual(len(localized_times), len(naive_times))
-            # The 2:00 AM should become 3:00 AM (shifted forward)
-            for ts in localized_times:
-                self.assertNotEqual(
-                    ts.hour,
-                    2,
-                    "No timestamp should have hour=2 after DST forward shift",
-                )
-
-            # Add explicit assertion for shifted timestamps
-            # Check that 2:00 AM is replaced by 3:00 AM (shifted forward)
-            expected_hours = [
-                1,
-                3,
-                3,
-            ]  # 1:30 AM, 3:00 AM (shifted from 2:00), 3:30 AM (shifted from 2:30)
-            actual_hours = [ts.hour for ts in localized_times]
-            self.assertEqual(
-                actual_hours,
-                expected_hours,
-                "Expected nonexistent times to be shifted forward correctly",
+        except Exception as e:
+            self.fail(f"Direct tz_localize failed during DST forward transition: {e}")
+        # Verify that nonexistent times were shifted forward
+        self.assertEqual(len(localized_times), len(naive_times))
+        # The 2:00 AM should become 3:00 AM (shifted forward)
+        for ts in localized_times:
+            self.assertNotEqual(
+                ts.hour,
+                2,
+                "No timestamp should have hour=2 after DST forward shift",
             )
 
-            logger.info("Direct tz_localize DST forward transition test: PASSED")
-        except Exception as e:
-            self.fail(
-                f"Direct tz_localize failed during DST forward transition: {e}"
-            )  # Test case 3: US Eastern Time DST transition (March)
+        # Add explicit assertion for shifted timestamps
+        # Check that 2:00 AM is replaced by 3:00 AM (shifted forward)
+        expected_hours = [
+            1,
+            3,
+            3,
+        ]  # 1:30 AM, 3:00 AM (shifted from 2:00), 3:30 AM (shifted from 2:30)
+        actual_hours = [ts.hour for ts in localized_times]
+        self.assertEqual(
+            actual_hours,
+            expected_hours,
+            "Expected nonexistent times to be shifted forward correctly",
+        )
+
+        logger.info("Direct tz_localize DST forward transition test: PASSED")
+        # Test case 3: US Eastern Time DST transition (March)
         # DST starts on March 9, 2025 at 2:00 AM -> 3:00 AM
         eastern_tz = pytz.timezone("US/Eastern")
         us_dst_start = eastern_tz.localize(datetime(2025, 3, 9, 1, 0, 0))  # March 9, 1 AM
@@ -3740,12 +3739,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         try:
             us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
-            logger.info("US Eastern DST forward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during forward transition: {e}")
+        self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+        self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+        self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
+        logger.info("US Eastern DST forward transition test: PASSED")
 
     async def test_dst_backward_transition_handling(self):
         """Test that forecast methods handle DST backward transitions (fall back) with ambiguous times."""
@@ -3793,13 +3792,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Test naive load forecast during DST backward transition
         try:
             p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
-            # Check that index is properly timezone-aware
-            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
-            logger.info("DST backward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST backward transition: {e}")
+        self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+        self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
+        # Check that index is properly timezone-aware
+        self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
+        logger.info("DST backward transition test for naive method: PASSED")
 
         # Test case 2: Test tz_localize with ambiguous times directly
         # Create naive timestamps that include the ambiguous 2:00-3:00 AM on DST backward day
@@ -3809,11 +3808,25 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         # This should handle ambiguous times with our fix
         # For ambiguous times, we'll use "NaT" to handle them gracefully, or specify the first occurrence
+        used_fallback = False
         try:
             # For backward transitions, ambiguous="infer" sometimes fails, so use explicit handling
             localized_times = naive_times.tz_localize(
                 sydney_tz, ambiguous="NaT", nonexistent="shift_forward"
             )
+        except Exception as e:
+            # Try alternative approach with first occurrence of ambiguous times
+            used_fallback = True
+            try:
+                localized_times = naive_times.tz_localize(
+                    sydney_tz,
+                    ambiguous=[True, True, True, True, False],
+                    nonexistent="shift_forward",
+                )
+            except Exception as e2:
+                self.fail(f"Direct tz_localize failed during DST backward transition: {e} and {e2}")
+
+        if not used_fallback:
             # Verify that we got some valid results (non-NaT times)
             valid_times = localized_times.dropna()
             self.assertGreater(
@@ -3826,23 +3839,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(ts.tzinfo, "Valid timestamps should be timezone-aware")
 
             logger.info("Direct tz_localize DST backward transition test: PASSED")
-        except Exception as e:
-            # Try alternative approach with first occurrence of ambiguous times
-            try:
-                localized_times = naive_times.tz_localize(
-                    sydney_tz,
-                    ambiguous=[True, True, True, True, False],
-                    nonexistent="shift_forward",
-                )
-                # Verify that ambiguous times were handled
-                self.assertEqual(len(localized_times), len(naive_times))
-                # Check that we got reasonable results for ambiguous times
-                for ts in localized_times:
-                    self.assertIsNotNone(ts.tzinfo, "All timestamps should be timezone-aware")
+        else:
+            # Verify that ambiguous times were handled
+            self.assertEqual(len(localized_times), len(naive_times))
+            # Check that we got reasonable results for ambiguous times
+            for ts in localized_times:
+                self.assertIsNotNone(ts.tzinfo, "All timestamps should be timezone-aware")
 
-                logger.info("Direct tz_localize DST backward transition test (alternative): PASSED")
-            except Exception as e2:
-                self.fail(f"Direct tz_localize failed during DST backward transition: {e} and {e2}")
+            logger.info("Direct tz_localize DST backward transition test (alternative): PASSED")
 
         # Test case 3: US Eastern Time DST backward transition (November)
         # DST ends on November 2, 2025 at 2:00 AM -> 1:00 AM
@@ -3878,12 +3882,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         try:
             us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
-            logger.info("US Eastern DST backward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during backward transition: {e}")
+        self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+        self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+        self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
+        logger.info("US Eastern DST backward transition test: PASSED")
 
     async def test_solcast_caching_and_errors(self):
         """Test Solcast caching logic and API error handling."""

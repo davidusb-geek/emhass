@@ -3208,7 +3208,7 @@ class Forecast:
         """
         if df.index.tz is None or instants.tz is None:
             return df.loc[instants, :].values
-        by_utc = df.set_axis(df.index.tz_convert("UTC"))
+        by_utc = df.set_axis(df.index.tz_convert("UTC"), axis="index")
         return by_utc.loc[instants.tz_convert("UTC"), :].values
 
     def get_forecast_out_from_csv_or_list(
