@@ -1201,6 +1201,22 @@ async def api_v1_plan():
     return response
 
 
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _log_safe(value: object, limit: int = 200) -> str:
+    """Render request-derived text as bounded, single-line log text.
+
+    Control characters (CR, LF, ANSI escape, DEL, C1, Unicode line and
+    paragraph separators) become visible backslash-u escapes, so the text cannot
+    forge a log line or drive the terminal; other text is left as it is.
+    """
+    text = str(value)
+    cut = len(text) > limit
+    text = _LOG_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text[:limit])
+    return text + "...[truncated]" if cut else text
+
+
 @app.route("/api/v1/dry-run/<action_name>", methods=["POST"])
 async def api_v1_dry_run(action_name: str):
     """Solve an optimization as POST /action/<action_name> would, and return
@@ -1247,7 +1263,7 @@ async def api_v1_dry_run(action_name: str):
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
-        app.logger.exception(f"Dry run of {action_name} failed: {exc}")
+        app.logger.exception(f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}")
         body, code = {"status": "not-run", "plan": None}, 500
     finally:
         _dry_run_log.reset(token)
@@ -1281,7 +1297,8 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
     }
     if action_name not in DRY_RUN_ACTIONS:
         app.logger.error(
-            f"A dry run is for {', '.join(DRY_RUN_ACTIONS)}, not {action_name!r}. Nothing was run"
+            f"A dry run is for {', '.join(DRY_RUN_ACTIONS)}, not '{_log_safe(action_name)}'. "
+            "Nothing was run"
         )
         return not_run, 400
     raw = await request.get_data()
