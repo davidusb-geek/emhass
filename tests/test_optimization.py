@@ -10001,48 +10001,45 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 def_start_timestep=def_start_timestep,
                 def_end_timestep=def_end_timestep,
             )
-
-            # Assertions - accept both Optimal (MIP gap may help) and Optimal (Relaxed)
-            status = opt_res["optim_status"].iloc[0]
-            self.assertIn(
-                status,
-                ["Optimal", "Optimal (Relaxed)", "Optimal (Incumbent)"],
-                f"Expected Optimal or a fallback/incumbent status, got {status}",
-            )
-
-            # Check Load 0
-            p_def_0 = opt_res["P_deferrable0"]
-
-            # Since we might have fallen back to relaxed LP, strict timestep counting
-            # can be off by +/- 1 due to continuous "smearing" of energy.
-            # Instead, verify the Total Energy matches the requirement.
-            # Target: 24 steps * 3000 W
-            total_energy_delivered = p_def_0.sum()
-            target_energy = 24 * 3000
-
-            # Allow small numerical tolerance (e.g. 1%)
-            self.assertAlmostEqual(
-                total_energy_delivered, target_energy, delta=target_energy * 0.01
-            )
-
-            # Active-step count and peak power are invariants of the integer
-            # (MILP) solution only. When the solver falls back to a relaxed LP,
-            # energy is "smeared" across partial steps, so neither the step
-            # count nor the peak power is constrained; the total-energy check
-            # above is the invariant in that case.
-            steps_active = (p_def_0 > 10.0).sum()  # 10 W threshold ignores noise
-            max_power = p_def_0.max()
-            if status == "Optimal":
-                self.assertTrue(
-                    23 <= steps_active <= 25,
-                    f"Expected ~24 active steps, got {steps_active}",
-                )
-                self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
-
-            self.assertIn("predicted_temp_heater6", opt_res.columns)
-
         except Exception as e:
             self.fail(f"Complex optimization failed with error: {e}")
+
+        # Assertions - accept both Optimal (MIP gap may help) and Optimal (Relaxed)
+        status = opt_res["optim_status"].iloc[0]
+        self.assertIn(
+            status,
+            ["Optimal", "Optimal (Relaxed)", "Optimal (Incumbent)"],
+            f"Expected Optimal or a fallback/incumbent status, got {status}",
+        )
+
+        # Check Load 0
+        p_def_0 = opt_res["P_deferrable0"]
+
+        # Since we might have fallen back to relaxed LP, strict timestep counting
+        # can be off by +/- 1 due to continuous "smearing" of energy.
+        # Instead, verify the Total Energy matches the requirement.
+        # Target: 24 steps * 3000 W
+        total_energy_delivered = p_def_0.sum()
+        target_energy = 24 * 3000
+
+        # Allow small numerical tolerance (e.g. 1%)
+        self.assertAlmostEqual(total_energy_delivered, target_energy, delta=target_energy * 0.01)
+
+        # Active-step count and peak power are invariants of the integer
+        # (MILP) solution only. When the solver falls back to a relaxed LP,
+        # energy is "smeared" across partial steps, so neither the step
+        # count nor the peak power is constrained; the total-energy check
+        # above is the invariant in that case.
+        steps_active = (p_def_0 > 10.0).sum()  # 10 W threshold ignores noise
+        max_power = p_def_0.max()
+        if status == "Optimal":
+            self.assertTrue(
+                23 <= steps_active <= 25,
+                f"Expected ~24 active steps, got {steps_active}",
+            )
+            self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
+
+        self.assertIn("predicted_temp_heater6", opt_res.columns)
 
     def test_perform_naive_mpc_optim_complex_case_with_inactive_loads(self):
         """
@@ -10320,17 +10317,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 unit_load_cost,
                 unit_prod_price,
             )
-
-            # SUCCESS CRITERIA: The optimization finished without crashing
-            self.assertEqual(self.opt.optim_status, "Optimal")
-            self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
-
-            # We use GreaterEqual because 0 is a valid result if costs are high
-            # The important part is that we got a result, not what the result is.
-            self.assertGreaterEqual(self.opt_res_dayahead["P_deferrable0"].sum(), 0)
-
         except Exception as e:
             self.fail(f"Optimization failed when handling NaN temperatures: {e}")
+
+        # SUCCESS CRITERIA: The optimization finished without crashing
+        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
+
+        # We use GreaterEqual because 0 is a valid result if costs are high
+        # The important part is that we got a result, not what the result is.
+        self.assertGreaterEqual(self.opt_res_dayahead["P_deferrable0"].sum(), 0)
 
     def test_thermal_battery_with_partial_nan_data(self):
         """Test thermal battery optimization where some (but not all) temperature data is missing."""
@@ -10372,9 +10368,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 unit_load_cost,
                 unit_prod_price,
             )
-            self.assertEqual(self.opt.optim_status, "Optimal")
         except Exception as e:
             self.fail(f"Optimization failed with partial NaN data: {e}")
+        self.assertEqual(self.opt.optim_status, "Optimal")
 
     def test_thermal_battery_soft_constraints(self):
         """Test thermal_battery with desired_temperatures and overshoot penalty."""
