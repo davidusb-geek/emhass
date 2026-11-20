@@ -94,7 +94,7 @@ test("thermal cards treat configuration values and extra keys as data, never mar
   const byField = (name) => nodes.find((n) => n.attributes?.["data-field"] === name);
   assert.equal(byField("heating_rate").value, malicious);
   assert.equal(byField("supply_temperature").value, malicious);
-  assert.ok(nodes.some((n) => n.textContent.includes(malicious)));
+  assert.ok(nodes.some((n) => String(n.textContent ?? '').includes(malicious)));
   assert.ok(nodes.some((n) => n.className.includes("thermal-kind-select")));
   assert.ok(nodes.some((n) => n.className.includes("thermal-array-fields")));
   assert.equal(nodes.filter((n) => n.tag === "img" || n.tag === "script").length, 0);
