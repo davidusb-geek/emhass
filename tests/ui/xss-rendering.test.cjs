@@ -95,8 +95,8 @@ test("thermal cards treat configuration values and extra keys as data, never mar
   assert.equal(byField("heating_rate").value, malicious);
   assert.equal(byField("supply_temperature").value, malicious);
   assert.ok(nodes.some((n) => String(n.textContent ?? '').includes(malicious)));
-  assert.ok(nodes.some((n) => n.className.includes("thermal-kind-select")));
-  assert.ok(nodes.some((n) => n.className.includes("thermal-array-fields")));
+  assert.ok(nodes.some((n) => String(n.className ?? '').includes("thermal-kind-select")));
+  assert.ok(nodes.some((n) => String(n.className ?? '').includes("thermal-array-fields")));
   assert.equal(nodes.filter((n) => n.tag === "img" || n.tag === "script").length, 0);
 });
 
@@ -110,7 +110,7 @@ test("system overview badges render malicious-looking values as text", () => {
     number_of_deferrable_loads: 0,
   };
   vm.runInContext("updateConfigSystemOverviewBadges(saved);", ctx);
-  assert.ok(descendants(overview).some((n) => n.textContent.includes(malicious)));
+  assert.ok(descendants(overview).some((n) => String(n.textContent ?? '').includes(malicious)));
   assert.equal(descendants(overview).filter((n) => n.tag === "img").length, 0);
 });
 
