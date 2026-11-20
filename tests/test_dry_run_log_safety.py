@@ -184,3 +184,10 @@ def test_ordinary_exception_keeps_type_message_and_frames(formatted):
     assert "web_server.py" in text and "api_v1_dry_run" in text
     assert text.splitlines()[-1] == "KeyError: 'sensor_x'"
     assert len(formatted) == 1
+
+
+def test_log_safe_output_is_bounded_even_when_every_character_expands():
+    """Each escaped character becomes six, so the worst case is limit * 6."""
+    worst = web_server._log_safe("\x00" * 10**6)
+    assert len(worst) <= 200 * 6 + len("...[truncated]")
+    assert web_server._log_safe("ok text") == "ok text"
