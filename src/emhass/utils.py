@@ -1016,7 +1016,7 @@ def compile_heat_topology(topology: dict) -> dict:
         # an electric booster) can drive the tank up to the tank's max_temperatures.
         _cap = src.get("max_supply_temperature")
         if _cap is not None:
-            if isinstance(_cap, (list, tuple, np.ndarray)):
+            if isinstance(_cap, list | tuple | np.ndarray):
                 cap_value = [float(x) for x in _cap]
                 if not cap_value:
                     raise ValueError(
