@@ -2080,112 +2080,192 @@ function renderThermalLoadCards(builderEl, count) {
     thermalLoadStates.push({ kind: "standard", extra: {} });
   }
 
-  let html = '<div class="thermal-builder-header">';
-  html += "<h4>Thermal &amp; Heat Pump Model Configurator (<code>def_load_config</code>)</h4>";
-  html +=
-    '<p class="section-hint">Configure Simple Thermal Models (<code>thermal_config</code>) or Heat Pumps (<code>thermal_battery</code>) per load with a Day/Night comfort schedule generator anchored to your first optimization step hour.</p>';
-  html += "</div>";
+  // Saved configuration values enter DOM properties, never HTML parsing sinks.
+  const element = (tag, cls = "", text = null) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== null) node.textContent = String(text);
+    return node;
+  };
+  const input = (type, attributes = {}) => {
+    const node = document.createElement("input");
+    node.type = type;
+    for (const [name, value] of Object.entries(attributes)) {
+      if (name === "value") node.value = String(value);
+      else node.setAttribute(name, String(value));
+    }
+    return node;
+  };
+  const field = (parent, labelText, type, value, fieldName, ariaLabel, step) => {
+    const label = element("label", "", labelText);
+    const attrs = { "data-field": fieldName, value, "aria-label": ariaLabel };
+    if (step !== undefined) attrs.step = step;
+    label.append(input(type, attrs));
+    parent.append(label);
+  };
+  const scheduleField = (parent, cls, value, title, aria, step, bounds) => {
+    const attrs = { class: cls, value, title, "aria-label": aria };
+    if (step !== undefined) attrs.step = step;
+    if (bounds) { attrs.min = bounds[0]; attrs.max = bounds[1]; }
+    parent.append(input("number", attrs));
+  };
+  const temperatureFields = (card, minStr, maxStr, idx) => {
+    const group = element("div", "thermal-array-fields");
+    field(group, "min_temperatures (comma-separated °C)", "text", minStr,
+      "min_temperatures", "Load " + idx + " min temperatures");
+    field(group, "max_temperatures (comma-separated °C)", "text", maxStr,
+      "max_temperatures", "Load " + idx + " max temperatures");
+    card.append(group);
+  };
+  const schedule = (card, idx, isBattery) => {
+    const helper = element("div", "thermal-schedule-helper");
+    helper.append(element("span", "",
+      "Day/Night Comfort Schedule (" + getConfiguredHorizonSteps() + " steps):"));
+    const fields = element("div", "thermal-schedule-inputs");
+    const hours = [0, 23];
+    fields.append(document.createTextNode("Start h: "));
+    scheduleField(fields, "sched-first-hour", 0, "First optimization step hour (0-23)",
+      "Load " + idx + " first step hour", undefined, hours);
+    fields.append(document.createTextNode("h | "));
+    scheduleField(fields, "sched-day-start", 7, "Day start hour",
+      "Load " + idx + " day start hour", undefined, hours);
+    fields.append(document.createTextNode("h–"));
+    scheduleField(fields, "sched-day-end", 22, "Day end hour",
+      "Load " + idx + " day end hour", undefined, hours);
+    fields.append(document.createTextNode("h | Min D/N: "));
+    scheduleField(fields, "sched-min-day", 20, "",
+      "Load " + idx + " day min temperature", 0.5);
+    fields.append(document.createTextNode(" / "));
+    scheduleField(fields, "sched-min-night", isBattery ? 18.5 : 18, "",
+      "Load " + idx + " night min temperature", 0.5);
+    fields.append(document.createTextNode(" °C | Max: "));
+    scheduleField(fields, "sched-max-day", isBattery ? 26 : 23, "",
+      "Load " + idx + " max temperature", 0.5);
+    fields.append(document.createTextNode(" °C "));
+    const button = element("button", "tool-btn apply-sched-btn", "Fill Schedule");
+    button.type = "button";
+    button.dataset.loadIndex = String(idx);
+    fields.append(button);
+    helper.append(fields);
+    card.append(helper);
+  };
+
+  const heading = element("div", "thermal-builder-header");
+  const title = element("h4");
+  title.append(document.createTextNode("Thermal & Heat Pump Model Configurator ("));
+  title.append(element("code", "", "def_load_config"));
+  title.append(document.createTextNode(")"));
+  const info = element("p", "section-hint");
+  info.append(document.createTextNode("Configure Simple Thermal Models ("));
+  info.append(element("code", "", "thermal_config"));
+  info.append(document.createTextNode(") or Heat Pumps ("));
+  info.append(element("code", "", "thermal_battery"));
+  info.append(document.createTextNode(") per load with a Day/Night comfort schedule generator anchored to your first optimization step hour."));
+  heading.append(title, info);
+  builderEl.replaceChildren(heading);
 
   if (count <= 0) {
-    html += '<p class="muted-hint">Set Number of Loads &gt; 0 to configure deferrable or thermal loads.</p>';
-    builderEl.innerHTML = html;
+    builderEl.append(element("p", "muted-hint",
+      "Set Number of Loads > 0 to configure deferrable or thermal loads."));
     return;
   }
 
-  html += '<div class="thermal-cards-grid">';
+  const grid = element("div", "thermal-cards-grid");
   for (let idx = 0; idx < count; idx++) {
     const state = thermalLoadStates[idx] || { kind: "standard", extra: {} };
     const tc = state.thermal_config || {};
     const tb = state.thermal_battery || {};
     const extraKeys = state.extra ? Object.keys(state.extra) : [];
-    const horizon = getConfiguredHorizonSteps();
-
-    html += `<div class="thermal-load-card" data-load-index="${idx}">`;
-    html += `<div class="thermal-load-card-head"><strong>Load ${idx}</strong>`;
-    html += `<select class="thermal-kind-select form-select" data-load-index="${idx}" aria-label="Deferrable load ${idx} thermal model type">`;
-    html += `<option value="standard"${state.kind === "standard" ? " selected" : ""}>Standard Deferrable Load ({})</option>`;
-    html += `<option value="thermal_config"${state.kind === "thermal_config" ? " selected" : ""}>Simple Thermal Load (thermal_config)</option>`;
-    html += `<option value="thermal_battery"${state.kind === "thermal_battery" ? " selected" : ""}>Heat Pump / Thermal Battery (thermal_battery)</option>`;
+    const card = element("div", "thermal-load-card");
+    card.dataset.loadIndex = String(idx);
+    const head = element("div", "thermal-load-card-head");
+    head.append(element("strong", "", "Load " + idx));
+    const select = element("select", "thermal-kind-select form-select");
+    select.dataset.loadIndex = String(idx);
+    select.setAttribute("aria-label", "Deferrable load " + idx + " thermal model type");
+    const options = [
+      ["standard", "Standard Deferrable Load ({})"],
+      ["thermal_config", "Simple Thermal Load (thermal_config)"],
+      ["thermal_battery", "Heat Pump / Thermal Battery (thermal_battery)"],
+    ];
     if (state.kind === "passthrough") {
-      html += `<option value="passthrough" selected>Custom / Preserved Entry (${escapeHtml(extraKeys.join(", "))})</option>`;
+      options.push(["passthrough", "Custom / Preserved Entry (" + extraKeys.join(", ") + ")"]);
     }
-    html += "</select></div>";
+    for (const [value, label] of options) {
+      const option = element("option", "", label);
+      option.value = value;
+      option.selected = value === state.kind;
+      select.append(option);
+    }
+    head.append(select);
+    card.append(head);
 
     if (state.kind === "passthrough") {
-      html += `<p class="muted-hint">Preserving existing configuration keys: <code>${escapeHtml(
-        extraKeys.join(", ")
-      )}</code>. Switch model type above only if you intend to replace them.</p>`;
+      card.append(element("p", "muted-hint",
+        "Preserving existing configuration keys: " + extraKeys.join(", ") +
+        ". Switch model type above only if you intend to replace them."));
     } else if (state.kind === "standard") {
-      html +=
-        '<p class="muted-hint">Standard electrical load (no thermal envelope simulation attached; exports as <code>{}</code>).</p>';
+      const hint = element("p", "muted-hint",
+        "Standard electrical load (no thermal envelope simulation attached; exports as ");
+      hint.append(element("code", "", "{}"));
+      hint.append(document.createTextNode(")."));
+      card.append(hint);
     } else if (state.kind === "thermal_config") {
-      const minStr = Array.isArray(tc.min_temperatures)
-        ? tc.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
-        : "20";
-      const maxStr = Array.isArray(tc.max_temperatures)
-        ? tc.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
-        : "24";
-      html += '<div class="thermal-fields-grid">';
-      html += `<label>Heating rate (°C/h)<input type="number" step="any" data-field="heating_rate" value="${tc.heating_rate ?? 5.0}" aria-label="Load ${idx} heating rate"></label>`;
-      html += `<label>Cooling constant<input type="number" step="any" data-field="cooling_constant" value="${tc.cooling_constant ?? 0.1}" aria-label="Load ${idx} cooling constant"></label>`;
-      html += `<label>Thermal inertia (h)<input type="number" step="any" data-field="thermal_inertia" value="${tc.thermal_inertia ?? 0.0}" aria-label="Load ${idx} thermal inertia"></label>`;
-      html += `<label>Start temp (°C)<input type="number" step="any" data-field="start_temperature" value="${tc.start_temperature ?? 20.0}" aria-label="Load ${idx} start temperature"></label>`;
-      html += `<label>Sense<select data-field="sense" aria-label="Load ${idx} thermal sense"><option value="heat"${(tc.sense || "heat") === "heat" ? " selected" : ""}>heat</option><option value="cool"${tc.sense === "cool" ? " selected" : ""}>cool</option></select></label>`;
-      html += "</div>";
-      html += `<div class="thermal-schedule-helper">
-        <span>Day/Night Comfort Schedule (${horizon} steps):</span>
-        <div class="thermal-schedule-inputs">
-          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
-          <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
-          <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
-          Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
-          <input type="number" step="0.5" class="sched-min-night" value="18" aria-label="Load ${idx} night min temperature"> °C |
-          Max: <input type="number" step="0.5" class="sched-max-day" value="23" aria-label="Load ${idx} max temperature"> °C
-          <button type="button" class="tool-btn apply-sched-btn" data-load-index="${idx}">Fill Schedule</button>
-        </div>
-      </div>`;
-      html += `<div class="thermal-array-fields">
-        <label>min_temperatures (comma-separated °C)<input type="text" data-field="min_temperatures" value="${escapeHtml(minStr)}" aria-label="Load ${idx} min temperatures"></label>
-        <label>max_temperatures (comma-separated °C)<input type="text" data-field="max_temperatures" value="${escapeHtml(maxStr)}" aria-label="Load ${idx} max temperatures"></label>
-      </div>`;
+      const fields = element("div", "thermal-fields-grid");
+      field(fields, "Heating rate (°C/h)", "number", tc.heating_rate ?? 5.0,
+        "heating_rate", "Load " + idx + " heating rate", "any");
+      field(fields, "Cooling constant", "number", tc.cooling_constant ?? 0.1,
+        "cooling_constant", "Load " + idx + " cooling constant", "any");
+      field(fields, "Thermal inertia (h)", "number", tc.thermal_inertia ?? 0.0,
+        "thermal_inertia", "Load " + idx + " thermal inertia", "any");
+      field(fields, "Start temp (°C)", "number", tc.start_temperature ?? 20.0,
+        "start_temperature", "Load " + idx + " start temperature", "any");
+      const senseLabel = element("label", "", "Sense");
+      const senseSelect = element("select");
+      senseSelect.dataset.field = "sense";
+      senseSelect.setAttribute("aria-label", "Load " + idx + " thermal sense");
+      for (const mode of ["heat", "cool"]) {
+        const option = element("option", "", mode);
+        option.value = mode;
+        option.selected = (tc.sense || "heat") === mode;
+        senseSelect.append(option);
+      }
+      senseLabel.append(senseSelect);
+      fields.append(senseLabel);
+      card.append(fields);
+      schedule(card, idx, false);
+      const mins = Array.isArray(tc.min_temperatures)
+        ? tc.min_temperatures.map(v => v === null ? "null" : String(v)).join(", ") : "20";
+      const maxes = Array.isArray(tc.max_temperatures)
+        ? tc.max_temperatures.map(v => v === null ? "null" : String(v)).join(", ") : "24";
+      temperatureFields(card, mins, maxes, idx);
     } else if (state.kind === "thermal_battery") {
-      const minStr = Array.isArray(tb.min_temperatures)
-        ? tb.min_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
-        : "20";
-      const maxStr = Array.isArray(tb.max_temperatures)
-        ? tb.max_temperatures.map((v) => (v === null ? "null" : String(v))).join(", ")
-        : "26";
-      html += '<div class="thermal-fields-grid">';
-      html += `<label>Supply temp (°C)<input type="number" step="any" data-field="supply_temperature" value="${tb.supply_temperature ?? 35.0}" aria-label="Load ${idx} supply temperature"></label>`;
-      html += `<label>Buffer volume (m³/unit)<input type="number" step="any" data-field="volume" value="${tb.volume ?? 14.91}" aria-label="Load ${idx} volume"></label>`;
-      html += `<label>Start temp (°C)<input type="number" step="any" data-field="start_temperature" value="${tb.start_temperature ?? 22.0}" aria-label="Load ${idx} start temperature"></label>`;
-      html += `<label>Carnot efficiency<input type="number" step="any" data-field="carnot_efficiency" value="${tb.carnot_efficiency ?? 0.45}" aria-label="Load ${idx} Carnot efficiency"></label>`;
-      html += `<label>U-value<input type="number" step="any" data-field="u_value" value="${tb.u_value ?? 0.326}" aria-label="Load ${idx} U-value"></label>`;
-      html += `<label>Envelope area (m²)<input type="number" step="any" data-field="envelope_area" value="${tb.envelope_area ?? 649.4}" aria-label="Load ${idx} envelope area"></label>`;
-      html += `<label>Ventilation rate<input type="number" step="any" data-field="ventilation_rate" value="${tb.ventilation_rate ?? 0.12}" aria-label="Load ${idx} ventilation rate"></label>`;
-      html += `<label>Heated volume (m³)<input type="number" step="any" data-field="heated_volume" value="${tb.heated_volume ?? 573.5}" aria-label="Load ${idx} heated volume"></label>`;
-      html += "</div>";
-      html += `<div class="thermal-schedule-helper">
-        <span>Day/Night Comfort Schedule (${horizon} steps):</span>
-        <div class="thermal-schedule-inputs">
-          Start h: <input type="number" class="sched-first-hour" value="0" min="0" max="23" title="First optimization step hour (0-23)" aria-label="Load ${idx} first step hour">h |
-          <input type="number" class="sched-day-start" value="7" min="0" max="23" title="Day start hour" aria-label="Load ${idx} day start hour">h–
-          <input type="number" class="sched-day-end" value="22" min="0" max="23" title="Day end hour" aria-label="Load ${idx} day end hour">h |
-          Min D/N: <input type="number" step="0.5" class="sched-min-day" value="20" aria-label="Load ${idx} day min temperature"> /
-          <input type="number" step="0.5" class="sched-min-night" value="18.5" aria-label="Load ${idx} night min temperature"> °C |
-          Max: <input type="number" step="0.5" class="sched-max-day" value="26" aria-label="Load ${idx} max temperature"> °C
-          <button type="button" class="tool-btn apply-sched-btn" data-load-index="${idx}">Fill Schedule</button>
-        </div>
-      </div>`;
-      html += `<div class="thermal-array-fields">
-        <label>min_temperatures (comma-separated °C)<input type="text" data-field="min_temperatures" value="${escapeHtml(minStr)}" aria-label="Load ${idx} min temperatures"></label>
-        <label>max_temperatures (comma-separated °C)<input type="text" data-field="max_temperatures" value="${escapeHtml(maxStr)}" aria-label="Load ${idx} max temperatures"></label>
-      </div>`;
+      const fields = element("div", "thermal-fields-grid");
+      const specs = [
+        ["Supply temp (°C)", "supply_temperature", 35.0, "supply temperature"],
+        ["Buffer volume (m³/unit)", "volume", 14.91, "volume"],
+        ["Start temp (°C)", "start_temperature", 22.0, "start temperature"],
+        ["Carnot efficiency", "carnot_efficiency", 0.45, "Carnot efficiency"],
+        ["U-value", "u_value", 0.326, "U-value"],
+        ["Envelope area (m²)", "envelope_area", 649.4, "envelope area"],
+        ["Ventilation rate", "ventilation_rate", 0.12, "ventilation rate"],
+        ["Heated volume (m³)", "heated_volume", 573.5, "heated volume"],
+      ];
+      for (const [label, name, fallback, aria] of specs) {
+        field(fields, label, "number", tb[name] ?? fallback, name,
+          "Load " + idx + " " + aria, "any");
+      }
+      card.append(fields);
+      schedule(card, idx, true);
+      const mins = Array.isArray(tb.min_temperatures)
+        ? tb.min_temperatures.map(v => v === null ? "null" : String(v)).join(", ") : "20";
+      const maxes = Array.isArray(tb.max_temperatures)
+        ? tb.max_temperatures.map(v => v === null ? "null" : String(v)).join(", ") : "26";
+      temperatureFields(card, mins, maxes, idx);
     }
-    html += "</div>";
+    grid.append(card);
   }
-  html += "</div>";
-  builderEl.innerHTML = html;
+  builderEl.append(grid);
 
   builderEl.querySelectorAll(".thermal-kind-select").forEach((sel) => {
     sel.addEventListener("change", () => {
