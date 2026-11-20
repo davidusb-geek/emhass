@@ -330,7 +330,7 @@ test('box view sets the textarea value, so character references are not decoded'
   // Assigning innerHTML to a textarea parses its text and decodes references such as &amp; or &lt.
   const ctx = setup();
   const box = { innerHTML: undefined, value: undefined };
-  ctx.document.getElementById = id => (id === 'config-box' ? box : { innerHTML: '' });
+  ctx.document.getElementById = id => (id === 'config-box' ? box : id === 'system-overview-badges' ? null : { innerHTML: '' });
   const config = { a: 'x &amp; y', url: 'https://h/?p=1&lt=2', q: '"<b>"' };
   await ctx.loadConfigurationBoxPage(config);
   assert.equal(box.innerHTML, undefined);
@@ -424,7 +424,7 @@ test('JSON box view round trips configuration strings through the textarea value
   const page = savePage({}, {});
   const box = { value: undefined };
   page.ctx.box = box;
-  page.ctx.document.getElementById = id => (id === 'config-box' ? box : id === 'configuration-container' ? { innerHTML: '' } : { style: {}, textContent: '', classList: { add() {}, remove() {} } });
+  page.ctx.document.getElementById = id => (id === 'config-box' ? box : id === 'system-overview-badges' ? null : id === 'configuration-container' ? { innerHTML: '' } : { style: {}, textContent: '', classList: { add() {}, remove() {} } });
   await page.ctx.loadConfigurationBoxPage(config);
   assert.deepEqual(JSON.parse(box.value), config);
   assert.deepEqual(await page.save(), config);
