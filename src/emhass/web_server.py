@@ -460,6 +460,12 @@ async def configuration():
     return await make_response(
         template.render(
             config=params,
+            # The fragment ships with EMHASS; never populated from request data.
+            configuration_list_markup=Markup(
+                (Path(__file__).resolve().parent / "static" / "configuration_list.html").read_text(
+                    encoding="utf-8"
+                )
+            ),
             emhass_version=last_run.emhass_version(),
             current_year=datetime.now().year,
         )
