@@ -1217,6 +1217,22 @@ def _log_safe(value: object, limit: int = 200) -> str:
     return text + "...[truncated]" if cut else text
 
 
+def _safe_exc_info(exc: BaseException):
+    """``exc_info`` for logging ``exc`` with its message made log-safe.
+
+    The logging module prints ``Type: message`` from the exception itself, so a
+    request-derived message would reach the log unescaped. The traceback frames
+    are kept; the message is escaped and bounded, and the chained exceptions
+    (whose messages are equally unvetted) are left out.
+    """
+    cls = type(exc)
+    proxy_cls = type(
+        cls.__name__, (Exception,), {"__module__": cls.__module__, "__qualname__": cls.__qualname__}
+    )
+    proxy = proxy_cls(_log_safe(exc)).with_traceback(exc.__traceback__)
+    return proxy_cls, proxy, exc.__traceback__
+
+
 @app.route("/api/v1/dry-run/<action_name>", methods=["POST"])
 async def api_v1_dry_run(action_name: str):
     """Solve an optimization as POST /action/<action_name> would, and return
@@ -1263,7 +1279,10 @@ async def api_v1_dry_run(action_name: str):
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
-        app.logger.exception(f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}")
+        app.logger.error(
+            f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}",
+            exc_info=_safe_exc_info(exc),
+        )
         body, code = {"status": "not-run", "plan": None}, 500
     finally:
         _dry_run_log.reset(token)
