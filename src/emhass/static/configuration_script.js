@@ -112,15 +112,15 @@ window.onload = async function () {
   //obtain configuration from emhass (pull)
   let config = param_definitions && (await obtainConfig());
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
-  let list_html = config && (await getListHTML());
+  let list_template = config && (await getListTemplate());
   //fail closed: a failed load is not an empty configuration. Render no form, allow no save, say how to recover
-  if (!list_html) {
+  if (!list_template) {
     document.getElementById("save").disabled = true;
     document.getElementById("alert-text").textContent += "\r\n\u2022 Reload the page to try again.";
     return;
   }
   //load list parameter page (default)
-  loadConfigurationListView(param_definitions, config, list_html);
+  loadConfigurationListView(param_definitions, config, list_template);
 
   //add event listener to save button
   document
@@ -136,14 +136,14 @@ window.onload = async function () {
   document
     .getElementById("defaults")
     .addEventListener("click", () =>
-      ToggleView(param_definitions, list_html, true)
+      ToggleView(param_definitions, list_template, true)
     );
 
   //add event listener to json-toggle button (toggle between json box and list view)
   document
     .getElementById("json-toggle")
     .addEventListener("click", () =>
-      ToggleView(param_definitions, list_html, false)
+      ToggleView(param_definitions, list_template, false)
     );
 
   const yearEl = document.getElementById("current-year");
@@ -232,33 +232,20 @@ async function readErrorLog(response) {
   return [`HTTP ${response.status}`];
 }
 
-//get html data from configuration_list.html (list template)
-//returns null when the template could not be obtained
-async function getListHTML() {
-  try {
-    const response = await fetch(`static/configuration_list.html`, {
-      cache: "no-cache", //revalidate: the template changes with the release
-      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT_MS),
-    });
-    if (response.status !== 200 && response.status !== 201) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    let blob = await response.blob(); //get data blob
-    const html = await new Response(blob).text(); //obtain html from blob
-    //an empty template cannot render a form: report it instead of failing closed without a message
-    if (!html.trim()) {
-      throw new Error("the file is empty");
-    }
-    return html;
-  } catch (error) {
-    errorAlert(`Unable to obtain configuration_list.html file: ${error.message}`);
+// The packaged configuration fragment is embedded in an inert HTML template
+// by the server. Clone parsed, trusted DOM nodes instead of parsing fetched HTML.
+function getListTemplate() {
+  const template = document.getElementById("configuration-list-template");
+  if (!template || !template.content) {
+    errorAlert("Unable to obtain the configuration list template.");
     return null;
   }
+  return template;
 }
 
 //load list configuration view
-function loadConfigurationListView(param_definitions, config, list_html) {
-  if (list_html == null || config == null || param_definitions == null) {
+function loadConfigurationListView(param_definitions, config, list_template) {
+  if (list_template == null || config == null || param_definitions == null) {
     return 1;
   }
   lastLoadedConfig = config;
@@ -270,7 +257,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   let header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads", "number_of_batteries"];
 
   //get the main container and append list template html
-  document.getElementById("configuration-container").innerHTML = list_html;
+  document.getElementById("configuration-container").replaceChildren(list_template.content.cloneNode(true));
 
   //loop through configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
   for (let section in param_definitions) {
@@ -1372,7 +1359,7 @@ async function saveConfiguration(param_definitions) {
 }
 
 //Toggle between box (json) and list view
-async function ToggleView(param_definitions, list_html, default_reset) {
+async function ToggleView(param_definitions, list_template, default_reset) {
   let selected = "";
   config = {};
 
@@ -1422,7 +1409,7 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   switch (selected) {
     case "box":
       //load list
-      loadConfigurationListView(param_definitions, config, list_html);
+      loadConfigurationListView(param_definitions, config, list_template);
       yaml_button.style.display = "none";
       if (filterBar) {
         filterBar.style.display = "";
