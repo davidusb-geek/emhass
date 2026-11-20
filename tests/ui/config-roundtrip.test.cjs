@@ -84,8 +84,11 @@ function setup({ getConfig = () => ({}) } = {}) {
     addEventListener(type, fn) { this.listeners[type] = fn; } });
   const nodes = Object.fromEntries(['alert', 'alert-text', 'loader', 'save', 'yaml', 'defaults', 'json-toggle'].map(id => [id, node()]));
   const container = node();
-  const listTemplate = { content: { cloneNode: () => ({}) } };
-  container.replaceChildren = () => {
+  const clones = [], inserted = [];
+  const cards = ['Local', 'System', 'Tariff', 'Solar System (PV)', 'Inverters', 'Battery', 'Deferrable Loads'].map(id => ({ id, querySelector: () => ({}) }));
+  const listTemplate = { content: { querySelectorAll: () => cards, cloneNode: deep => { const clone = { clone: clones.length, deep }; clones.push(clone); return clone; } } };
+  container.replaceChildren = (...nodes) => {
+    inserted.push(nodes);
     rendered = true;
     for (const body of Object.values(bodies)) body.innerHTML = '';
   };
@@ -130,7 +133,7 @@ function setup({ getConfig = () => ({}) } = {}) {
   vm.createContext(ctx); vm.runInContext(source, ctx);
   ctx.headerElement = () => {}; // header-driven row counts are not under test
   const shown = id => (params()[id] || [headers[id]])[0];
-  return { ctx, nodes, posts, calls, shown, listTemplate };
+  return { ctx, nodes, posts, calls, shown, listTemplate, clones, inserted, container };
 }
 // per-battery parameters are saved as one-element lists
 const single = value => (Array.isArray(value) && value.length === 1 ? value[0] : value);
@@ -169,4 +172,21 @@ test('Defaults only changes the form; nothing is saved until the user presses Sa
   assert.equal(s.posts.length, 1);
   assert.equal(single(s.posts[0].battery_nominal_energy_capacity), DEFAULT_REPLY.battery_nominal_energy_capacity);
   assert.equal(s.posts[0].costfun, DEFAULT_REPLY.costfun);
+});
+
+test('the list loader inserts a fresh deep clone of the template into the container each time', () => {
+  const s = setup();
+  s.ctx.loadConfigurationListView(defs, {}, s.listTemplate);
+  s.ctx.loadConfigurationListView(defs, CUSTOM, s.listTemplate);
+  assert.equal(s.clones.length, 2);
+  assert.ok(s.clones.every(c => c.deep === true), 'cloneNode(true)');
+  assert.deepEqual(s.inserted.map(nodes => nodes.length), [1, 1]);
+  assert.equal(s.inserted[0][0], s.clones[0]);
+  assert.equal(s.inserted[1][0], s.clones[1]);
+  assert.notEqual(s.inserted[0][0], s.inserted[1][0], 'the template itself or a reused clone is never inserted twice');
+});
+test('the list loader renders nothing when no template is given', () => {
+  const s = setup();
+  assert.equal(s.ctx.loadConfigurationListView(defs, {}, null), 1);
+  assert.deepEqual(s.inserted, []);
 });

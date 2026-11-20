@@ -15,9 +15,20 @@ class FakeNode {
     this.dataset = {};
     this.attributes = {};
     this.className = "";
-    this.value = "";
+    this._type = "";
+    this._value = "";
     this.textContent = "";
     this.style = {};
+  }
+  // Standards-aligned value sanitization (HTML Standard, input type=number): a value that is not a
+  // valid floating-point number becomes "". Applied on assignment and again when the type changes.
+  get type() { return this._type; }
+  set type(type) { this._type = type; this._value = this._sanitize(this._value); }
+  get value() { return this._value; }
+  set value(value) { this._value = this._sanitize(String(value)); }
+  _sanitize(value) {
+    if (this._type !== "number") return value;
+    return /^-?(\d+|\d*\.\d+)([eE][-+]?\d+)?$/.test(value) ? value : "";
   }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
@@ -92,8 +103,15 @@ test("thermal cards treat configuration values and extra keys as data, never mar
   vm.runInContext("thermalLoadStates = state; renderThermalLoadCards(builder, 3);", ctx);
   const nodes = descendants(ctx.builder);
   const byField = (name) => nodes.find((n) => n.attributes?.["data-field"] === name);
-  assert.equal(byField("heating_rate").value, malicious);
-  assert.equal(byField("supply_temperature").value, malicious);
+  // type="number" inputs sanitize a non-numeric value to "" in a browser; they never keep or parse the markup
+  assert.equal(byField("heating_rate").type, "number");
+  assert.equal(byField("heating_rate").value, "");
+  assert.equal(byField("supply_temperature").type, "number");
+  assert.equal(byField("supply_temperature").value, "");
+  assert.equal(byField("cooling_constant").value, "0.1");
+  // a genuine text field keeps the markup-like string as an ordinary value
+  const minTemperatures = nodes.filter((n) => n.attributes?.["data-field"] === "min_temperatures");
+  assert.ok(minTemperatures.some((n) => n.type === "text" && n.value === malicious));
   assert.ok(nodes.some((n) => String(n.textContent ?? '').includes(malicious)));
   assert.ok(nodes.some((n) => String(n.className ?? '').includes("thermal-kind-select")));
   assert.ok(nodes.some((n) => String(n.className ?? '').includes("thermal-array-fields")));
@@ -114,9 +132,36 @@ test("system overview badges render malicious-looking values as text", () => {
   assert.equal(descendants(overview).filter((n) => n.tag === "img").length, 0);
 });
 
-test("the configuration fragment is cloned from an inert template", () => {
+test("number inputs in the fixture sanitize like a browser", () => {
+  const input = new FakeNode("input");
+  input.value = malicious;
+  input.type = "number";
+  assert.equal(input.value, "");
+  input.value = "1e3";
+  assert.equal(input.value, "1e3");
+  input.type = "text";
+  input.value = malicious;
+  assert.equal(input.value, malicious);
+});
+
+const SECTIONS = ["Local", "System", "Tariff", "Solar System (PV)", "Inverters", "Battery", "Deferrable Loads"];
+const templateOf = (ids, { body = true } = {}) => ({
+  content: {
+    querySelectorAll: () => ids.map((id) => ({ id, querySelector: () => (body ? {} : null) })),
+    cloneNode: () => new FakeNode("fragment"),
+  },
+});
+
+test("the configuration fragment is validated before it is used as an inert template", () => {
   const { ctx, template } = setup();
+  ctx.errors = [];
+  vm.runInContext("errorAlert = (m) => errors.push(m);", ctx);
+  template.content = templateOf(SECTIONS).content;
   assert.equal(vm.runInContext("getListTemplate()", ctx), template);
-  assert.match(source, /replaceChildren\(list_template\.content\.cloneNode\(true\)\)/);
-  assert.doesNotMatch(source, /innerHTML\s*=\s*list_template/);
+  assert.deepEqual(ctx.errors, []);
+  for (const content of [templateOf([]).content, templateOf(["Local"]).content, templateOf(SECTIONS.slice(1)).content, templateOf(SECTIONS, { body: false }).content, {}]) {
+    template.content = content;
+    assert.equal(vm.runInContext("getListTemplate()", ctx), null);
+  }
+  assert.equal(ctx.errors.length, 5);
 });

@@ -232,12 +232,37 @@ async function readErrorLog(response) {
   return [`HTTP ${response.status}`];
 }
 
+// Sections (and their .section-body) that loadConfigurationListView() and the tab bar
+// rely on; configuration_list.html must provide every one of them.
+const REQUIRED_CONFIG_SECTIONS = [
+  "Local",
+  "System",
+  "Tariff",
+  "Solar System (PV)",
+  "Inverters",
+  "Battery",
+  "Deferrable Loads",
+];
+
 // The packaged configuration fragment is embedded in an inert HTML template
 // by the server. Clone parsed, trusted DOM nodes instead of parsing fetched HTML.
+// Fail closed (null) when the fragment is missing, empty or lacks a required section.
 function getListTemplate() {
   const template = document.getElementById("configuration-list-template");
-  if (!template || !template.content) {
+  const content = template && template.content;
+  if (!content || typeof content.querySelectorAll !== "function") {
     errorAlert("Unable to obtain the configuration list template.");
+    return null;
+  }
+  const present = new Set();
+  for (const card of content.querySelectorAll(".section-card")) {
+    if (card.querySelector(".section-body")) {
+      present.add(card.id);
+    }
+  }
+  const missing = REQUIRED_CONFIG_SECTIONS.filter((id) => !present.has(id));
+  if (missing.length > 0) {
+    errorAlert("The configuration list template is incomplete (missing: " + missing.join(", ") + ").");
     return null;
   }
   return template;
