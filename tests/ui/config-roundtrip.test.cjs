@@ -84,6 +84,11 @@ function setup({ getConfig = () => ({}) } = {}) {
     addEventListener(type, fn) { this.listeners[type] = fn; } });
   const nodes = Object.fromEntries(['alert', 'alert-text', 'loader', 'save', 'yaml', 'defaults', 'json-toggle'].map(id => [id, node()]));
   const container = node();
+  const listTemplate = { content: { cloneNode: () => ({}) } };
+  container.replaceChildren = () => {
+    rendered = true;
+    for (const body of Object.values(bodies)) body.innerHTML = '';
+  };
   let rendered = false, cache = { html: null, params: {} };
   Object.defineProperty(container, 'innerHTML', { get() { return ''; }, set(html) {
     rendered = html.includes('section-card');
@@ -99,6 +104,7 @@ function setup({ getConfig = () => ({}) } = {}) {
     document: {
       getElementById: id => {
         if (id === 'configuration-container') return container;
+        if (id === 'configuration-list-template') return listTemplate;
         if (headers[id]) return headers[id];
         if (sections[id]) return sections[id];
         if (nodes[id]) return nodes[id];
@@ -124,7 +130,7 @@ function setup({ getConfig = () => ({}) } = {}) {
   vm.createContext(ctx); vm.runInContext(source, ctx);
   ctx.headerElement = () => {}; // header-driven row counts are not under test
   const shown = id => (params()[id] || [headers[id]])[0];
-  return { ctx, nodes, posts, calls, shown };
+  return { ctx, nodes, posts, calls, shown, listTemplate };
 }
 // per-battery parameters are saved as one-element lists
 const single = value => (Array.isArray(value) && value.length === 1 ? value[0] : value);
@@ -132,7 +138,7 @@ const display = input => (input.type === 'checkbox' ? input.checked : input.type
 
 test('loading a customised configuration and saving it preserves every customised setting', async () => {
   const s = setup();
-  s.ctx.loadConfigurationListView(defs, CUSTOM, listHtml);
+  s.ctx.loadConfigurationListView(defs, CUSTOM, s.listTemplate);
   for (const [name, value] of Object.entries(CUSTOM)) assert.equal(display(s.shown(name)), value, `${name} rendered`);
   await s.ctx.saveConfiguration(defs);
   assert.equal(s.posts.length, 1);
@@ -141,7 +147,7 @@ test('loading a customised configuration and saving it preserves every customise
 
 test('control: the same save from an empty configuration writes the parameter defaults, not the customised values', async () => {
   const s = setup();
-  s.ctx.loadConfigurationListView(defs, {}, listHtml);
+  s.ctx.loadConfigurationListView(defs, {}, s.listTemplate);
   await s.ctx.saveConfiguration(defs);
   assert.notEqual(single(s.posts[0].battery_nominal_energy_capacity), CUSTOM.battery_nominal_energy_capacity);
   assert.notEqual(s.posts[0].costfun, CUSTOM.costfun);
