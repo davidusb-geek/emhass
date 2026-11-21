@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import copy
 import json
 import logging
@@ -2641,6 +2642,24 @@ async def _set_input_data_dict(
                             "plant_conf": plant_conf,
                         },
                         logger,
+                    )
+        if opt is not None:
+            # Under _solve_lock, as the cache-hit updates above: a cached
+            # optimizer may be solving for another request.
+            lock = getattr(opt, "_solve_lock", None)
+            with lock if lock is not None else contextlib.nullcontext():
+                # A coordinator backend asks remote solvers to run their part of a
+                # live plan only: a dry run has no effect anywhere
+                opt.fed_dry_run = bool((params.get("passed_data") or {}).get("dry_run", False))
+                # The remote solvers' tokens as configured now: a cached problem keeps
+                # the retrieve_hass_conf it was built with, which a rotated token
+                # leaves stale.
+                if (
+                    "remote_tokens" in retrieve_hass_conf
+                    or "remote_tokens" in opt.retrieve_hass_conf
+                ):
+                    opt.retrieve_hass_conf["remote_tokens"] = dict(
+                        retrieve_hass_conf.get("remote_tokens") or {}
                     )
     # Create SetupContext
     ctx = SetupContext(

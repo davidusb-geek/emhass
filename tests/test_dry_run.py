@@ -1527,6 +1527,11 @@ SITE = [
     {"id": "deferrable1", "parent": "garage", "group": "loads"},
     {"id": "deferrable2", "parent": "heat"},
 ]
+REMOTE = {
+    "id": "garage_emhass",
+    "parent": "garage",
+    "solver": {"url": "http://emhass-garage:5000/participant", "token_secret": "garage_token"},
+}
 
 
 def _with(index: int, **change):
@@ -1579,9 +1584,14 @@ def _with(index: int, **change):
         (SITE + [{"id": "garage", "parent": "grid", "type": "breaker"}], "appears twice"),
         ([{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}], "form a loop"),
         (
-            [{"id": "x", "parent": "grid", "solver": {"url": "http://h/"}}],
-            "may have only",
+            [{"id": "x", "parent": "grid", "solver": {"url": "file:///etc/passwd"}}],
+            "solver must be {url",
         ),
+        (
+            [{"id": "x", "parent": "grid", "solver": {"url": "http://h/", "rogue": 1}}],
+            "solver must be {url",
+        ),
+        ([{**REMOTE, "solver": {**REMOTE["solver"], "token_secret": "A!"}}], "must name a secret"),
     ],
 )
 def test_the_site_is_checked_before_anything_reads_it(site, problem):
@@ -1594,7 +1604,7 @@ def test_the_site_is_checked_before_anything_reads_it(site, problem):
 
 def test_a_known_backend_and_a_valid_site_pass():
     assert _coordinated_config_problem({"optimization_backend": "dantzig_wolfe"}) is None
-    for site in (SITE, []):
+    for site in (SITE, SITE + [REMOTE], []):
         assert (
             _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
             is None
@@ -1602,6 +1612,14 @@ def test_a_known_backend_and_a_valid_site_pass():
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
     # documented as future work, not offered: it says so and the default solver plans
     assert "later release" in _coordinated_config_problem({"optimization_backend": "admm"})
+
+
+def test_a_remote_solver_comes_from_the_configuration_only():
+    """A site sent with a request may not name a remote solver: no request
+    makes EMHASS call a host of its choosing."""
+    assert site_mod.site_problem(SITE + [REMOTE]) is None
+    reason = site_mod.site_problem(SITE + [REMOTE], from_request=True)
+    assert reason and "from the configuration only" in reason
 
 
 def test_the_published_schema_is_the_check():
@@ -1618,6 +1636,7 @@ def test_the_published_schema_is_the_check():
         "a node": "node",
         "a limit": "limit",
         "a device": "device",
+        "a remote solver": "remote",
     }
     # the PV is a device with a parent and nothing else (the check refuses
     # a solver, group or limits on it), so it has its own alternative
@@ -1639,7 +1658,7 @@ def test_the_published_schema_is_the_check():
     assert device["solver"]["enum"] == list(site_mod._SITE_SOLVERS)
     assert kinds["a node"]["properties"]["type"]["enum"] == list(site_mod._SITE_NODE_TYPES)
     assert kinds["a node"]["properties"]["id"]["pattern"] == site_mod._SITE_ID.pattern
-    for title in ("a node", "a device"):
+    for title in ("a node", "a device", "a remote solver"):
         assert "parent" in kinds[title]["required"]
     # null efficiencies, which the check reads as omitted, validate too
     node = kinds["a node"]["properties"]
@@ -1750,7 +1769,8 @@ def test_an_omitted_inverter_rating_keeps_the_configured_cap(omitted, plant_key,
 def test_the_input_pipeline_compiles_the_site():
     """Set in the configuration (or a request), the site's inverter and meter
     reach the default solver's plant configuration; a request's site that
-    cannot be used is not, and the configured one stays."""
+    cannot be used - one naming a remote solver - is not, and the configured
+    one stays."""
 
     async def run(runtime: dict):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1777,7 +1797,7 @@ def test_the_input_pipeline_compiles_the_site():
     plant, _ = asyncio.run(run({}))
     assert plant["inverter_is_hybrid"] is True and plant["inverter_ac_output_max"] == 4000
     assert plant["maximum_power_to_grid"] == 5000
-    _, optim = asyncio.run(run({"site": [{"id": "battery"}]}))  # no parent
+    _, optim = asyncio.run(run({"site": [REMOTE]}))
     assert optim["site"] == SITE  # the configured one, kept
 
 
@@ -1934,13 +1954,14 @@ def test_emhass_holds_the_inverter_only_with_the_battery_where_site_puts_it(
 def test_a_parent_that_is_not_a_name_is_refused(parent):
     """A parent of the wrong type is reported, not a TypeError."""
     site = [{"id": "grid"}, {"id": "battery", "parent": parent}]
-    reason = site_mod.site_problem(site)
+    reason = site_mod.site_problem(site, from_request=True)
     assert reason and "parent must be" in reason
 
 
 @pytest.mark.parametrize("site", [42, "grid", {"id": "grid"}])
 def test_a_site_that_is_not_a_list_still_builds_the_parameters(site):
-    """build_params takes a site of any shape; the site check reports it."""
+    """build_params gathers the remote tokens only from a list; anything else
+    is left to the site check to report."""
     ec = _conf(root / "data")
 
     async def build():
@@ -1949,7 +1970,8 @@ def test_a_site_that_is_not_a_list_still_builds_the_parameters(site):
         config["site"] = site
         return await build_params(ec, secrets, config, logger)
 
-    asyncio.run(build())
+    params = asyncio.run(build())
+    assert "remote_tokens" not in params["retrieve_hass_conf"]
     assert _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
 
 
@@ -1991,3 +2013,54 @@ def test_the_coordinator_gets_the_battery_endpoints_the_default_solver_uses(init
         opt, {"soc_init": init, "soc_final": final, "debug": False}
     )
     assert (kw["soc_init"], kw["soc_final"]) == expected and kw["debug"] is False
+
+
+def test_a_cached_problem_takes_the_remote_tokens_as_configured_now():
+    """A rotated token reaches the coordinator on a cache hit too: the cached
+    problem keeps the retrieve_hass_conf it was built with otherwise."""
+
+    async def build(data_path, token):
+        params = await _params(data_path)
+        params["retrieve_hass_conf"]["remote_tokens"] = {"garage_token": token}
+        return await set_input_data_dict(
+            _conf(data_path),
+            "profit",
+            orjson.dumps(params).decode(),
+            orjson.dumps(FORECASTS).decode(),
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+
+    with _data_copy() as data_path:
+        first = asyncio.run(build(data_path, "old"))
+        second = asyncio.run(build(data_path, "rotated"))
+    assert second["opt"] is first["opt"], "the second run should hit the cache"
+    assert second["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": "rotated"}
+
+
+def test_remote_tokens_are_masked_as_the_other_secrets(caplog):
+    """The tokens a coordinator presents never reach the log nor a
+    configuration export."""
+    sentinel = "s3ntinel-" + uuid.uuid4().hex
+
+    async def build(data_path):
+        params = await _params(data_path)
+        params["retrieve_hass_conf"]["remote_tokens"] = {"garage_token": sentinel}
+        idd = await set_input_data_dict(
+            _conf(data_path),
+            "profit",
+            orjson.dumps(params).decode(),
+            orjson.dumps(FORECASTS).decode(),
+            "dayahead-optim",
+            logger,
+            get_data_from_file=True,
+        )
+        return params, idd
+
+    with _data_copy() as data_path, caplog.at_level(logging.DEBUG):
+        params, idd = asyncio.run(build(data_path))
+    assert idd["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": sentinel}
+    assert "Initialized Optimization with retrieve_hass_conf" in caplog.text
+    assert sentinel not in caplog.text
+    assert sentinel not in json.dumps(utils.param_to_config(params, logger), default=str)

@@ -40,6 +40,7 @@ Every device (the battery, `deferrable0`, `deferrable1`, ...) is then planned on
 | a node | any other id | an inverter, a panel, a breaker or a meter behind the main meter: `parent` (another node, or `grid`), so nodes nest to any depth; `max_import` / `max_export` (W) on its connection to the parent (`max_export: 0`: no backfeed); `efficiency_import` / `efficiency_export` for a converter (1 by default); `type` (`hybrid_inverter`, `inverter`, `panel`, `breaker`, `meter`) |
 | a limit | `type: "limit"` | `max_import` and/or `max_export` (W) on what the devices tagged with it draw together, wherever they are - a phase, a shared cable, a contract |
 | a device | a device name: `pv`, `battery0` (or `battery`), `deferrable0`, ... | `parent`; `group`; `limits` (the limits it counts against) |
+| a remote solver | `solver: {"url": ..., "token_secret": ...}` | another EMHASS, or any solver serving the participant API, as one participant: `parent`; `limits` (see "Remote solvers") |
 
 
 **Groups.** Each device is planned by EMHASS's own model, with only that device, or its group, enabled. Devices that share a `group` are planned together, so a `deferrable_load_groups` budget among them is held exactly; each device has its own share of the saving otherwise, the group one. A device `site` leaves out is planned on its own, on the main meter. The PV is a forecast: it has a `parent` and nothing else. The battery's indexed name, `battery0`, follows the multi-battery convention (#1032); with one battery its columns stay `P_batt` and `fed_share_battery`, as EMHASS's own do.
@@ -53,6 +54,30 @@ The coordinator sees a group only as its total, so a group's devices share one p
 **Prices.** The coordinator holds each node as a balance of its own, so the devices on it are priced at the node's own price (`fed_local_price_<id>`): the parent's price through the connection's efficiency while it has headroom, apart from it while it is at a rating - a hybrid inverter's falls to zero while its PV is being clipped. A limit adds its own premium while it binds (`fed_limit_price_<id>`).
 
 **From a request.** `site` may come with a request, like any runtime parameter; it is checked by shape before anything reads it, and a request's `site` that cannot be used leaves the configured one in place.
+
+## Remote solvers
+
+A part of the house can be planned by a solver elsewhere - another EMHASS, in its own container, planning the garage's EV and battery - as one element of `site`:
+
+```json
+{"id": "garage_emhass", "parent": "garage",
+ "solver": {"url": "http://emhass-garage:5000/participant", "token_secret": "garage_token",
+            "trusted_network": true}}
+```
+
+The coordinator asks it what it would do at given prices, and, once it has chosen, asks it to run its part (the participant API: [participant-api.v1.json](https://github.com/davidusb-geek/emhass/blob/master/src/emhass/static/participant-api/participant-api.v1.json), with the query and answer schemas beside it). The API is versioned: its major version is in every path (`/v1/`) and body, and within it the API only grows. A participant lists what it serves beyond the first draft in its description's `features`, and a coordinator uses a new feature only with a participant that lists it, so an older and a newer EMHASS still plan together. It is never sent the rest of the house's load: it is asked at its connection's marginal prices - what drawing costs and supplying is worth there - which carry the tariff and every rating. `token_secret` names the secret in `secrets_emhass.yaml` that holds the token it expects. It must be a secret of its own: one of EMHASS's own secrets (`long_lived_token`, `participant_token`, an API key, ...) is refused, so no saved `site` sends one of them to a remote's URL. A remote solver is accepted from the configuration only: a `site` sent with a request may not name one. If it does not answer, the house is planned without it and the plan says so (`fed_remote_status_<id>`). The coordinator asks the remotes to run their parts only once the whole plan is made, so nothing that follows can send this EMHASS to its default solver after a remote has committed; A remote answers a commit at once and runs it after; the coordinator then asks for its outcome until it is known, or for 30 s. A commit the remote refuses (nothing was published) is that remote's refusal. A commit that got no answer is asked about, and sent again only if the remote never had it: a remote never runs one commit twice. If the outcome is still not known, or the remote published part of the plan before failing, the remote is recorded as `uncertain` and its part kept in the plan, since it may be running. A remote that refuses is then planned without, as one that did not answer: the house is planned again, the remotes that committed held to the plans they took, and the remotes still to ask are asked for their part of the new plan. A token is sent as a bearer token, which anyone on the network between could read over plain `http://`. So a remote on another machine with a `token_secret` must be `https://`, or its `solver` must say the network between is trusted (`"trusted_network": true`, for example two EMHASS on port 5000 of a home LAN); otherwise it is not called, and the plan says why (`declined: ...`). `https://` is recommended.
+
+**Serving this EMHASS** to a coordinator elsewhere: set `participant_api` and a `participant_token` secret.
+
+```json
+"participant_api": {"publish_prefix": "garage_"}
+```
+
+It then answers at `/participant/v1/describe`, `baseline`, `query` and `commit`, and `commit/<id>` for a commit's outcome, every call presenting `participant_token` as a bearer token - that token only: these routes do not ask for the server's own API token (`emhass_api_token`), so a coordinator never holds it, but Home Assistant's ingress port refuses them, as anything but the Supervisor's requests -. `participant_token` must be at least as long as the API token's minimum (16 characters), or the API answers 503. It is checked before the configuration or any body is read, so a caller without it learns nothing of the configuration (a body over 1 MiB is refused, 413, as is one that takes over 30 s to arrive, 408) (off, 404, without `participant_api`; 503 without the token, or with more than one web worker, `WEB_CONCURRENCY`, since a coordinator's answers live in one worker's memory). Every horizon it is asked about names its first slot (`start`), which must be the slot it plans now. Its answers come from its own model: its battery, starting from its `sensor_battery_state_of_charge`, and its deferrable loads, planned together within its own `maximum_power_from_grid` / `maximum_power_to_grid` - its connection's limits, a panel's rating, no backfeed. Queries have no effect. A commit is answered at once (202) and then publishes the chosen plan as a run would, holding the live-optimization slot until it has; its record (running, accepted, refused, or partial when publishing failed part way) is kept 48 hours in `participant_commits.json` in the data folder, across a restart, so a coordinator can ask for it again and a commit sent twice runs once. It publishes its sensors prefixed by `publish_prefix` so two EMHASS on one Home Assistant do not collide. While it is coordinated it should not run its own optimizations. If it does, a commit that arrives during one of them is refused (429, as a second live optimization is), and the coordinator records it as refused. A commit is also refused while `continual_publish` is on, since its loop would publish an earlier plan back. An EMHASS with a hybrid inverter is not served (its answers would not hold the inverter's AC limits): the coordinator records it as declined.
+
+Each call to a remote has 30 s in all, its answer at most 1 MiB, and a redirect is not followed (it would carry the token elsewhere); an answer that is not a finite plan leaves that remote out of the plan. An EMHASS serving its devices declines (`declined: ...`) what the coordinator would decline in its own house - a non-electric load, a final-SoC reward and the rest of "What falls back" - since its answers would not be what the coordinator can coordinate.
+
+Any solver that serves the participant API can be a remote, not only EMHASS: the API is the standard interface between optimizers, versioned (`version` in every body) and documented by those schemas.
 
 ## What falls back
 
@@ -97,6 +122,9 @@ The usual `opt_res` columns, plus:
 | `fed_local_price_<id>` | the price of one more kWh on a node of `site` (or the hybrid inverter EMHASS's keys describe, `inverter`), per timestep (currency/kWh) |
 | `fed_node_power_<id>` | that node's power to its parent, per timestep (W, + = up the tree) |
 | `fed_limit_price_<id>` | a limit's premium while it binds, per timestep (currency/kWh): a `site` limit's id, or a `deferrable_load_groups` group's loads (`deferrable0+deferrable1`) |
+| `fed_remote_power_<id>` | a remote solver's planned power, per timestep (W, + = drawn) |
+| `fed_remote_status_<id>` | what became of it: `committed`, `uncertain: ...` (its commit's outcome is not known, or it published part of the plan: it may be running, so its part stays in the plan), `refused: ...`, `unreachable`, `unauthorized` or `declined: ...` (planned without it; `declined` when it cannot plan this horizon, such as one starting on another slot), `planned (dry run)` |
+| `fed_remote_last_commit_<id>` | how the remote's last commit ended, as it records it: `accepted`, `refused: ...`, `partial: ...` or `running` (the commit of an earlier run, unless this run's has just been made) |
 
 With EMHASS's devices answered as black boxes the bound is often loose, so a large `fed_gap` does not by itself mean a poor plan.
 
@@ -116,7 +144,7 @@ Each participant is first reimbursed its change in private cost (comfort, stored
 
 ## Dry run
 
-A coordinator outside EMHASS can ask EMHASS for its plan at trial prices without replacing or disturbing the live plan: send the action's body to `/api/v1/dry-run/<action>`. It works with either backend. See [Dry run](dry_run.md).
+A coordinator outside EMHASS can ask EMHASS for its plan at trial prices without replacing or disturbing the live plan: send the action's body to `/api/v1/dry-run/<action>`. It works with either backend, and a dry run never asks a remote solver to run its part. See [Dry run](dry_run.md).
 
 ```bash
 curl -H "Authorization: Bearer $EMHASS_API_TOKEN" -X POST http://localhost:5000/api/v1/dry-run/naive-mpc-optim -H 'Content-Type: application/json' \
@@ -132,8 +160,6 @@ python scripts/federated_benchmark.py
 ```
 
 ## Future
-
-**Remote solvers.** A part of the house planned by a solver elsewhere - another EMHASS, in its own container - as one element of `site`, through a standard query-and-answer interface. Planned for a follow-up.
 
 **ADMM.** A second coordinator, ADMM, is planned but not offered yet: `optimization_backend` accepts only `cvxpy` and `dantzig_wolfe`, and `admm` set by hand logs that it is not available and runs the default MILP. It needs EMHASS's model to accept a pull towards a target plan (a linear, absolute-value term, so the problem stays a MILP HiGHS can solve), and it gives no bound on how far its plan is from the best, so it would report no `fed_gap`.
 
