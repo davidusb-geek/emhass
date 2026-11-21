@@ -1667,6 +1667,21 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(secrets["long_lived_token"], "supervisor.token")
 
+    async def test_build_secrets_emhass_key_beats_supervisor(self):
+        environ = self.enterContext(patch.dict(os.environ))
+        environ["EMHASS_KEY"] = "env.key"
+        environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        with patch("aiohttp.ClientSession") as session:
+            _, secrets = await utils.build_secrets(
+                emhass_conf,
+                logger,
+                options_path=emhass_conf["options_path"],
+                secrets_path="",
+                no_response=False,
+            )
+        session.assert_not_called()
+        self.assertEqual(secrets["long_lived_token"], "env.key")
+
     def test_get_injection_dict_with_thermal(self):
         # Add thermal columns to dummy df
         self.df["predicted_temp_heater1"] = 21.0
