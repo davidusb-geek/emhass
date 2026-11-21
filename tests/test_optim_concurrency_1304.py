@@ -410,18 +410,14 @@ class TestSnapshotOrdering(unittest.TestCase):
 class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.data_path = Path(self.tmp.name)
-        self.conf_patch = patch.object(web_server, "emhass_conf", {"data_path": self.data_path})
-        self.conf_patch.start()
+        self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": self.data_path}))
         self.client = web_server.app.test_client()
-        last_run._cache = None
-        plan_store._cache = None
-
-    async def asyncTearDown(self):
-        self.conf_patch.stop()
-        self.tmp.cleanup()
-        last_run._cache = None
-        plan_store._cache = None
+        for module in (last_run, plan_store):
+            self.enterContext(patch.object(module, "_cache", None))
+            self.enterContext(patch.object(module, "_unpersisted", False))
+            self.enterContext(patch.object(module, "_persisted", None))
 
     async def test_second_live_request_gets_429_and_cannot_overwrite_first_plan(self):
         started = asyncio.Event()
