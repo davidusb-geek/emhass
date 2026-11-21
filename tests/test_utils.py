@@ -1588,7 +1588,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # build_secrets prefers EMHASS_URL, SUPERVISOR_TOKEN and TIME_ZONE from the environment over
         # the files under test; a developer's own values must not change the expected defaults.
         environ = self.enterContext(patch.dict(os.environ))
-        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+        for name in ("EMHASS_URL", "EMHASS_KEY", "SUPERVISOR_TOKEN", "TIME_ZONE"):
             environ.pop(name, None)
         # Test the build_secrets defaults from get_test_params()
         params = await TestUtils.get_test_params()
@@ -1645,6 +1645,42 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "test.url")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "test.key")
+
+    async def test_build_secrets_emhass_key_env(self):
+        environ = self.enterContext(patch.dict(os.environ))
+        environ.pop("SUPERVISOR_TOKEN", None)
+        environ["EMHASS_URL"] = "http://homeassistant.local:8123/"
+        environ["EMHASS_KEY"] = "env.key"
+        _, secrets = await utils.build_secrets(
+            emhass_conf, logger, secrets_path="", no_response=True
+        )
+        self.assertEqual(secrets["hass_url"], "http://homeassistant.local:8123/")
+        self.assertEqual(secrets["long_lived_token"], "env.key")
+        environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        _, secrets = await utils.build_secrets(
+            emhass_conf, logger, secrets_path="", no_response=True
+        )
+        self.assertEqual(secrets["long_lived_token"], "env.key")
+        environ["EMHASS_KEY"] = ""
+        _, secrets = await utils.build_secrets(
+            emhass_conf, logger, secrets_path="", no_response=True
+        )
+        self.assertEqual(secrets["long_lived_token"], "supervisor.token")
+
+    async def test_build_secrets_emhass_key_beats_supervisor(self):
+        environ = self.enterContext(patch.dict(os.environ))
+        environ["EMHASS_KEY"] = "env.key"
+        environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        with patch("aiohttp.ClientSession") as session:
+            _, secrets = await utils.build_secrets(
+                emhass_conf,
+                logger,
+                options_path=emhass_conf["options_path"],
+                secrets_path="",
+                no_response=False,
+            )
+        session.assert_not_called()
+        self.assertEqual(secrets["long_lived_token"], "env.key")
 
     def test_get_injection_dict_with_thermal(self):
         # Add thermal columns to dummy df

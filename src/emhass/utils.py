@@ -7352,7 +7352,7 @@ async def build_secrets(
 
     # Obtain Secrets from ENV?
     params_secrets["hass_url"] = os.getenv("EMHASS_URL", params_secrets["hass_url"])
-    params_secrets["long_lived_token"] = os.getenv(
+    params_secrets["long_lived_token"] = os.getenv("EMHASS_KEY") or os.getenv(
         "SUPERVISOR_TOKEN", params_secrets["long_lived_token"]
     )
     params_secrets["time_zone"] = os.getenv("TIME_ZONE", params_secrets["time_zone"])
@@ -7463,7 +7463,11 @@ async def build_secrets(
                     )
 
             # Check to use Home Assistant local API
-            if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
+            if (
+                not no_response
+                and os.getenv("SUPERVISOR_TOKEN", None) is not None
+                and not os.getenv("EMHASS_KEY")
+            ):
                 params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
                 # Use hass_url from options.json if available, otherwise use supervisor API for addon
                 if url_from_options != "empty" and url_from_options != "":
