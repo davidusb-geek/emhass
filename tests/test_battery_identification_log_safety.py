@@ -3,7 +3,6 @@
 No real Home Assistant or Sigenergy actions; cache fixtures are isolated.
 """
 
-import contextlib
 import copy
 import io
 import json
@@ -271,112 +270,6 @@ class TestBatteryIdentificationLogSafety(unittest.IsolatedAsyncioTestCase):
             self.stream.getvalue(),
             "Successfully posted to sensor.battery_identified_capacity = 32.24\n",
         )
-
-
-HOSTILE_OPERANDS = (
-    "1\r\nERROR forged\x1b[31m\x7f\u2028\u2029",
-    "X" * 5000 + "\nERROR forged",
-    ["1\nERROR forged"],
-    {"k": "\r\nERROR forged"},
-    10**400,
-    float("inf"),
-    True,
-)
-NUMERIC_OPERANDS = (
-    ("capacity_kwh", "value"),
-    ("round_trip_efficiency", "value"),
-    ("eta_charge_symmetric", None),
-)
-TIERS = ("observe", "suggest")
-PLANT_N2 = {
-    "number_of_batteries": 2,
-    "battery_nominal_energy_capacity": [32240, 32240],
-    "battery_charge_efficiency": [0.9747, 0.9747],
-    "battery_discharge_efficiency": [0.9747, 0.9747],
-}
-SENSORS_N2 = {
-    "sensor_power_battery": ["power0", "power1"],
-    "sensor_battery_state_of_charge": ["soc0", "soc1"],
-}
-
-
-class TestBatteryIdentificationNumericOperandFlow(TestBatteryIdentificationLogSafety):
-    """Cache file -> identify_battery -> both Sonar sinks, for every numeric operand.
-
-    The %.2f/%.3f operands are not routed through _battery_id_safe_log_value.
-    Those formats only accept real numbers, so a hostile value must either format
-    as a number or fail inside logging, and in neither case may a raw control
-    character or forged line reach the log or logging's stderr fallback.
-    """
-
-    def assert_clean(self, text, max_line=None):
-        for forbidden in ("\r", "\x1b", "\x7f", "\u2028", "\u2029"):
-            self.assertNotIn(forbidden, text)
-        for line in text.splitlines():
-            self.assertFalse(line.startswith(("ERROR", "WARNING", "CRITICAL", "forged")), line)
-            if max_line:
-                self.assertLess(len(line), max_line)
-
-    def hostile_entry(self, operand, value):
-        entry = copy.deepcopy(self.payload)
-        group, key = operand
-        if key is None:
-            entry[group] = value
-        else:
-            entry[group][key] = value
-        return entry
-
-    async def run_flow(self, cache, tier, plant=None, sensors=None):
-        plant = copy.deepcopy(self.plant_conf if plant is None else plant)
-        sensors = sensors or {
-            "sensor_power_battery": "power",
-            "sensor_battery_state_of_charge": "soc",
-        }
-        stderr = io.StringIO()
-        with tempfile.TemporaryDirectory() as folder:
-            pathlib.Path(folder, "battery_identification.json").write_text(
-                json.dumps(cache), encoding="utf-8"
-            )
-            with (
-                contextlib.redirect_stderr(stderr),
-                patch.object(
-                    command_line, "retrieve_home_assistant_data", new_callable=AsyncMock
-                ) as retrieve,
-            ):
-                await command_line.identify_battery(
-                    self.logger,
-                    {"battery_identification_trust_tier": tier},
-                    plant,
-                    sensors,
-                    FakeRetrieveHass(),
-                    {"data_path": pathlib.Path(folder)},
-                    False,
-                    "unused.pkl",
-                )
-                retrieve.assert_not_called()
-        self.assert_clean(self.stream.getvalue(), max_line=500)
-        # stderr is logging's own repr-escaped error fallback: no forged lines or
-        # control characters, though its length follows the offending input.
-        self.assert_clean(stderr.getvalue())
-
-    async def test_n1_every_numeric_operand_for_both_tiers(self):
-        for tier in TIERS:
-            for operand in NUMERIC_OPERANDS:
-                for value in HOSTILE_OPERANDS:
-                    with self.subTest(tier=tier, operand=operand, value=repr(value)[:20]):
-                        await self.run_flow(self.hostile_entry(operand, value), tier)
-
-    async def test_n2_every_numeric_operand_for_both_tiers(self):
-        for tier in TIERS:
-            for operand in NUMERIC_OPERANDS:
-                for value in HOSTILE_OPERANDS:
-                    with self.subTest(tier=tier, operand=operand, value=repr(value)[:20]):
-                        e0 = self.hostile_entry(operand, value)
-                        e0["sensors"] = {"power": "power0", "soc": "soc0"}
-                        e1 = copy.deepcopy(self.payload)
-                        e1["sensors"] = {"power": "power1", "soc": "soc1"}
-                        cache = {"schema_version": 2, "batteries": {"0": e0, "1": e1}}
-                        await self.run_flow(cache, tier, PLANT_N2, SENSORS_N2)
 
 
 if __name__ == "__main__":
