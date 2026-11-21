@@ -285,8 +285,10 @@ def test_curves_invalidate_the_optimization_cache_through_plant_conf_hash():
         )
 
     other = [[1000, 0.8], [5000, 0.92]]
-    assert key() == key()  # default (empty) curves: stable
-    assert key(**{DC_AC: DISCHARGE_CURVE}) == key(**{DC_AC: DISCHARGE_CURVE})
+    default_key = key()
+    assert default_key == key()  # independently generated default keys are stable
+    discharge_key = key(**{DC_AC: DISCHARGE_CURVE})
+    assert discharge_key == key(**{DC_AC: DISCHARGE_CURVE})
     assert key(**{DC_AC: DISCHARGE_CURVE}) != key()
     assert key(**{DC_AC: DISCHARGE_CURVE}) != key(**{DC_AC: other})
     assert key(**{AC_DC: CHARGE_CURVE}) != key()
@@ -307,7 +309,8 @@ def test_inverter_count_and_index_lists_invalidate_the_optimization_cache_key():
             params["optim_conf"], params["plant_conf"], "profit", rh
         )
 
-    assert key() == key()
+    default_key = key()
+    assert default_key == key()
     assert key(number_of_inverters=2) != key()
     assert key(battery_inverter_index=[0]) != key()
     assert key(pv_plant_inverter_index=[0]) != key()
