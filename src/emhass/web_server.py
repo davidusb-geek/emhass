@@ -1201,19 +1201,33 @@ async def api_v1_plan():
     return response
 
 
-_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def _log_escape(char: str) -> str:
+    """One character as it is safe to log: a backslash is doubled, a printable
+    character is kept, anything else becomes a visible backslash escape."""
+    if char == "\\":
+        return "\\\\"
+    if char.isprintable():
+        return char
+    code = ord(char)
+    kind = "x%02x" if code < 0x100 else "u%04x" if code < 0x10000 else "U%08x"
+    return "\\" + kind % code
 
 
 def _log_safe(value: object, limit: int = 200) -> str:
     """Render request-derived text as bounded, single-line log text.
 
-    Control characters (CR, LF, ANSI escape, DEL, C1, Unicode line and
-    paragraph separators) become visible backslash-u escapes, so the text cannot
-    forge a log line or drive the terminal; other text is left as it is.
+    The API token is masked first: truncating or escaping it beforehand would
+    leave a prefix or a spelling that the record-level masking cannot match.
+    Then at most ``limit`` characters are kept; a backslash and every
+    non-printable character (control characters, DEL, C1, Unicode line and
+    paragraph separators, bidi overrides, zero-width and other format
+    characters) become visible escapes, and printable text is left as it is.
+    An escape is at most ten characters, so the output is at most ``limit * 10``
+    plus the truncation marker.
     """
-    text = str(value)
+    text = api_auth.mask_text(str(value))
     cut = len(text) > limit
-    text = _LOG_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text[:limit])
+    text = "".join(map(_log_escape, text[:limit]))
     return text + "...[truncated]" if cut else text
 
 

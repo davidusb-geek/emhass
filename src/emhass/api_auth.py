@@ -618,6 +618,17 @@ def _mask(text: str, forms: list[str]) -> str:
     return text
 
 
+def mask_text(text: str) -> str:
+    """``text`` with the configured token masked, in every form the log filter knows.
+
+    For text that is about to be truncated or escaped: either would leave a
+    prefix, or a spelling, of the token that the record-level filter can no
+    longer recognise. Mask first, then transform.
+    """
+    token = current_token()
+    return _mask(text, _token_forms(token)) if token else text
+
+
 class TokenLogFilter(logging.Filter):
     """Masks the configured token in a log record's message and traceback.
 

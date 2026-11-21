@@ -7,16 +7,19 @@ Unicode line separator would forge a log line or drive the terminal.
 """
 
 import asyncio
+import json
 import logging
 import urllib.parse
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from emhass import web_server
+from emhass import api_auth, web_server
 
-HOSTILE = "x\r\nERROR - forged\x1b[31m\x7f  \x85\t\x00"
-SPECIALS = ("\r", "\n", "\x1b", "\x7f", " ", " ", "\x85", "\t", "\x00")
+FORMAT_CHARS = tuple(map(chr, (0x202E, 0x200B, 0xFEFF)))
+HOSTILE = "x\r\nERROR - forged\x1b[31m\x7f\u2028\u2029\x85\t\x00" + "".join(FORMAT_CHARS)
+SPECIALS = ("\r", "\n", "\x1b", "\x7f", "\u2028", "\u2029", "\x85", "\t", "\x00", *FORMAT_CHARS)
 
 
 class _Capture(logging.Handler):
@@ -198,7 +201,155 @@ def test_ordinary_exception_keeps_type_message_and_frames(formatted):
 
 
 def test_log_safe_output_is_bounded_even_when_every_character_expands():
-    """Each escaped character becomes six, so the worst case is limit * 6."""
-    worst = web_server._log_safe("\x00" * 10**6)
-    assert len(worst) <= 200 * 6 + len("...[truncated]")
+    """An escaped character takes at most ten characters (a U+XXXXXXXX escape)."""
+    for char, width in (("\x00", 4), (chr(0xE0001), 10)):
+        worst = web_server._log_safe(char * 10**6)
+        assert len(worst) <= 200 * width + len("...[truncated]")
     assert web_server._log_safe("ok text") == "ok text"
+
+
+# --------------------------------------------------------------------------
+# The API token must be masked before anything is truncated or escaped
+# --------------------------------------------------------------------------
+
+TOKEN = "TqK7vXw9RmZ4bNc2HdL8sYf5JgP3uE6a"  # synthetic
+TAB_TOKEN = "TabbedQ7Kp3\tSepVq7Kp3ZxW9"  # synthetic, with an embedded tab
+
+
+@contextmanager
+def _token(value: str):
+    saved = dict(api_auth._state)
+    api_auth._state.update(loaded=True, token=value, failed=False, source="test")
+    try:
+        yield
+    finally:
+        api_auth._state.clear()
+        api_auth._state.update(saved)
+
+
+def _assert_no_token_fragment(text: str, token: str, width: int = 6) -> None:
+    """Neither the token nor any run of `width` of its characters appears."""
+    for part in token.split("\t"):
+        for i in range(max(len(part) - width + 1, 0)):
+            assert part[i : i + width] not in text, (part[i : i + width], text[:300])
+
+
+def _everything_logged(logged, formatted, response) -> str:
+    body = asyncio.run(response.get_json())
+    return "\n".join([*logged, *formatted, *body["errors"]])
+
+
+@pytest.mark.parametrize("token", [TOKEN, TAB_TOKEN])
+@pytest.mark.parametrize("offset", [0, 150, 190, 195, 199, 200, 260])
+def test_token_is_masked_before_truncation(logged, formatted, token, offset):
+    """A token that straddles the 200-character cut must not leave a prefix."""
+    boom = ValueError("y" * offset + token + " tail")
+    with _token(token), patch.object(web_server, "_dry_run", AsyncMock(side_effect=boom)):
+        response = _post("naive-mpc-optim")
+    assert response.status_code == 500
+    everything = _everything_logged(logged, formatted, response)
+    _assert_no_token_fragment(everything, token)
+    if offset <= 197:  # the mask is inside the 200 kept characters
+        assert "***" in everything
+
+
+@pytest.mark.parametrize("token", [TOKEN, TAB_TOKEN])
+@pytest.mark.parametrize(
+    "render",
+    [
+        lambda t: t,
+        repr,
+        json.dumps,
+        lambda t: urllib.parse.quote(t, safe=""),
+        lambda t: "'" + t + "'",
+    ],
+    ids=["raw", "repr", "json", "url", "quoted"],
+)
+def test_token_in_escaped_and_quoted_forms_is_masked(logged, formatted, token, render):
+    boom = ValueError("bad value " + render(token))
+    with _token(token), patch.object(web_server, "_dry_run", AsyncMock(side_effect=boom)):
+        response = _post("naive-mpc-optim")
+    _assert_no_token_fragment(_everything_logged(logged, formatted, response), token)
+
+
+@pytest.mark.parametrize("token", [TOKEN, TAB_TOKEN])
+def test_token_in_a_key_error_is_masked(logged, formatted, token):
+    """str(KeyError(x)) is repr(x), a third spelling of the token."""
+    with (
+        _token(token),
+        patch.object(web_server, "_dry_run", AsyncMock(side_effect=KeyError(token))),
+    ):
+        response = _post("naive-mpc-optim")
+    _assert_no_token_fragment(_everything_logged(logged, formatted, response), token)
+
+
+@pytest.mark.parametrize("token", [TOKEN, TAB_TOKEN])
+def test_token_in_the_url_action_name_is_masked(logged, formatted, token):
+    """On both sinks: the 500 before validation and the 400 for an unknown action."""
+    with _token(token):
+        unknown = _post(token + "x")
+        with patch.object(web_server, "_open_lock_slot", side_effect=RuntimeError("disk")):
+            failed = _post(token)
+    assert unknown.status_code == 400 and failed.status_code == 500
+    errors = asyncio.run(unknown.get_json())["errors"] + asyncio.run(failed.get_json())["errors"]
+    _assert_no_token_fragment("\n".join([*logged, *formatted, *errors]), token)
+
+
+# --------------------------------------------------------------------------
+# The response keeps its shape; hostile or oversized text is bounded and escaped
+# --------------------------------------------------------------------------
+
+
+def test_ordinary_error_response_is_unchanged():
+    boom = RuntimeError("solver crashed")
+    with patch.object(web_server, "_dry_run", AsyncMock(side_effect=boom)):
+        response = _post("naive-mpc-optim")
+    body = asyncio.run(response.get_json())
+    assert response.status_code == 500
+    assert body["errors"] == ["Dry run of naive-mpc-optim failed: solver crashed"]
+    assert {"dry_run", "action", "status", "plan", "warnings", "errors"} <= set(body)
+    assert body["status"] == "not-run" and body["plan"] is None
+
+
+def test_oversized_error_text_is_bounded_in_the_response_and_stays_intelligible():
+    boom = ValueError("first line\n" + "z" * 5000)
+    with patch.object(web_server, "_dry_run", AsyncMock(side_effect=boom)):
+        response = _post("naive-mpc-optim")
+    body = asyncio.run(response.get_json())
+    assert response.status_code == 500 and len(body["errors"]) == 1
+    message = body["errors"][0]
+    assert message.startswith("Dry run of naive-mpc-optim failed: first line")
+    assert message.endswith("...[truncated]") and "\n" not in message
+    assert len(message) < 200 * 4 + 120
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("naive-mpc-optim", "naive-mpc-optim"),
+        ("solver crashed: ça va", "solver crashed: ça va"),
+        ("a" + chr(92) + "nb", "a" + chr(92) * 2 + "nb"),  # a literal backslash stays distinct
+        ("\r\n", chr(92) + "x0d" + chr(92) + "x0a"),
+        ("\x1b[31m", chr(92) + "x1b[31m"),
+        ("\x7f", chr(92) + "x7f"),
+        ("\x85", chr(92) + "x85"),
+    ],
+)
+def test_log_safe_escapes_backslashes_and_controls_but_keeps_ordinary_text(raw, expected):
+    assert web_server._log_safe(raw) == expected
+
+
+@pytest.mark.parametrize("codepoint", [0x2028, 0x2029, 0x202E, 0x200B, 0xFEFF, 0xA0, 0xE0001])
+def test_log_safe_escapes_non_printable_unicode(codepoint):
+    kind = "x%02x" if codepoint < 0x100 else "u%04x" if codepoint < 0x10000 else "U%08x"
+    expected = "a" + chr(92) + kind % codepoint + "b"
+    assert web_server._log_safe("a" + chr(codepoint) + "b") == expected
+
+
+def test_unsupported_action_message_is_no_less_escaped_than_the_old_repr(logged):
+    """The old text was {action_name!r}: bidi overrides and backslashes were escaped."""
+    _post("evil" + chr(0x202E) + "name")
+    assert not any(chr(0x202E) in m for m in logged)
+    logged.clear()
+    _post("a" + chr(92) + "nERROR forged")
+    assert any("not 'a" + chr(92) * 2 + "nERROR forged'" in m for m in logged)
