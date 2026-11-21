@@ -273,15 +273,20 @@ class TestSnapshotOrdering(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.data = Path(self.tmp.name)
-        self._reset()
-        self.addCleanup(self._reset)
         self.addCleanup(self.tmp.cleanup)
+        # Isolate all three snapshot fields, restoring prior process state
+        # even if a test exits early or raises.
+        for module in (last_run, plan_store):
+            self.enterContext(patch.object(module, "_cache", None))
+            self.enterContext(patch.object(module, "_unpersisted", False))
+            self.enterContext(patch.object(module, "_persisted", None))
 
     @staticmethod
     def _reset():
         for module in (last_run, plan_store):
             module._cache = None
             module._unpersisted = False
+            module._persisted = None
 
     def _write(self, name, payload):
         (self.data / name).write_text(json.dumps(payload))
