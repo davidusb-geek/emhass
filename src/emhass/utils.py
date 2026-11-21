@@ -7352,7 +7352,7 @@ async def build_secrets(
 
     # Obtain Secrets from ENV?
     params_secrets["hass_url"] = os.getenv("EMHASS_URL", params_secrets["hass_url"])
-    params_secrets["long_lived_token"] = os.getenv(
+    params_secrets["long_lived_token"] = os.getenv("EMHASS_KEY") or os.getenv(
         "SUPERVISOR_TOKEN", params_secrets["long_lived_token"]
     )
     params_secrets["time_zone"] = os.getenv("TIME_ZONE", params_secrets["time_zone"])
