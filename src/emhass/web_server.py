@@ -1213,7 +1213,7 @@ def _log_escape(char: str) -> str:
     return "\\" + kind % code
 
 
-def _log_safe(value: object, limit: int = 200) -> str:
+def _log_safe(value: object, limit: int = 200, *, double_backslash: bool = True) -> str:
     """Render request-derived text as bounded, single-line log text.
 
     The API token is masked first: truncating or escaping it beforehand would
@@ -1223,11 +1223,13 @@ def _log_safe(value: object, limit: int = 200) -> str:
     paragraph separators, bidi overrides, zero-width and other format
     characters) become visible escapes, and printable text is left as it is.
     An escape is at most ten characters, so the output is at most ``limit * 10``
-    plus the truncation marker.
+    plus the truncation marker. ``double_backslash=False`` keeps a backslash as
+    it is, for text that already carries ``repr``'s escapes.
     """
     text = api_auth.mask_text(str(value))
     cut = len(text) > limit
-    text = "".join(map(_log_escape, text[:limit]))
+    escape = _log_escape if double_backslash else lambda c: c if c == "\\" else _log_escape(c)
+    text = "".join(map(escape, text[:limit]))
     return text + "...[truncated]" if cut else text
 
 
@@ -1245,6 +1247,32 @@ def _safe_exc_info(exc: BaseException):
     )
     proxy = proxy_cls(_log_safe(exc)).with_traceback(exc.__traceback__)
     return proxy_cls, proxy, exc.__traceback__
+
+
+_DRY_RUN_LINE_LIMIT = 1000
+
+
+def _dry_run_record_safe(record: logging.LogRecord) -> bool:
+    """Bound and escape every warning or error a dry run logs.
+
+    Request values reach these records from many places: the flag and inverter
+    checks, ``treat_runtimeparams`` and the run itself log them with ``%s`` or
+    ``repr`` on this logger, and the response collects the same text. So the
+    record is made safe once, here, before any handler sees it. A message that
+    carries ``repr``'s own backslashes keeps its wording. The exception of a
+    record is replaced by :func:`_safe_exc_info`, because logging prints its
+    message, and its chain, itself. INFO lines (the echo of the request) and
+    every record outside a dry run are left alone.
+    """
+    if record.levelno >= logging.WARNING and _dry_run_log.get() is not None:
+        record.msg = _log_safe(record.getMessage(), _DRY_RUN_LINE_LIMIT, double_backslash=False)
+        record.args = None
+        if record.exc_info and record.exc_info[1] is not None:
+            record.exc_info = _safe_exc_info(record.exc_info[1])
+    return True
+
+
+app.logger.addFilter(_dry_run_record_safe)
 
 
 @app.route("/api/v1/dry-run/<action_name>", methods=["POST"])
@@ -1295,7 +1323,7 @@ async def api_v1_dry_run(action_name: str):
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
         app.logger.error(
             f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}",
-            exc_info=_safe_exc_info(exc),
+            exc_info=exc,
         )
         body, code = {"status": "not-run", "plan": None}, 500
     finally:
