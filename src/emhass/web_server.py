@@ -1250,25 +1250,34 @@ def _safe_exc_info(exc: BaseException):
 
 
 _DRY_RUN_LINE_LIMIT = 1000
+_UNRENDERABLE_RECORD = "A log record could not be rendered safely"
 
 
 def _dry_run_record_safe(record: logging.LogRecord) -> bool:
-    """Bound and escape every warning or error a dry run logs.
+    """Make a warning or error that ``app.logger`` records during a dry run safe.
 
     Request values reach these records from many places: the flag and inverter
     checks, ``treat_runtimeparams`` and the run itself log them with ``%s`` or
     ``repr`` on this logger, and the response collects the same text. So the
-    record is made safe once, here, before any handler sees it. A message that
-    carries ``repr``'s own backslashes keeps its wording. The exception of a
-    record is replaced by :func:`_safe_exc_info`, because logging prints its
-    message, and its chain, itself. INFO lines (the echo of the request) and
-    every record outside a dry run are left alone.
+    record is made safe once, here, before any handler of this logger sees it:
+    the message is masked, bounded and escaped, and the exception is replaced by
+    :func:`_safe_exc_info`. The text logging cached from the original exception
+    is dropped, so it is rebuilt from the safe one. A message that carries
+    ``repr``'s own backslashes keeps its wording. A record that cannot be
+    rendered becomes a fixed message instead, with no arguments, exception or
+    stack. INFO lines, records of other loggers and every record outside a dry
+    run are left alone.
     """
-    if record.levelno >= logging.WARNING and _dry_run_log.get() is not None:
+    if record.levelno < logging.WARNING or _dry_run_log.get() is None:
+        return True
+    try:
         record.msg = _log_safe(record.getMessage(), _DRY_RUN_LINE_LIMIT, double_backslash=False)
-        record.args = None
         if record.exc_info and record.exc_info[1] is not None:
             record.exc_info = _safe_exc_info(record.exc_info[1])
+    except Exception:  # noqa: BLE001 - a log call must not fail the request
+        record.msg = _UNRENDERABLE_RECORD
+        record.exc_info = record.stack_info = None
+    record.args = record.exc_text = None
     return True
 
 
