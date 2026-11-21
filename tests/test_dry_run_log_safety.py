@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from emhass import api_auth, web_server
+from emhass.utils import InverterConfigError
 
 FORMAT_CHARS = tuple(map(chr, (0x202E, 0x200B, 0xFEFF)))
 HOSTILE = "x\r\nERROR - forged\x1b[31m\x7f\u2028\u2029\x85\t\x00" + "".join(FORMAT_CHARS)
@@ -63,10 +64,10 @@ def logged():
         web_server.app.logger.setLevel(saved)
 
 
-def _post(name: str):
+def _post(name: str, body: dict | None = None):
     async def go():
         return await web_server.app.test_client().post(
-            "/api/v1/dry-run/" + urllib.parse.quote(name, safe=""), json={}
+            "/api/v1/dry-run/" + urllib.parse.quote(name, safe=""), json=body or {}
         )
 
     return asyncio.run(go())
@@ -178,7 +179,7 @@ def test_formatted_traceback_cannot_be_forged_by_exception_text(formatted):
 def test_formatted_traceback_drops_hostile_chained_exception_text(formatted):
     try:
         try:
-            raise OSError(HOSTILE)
+            raise OSError("INNER-MARKER " + HOSTILE)
         except OSError as inner:
             raise RuntimeError("outer") from inner
     except RuntimeError as exc:
@@ -187,7 +188,8 @@ def test_formatted_traceback_drops_hostile_chained_exception_text(formatted):
     text = formatted[0]
     for special in SPECIALS[:1] + SPECIALS[2:]:
         assert special not in text, repr(special)
-    assert "forged" not in text.replace("\u001b", "") or "\nERROR - forged" not in text
+    assert "RuntimeError: outer" in text
+    assert "INNER-MARKER" not in text, "the chained exception must not be printed at all"
 
 
 def test_ordinary_exception_keeps_type_message_and_frames(formatted):
@@ -353,3 +355,131 @@ def test_unsupported_action_message_is_no_less_escaped_than_the_old_repr(logged)
     logged.clear()
     _post("a" + chr(92) + "nERROR forged")
     assert any("not 'a" + chr(92) * 2 + "nERROR forged'" in m for m in logged)
+
+
+# --------------------------------------------------------------------------
+# Every warning or error a dry run logs is bounded and safe, whoever logs it
+# --------------------------------------------------------------------------
+
+LINE_LIMIT = web_server._DRY_RUN_LINE_LIMIT
+
+
+def _problems(logged, response) -> list[str]:
+    errors = asyncio.run(response.get_json())["errors"]
+    return [*logged, *errors]
+
+
+def _assert_bounded_and_safe(messages: list[str]) -> None:
+    assert messages, "nothing was logged"
+    for message in messages:
+        for special in SPECIALS:
+            assert special not in message, (repr(special), message[:80])
+        assert len(message) <= LINE_LIMIT + len("...[truncated]") + 100, len(message)
+
+
+@pytest.mark.parametrize("flag", ["dry_run", "entity_save", "weather_forecast_cache"])
+def test_a_refused_flag_value_is_bounded_in_the_log_and_the_response(logged, flag):
+    """read_flag puts the sent value in its message, up to the 16 MB body limit."""
+    response = _post("naive-mpc-optim", {flag: "A" * 5000 + HOSTILE})
+    assert response.status_code == 400
+    _assert_bounded_and_safe(_problems(logged, response))
+
+
+def _stub_inputs(build):
+    """A dry run whose configuration loads and whose inputs `build` makes."""
+    return (
+        patch.object(web_server, "_load_params", AsyncMock(return_value=({"x": 1}, "profit"))),
+        patch.object(web_server, "set_input_data_dict", build),
+    )
+
+
+def test_a_message_logged_while_the_inputs_are_built_is_bounded_and_safe(logged):
+    """treat_runtimeparams logs an inverter fault with logger.error("...: %s", problem)
+    on the logger it is given, before any handler of the endpoint runs."""
+
+    async def build(*args, **kwargs):
+        args[5].error(
+            "number_of_inverters must be a positive integer, got %s", "A" * 5000 + HOSTILE
+        )
+
+    load, inputs = _stub_inputs(build)
+    with load, inputs:
+        response = _post("naive-mpc-optim")
+    assert response.status_code == 400
+    _assert_bounded_and_safe(_problems(logged, response))
+
+
+def test_an_inverter_config_error_is_bounded_and_safe_in_the_log_and_the_response(logged):
+    """_explain(str(exc)) for an InverterConfigError raised by the run."""
+    fault = InverterConfigError("inverter_ac_output_max: bad value " + "A" * 5000 + HOSTILE)
+    load, inputs = _stub_inputs(AsyncMock(return_value={"x": 1}))
+    with load, inputs, patch.object(web_server, "naive_mpc_optim", AsyncMock(side_effect=fault)):
+        response = _post("naive-mpc-optim")
+    assert response.status_code == 400
+    _assert_bounded_and_safe(_problems(logged, response))
+
+
+def test_an_ordinary_inverter_message_is_unchanged(logged):
+    """No extra escaping: the message already carries repr's own backslashes."""
+    ordinary = "inverter_ac_output_max[0]: non-numeric string element " + repr("a" + chr(92) + "nb")
+    load, inputs = _stub_inputs(AsyncMock(return_value={"x": 1}))
+    with (
+        load,
+        inputs,
+        patch.object(
+            web_server, "naive_mpc_optim", AsyncMock(side_effect=InverterConfigError(ordinary))
+        ),
+    ):
+        response = _post("naive-mpc-optim")
+    assert response.status_code == 400
+    assert ordinary in logged
+    assert asyncio.run(response.get_json())["errors"] == [ordinary]
+
+
+def test_informational_dry_run_lines_are_not_cut(logged):
+    """Only warnings and errors are bounded: the INFO line that echoes the request stays whole."""
+
+    async def build(*args, **kwargs):
+        args[5].info("x" * 3000)
+        args[5].error("stop")
+
+    load, inputs = _stub_inputs(build)
+    with load, inputs:
+        _post("naive-mpc-optim")
+    assert "x" * 3000 in logged
+
+
+def test_a_live_log_record_is_not_touched():
+    """Outside a dry run the filter does nothing, so action_logs.txt lines keep their form."""
+    record = logging.LogRecord("emhass", logging.ERROR, __file__, 1, "a %s", ("b" * 5000,), None)
+    assert web_server._dry_run_record_safe(record) is True
+    assert record.getMessage() == "a " + "b" * 5000
+
+
+def test_an_exception_logged_while_the_inputs_are_built_is_escaped_in_the_traceback(formatted):
+    """logger.exception() prints 'Type: message' and any chained exception itself,
+    and logging's stack_info prints the call stack: none may carry request text raw."""
+
+    async def build(*args, **kwargs):
+        try:
+            try:
+                raise OSError("CHAINED-MARKER " + HOSTILE)
+            except OSError as inner:
+                raise ValueError("INNER " + HOSTILE * 40) from inner
+        except ValueError:
+            args[5].exception("The inputs failed")
+        args[5].warning("with a stack", stack_info=True)
+
+    load, inputs = _stub_inputs(build)
+    with load, inputs:
+        _post("naive-mpc-optim")
+    failed = next(r for r in formatted if "The inputs failed" in r)
+    stacked = next(r for r in formatted if "with a stack" in r)
+    for text in (failed, stacked):
+        for special in SPECIALS[:1] + SPECIALS[2:]:
+            assert special not in text, repr(special)
+        assert not any(line.startswith("ERROR - forged") for line in text.splitlines())
+    assert "Traceback (most recent call last):" in failed and "ValueError: INNER" in failed
+    assert "CHAINED-MARKER" not in failed
+    assert len(failed) < 3000
+    assert "Stack (most recent call last):" in stacked
