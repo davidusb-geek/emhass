@@ -1201,6 +1201,89 @@ async def api_v1_plan():
     return response
 
 
+def _log_escape(char: str) -> str:
+    """One character as it is safe to log: a backslash is doubled, a printable
+    character is kept, anything else becomes a visible backslash escape."""
+    if char == "\\":
+        return "\\\\"
+    if char.isprintable():
+        return char
+    code = ord(char)
+    kind = "x%02x" if code < 0x100 else "u%04x" if code < 0x10000 else "U%08x"
+    return "\\" + kind % code
+
+
+def _log_safe(value: object, limit: int = 200, *, double_backslash: bool = True) -> str:
+    """Render request-derived text as bounded, single-line log text.
+
+    The API token is masked first: truncating or escaping it beforehand would
+    leave a prefix or a spelling that the record-level masking cannot match.
+    Then at most ``limit`` characters are kept; a backslash and every
+    non-printable character (control characters, DEL, C1, Unicode line and
+    paragraph separators, bidi overrides, zero-width and other format
+    characters) become visible escapes, and printable text is left as it is.
+    An escape is at most ten characters, so the output is at most ``limit * 10``
+    plus the truncation marker. ``double_backslash=False`` keeps a backslash as
+    it is, for text that already carries ``repr``'s escapes.
+    """
+    text = api_auth.mask_text(str(value))
+    cut = len(text) > limit
+    escape = _log_escape if double_backslash else lambda c: c if c == "\\" else _log_escape(c)
+    text = "".join(map(escape, text[:limit]))
+    return text + "...[truncated]" if cut else text
+
+
+def _safe_exc_info(exc: BaseException):
+    """``exc_info`` for logging ``exc`` with its message made log-safe.
+
+    The logging module prints ``Type: message`` from the exception itself, so a
+    request-derived message would reach the log unescaped. The traceback frames
+    are kept; the message is escaped and bounded, and the chained exceptions
+    (whose messages are equally unvetted) are left out.
+    """
+    cls = type(exc)
+    proxy_cls = type(
+        cls.__name__, (Exception,), {"__module__": cls.__module__, "__qualname__": cls.__qualname__}
+    )
+    proxy = proxy_cls(_log_safe(exc)).with_traceback(exc.__traceback__)
+    return proxy_cls, proxy, exc.__traceback__
+
+
+_DRY_RUN_LINE_LIMIT = 1000
+_UNRENDERABLE_RECORD = "A log record could not be rendered safely"
+
+
+def _dry_run_record_safe(record: logging.LogRecord) -> bool:
+    """Make a warning or error that ``app.logger`` records during a dry run safe.
+
+    Request values reach these records from many places: the flag and inverter
+    checks, ``treat_runtimeparams`` and the run itself log them with ``%s`` or
+    ``repr`` on this logger, and the response collects the same text. So the
+    record is made safe once, here, before any handler of this logger sees it:
+    the message is masked, bounded and escaped, and the exception is replaced by
+    :func:`_safe_exc_info`. The text logging cached from the original exception
+    is dropped, so it is rebuilt from the safe one. A message that carries
+    ``repr``'s own backslashes keeps its wording. A record that cannot be
+    rendered becomes a fixed message instead, with no arguments, exception or
+    stack. INFO lines, records of other loggers and every record outside a dry
+    run are left alone.
+    """
+    if record.levelno < logging.WARNING or _dry_run_log.get() is None:
+        return True
+    try:
+        record.msg = _log_safe(record.getMessage(), _DRY_RUN_LINE_LIMIT, double_backslash=False)
+        if record.exc_info and record.exc_info[1] is not None:
+            record.exc_info = _safe_exc_info(record.exc_info[1])
+    except Exception:  # noqa: BLE001 - a log call must not fail the request
+        record.msg = _UNRENDERABLE_RECORD
+        record.exc_info = record.stack_info = None
+    record.args = record.exc_text = None
+    return True
+
+
+app.logger.addFilter(_dry_run_record_safe)
+
+
 @app.route("/api/v1/dry-run/<action_name>", methods=["POST"])
 async def api_v1_dry_run(action_name: str):
     """Solve an optimization as POST /action/<action_name> would, and return
@@ -1247,7 +1330,10 @@ async def api_v1_dry_run(action_name: str):
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
-        app.logger.exception(f"Dry run of {action_name} failed: {exc}")
+        app.logger.error(
+            f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}",
+            exc_info=exc,
+        )
         body, code = {"status": "not-run", "plan": None}, 500
     finally:
         _dry_run_log.reset(token)
@@ -1281,7 +1367,8 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
     }
     if action_name not in DRY_RUN_ACTIONS:
         app.logger.error(
-            f"A dry run is for {', '.join(DRY_RUN_ACTIONS)}, not {action_name!r}. Nothing was run"
+            f"A dry run is for {', '.join(DRY_RUN_ACTIONS)}, not '{_log_safe(action_name)}'. "
+            "Nothing was run"
         )
         return not_run, 400
     raw = await request.get_data()
