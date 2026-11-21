@@ -483,3 +483,81 @@ def test_an_exception_logged_while_the_inputs_are_built_is_escaped_in_the_traceb
     assert "CHAINED-MARKER" not in failed
     assert len(failed) < 3000
     assert "Stack (most recent call last):" in stacked
+
+
+# --------------------------------------------------------------------------
+# With an API token configured, the masking record factory pre-renders exc_text
+# --------------------------------------------------------------------------
+
+
+def _hostile_chain() -> BaseException:
+    try:
+        try:
+            raise OSError("CHAINED-MARKER " + HOSTILE)
+        except OSError as inner:
+            raise ValueError("OUTER " + TOKEN + HOSTILE + "A" * 5000) from inner
+    except ValueError as exc:
+        return exc
+
+
+@pytest.mark.parametrize("route", ["the 500 handler", "a logger.exception call in the run"])
+def test_a_configured_token_does_not_bring_back_the_raw_traceback(formatted, route):
+    """The record factory caches exc_text from the original exception when a token
+    is set; the filter's safe exception must replace that text, not sit beside it."""
+
+    async def build(*args, **kwargs):
+        try:
+            raise _hostile_chain()
+        except ValueError:
+            args[5].exception("The inputs failed")
+
+    with _token(TOKEN):
+        if route == "the 500 handler":
+            _failing_dry_run(_hostile_chain())
+        else:
+            load, inputs = _stub_inputs(build)
+            with load, inputs:
+                _post("naive-mpc-optim")
+    text = next(r for r in formatted if "Traceback (most recent call last):" in r)
+    for special in SPECIALS[:1] + SPECIALS[2:]:
+        assert special not in text, repr(special)
+    assert not any(line.startswith(("ERROR - forged", "forged")) for line in text.splitlines())
+    assert "CHAINED-MARKER" not in text
+    assert "ValueError: OUTER" in text
+    assert len(text) < 3000
+    _assert_no_token_fragment(text, TOKEN)
+
+
+# --------------------------------------------------------------------------
+# A record that cannot be rendered is replaced, never raised and never passed on
+# --------------------------------------------------------------------------
+
+
+class _UnprintableArg:
+    def __str__(self) -> str:
+        raise RuntimeError("no string")
+
+
+@pytest.mark.parametrize(
+    "emit",
+    [
+        lambda log: log.warning("bad %d", "x" + HOSTILE),
+        lambda log: log.error("%s and %s", HOSTILE),
+        lambda log: log.error("%s", _UnprintableArg()),
+    ],
+    ids=["wrong type", "too few arguments", "argument that cannot be printed"],
+)
+def test_a_malformed_log_call_neither_raises_into_the_dry_run_nor_leaks(logged, formatted, emit):
+    async def build(*args, **kwargs):
+        emit(args[5])
+
+    load, inputs = _stub_inputs(build)
+    with load, inputs:
+        response = _post("naive-mpc-optim")
+    assert response.status_code == 400, "a bad log call must not turn the request into a 500"
+    errors = asyncio.run(response.get_json())["errors"]
+    everything = "\n".join([*logged, *errors, *formatted])
+    assert web_server._UNRENDERABLE_RECORD in errors or web_server._UNRENDERABLE_RECORD in logged
+    for special in SPECIALS[:1] + SPECIALS[2:]:
+        assert special not in everything, repr(special)
+    assert "forged" not in everything
