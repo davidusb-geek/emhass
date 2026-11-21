@@ -16,8 +16,10 @@ def data_path(tmp_path):
 
 @pytest.fixture(autouse=True)
 def reset_cache(monkeypatch):
-    """Start with a cold cache and restore the previous module state after each test."""
+    """Isolate the entire last-run snapshot state and restore it after every test."""
     monkeypatch.setattr(last_run, "_cache", None)
+    monkeypatch.setattr(last_run, "_unpersisted", False)
+    monkeypatch.setattr(last_run, "_persisted", None)
 
 
 def test_record_then_read_round_trip(data_path):
