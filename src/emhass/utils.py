@@ -33,6 +33,7 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+from emhass.connection_manager import is_supervisor_url
 from emhass.coordinator.site import (
     compile_site,
     reserved_secret_values,
@@ -7534,79 +7535,81 @@ async def build_secrets(
                 else:
                     # For addons, use supervisor API for both REST and WebSocket access
                     params_secrets["hass_url"] = "http://supervisor/core/api"
-                headers = {
-                    "Authorization": "Bearer " + params_secrets["long_lived_token"],
-                    "content-type": "application/json",
-                }
-                # Obtain secrets from Home Assistant via API
-                logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        params_secrets["hass_url"] + "/config", headers=headers
-                    ) as response:
-                        if response.status < 400:
-                            config_hass = await response.json()
-                            params_secrets.update(
-                                {
-                                    "hass_url": params_secrets["hass_url"],
-                                    "long_lived_token": params_secrets["long_lived_token"],
-                                    "time_zone": config_hass["time_zone"],
-                                    "Latitude": config_hass["latitude"],
-                                    "Longitude": config_hass["longitude"],
-                                    "Altitude": config_hass["elevation"],
-                                    # If defined in HA config, use them, otherwise keep defaults
-                                    "solcast_api_key": config_hass.get(
-                                        "solcast_api_key", params_secrets["solcast_api_key"]
-                                    ),
-                                    "solcast_rooftop_id": config_hass.get(
-                                        "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
-                                    ),
-                                    "solar_forecast_kwp": config_hass.get(
-                                        "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
-                                    ),
-                                    "influxdb_username": config_hass.get(
-                                        "influxdb_username", params_secrets.get("influxdb_username")
-                                    ),
-                                    "influxdb_password": config_hass.get(
-                                        "influxdb_password", params_secrets.get("influxdb_password")
-                                    ),
-                                    "victoriametrics_username": config_hass.get(
-                                        "victoriametrics_username",
-                                        params_secrets.get("victoriametrics_username"),
-                                    ),
-                                    "victoriametrics_password": config_hass.get(
-                                        "victoriametrics_password",
-                                        params_secrets.get("victoriametrics_password"),
-                                    ),
-                                }
-                            )
-                        else:
-                            # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                            logger.warning(
-                                "Error obtaining secrets from Home Assistant Supervisor API"
-                            )
-                            logger.debug("Obtaining url and key secrets from options.json")
-                            if url_from_options != "empty" and url_from_options != "":
-                                params_secrets["hass_url"] = url_from_options
-                            if key_from_options != "empty" and key_from_options != "":
-                                params_secrets["long_lived_token"] = key_from_options
-                            if (
-                                options.get("time_zone", "empty") != "empty"
-                                and options["time_zone"] != ""
-                            ):
-                                params_secrets["time_zone"] = options["time_zone"]
-                            if options.get("Latitude", None) is not None and bool(
-                                options["Latitude"]
-                            ):
-                                params_secrets["Latitude"] = options["Latitude"]
-                            if options.get("Longitude", None) is not None and bool(
-                                options["Longitude"]
-                            ):
-                                params_secrets["Longitude"] = options["Longitude"]
-                            if options.get("Altitude", None) is not None and bool(
-                                options["Altitude"]
-                            ):
-                                params_secrets["Altitude"] = options["Altitude"]
+                config_hass = None
+                if is_supervisor_url(params_secrets["hass_url"]):
+                    headers = {
+                        "Authorization": "Bearer " + params_secrets["long_lived_token"],
+                        "content-type": "application/json",
+                    }
+                    # Obtain secrets from Home Assistant via API
+                    logger.debug("Obtaining secrets from Home Assistant Supervisor API")
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            params_secrets["hass_url"] + "/config", headers=headers
+                        ) as response:
+                            if response.status < 400:
+                                config_hass = await response.json()
+                            else:
+                                logger.warning(
+                                    "Error obtaining secrets from Home Assistant Supervisor API"
+                                )
+                else:
+                    # The Supervisor token is only for the Supervisor proxy, so it is never sent
+                    # to the Home Assistant URL set in the options. Use the options instead.
+                    logger.debug(
+                        "hass_url in options.json is not the Supervisor, not calling the "
+                        "Supervisor API"
+                    )
+                if config_hass is not None:
+                    params_secrets.update(
+                        {
+                            "hass_url": params_secrets["hass_url"],
+                            "long_lived_token": params_secrets["long_lived_token"],
+                            "time_zone": config_hass["time_zone"],
+                            "Latitude": config_hass["latitude"],
+                            "Longitude": config_hass["longitude"],
+                            "Altitude": config_hass["elevation"],
+                            # If defined in HA config, use them, otherwise keep defaults
+                            "solcast_api_key": config_hass.get(
+                                "solcast_api_key", params_secrets["solcast_api_key"]
+                            ),
+                            "solcast_rooftop_id": config_hass.get(
+                                "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
+                            ),
+                            "solar_forecast_kwp": config_hass.get(
+                                "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
+                            ),
+                            "influxdb_username": config_hass.get(
+                                "influxdb_username", params_secrets.get("influxdb_username")
+                            ),
+                            "influxdb_password": config_hass.get(
+                                "influxdb_password", params_secrets.get("influxdb_password")
+                            ),
+                            "victoriametrics_username": config_hass.get(
+                                "victoriametrics_username",
+                                params_secrets.get("victoriametrics_username"),
+                            ),
+                            "victoriametrics_password": config_hass.get(
+                                "victoriametrics_password",
+                                params_secrets.get("victoriametrics_password"),
+                            ),
+                        }
+                    )
+                else:
+                    # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                    logger.debug("Obtaining url and key secrets from options.json")
+                    if url_from_options != "empty" and url_from_options != "":
+                        params_secrets["hass_url"] = url_from_options
+                    if key_from_options != "empty" and key_from_options != "":
+                        params_secrets["long_lived_token"] = key_from_options
+                    if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
+                        params_secrets["time_zone"] = options["time_zone"]
+                    if options.get("Latitude", None) is not None and bool(options["Latitude"]):
+                        params_secrets["Latitude"] = options["Latitude"]
+                    if options.get("Longitude", None) is not None and bool(options["Longitude"]):
+                        params_secrets["Longitude"] = options["Longitude"]
+                    if options.get("Altitude", None) is not None and bool(options["Altitude"]):
+                        params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
             # This logic runs regardless of whether HA API call above succeeded or failed,

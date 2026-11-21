@@ -1,16 +1,49 @@
 import asyncio
 import logging
+import os
 
 from emhass.websocket_client import AsyncWebSocketClient, ConnectionError
 
 _global_client: AsyncWebSocketClient | None = None
 _lock = asyncio.Lock()
 
+# The forms of the Supervisor proxy URL that may receive the Supervisor token (compared
+# without a trailing slash).
+SUPERVISOR_URLS = frozenset({"http://supervisor/core/api", "https://supervisor/core/api"})
+
+SUPERVISOR_TOKEN_REFUSED = (
+    "The Supervisor token is set as the token for a Home Assistant URL that is not "
+    "the Supervisor. It will not be sent. Set a long-lived access token for that URL."
+)
+
+
+def is_supervisor_url(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
+    if url is None or not str(url).strip() or str(url).strip() == "empty":
+        return True
+    return str(url).strip().rstrip("/").lower() in SUPERVISOR_URLS
+
+
+def is_supervisor_token_for_another_host(hass_url: str | None, token: str | None) -> bool:
+    """True when ``token`` is the Supervisor token and ``hass_url`` is not the Supervisor proxy.
+
+    The Supervisor token is only for the Supervisor proxy and must never be sent to another host.
+    """
+    supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+    if not supervisor_token or str(token or "").strip() != supervisor_token:
+        return False
+    return not is_supervisor_url(hass_url)
+
 
 async def _create_and_start_client(
     hass_url: str, token: str, logger: logging.Logger | None
 ) -> AsyncWebSocketClient:
     """Helper to create and start a new WebSocket client."""
+    # Every WebSocket connection is made here, so this one check covers them all.
+    if is_supervisor_token_for_another_host(hass_url, token):
+        if logger:
+            logger.error(SUPERVISOR_TOKEN_REFUSED)
+        raise ConnectionError(SUPERVISOR_TOKEN_REFUSED)
     if logger:
         logger.debug(f"Creating new WebSocket client for {hass_url}")
     client = AsyncWebSocketClient(hass_url=hass_url, long_lived_token=token, logger=logger)

@@ -1159,5 +1159,110 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
+    """The Supervisor token goes to the Supervisor proxy only: no WebSocket, no config call."""
+
+    OTHER = "https://other-ha.test:8123/api"
+
+    def setUp(self):
+        import asyncio
+
+        import emhass.connection_manager as cm
+
+        cm._global_client = None
+        cm._lock = asyncio.Lock()
+
+    async def asyncTearDown(self):
+        from emhass.connection_manager import close_global_connection
+
+        await close_global_connection()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_refuses_the_supervisor_token_for_another_host(self, client_class):
+        from emhass.connection_manager import get_websocket_client
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        for token in ("sv-token", " sv-token\t"):
+            with self.subTest(token=token), self.assertLogs(logger, level="ERROR"):
+                with self.assertRaises(WsConnectionError):
+                    await get_websocket_client(self.OTHER, token, logger)
+        client_class.assert_not_called()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_still_connects_where_it_should(self, client_class):
+        import emhass.connection_manager as cm
+        from emhass.connection_manager import get_websocket_client
+
+        client_class.return_value = AsyncMock(connected=True)
+        for url, token in (
+            ("http://supervisor/core/api", "sv-token"),
+            ("https://supervisor/core/api/", "sv-token"),
+            (self.OTHER, "own-llat"),
+        ):
+            with self.subTest(url=url, token=token):
+                cm._global_client = None
+                await get_websocket_client(url, token, logger)
+                client_class.assert_called_with(hass_url=url, long_lived_token=token, logger=logger)
+
+    def _options(self, tmp, options):
+        path = pathlib.Path(tmp) / "options.json"
+        path.write_bytes(orjson.dumps(options))
+        conf = dict(emhass_conf)
+        conf["data_path"] = pathlib.Path(tmp)
+        return conf, str(path)
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_build_secrets_does_not_send_the_supervisor_token_to_the_options_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf, options_path = self._options(
+                tmp, {"hass_url": self.OTHER, "long_lived_token": "own-llat"}
+            )
+            with aioresponses() as mocked:
+                # Another Home Assistant answers the Supervisor token with 401
+                mocked.get(re.compile(r".*"), status=401, repeat=True)
+                _, secrets = await utils.build_secrets(
+                    conf, logger, options_path=options_path, secrets_path=""
+                )
+                sent = [
+                    c.kwargs["headers"]["Authorization"]
+                    for cs in mocked.requests.values()
+                    for c in cs
+                ]
+                self.assertEqual(sent, [])
+        self.assertEqual(secrets["hass_url"], self.OTHER)
+        self.assertEqual(secrets["long_lived_token"], "own-llat")
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_build_secrets_still_asks_the_supervisor(self):
+        payload = {
+            "time_zone": "Europe/Paris",
+            "latitude": 1.5,
+            "longitude": 2.5,
+            "elevation": 3,
+        }
+        for options_url in ("", "http://supervisor/core/api"):
+            with self.subTest(options_url=options_url), tempfile.TemporaryDirectory() as tmp:
+                conf, options_path = self._options(
+                    tmp, {"hass_url": options_url, "long_lived_token": "own-llat"}
+                )
+                with aioresponses() as mocked:
+                    mocked.get(
+                        "http://supervisor/core/api/config",
+                        status=200,
+                        payload=payload,
+                        repeat=True,
+                    )
+                    _, secrets = await utils.build_secrets(
+                        conf, logger, options_path=options_path, secrets_path=""
+                    )
+                    calls = [c for (_, url), cs in mocked.requests.items() for c in cs]
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0].kwargs["headers"]["Authorization"], "Bearer sv-token")
+                self.assertEqual(secrets["hass_url"], "http://supervisor/core/api")
+                self.assertEqual(secrets["time_zone"], "Europe/Paris")
+
+
 if __name__ == "__main__":
     unittest.main()
