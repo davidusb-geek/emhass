@@ -48,6 +48,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
 
 
+def _reported_reach(message):
+    """The SoC value a soc_target reach warning reports as reachable."""
+    return float(message.split("reachable SoC is ~")[1].split()[0])
+
+
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The fixtures below are 48 half-hour steps; the real-clock grid is 46 or 50 on
@@ -843,6 +848,146 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             any("outside" in line for line in logs.output),
             msg=f"expected an out-of-range clamp warning, got: {logs.output}",
         )
+
+    def _run_soc_target_reach_case(
+        self, target, timestep, plant=None, availability=None, soc_init=0.3
+    ):
+        """Solve one intermediate soc_target case on a 10 kWh battery that
+        charges at 3000 W with 0.95 charge efficiency (30 min steps), and return
+        the solver status and the "may be unreachable" warnings it logged.
+
+        Per full step the model can store 3000 * 0.95 * 0.5 = 1425 Wh.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": False,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 3000,
+                "battery_charge_power_max": 3000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 0.95,
+                "battery_charge_efficiency": 0.95,
+            }
+        )
+        self.plant_conf.update(plant or {})
+        kwargs = {}
+        if availability is not None:
+            kwargs["battery_availability"] = availability
+        self.opt = self.create_optimization()
+        with mock.patch.object(
+            self.opt.logger, "warning", wraps=self.opt.logger.warning
+        ) as warning:
+            self.opt.perform_naive_mpc_optim(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast,
+                self.p_load_forecast,
+                10,
+                soc_init=soc_init,
+                soc_final=soc_init,
+                soc_target=target,
+                soc_target_timestep=timestep,
+                **kwargs,
+            )
+        messages = [str(call.args[0]) for call in warning.call_args_list if call.args]
+        return self.opt.optim_status, [m for m in messages if "may be unreachable" in m]
+
+    def test_intermediate_soc_target_reach_counts_charge_efficiency(self):
+        """The reach warning must count the charge efficiency: charging is
+        capped at battery_charge_power_max on the grid side, so a step stores
+        at most charge_power_max * efficiency * time_step. Targets between that
+        real reach and the efficiency-blind estimate are infeasible and must
+        be warned about.
+        """
+        # (target, timestep, real reach): 0.3 + 0.1425 per step
+        for target, timestep, reach in ((0.447, 0, 0.4425), (0.875, 3, 0.87)):
+            with self.subTest(target=target, timestep=timestep):
+                status, warnings_logged = self._run_soc_target_reach_case(target, timestep)
+                self.assertNotIn(status, VALID_OPTIMAL_STATUSES)
+                self.assertTrue(
+                    warnings_logged,
+                    msg=f"soc_target={target} is above the real reach {reach} but no "
+                    "reach warning was logged",
+                )
+                reported = _reported_reach(warnings_logged[0])
+                self.assertAlmostEqual(reported, reach, delta=1e-3)
+                self.assertIn("battery_charge_efficiency", warnings_logged[0])
+
+    def test_intermediate_soc_target_reach_no_false_warning(self):
+        """Reachable targets stay quiet. With availability below the charge
+        efficiency the availability ceiling is what binds (0.5 * 3000 * 0.5 =
+        750 Wh per step), so the per-step factor is min(availability,
+        efficiency), not their product.
+        """
+        # (target, availability, has slack to the real reach)
+        cases = (
+            (0.44, None, True),
+            # Exactly the real reach: only the warning is checked, the solve
+            # status would lean on solver tolerance.
+            (0.4425, None, False),
+            (0.374, [0.5] * 10, True),  # availability * efficiency would say 0.37125
+            (0.442, [0.97] * 10, True),
+        )
+        for target, availability, has_slack in cases:
+            with self.subTest(target=target, availability=availability):
+                status, warnings_logged = self._run_soc_target_reach_case(
+                    target, 0, availability=availability
+                )
+                if has_slack:
+                    self.assertIn(status, VALID_OPTIMAL_STATUSES)
+                self.assertEqual(warnings_logged, [])
+
+    def test_intermediate_soc_target_reach_follows_charge_derating(self):
+        """With battery_charge_power_derating the reach follows the derated
+        rate, including the faster path that starts step 1 just below a
+        threshold. With [[0.4, 0.2]] the best by step 1 is 0.4 + 0.1425 =
+        0.5425, from 0.3 (charging flat out only gets to 0.4725) and from 0.41
+        (discharge below 0.4 at step 0 first). Without derating the estimate
+        would be 0.60 and 0.71. Step 0 itself starts at soc_init, so from 0.41
+        it charges at the derated rate.
+        """
+        derating = {"battery_charge_power_derating": [[0.4, 0.2]]}
+        for soc_init, target in ((0.3, 0.56), (0.41, 0.55)):
+            with self.subTest(soc_init=soc_init, target=target):
+                status, warnings_logged = self._run_soc_target_reach_case(
+                    target, 1, plant=derating, soc_init=soc_init
+                )
+                self.assertNotIn(status, VALID_OPTIMAL_STATUSES)
+                self.assertTrue(
+                    warnings_logged, msg=f"soc_target={target} is above the derated reach"
+                )
+                reported = _reported_reach(warnings_logged[0])
+                self.assertAlmostEqual(reported, 0.5425, delta=1e-3)
+                self.assertIn("battery_charge_power_derating", warnings_logged[0])
+        # Reachable only by starting step 1 just below the threshold.
+        for soc_init in (0.3, 0.41):
+            with self.subTest(soc_init=soc_init, target=0.54):
+                status, warnings_logged = self._run_soc_target_reach_case(
+                    0.54, 1, plant=derating, soc_init=soc_init
+                )
+                self.assertIn(status, VALID_OPTIMAL_STATUSES)
+                self.assertEqual(warnings_logged, [])
+        # A threshold at soc_min gives no faster path: the SoC cannot go below
+        # it, so from 0.41 the derated rate applies throughout and three steps
+        # reach 0.41 + 3 * 0.03 = 0.50.
+        floor_plant = dict(derating, battery_minimum_state_of_charge=0.4)
+        status, warnings_logged = self._run_soc_target_reach_case(
+            0.536, 2, plant=floor_plant, soc_init=0.41
+        )
+        self.assertNotIn(status, VALID_OPTIMAL_STATUSES)
+        self.assertTrue(warnings_logged, msg="soc_target=0.536 is above the derated reach 0.50")
+        reported = _reported_reach(warnings_logged[0])
+        self.assertAlmostEqual(reported, 0.50, delta=1e-3)
 
     def test_battery_soc_final_reward_factor(self):
         """Test that defining a battery_soc_final_reward_factor causes

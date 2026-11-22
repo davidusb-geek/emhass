@@ -2249,6 +2249,56 @@ class Optimization:
             ),
         }
 
+    def _max_charge_reach_wh(
+        self, k: int, batt_conf: dict, avail_k: np.ndarray, n_steps: int, start_wh: float
+    ) -> float:
+        """
+        Upper bound on the energy (Wh) battery k can hold after its first
+        ``n_steps`` timesteps when it starts with ``start_wh`` stored.
+
+        The model caps charging at battery_charge_power_max on the grid side and
+        stores battery_charge_efficiency of it, while the availability and
+        derating ceilings cap the stored side. So one step stores at most
+        charge_power_max * min(availability, efficiency, derating) * time_step.
+
+        The derating fraction follows the SoC a step starts at, so a battery
+        that can start a step just below a threshold may charge faster than one
+        charging flat out. The reach after each step is the best of the previous
+        reach plus its own gain and every threshold between the lowest and the
+        highest SoC the step can start at, plus the gain just below it.
+
+        The lowest SoC falls by the discharge power limit each step but never below
+        soc_min, or below the start when that is under soc_min (the recovery
+        constraints keep it there). Other discharge limits are ignored, so the
+        result can over-estimate but never under-estimates: a target above it
+        is out of reach.
+        """
+        avail = np.asarray(avail_k[:n_steps], dtype=float)
+        chg_dt = float(batt_conf["charge_power_max"][k]) * self.time_step
+        eff = float(batt_conf["eff_chg"][k])
+        step_gain = chg_dt * np.minimum(avail, eff)
+        derating = batt_conf["charge_derating"][k]
+        if not derating:
+            return float(start_wh) + float(np.sum(step_gain))
+        cap = float(batt_conf["cap"][k])
+        step_drop = float(batt_conf["discharge_power_max"][k]) * self.time_step * avail
+        low = reach = float(start_wh)
+        floor_wh = min(low, float(batt_conf["soc_min"][k]) * cap)
+        for gain_max, drop_max in zip(step_gain, step_drop, strict=True):
+            best = reach
+            fraction = 1.0
+            # Rows ascend by SoC (utils.check_batt_charge_derating).
+            for soc_threshold, power_max in derating:
+                threshold_wh = soc_threshold * cap
+                if threshold_wh > reach:
+                    break
+                if threshold_wh > low:
+                    best = max(best, threshold_wh + min(gain_max, chg_dt * fraction))
+                fraction = power_max
+            reach = max(best, reach + min(gain_max, chg_dt * fraction))
+            low = max(low - drop_max, floor_wh)
+        return reach
+
     def _normalize_soc_arg(
         self, value: float | list | None, name: str = "soc_init/soc_final"
     ) -> list:
@@ -8943,20 +8993,23 @@ class Optimization:
                         f"[{soc_min_k}, {soc_max_k}], clamping to soc_target={soc_target_clamped}"
                     )
                 cap_k = batt_conf["cap"][k]
-                # Max stored-energy gain per step is the charge ceiling * time_step:
-                # the charge constraint caps grid-side power at ceiling / eff so the
-                # battery-side energy added (grid * eff) is ceiling * time_step, i.e. the
-                # charge efficiency cancels. (Do not multiply by efficiency again here, or
-                # the bound under-estimates reach and warns spuriously when eff < 1.)
-                charge_ceiling = avail_k[: k_target + 1] * batt_conf["charge_power_max"][k]
-                reach = soc_init_list[k] + float(np.sum(charge_ceiling)) * self.time_step / cap_k
+                # Steps 0..k_target all count: the SoC at k_target includes that
+                # step's own charge. The charge efficiency does not cancel, see
+                # _max_charge_reach_wh.
+                reach = (
+                    self._max_charge_reach_wh(
+                        k, batt_conf, avail_k, k_target + 1, soc_init_list[k] * cap_k
+                    )
+                    / cap_k
+                )
                 if soc_target_clamped > reach + 1e-6:
                     self.logger.warning(
                         f"Battery {k}: intermediate soc_target={soc_target_clamped} may be "
                         f"unreachable by timestep {k_target}: from "
                         f"soc_init={soc_init_list[k]} the maximum reachable SoC is "
-                        f"~{reach:.3f} given battery_charge_power_max and "
-                        "battery_availability; the optimization may be infeasible."
+                        f"~{reach:.3f} given battery_charge_power_max, "
+                        "battery_charge_efficiency, battery_availability and "
+                        "battery_charge_power_derating; the optimization may be infeasible."
                     )
                 floor = np.zeros(self.num_timesteps)
                 floor[k_target] = soc_target_clamped * cap_k
@@ -9248,13 +9301,19 @@ class Optimization:
                 if avail_list is not None and (
                     np.any(avail_list[k] < 1) or energy_max_list[k] is not None
                 ):
-                    chg_reach = float(np.sum(self.param_batt_charge_ceiling[k].value))
+                    start_wh = soc_init_list[k] * batt_conf["cap"][k]
+                    chg_reach = (
+                        self._max_charge_reach_wh(
+                            k, batt_conf, avail_list[k], self.num_timesteps, start_wh
+                        )
+                        - start_wh
+                    )
                     dis_reach = float(np.sum(self.param_batt_discharge_ceiling[k].value))
                     dis_reach = min(
                         dis_reach * self.time_step,
                         float(self.param_batt_discharge_energy_max[k].value),
                     )
-                    if low_gap_wh > chg_reach * self.time_step + 1e-6:
+                    if low_gap_wh > chg_reach + 1e-6:
                         self.logger.warning(
                             f"Battery {k}: soc_init={soc_init_list[k]} is below soc_min and "
                             "cannot recover inside its availability window; the minimum "
