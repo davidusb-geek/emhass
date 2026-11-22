@@ -8687,6 +8687,7 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
@@ -8732,6 +8733,12 @@ class Optimization:
         (``Forecast.get_pv_plant_inverters``). It is read only above one inverter, where
         the PV of each inverter is the sum of its columns; with one PV inverter the whole
         ``p_pv`` goes to it and the argument may be ``None``.
+
+        ``battery_discharge_availability`` has the shape and validation of
+        ``battery_availability`` but scales only the discharge power limit, so a
+        battery can be kept from discharging while it may still charge. It
+        multiplies with ``battery_availability``. ``None`` (the default) changes
+        nothing.
         """
         with self._solve_lock:
             return self._perform_optimization_locked(
@@ -8761,6 +8768,7 @@ class Optimization:
                 def_availability=def_availability,
                 p_pv_plants=p_pv_plants,
                 pv_plant_inverters=pv_plant_inverters,
+                battery_discharge_availability=battery_discharge_availability,
             )
 
     def _perform_optimization_locked(
@@ -8791,6 +8799,7 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Opt-in coordinator backend (emhass.coordinator): the devices are planned as separate
@@ -8923,16 +8932,30 @@ class Optimization:
         # target below defaults its timestep to the last connected step.
         n_steps = self.num_timesteps
         avail_list = None
+        dis_avail_list = None
         if self.optim_conf["set_use_battery"]:
             avail_list = self._normalize_battery_availability(battery_availability, n_steps)
+            # Discharge-only cap (#1348), same shapes and validation as
+            # battery_availability; it scales the discharge ceiling alone.
+            if battery_discharge_availability is not None:
+                dis_avail_list = self._normalize_availability(
+                    battery_discharge_availability,
+                    n_steps,
+                    self.n_batt,
+                    "battery_discharge_availability",
+                    "number_of_batteries",
+                )
             energy_max_list = self._normalize_soc_arg(
                 battery_discharge_energy_max, "battery_discharge_energy_max"
             )
             for k in range(self.n_batt):
                 chg_k = float(batt_conf["charge_power_max"][k])
                 dis_k = float(batt_conf["discharge_power_max"][k])
+                dis_scale = avail_list[k]
+                if dis_avail_list is not None:
+                    dis_scale = dis_scale * dis_avail_list[k]
                 self.param_batt_charge_ceiling[k].value = avail_list[k] * chg_k
-                self.param_batt_discharge_ceiling[k].value = avail_list[k] * dis_k
+                self.param_batt_discharge_ceiling[k].value = dis_scale * dis_k
                 unreachable = dis_k * self.time_step * n_steps + 1.0
                 if energy_max_list[k] is None:
                     self.param_batt_discharge_energy_max[k].value = unreachable
@@ -9299,7 +9322,9 @@ class Optimization:
                 # budget allows, leave it outside the band instead of going
                 # infeasible.
                 if avail_list is not None and (
-                    np.any(avail_list[k] < 1) or energy_max_list[k] is not None
+                    np.any(avail_list[k] < 1)
+                    or (dis_avail_list is not None and np.any(dis_avail_list[k] < 1))
+                    or energy_max_list[k] is not None
                 ):
                     start_wh = soc_init_list[k] * batt_conf["cap"][k]
                     chg_reach = (
@@ -10617,6 +10642,7 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -10768,6 +10794,11 @@ class Optimization:
             to build the PV of each inverter. It is passed through unsliced. \
             ``None`` (the default) is right at one inverter.
         :type pv_plant_inverters: list, optional
+        :param battery_discharge_availability: Optional per-battery fraction in \
+            [0, 1] per timestep that scales only the discharge power limit (0 = \
+            may not discharge, charging still allowed). Same shapes as \
+            ``battery_availability``, and multiplied with it.
+        :type battery_discharge_availability: float | list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -10826,6 +10857,7 @@ class Optimization:
             def_availability=def_availability,
             p_pv_plants=p_pv_plants_slice,
             pv_plant_inverters=pv_plant_inverters,
+            battery_discharge_availability=battery_discharge_availability,
         )
         return self.opt_res
 

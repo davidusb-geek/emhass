@@ -4158,6 +4158,77 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         # Cache key should be the same (hit)
         self.assertEqual(stats_after_second["cache_key"], first_cache_key)
 
+    def _reserve_day_setup(self):
+        """A 48 x 30 min day for the #1348 runtime keys: a cheap block, a dear
+        block, PV in the afternoon and a dear evening, 10 kWh / 3 kW battery."""
+        n = 48
+        cost = np.full(n, 0.25)
+        cost[0:6] = 0.45
+        cost[10:24] = 0.10
+        cost[16:18] = 0.60  # a price spike inside the reserve window
+        cost[24:30] = 0.50  # a dear block right after it
+        cost[30:38] = 0.15
+        cost[38:46] = 0.30
+        cost[46:48] = 0.60
+        pv = np.zeros(n)
+        for t in range(26, 46):
+            pv[t] = 4000.0 * np.sin(np.pi * (t - 25) / 21)
+        load = np.full(n, 800.0)
+        load[44:46] = 2500.0
+        self.params["optim_conf"]["set_use_battery"] = True
+        self.params["optim_conf"]["lp_solver_mip_rel_gap"] = 0
+        self.params["plant_conf"].update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_charge_power_max": 3000,
+                "battery_discharge_power_max": 3000,
+                "battery_charge_efficiency": 0.95,
+                "battery_discharge_efficiency": 0.95,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.5,
+            }
+        )
+
+        async def tick(extra):
+            runtimeparams = {
+                "pv_power_forecast": pv.tolist(),
+                "load_power_forecast": load.tolist(),
+                "load_cost_forecast": cost.tolist(),
+                "prod_price_forecast": [0.05] * n,
+                "prediction_horizon": n,
+                "soc_init": 0.5,
+                "soc_final": 0.5,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                **extra,
+            }
+            input_data_dict = await self._run_set_input(runtimeparams)
+            res = await naive_mpc_optim(input_data_dict, logger, debug=True)
+            return res, input_data_dict["opt"], OptimizationCache.get_stats()["cache_key"]
+
+        return tick
+
+    async def test_mpc_battery_discharge_availability_end_to_end(self):
+        """#1348: battery_discharge_availability in the runtime JSON reaches the
+        optimizer (it used to be dropped silently) and blocks discharge where it is
+        0, on the same cached problem. The next tick without the key plans exactly
+        as before."""
+        tick = self._reserve_day_setup()
+        hold = [1.0] * 38 + [0.0] * 8 + [1.0] * 2
+        with fixture_clock():
+            res_free, opt, key = await tick({})
+            res_hold, opt_hold, key_hold = await tick({"battery_discharge_availability": hold})
+            res_next, opt_next, key_next = await tick({})
+        # Counterfactual: the free plan discharges in steps 38-45.
+        self.assertGreater(res_free["P_batt"].to_numpy()[38:46].max(), 1.0)
+        self.assertEqual(res_hold["optim_status"].iloc[0], "Optimal")
+        self.assertLessEqual(res_hold["P_batt"].to_numpy()[38:46].max(), 1e-6)
+        self.assertIs(opt_hold, opt)
+        self.assertIs(opt_next, opt)
+        self.assertEqual(key_hold, key)
+        self.assertEqual(key_next, key)
+        np.testing.assert_allclose(res_next["P_batt"], res_free["P_batt"], atol=1e-6)
+
     async def test_mpc_cache_hit_with_capacity_charge_consideration_change(self):
         """Issue #540 follow-up: capacity_charge_consideration is
         runtime-only (never an optim_conf key, exactly like

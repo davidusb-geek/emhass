@@ -3301,6 +3301,11 @@ async def treat_runtimeparams(
             params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
                 "battery_discharge_energy_max", None
             )
+            # Discharge-only cap (#1348), same shape and validation as
+            # battery_availability (done in Optimization.perform_optimization).
+            params["passed_data"]["battery_discharge_availability"] = runtimeparams.get(
+                "battery_discharge_availability", None
+            )
             # Per-deferrable-load availability, same shape and validation as
             # battery_availability (done in Optimization.perform_optimization).
             params["passed_data"]["def_availability"] = runtimeparams.get("def_availability", None)
@@ -7916,6 +7921,7 @@ async def build_params(
         "soc_target_timestep": None,
         "battery_availability": None,
         "battery_discharge_energy_max": None,
+        "battery_discharge_availability": None,
         "def_availability": None,
         "current_period_peak": None,
         "capacity_charge_window": None,

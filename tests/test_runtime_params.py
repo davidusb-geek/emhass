@@ -51,6 +51,7 @@ EXPECTED_KEYS = {
     "soc_final",
     "soc_target",
     "soc_target_timestep",
+    "battery_discharge_availability",
     "current_period_peak",
     "capacity_charge_window",
     "capacity_charge_consideration",

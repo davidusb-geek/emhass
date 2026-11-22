@@ -142,6 +142,7 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
 | **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep index by which `soc_target` must be achieved. |
 | **`battery_availability`** | Float, List, or Nested Structure | `null` (Always available) | Per-battery availability flag/fraction in `[0, 1]` per timestep. Scales max charge/discharge limits (`1` = full power, `0` = disconnected/frozen SOC; ideal for EV modeling). |
 | **`battery_discharge_energy_max`** | Float or List | `null` (No cap) | Maximum energy (Wh, battery side) the battery may deliver over the horizon (for V2G warranties or cycle limits). |
+| **`battery_discharge_availability`** | Float, List, or Nested Structure | `null` (No cap) | Per-battery fraction in `[0, 1]` per timestep that scales only the discharge power limit (`0` = may not discharge, charging still allowed). Same shape as `battery_availability` and multiplied with it. |
 
 ---
 
@@ -385,6 +386,8 @@ Example: battery 0 is the home battery, battery 1 a 75 kWh car that is plugged i
 ```
 
 When the car is unplugged, keep `number_of_batteries` at 2 and send `battery_availability: [null, 0]` with the car's last known SOC as `soc_init`/`soc_final`; its power forecast is then zero for the whole horizon.
+
+`battery_availability` limits charging and discharging together. To limit discharging only, use `battery_discharge_availability` (issue [#1348](https://github.com/davidusb-geek/emhass/issues/1348)). It works for any battery, not only an EV. It has the same shape and validation as `battery_availability`, scales only `battery_discharge_power_max`, and is multiplied with `battery_availability`. With `0` in a step the battery may not discharge there but can still charge from PV or the grid, for example to keep it for a later window. A fraction caps the discharge power, for example at the base house load while a deferrable load runs so the battery does not feed that load (issue [#552](https://github.com/davidusb-geek/emhass/issues/552)): with a 3 kW battery and 800 W of house load, send about `0.27` for those steps. Whatever the battery may not deliver must come from PV or the grid, so the problem is infeasible when the load in such a step is higher than PV plus `maximum_power_from_grid`, the same as with `battery_availability: 0`. As with `battery_availability`, a list shorter than the horizon repeats its last value (a warning is logged), so to block discharging for the next few steps only, end the list with `1`. It is only used by `naive-mpc-optim` and defaults to no cap.
 
 ### Deferrable loads that are not always available (naive-mpc-optim)
 

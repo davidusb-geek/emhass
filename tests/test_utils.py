@@ -2798,6 +2798,23 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         params_out = orjson.loads(params_out)
         self.assertEqual(params_out["passed_data"]["def_availability"], mask)
 
+    async def test_treat_runtimeparams_passes_battery_discharge_availability(self):
+        """battery_discharge_availability (#1348) reaches naive-mpc-optim unchanged;
+        validation happens in Optimization.perform_optimization. dayahead-optim does
+        not use it."""
+        mask = [None, [1, 1, 0, 0, 0.5]]
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"prediction_horizon": 10, "battery_discharge_availability": mask}
+        )
+        passed = orjson.loads(params_out)["passed_data"]
+        self.assertEqual(passed.get("battery_discharge_availability"), mask)
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"battery_discharge_availability": mask}, "dayahead-optim"
+        )
+        self.assertIsNone(
+            orjson.loads(params_out)["passed_data"].get("battery_discharge_availability")
+        )
+
     async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
         """A percentage saved in the plant config fails even when the request adds nothing."""
         params = await TestUtils.get_test_params()

@@ -49,6 +49,13 @@
       "default_value": null,
       "unit": "Wh"
     },
+    "battery_discharge_availability": {
+      "friendly_name": "Battery discharge availability",
+      "Description": "Optional, one entry per battery: null (no cap), a number, or a list with one value per timestep. Each value is a fraction in [0,1] (NOT percent) that scales only the battery's discharge power limit; 0 = the battery may not discharge in that step, while charging stays allowed. Same shape and validation as battery_availability, and multiplied with it. Defaults to no cap, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "fraction"
+    },
     "def_availability": {
       "friendly_name": "Deferrable load availability",
       "Description": "Optional, one entry per deferrable load: null (always available), a number, or a list with one value per timestep. Each value is a fraction in [0,1] (NOT percent) that scales the load's nominal power ceiling for that timestep; 0 = the load must not run, whatever else would force it on (def_current_state, def_current_power, minimum on-time). A semi-continuous load runs at its ON level or not at all, so for it any value below 1 blocks the step. Same shape and validation as battery_availability. Defaults to always available, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",
