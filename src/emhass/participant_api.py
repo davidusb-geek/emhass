@@ -472,15 +472,18 @@ class PlanStepper:
             if held is None or self.log is None:
                 return
             with self._lock:
-                current = gen == self._gen
+                current = gen == self._gen and not self.superseded  # its plan, still
             if current:
                 last_slot = int(held) == len(index) - 1
                 self.log.annotate(commit_id, {"held_slot": None if last_slot else int(held)})
 
+        def over() -> bool:
+            return not len(index) or pd.Timestamp.now(tz="UTC") >= index[-1] + step
+
         def loop() -> None:
             now = pd.Timestamp.now(tz="UTC")
             if now_first and not attempt(now + step, last=True):
-                if not len(index) or pd.Timestamp.now(tz="UTC") >= index[-1] + step:
+                if over():
                     ended()  # an ended plan published once (after a restart)
                 return
             while True:
@@ -494,6 +497,8 @@ class PlanStepper:
                 if wake.wait((at - now).total_seconds() + 1.0):
                     return
                 if not attempt(at + step):
+                    if over():
+                        ended()  # its last slot's tries ran past the plan's end
                     return
 
         thread = threading.Thread(target=loop, name="participant-plan-steps", daemon=True)
