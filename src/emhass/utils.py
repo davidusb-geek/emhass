@@ -7904,9 +7904,11 @@ async def build_params(
         if str(params_secrets[name]) in reserved:
             # the same value as one of EMHASS's own secrets (Home Assistant's
             # token, say): never sent to a remote - it is reached without one
+            # (the element named, never anything of the secret)
             logger.warning(
-                f"site: the secret {name!r} holds the value of one of EMHASS's own secrets; "
-                "it is not sent to the remote solver"
+                "site: the remote solver %r's token holds the value of one of EMHASS's own "
+                "secrets; it is not sent",
+                str(element.get("id")),
             )
             continue
         params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[name]
