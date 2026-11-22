@@ -2823,7 +2823,8 @@ class RetrieveHass:
             is kept as a gap. A time step shorter than the 5-minute statistics \
             period still takes the value of the row whose period it falls in.
         :type forward_fill: bool, optional
-        :return: Statistics resampled to the time step, indexed in the local             time zone. Empty when no entity has usable statistics.
+        :return: Statistics resampled to the time step, indexed in the local \
+            time zone. Empty when no entity has usable statistics.
         :rtype: pd.DataFrame
         """
         import pandas as pd
