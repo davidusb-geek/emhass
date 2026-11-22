@@ -407,6 +407,65 @@ def test_a_weighted_load_group_inside_one_participant_keeps_its_weight():
     np.testing.assert_allclose(p[p > 1], 750.0, atol=1e-3)
 
 
+def test_a_weighted_group_inside_a_two_load_participant_keeps_each_weight_on_its_load():
+    """Both loads in one participant, modulating, weight 0.5 on deferrable1
+    under a 2.5 kW budget: deferrable0 (3 kW) counts in full, so it never runs
+    above 2.5 kW, though the PV would carry 3 kW at noon. With each weight on
+    the other load it would run at 3 kW (counted 1.5 kW)."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    oc = dict(oc, treat_deferrable_load_as_semi_cont=[False, False])
+    groups = [
+        {
+            "names": ["deferrable0", "deferrable1"],
+            "max_power": 2500,
+            "weights": {"deferrable1": 0.5},
+        }
+    ]
+    site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe", site=LOADS)
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    row = res["P_deferrable0"] + 0.5 * res["P_deferrable1"]
+    assert row.max() <= 2500 + 1e-3
+    assert res["P_deferrable0"].sum() * 0.5 == pytest.approx(3000.0 * 4, rel=1e-6)
+    assert _bill(res) == pytest.approx(_bill(milp), abs=0.01)
+
+
+def test_two_groups_on_the_same_loads_across_participants_fall_back_by_name():
+    """Two budgets on the same two loads, each load planned on its own: the
+    default solver holds both rows, so the coordinator falls back with a
+    reason that names the overlap, and nothing is logged as an error."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    names = ["deferrable0", "deferrable1"]
+    groups = [{"names": names, "max_power": 3000}, {"names": names, "max_power": 2500}]
+    site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    reason = (
+        "deferrable_load_groups ['deferrable0', 'deferrable1']: two overlapping groups "
+        "on the same loads across participants"
+    )
+    with (
+        mock.patch.object(logger, "error") as error,
+        mock.patch.object(logger, "warning") as warning,
+    ):
+        _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    _fell_back(res, milp, reason)
+    error.assert_not_called()
+    assert any(reason in str(c) for c in warning.call_args_list)
+
+
+def test_a_battery_member_is_read_by_emhass_parser():
+    """_battery_members keeps only the `batteryK` names; a name the parser
+    cannot read, or one that is not a string, is left to the group validator."""
+    from emhass.coordinator.backend import _battery_members
+
+    assert _battery_members(["deferrable0", "oops", "battery", 3]) == []
+    assert _battery_members(["battery0", "oops", "deferrable1", "battery2"]) == [
+        "battery0",
+        "battery2",
+    ]
+
+
 def test_a_per_step_load_group_list_inside_one_participant_is_held():
     """A per-step max_power list (#1366) on a group whose loads are all one
     participant's stays in that participant's own model, with deferrable1
