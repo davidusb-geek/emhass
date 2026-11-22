@@ -139,9 +139,13 @@ SELF_CONSUMPTION_BIGM = 1e3
 # is charged per Wh and per step, with no time_step factor, so one step of shortfall
 # costs more than any energy trade the plan could win with it at any step length:
 # 10x over the 100x of SOC_FINAL_DEVIATION_PENALTY_FACTOR and
-# BATTERY_FIRST_IMPORT_PENALTY_FACTOR, so the floor wins against both whenever it can
-# be held. A factor of 100 still lost to soc_final in testing. Larger values
-# change no plan but scale the objective up whenever the floor cannot be met.
+# BATTERY_FIRST_IMPORT_PENALTY_FACTOR, so the floor wins against soc_final whenever it
+# can be held. A factor of 100 still lost to soc_final in testing. Battery-first is
+# the exception: dropping to soc_min + 1% opens a whole step of import at no penalty,
+# which no per-Wh price fully outweighs, so a floor within about
+# 0.1 x discharge power x time step (Wh) of that level can still lose to it. A larger
+# factor only narrows that band, and it scales the objective up whenever the floor
+# cannot be met.
 SOC_FLOOR_SHORTFALL_PENALTY_FACTOR = 1000.0
 # Default big-M (deg C) for the per-source max_supply_temperature gate on
 # shared thermal tanks. When allow_k = 0 the gate must leave the tank
@@ -1324,7 +1328,8 @@ class Optimization:
                 f"{float(miss.max()) / caps[k]:.3f} of the capacity; the battery cannot "
                 "hold or reach the floor there (for example a load above PV plus "
                 "maximum_power_from_grid, or a charge limit the reach estimate does not "
-                "count)."
+                "count), or, under set_battery_first_priority, the floor is so close to "
+                "the minimum SOC that the plan drops to it instead."
             )
 
     def _normalize_availability(self, value, n: int, count: int, name: str, count_name: str):
