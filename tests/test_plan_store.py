@@ -16,16 +16,15 @@ import pandas as pd
 
 from emhass import last_run, plan_store
 
+from .snapshot_state_support import isolated_snapshot_state
+
 
 class TestLastRunRecordReturn(unittest.TestCase):
     """last_run.record() returns the ISO timestamp it stamps (single source for AC-6)."""
 
     def setUp(self):
         self.tmp_path = Path(tempfile.mkdtemp())
-        last_run._cache = None
-
-    def tearDown(self):
-        last_run._cache = None
+        self.enterContext(isolated_snapshot_state())
 
     def test_record_returns_stamped_timestamp(self):
         ts = last_run.record(
@@ -48,10 +47,7 @@ class TestPlanStore(unittest.TestCase):
 
     def setUp(self):
         self.tmp_path = Path(tempfile.mkdtemp())
-        plan_store._cache = None
-
-    def tearDown(self):
-        plan_store._cache = None
+        self.enterContext(isolated_snapshot_state())
 
     def test_serialize_opt_res_records_iso_and_nan(self):
         idx = pd.to_datetime(["2026-06-17T00:00:00+00:00", "2026-06-17T00:30:00+00:00"], utc=True)
@@ -84,12 +80,7 @@ class TestRecordOptimSnapshotWritesPlan(unittest.TestCase):
 
     def setUp(self):
         self.tmp_path = Path(tempfile.mkdtemp())
-        last_run._cache = None
-        plan_store._cache = None
-
-    def tearDown(self):
-        last_run._cache = None
-        plan_store._cache = None
+        self.enterContext(isolated_snapshot_state())
 
     def test_record_optim_snapshot_writes_plan_with_shared_timestamp(self):
         import logging

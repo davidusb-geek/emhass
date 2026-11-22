@@ -55,6 +55,8 @@ from emhass.utils import (
     read_flag,
 )
 
+from .snapshot_state_support import isolated_snapshot_state
+
 root = pathlib.Path(get_root(__file__, num_parent=2))
 logger, _ = get_logger(__name__, {"data_path": root / "data/"}, save_to_file=False)
 SCHEMA = json.loads((root / "docs/api/v1/dry-run.schema.json").read_text(encoding="utf-8"))
@@ -169,13 +171,13 @@ def _one_clock():
 
 @pytest.fixture(autouse=True)
 def _cold_cache():
-    """Each test starts and ends with an empty OptimizationCache, and leaves
-    the in-memory last-run and plan snapshots as it found them."""
-    saved = last_run._cache, plan_store._cache
+    """Each test starts and ends with an empty OptimizationCache and cold
+    last-run and plan snapshots (cache, pending-write flag and persisted copy),
+    and leaves all of them as it found them."""
     OptimizationCache.clear()
-    yield
+    with isolated_snapshot_state():
+        yield
     OptimizationCache.clear()
-    last_run._cache, plan_store._cache = saved
 
 
 # --------------------------------------------------------------------------
@@ -1036,7 +1038,7 @@ def test_the_dry_run_url_returns_the_plan_and_writes_nothing(action):
     start.assert_not_called()
 
 
-def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run():
+def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run(monkeypatch):
     """After a live run, GET /api/v1/plan and /api/v1/last-run serve it. A dry
     run at other prices, through the dry-run URL, changes neither response,
     in memory or on disk, though its own plan differs."""
@@ -1058,8 +1060,9 @@ def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run():
 
             before = asyncio.run(endpoints())
             answer = asyncio.run(dry())
-            last_run._cache = None  # read from disk too, not only the in-memory copy
-            plan_store._cache = None
+            # read from disk too, not only the in-memory copy
+            monkeypatch.setattr(last_run, "_cache", None)
+            monkeypatch.setattr(plan_store, "_cache", None)
             after = asyncio.run(endpoints())
     assert before[0]["status"] == "ok" and before[1]["action"] == "dayahead-optim"
     assert after == before
@@ -1426,15 +1429,8 @@ def test_the_command_line_refuses_a_dry_run(asked):
 def test_a_snapshot_is_not_stored():
     """last_run.snapshot builds the record that record() stores, and stores
     nothing itself."""
-    saved = last_run._cache
-    try:
-        last_run._cache = None
-        snap = last_run.snapshot(
-            "dayahead-optim", {"optim_solve": 0.1}, "Infeasible", True, 1.0, "1.0"
-        )
-        assert last_run._cache is None
-    finally:
-        last_run._cache = saved
+    snap = last_run.snapshot("dayahead-optim", {"optim_solve": 0.1}, "Infeasible", True, 1.0, "1.0")
+    assert last_run._cache is None
     assert snap["status"] == "infeasible" and snap["action"] == "dayahead-optim"
     assert set(snap) == set(SCHEMA["allOf"][0]["else"]["required"]) | {"status", "action"}
 

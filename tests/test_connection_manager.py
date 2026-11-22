@@ -33,11 +33,11 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         self.hass_url = "http://homeassistant.local:8123/api"
         self.token = "test_token_123"
 
-        # Reset global client state before each test
+        # Reset global client state before each test and restore it afterwards
         import emhass.connection_manager as cm
 
-        cm._global_client = None
-        cm._lock = asyncio.Lock()
+        self.enterContext(patch.object(cm, "_global_client", None))
+        self.enterContext(patch.object(cm, "_lock", asyncio.Lock()))
 
     async def asyncTearDown(self):
         """Clean up after each test."""
@@ -208,12 +208,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
     def test_is_connected_no_client(self):
         """Test is_connected when no client exists."""
-        # Reset global client
-        import emhass.connection_manager as cm
-
-        cm._global_client = None
-
-        # Should return False
+        # setUp starts every test without a client, so this should return False
         self.assertFalse(is_connected())
 
     @patch("emhass.connection_manager.AsyncWebSocketClient")
