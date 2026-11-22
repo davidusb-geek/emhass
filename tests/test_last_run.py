@@ -15,11 +15,11 @@ def data_path(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def reset_cache():
-    """Clear in-memory cache between tests to avoid cross-test bleed."""
-    last_run._cache = None
-    yield
-    last_run._cache = None
+def reset_cache(monkeypatch):
+    """Isolate the entire last-run snapshot state and restore it after every test."""
+    monkeypatch.setattr(last_run, "_cache", None)
+    monkeypatch.setattr(last_run, "_unpersisted", False)
+    monkeypatch.setattr(last_run, "_persisted", None)
 
 
 def test_record_then_read_round_trip(data_path):
@@ -126,7 +126,7 @@ def test_is_recent_false_when_no_run(data_path):
     assert last_run.is_recent(data_path, max_age_seconds=60) is False
 
 
-def test_is_recent_false_when_too_old(data_path):
+def test_is_recent_false_when_too_old(data_path, monkeypatch):
     from datetime import timedelta
 
     old_ts = (
@@ -134,33 +134,41 @@ def test_is_recent_false_when_too_old(data_path):
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
-    last_run._cache = {
-        "status": "ok",
-        "timestamp": old_ts,
-        "action": "naive-mpc-optim",
-        "stage_times": {},
-        "duration_total_seconds": 1.0,
-        "emhass_version": "0.13.0",
-        "schema_version": "1.0",
-        "infeasible": False,
-        "error_message": None,
-    }
+    monkeypatch.setattr(
+        last_run,
+        "_cache",
+        {
+            "status": "ok",
+            "timestamp": old_ts,
+            "action": "naive-mpc-optim",
+            "stage_times": {},
+            "duration_total_seconds": 1.0,
+            "emhass_version": "0.13.0",
+            "schema_version": "1.0",
+            "infeasible": False,
+            "error_message": None,
+        },
+    )
     assert last_run.is_recent(data_path, max_age_seconds=600) is False
 
 
-def test_is_recent_logs_warning_on_malformed_timestamp(data_path, caplog):
+def test_is_recent_logs_warning_on_malformed_timestamp(data_path, caplog, monkeypatch):
     """A corrupt timestamp must surface as a warning, not silent False."""
-    last_run._cache = {
-        "status": "ok",
-        "timestamp": "not-a-timestamp",
-        "action": "naive-mpc-optim",
-        "stage_times": {},
-        "duration_total_seconds": 1.0,
-        "emhass_version": "0.13.0",
-        "schema_version": "1.0",
-        "infeasible": False,
-        "error_message": None,
-    }
+    monkeypatch.setattr(
+        last_run,
+        "_cache",
+        {
+            "status": "ok",
+            "timestamp": "not-a-timestamp",
+            "action": "naive-mpc-optim",
+            "stage_times": {},
+            "duration_total_seconds": 1.0,
+            "emhass_version": "0.13.0",
+            "schema_version": "1.0",
+            "infeasible": False,
+            "error_message": None,
+        },
+    )
     with caplog.at_level(logging.WARNING, logger="emhass.last_run"):
         result = last_run.is_recent(data_path, max_age_seconds=60)
     assert result is False
