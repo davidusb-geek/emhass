@@ -410,9 +410,10 @@ class TestCrashSafety(AuthSupportBase):
                     )
             return result
 
+        token_file = self.token_file()
         with patch.object(pathlib.Path, "stat", stat):
             with self.assertRaises(api_auth.ApiTokenError):
-                api_auth._discard_stale(self.token_file())
+                api_auth._discard_stale(token_file)
         self.assertTrue(self.token_file().exists())
 
     def test_non_blank_text_is_never_discarded(self):
@@ -421,8 +422,9 @@ class TestCrashSafety(AuthSupportBase):
         self.token_file().write_text("something else entirely\n")
         past = time.time() - 3600
         os.utime(self.token_file(), (past, past))
+        token_file = self.token_file()
         with self.assertRaises(api_auth.ApiTokenError):
-            api_auth._discard_stale(self.token_file())
+            api_auth._discard_stale(token_file)
         self.assertEqual(self.token_file().read_text(), "something else entirely\n")
 
     def test_a_file_that_vanishes_while_being_looked_at_is_not_an_error(self):

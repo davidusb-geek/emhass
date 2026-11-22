@@ -3196,8 +3196,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             (None, {"transfer_coefficient": float("nan")}, "transfer_coefficient"),
         ):
             with self.subTest(field=field, storage=storage_extra, transfer=transfer_extra):
+                topology = topo(storage_extra, transfer_extra)
                 with self.assertRaisesRegex(ValueError, field):
-                    utils.compile_heat_topology(topo(storage_extra, transfer_extra))
+                    utils.compile_heat_topology(topology)
 
     def test_compile_heat_topology_rejects_bad_zone_values(self):
         """Zone physics fields must be finite numbers in their physical range, or
@@ -3223,11 +3224,10 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             ("shgc", True),
             ("window_area", "big"),
         ):
-            with (
-                self.subTest(field=field, value=value),
-                self.assertRaisesRegex(ValueError, field),
-            ):
-                utils.compile_heat_topology(topo(**{field: value}))
+            with self.subTest(field=field, value=value):
+                topology = topo(**{field: value})
+                with self.assertRaisesRegex(ValueError, field):
+                    utils.compile_heat_topology(topology)
         compiled = utils.compile_heat_topology(
             topo(loss_coefficient=0.2, thermal_inertia=0.0, window_area=4.0, shgc=0.6)
         )
@@ -3508,17 +3508,16 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         """In extend mode the kept runtime tanks and the compiled ones share one
         list; two tanks with the same id would both take that id's start
         temperature, so the combination is rejected."""
+        runtimeparams = {
+            "def_load_config": [
+                {"thermal_source": {"efficiency": 1.0}},
+                {"thermal_source": {"efficiency": 1.0}},
+            ],
+            "shared_thermal_tanks": [self._manual_tank()],
+            "heat_topology": self._hp_booster_extend_topo(extend=True),
+        }
         with self.assertRaisesRegex(ValueError, "dhw"):
-            await self._run_treat_runtimeparams(
-                {
-                    "def_load_config": [
-                        {"thermal_source": {"efficiency": 1.0}},
-                        {"thermal_source": {"efficiency": 1.0}},
-                    ],
-                    "shared_thermal_tanks": [self._manual_tank()],
-                    "heat_topology": self._hp_booster_extend_topo(extend=True),
-                }
-            )
+            await self._run_treat_runtimeparams(runtimeparams)
 
     async def test_treat_runtimeparams_shared_thermal_tanks_runtime(self):
         """shared_thermal_tanks passed at runtime lands in optim_conf: the
@@ -6328,15 +6327,19 @@ class TestCompileHeatTopology(unittest.TestCase):
                 "cost_tracks": {"gas": [0.085] * 48},
             }
 
+        negative_penalty = topo({"startup_penalty": -0.1})
         with self.assertRaises(ValueError):
-            utils.compile_heat_topology(topo({"startup_penalty": -0.1}))
+            utils.compile_heat_topology(negative_penalty)
+        negative_startups = topo({"max_startups": -1})
         with self.assertRaises(ValueError):
-            utils.compile_heat_topology(topo({"max_startups": -1}))
+            utils.compile_heat_topology(negative_startups)
         # A start count is a whole number: -0.9, 0.9 and 1.9 must not be
         # truncated by int() into a silently different limit.
         for bad in (-0.9, 0.9, 1.9, "two"):
-            with self.subTest(max_startups=bad), self.assertRaises(ValueError):
-                utils.compile_heat_topology(topo({"max_startups": bad}))
+            with self.subTest(max_startups=bad):
+                topology = topo({"max_startups": bad})
+                with self.assertRaises(ValueError):
+                    utils.compile_heat_topology(topology)
         out = utils.compile_heat_topology(topo({"max_startups": 2.0}))
         self.assertEqual(out["set_deferrable_max_startups"], [2])
 
@@ -6451,8 +6454,9 @@ class TestCompileHeatTopology(unittest.TestCase):
         """A cap <= 0 (likely a typo or a mistaken 'disable' sentinel) and an
         empty list are rejected with a clear error naming the source."""
         for bad_cap in (0, -5, [53.0, 0.0], []):
+            topology = self._hp_booster_topo(bad_cap)
             with self.assertRaises(ValueError, msg=f"cap={bad_cap!r} should raise"):
-                utils.compile_heat_topology(self._hp_booster_topo(bad_cap))
+                utils.compile_heat_topology(topology)
 
     def _capped_hp_only_topo(self, hp_cap, min_temps):
         """Single capped heat pump feeding one tank (no uncapped fallback)."""
@@ -7325,8 +7329,9 @@ class TestCompileHeatTopology(unittest.TestCase):
                 "flows": [{"from": "hp", "to": "buf"}],
             }
 
+        min_power_above_nominal = topo(4000)
         with self.assertRaises(ValueError) as ctx:
-            utils.compile_heat_topology(topo(4000))
+            utils.compile_heat_topology(min_power_above_nominal)
         msg = str(ctx.exception)
         self.assertIn("hp", msg)
         self.assertIn("min_power", msg)

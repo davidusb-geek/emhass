@@ -280,8 +280,9 @@ def test_n1_one_element_cap_list_with_null_element_removes_the_cap():
 )
 def test_n1_wrong_length_list_is_an_error_naming_the_key(key, value):
     conf = {key: list(value)}
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert key in message
     assert f"has {len(value)} entries" in message
@@ -420,8 +421,9 @@ def test_n_gt_1_exact_length_list_passes_through_with_coercion():
 @pytest.mark.parametrize("length", [1, 3])
 def test_n_gt_1_wrong_length_list_names_param_length_and_count(name, default, length):
     conf = _two(**{name: [default] * length})
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert name in message
     assert f"has {length} {'entry' if length == 1 else 'entries'}" in message
@@ -441,15 +443,17 @@ def test_n_gt_1_wrong_length_list_names_param_length_and_count(name, default, le
 )
 def test_n_gt_1_bad_list_element_is_an_error_naming_the_slot(name, element):
     conf = _two(**{name: [1.0 if name != "compute_curtailment" else False, element]})
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match=rf"{name}\[1\]"):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 @pytest.mark.parametrize("scalar", ["maybe", 3, [1]])
 def test_n_gt_1_compute_curtailment_bad_scalar_is_an_error(scalar):
     conf = _two(compute_curtailment=scalar)
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match="compute_curtailment"):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 def test_compute_curtailment_string_elements_are_case_insensitive_booleans():
@@ -465,8 +469,9 @@ def test_compute_curtailment_string_elements_are_case_insensitive_booleans():
 @pytest.mark.parametrize("scalar", [5000, 12000.0, "4000", None])
 def test_n_gt_1_cap_scalar_is_refused_with_an_explanation(name, scalar):
     conf = _two(**{name: scalar})
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert name in message
     assert "number_of_inverters=2" in message
@@ -477,16 +482,18 @@ def test_n_gt_1_cap_scalar_is_refused_with_an_explanation(name, scalar):
 def test_n_gt_1_cap_missing_key_is_refused(name):
     conf = _two()
     del conf[name]
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match=name):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 @pytest.mark.parametrize("name", ["inverter_ac_output_max", "inverter_ac_input_max"])
 @pytest.mark.parametrize("length", [1, 3])
 def test_n_gt_1_cap_wrong_length_list_names_param_and_count(name, length):
     conf = _two(**{name: [5000] * length})
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert name in message
     assert f"has {length} {'entry' if length == 1 else 'entries'}" in message
@@ -496,8 +503,9 @@ def test_n_gt_1_cap_wrong_length_list_names_param_and_count(name, length):
 @pytest.mark.parametrize("bad", [-1, float("inf"), float("nan"), True, "lots", None, [5000]])
 def test_n_gt_1_cap_elements_must_be_finite_and_not_negative(bad):
     conf = _two(inverter_ac_output_max=[5000, bad])
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match=r"inverter_ac_output_max\[1\]"):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 def test_n_gt_1_cap_list_is_coerced_and_zero_is_allowed():
@@ -518,8 +526,9 @@ def test_n_gt_1_unset_index_list_is_an_error(key, unset):
         del conf[key]
     else:
         conf[key] = unset
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert key in str(excinfo.value)
     assert "number_of_inverters=2" in str(excinfo.value)
 
@@ -529,15 +538,17 @@ def test_n_gt_1_unset_index_list_is_an_error(key, unset):
 def test_n_gt_1_index_element_must_be_an_in_range_integer(key, bad):
     conf = _two(battery_inverter_index=[0], pv_plant_inverter_index=[1, 0])
     conf[key] = [0, bad] if key == "pv_plant_inverter_index" else [bad]
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert key in str(excinfo.value)
 
 
 def test_n_gt_1_index_scalar_is_an_error():
     conf = _two(battery_inverter_index=0)
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match="battery_inverter_index"):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 def test_n_gt_1_index_elements_are_normalised_to_plain_ints():
@@ -555,8 +566,9 @@ def test_n_gt_1_index_elements_are_normalised_to_plain_ints():
 
 def test_n_gt_1_battery_index_length_must_match_number_of_batteries():
     conf = _two(number_of_batteries=2, battery_inverter_index=[0])
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert "battery_inverter_index" in message
     assert "number_of_batteries=2" in message
@@ -581,8 +593,9 @@ def test_n_gt_1_every_inverter_needs_a_battery_or_a_pv_plant():
         battery_inverter_index=[0],
         pv_plant_inverter_index=[0, 1],
     )
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert "inverter 2 has no battery and no PV plant" in str(excinfo.value)
 
 
@@ -605,8 +618,9 @@ def test_n_gt_1_inverter_is_hybrid_false_is_silent(caplog):
 
 
 def test_n_gt_1_bad_count_is_an_error():
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match="number_of_inverters must be a positive integer"):
-        _get_func("check_inverter_params")({"number_of_inverters": 0}, logger)
+        check_inverter_params({"number_of_inverters": 0}, logger)
 
 
 # ───────────────── idempotence and in-place semantics ─────────────────────────
@@ -697,8 +711,9 @@ def test_faults_are_reported_in_every_entry_point_at_more_than_one_inverter():
     config = _two(inverter_efficiency_dc_ac=[0.9, 0.9, 0.9])
     assert "inverter_efficiency_dc_ac" in _get_func("inverter_config_faults")(config)[0]
     base = build_params()
+    runtime = copy.deepcopy(config)
     with pytest.raises(_error_class(), match="inverter_efficiency_dc_ac"):
-        treat_runtime(copy.deepcopy(config), base)
+        treat_runtime(runtime, base)
 
 
 def test_treat_runtimeparams_accepts_more_than_one_inverter():
@@ -775,8 +790,9 @@ def test_one_inverter_wording_is_singular_and_has_no_double_periods():
     message = str(excinfo.value)
     assert "exactly 1 entry" in message
     assert "1 entries" not in message
+    one_entry_for_two_inverters = _two(inverter_efficiency_dc_ac=[0.9])
     with pytest.raises(_error_class(), match="exactly 2 entries"):
-        check(_two(inverter_efficiency_dc_ac=[0.9]), logger)
+        check(one_entry_for_two_inverters, logger)
     with pytest.raises(_error_class()) as two_faults:
         check({"number_of_inverters": 2}, logger)
     assert ".." not in str(two_faults.value)
@@ -874,8 +890,9 @@ def test_huge_inverter_count_does_not_allocate_per_inverter_lists():
 
 def test_huge_inverter_count_coverage_message_is_bounded():
     conf = _two(number_of_inverters=_BIG)
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     # inverters 0 and 1 are attached; 2..11 are listed, the rest are counted.
     assert "inverter 2 has no battery and no PV plant" in message
@@ -887,8 +904,9 @@ def test_huge_inverter_count_coverage_message_is_bounded():
 
 def test_coverage_message_with_one_more_than_ten_missing_uses_the_singular():
     conf = _two(number_of_inverters=13)  # 0 and 1 attached, 2..12 missing
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert "inverter 11 has no battery and no PV plant" in message
     assert "inverter 12 has no battery" not in message
@@ -902,8 +920,9 @@ def test_coverage_message_up_to_ten_missing_is_unchanged():
         inverter_ac_input_max=[1, 2, 3, 4],
         pv_plant_inverter_index=[0],
     )
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert str(excinfo.value) == "; ".join(
         f"inverter {k} has no battery and no PV plant: add {k} to "
         "battery_inverter_index or pv_plant_inverter_index"
@@ -918,8 +937,9 @@ def test_coverage_message_with_exactly_ten_missing_lists_all_ten_and_no_tail():
         inverter_ac_input_max=[1] * 11,
         pv_plant_inverter_index=[0],
     )
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert message.count("has no battery and no PV plant") == 10
     assert "more inverter" not in message
@@ -929,14 +949,16 @@ def test_coverage_message_with_exactly_ten_missing_lists_all_ten_and_no_tail():
 
 
 def test_validate_num_inverters_rejects_an_int_too_large_for_a_float():
+    validate_num_inverters = _get_func("validate_num_inverters")
     with pytest.raises(_error_class(), match="number_of_inverters must be a positive integer"):
-        _get_func("validate_num_inverters")({"number_of_inverters": 10**400})
+        validate_num_inverters({"number_of_inverters": 10**400})
 
 
 def test_huge_battery_count_is_an_inverter_error_not_an_overflow():
     conf = _two(number_of_batteries=10**400)
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class(), match="number_of_batteries must be at most 100"):
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
 
 
 # ───────────────── round 1 review: every fault at once (F4) ───────────────────
@@ -952,8 +974,9 @@ _FOUR_FAULTS = {
 def test_check_inverter_params_reports_every_fault_in_check_order():
     conf = _two(**_FOUR_FAULTS)
     snapshot = copy.deepcopy(conf)
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     problems = getattr(excinfo.value, "problems", None)
     assert problems is not None and len(problems) == 4, message
@@ -972,22 +995,25 @@ def test_inverter_config_faults_lists_every_fault_and_nothing_else():
 
 def test_only_the_first_bad_element_of_a_parameter_is_reported():
     conf = _two(inverter_efficiency_dc_ac=["abc", "def"])
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert "inverter_efficiency_dc_ac[0]" in str(excinfo.value)
     assert "inverter_efficiency_dc_ac[1]" not in str(excinfo.value)
 
 
 def test_a_single_fault_keeps_its_exact_message():
     conf = _two(inverter_efficiency_dc_ac=[0.9, 0.9, 0.9])
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert str(excinfo.value) == (
         "inverter_efficiency_dc_ac has 3 entries but number_of_inverters=2; provide a scalar "
         "(broadcast to every inverter) or a list of exactly 2 entries"
     )
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as one:
-        _get_func("check_inverter_params")({"inverter_efficiency_dc_ac": [0.9, 0.9]}, logger)
+        check_inverter_params({"inverter_efficiency_dc_ac": [0.9, 0.9]}, logger)
     assert str(one.value) == (
         "inverter_efficiency_dc_ac has 2 entries but number_of_inverters=1; provide a single "
         "value or a list of exactly 1 entry"
@@ -996,8 +1022,9 @@ def test_a_single_fault_keeps_its_exact_message():
 
 def test_one_inverter_faults_are_collected_too():
     conf = {"inverter_efficiency_dc_ac": [0.9, 0.9], "inverter_ac_output_max": [1, 2]}
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     message = str(excinfo.value)
     assert "inverter_efficiency_dc_ac" in message and "inverter_ac_output_max" in message
     assert conf == {"inverter_efficiency_dc_ac": [0.9, 0.9], "inverter_ac_output_max": [1, 2]}
@@ -1013,8 +1040,9 @@ def test_a_bad_battery_count_is_reported_once_and_skips_the_dependent_checks():
 
 def test_the_coverage_check_waits_for_both_index_lists_to_be_usable():
     conf = _two(pv_plant_inverter_index=[9], battery_inverter_index=[0])
+    check_inverter_params = _get_func("check_inverter_params")
     with pytest.raises(_error_class()) as excinfo:
-        _get_func("check_inverter_params")(conf, logger)
+        check_inverter_params(conf, logger)
     assert "pv_plant_inverter_index[0]=9" in str(excinfo.value)
     assert "has no battery and no PV plant" not in str(excinfo.value)
 
@@ -1022,16 +1050,18 @@ def test_the_coverage_check_waits_for_both_index_lists_to_be_usable():
 def test_hybrid_warning_is_logged_even_when_there_are_faults(caplog):
     conf = _two(inverter_is_hybrid=True, inverter_ac_output_max=5000)
     with caplog.at_level(logging.WARNING):
+        check_inverter_params = _get_func("check_inverter_params")
         with pytest.raises(_error_class()):
-            _get_func("check_inverter_params")(conf, logger)
+            check_inverter_params(conf, logger)
     assert any("inverter_is_hybrid is ignored" in r.getMessage() for r in caplog.records)
 
 
 def test_require_usable_inverter_config_logs_and_raises_every_problem(caplog):
     conf = _two(**_FOUR_FAULTS)
     with caplog.at_level(logging.ERROR):
+        require_usable_inverter_config = _get_func("require_usable_inverter_config")
         with pytest.raises(_error_class()) as excinfo:
-            _get_func("require_usable_inverter_config")(conf, logger)
+            require_usable_inverter_config(conf, logger)
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 4
     message = str(excinfo.value)
