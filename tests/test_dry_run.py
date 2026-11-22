@@ -1038,7 +1038,7 @@ def test_the_dry_run_url_returns_the_plan_and_writes_nothing(action):
     start.assert_not_called()
 
 
-def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run(monkeypatch):
+def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run():
     """After a live run, GET /api/v1/plan and /api/v1/last-run serve it. A dry
     run at other prices, through the dry-run URL, changes neither response,
     in memory or on disk, though its own plan differs."""
@@ -1060,10 +1060,10 @@ def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run(monkeypatch):
 
             before = asyncio.run(endpoints())
             answer = asyncio.run(dry())
-            # read from disk too, not only the in-memory copy
-            monkeypatch.setattr(last_run, "_cache", None)
-            monkeypatch.setattr(plan_store, "_cache", None)
-            after = asyncio.run(endpoints())
+            # read from disk too, not only the in-memory copy; scoped here so the
+            # live snapshot is restored before _cold_cache restores the pre-test state
+            with patch.object(last_run, "_cache", None), patch.object(plan_store, "_cache", None):
+                after = asyncio.run(endpoints())
     assert before[0]["status"] == "ok" and before[1]["action"] == "dayahead-optim"
     assert after == before
     assert [r["P_grid"] for r in answer["plan"]] != live["P_grid"].tolist()
