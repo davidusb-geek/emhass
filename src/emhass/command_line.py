@@ -702,6 +702,10 @@ async def _retrieve_from_hass(
         # Lets battery identification hold short silences of its sensors at the
         # last recorded state (#1073); every other set_type is unchanged.
         record_staleness=(set_type == "battery_id"),
+        # On the websocket path, a stretch with no statistics reaches battery
+        # identification as a gap, as on REST, instead of being forward filled
+        # (#1360); every other set_type gets the filled frame.
+        keep_websocket_gaps=(set_type == "battery_id"),
     )
     return success, days_list
 

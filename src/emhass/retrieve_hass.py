@@ -466,6 +466,7 @@ class RetrieveHass:
         keep_partial_days: bool = False,
         hold_unchanged_tail: bool = False,
         record_staleness: bool = False,
+        keep_websocket_gaps: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -483,18 +484,15 @@ class RetrieveHass:
         :param significant_changes_only: Retrieve significant changes only \
             using the hass restful API, defaults to False
         :type significant_changes_only: bool, optional
-        :param keep_partial_days: Applies to the REST API and websocket paths, \
-            not to InfluxDB or VictoriaMetrics. On REST, including when a \
-            websocket-configured retrieval falls back to REST: when False \
+        :param keep_partial_days: Only applies to the REST API path, including \
+            when a websocket-configured retrieval falls back to REST. When False \
             (default), a day is dropped for every variable in var_list if any one \
             variable has no data for that day, matching today's behaviour. When \
             True, a day is only dropped if every variable is missing for it; a \
             variable missing on an otherwise-kept day shows up as NaN for that \
-            stretch instead. On the websocket path, True leaves a time step with \
-            no statistics for a variable as NaN instead of filling it with the \
-            last value. Used by battery self-identification so one stale \
-            sensor doesn't cost other sensors days they did have data for, and \
-            so a stretch without data is seen as a gap. Defaults to False
+            stretch instead. Used by battery self-identification so one stale \
+            sensor doesn't cost other sensors days they did have data for. \
+            Defaults to False
         :type keep_partial_days: bool, optional
         :param hold_unchanged_tail: Only applies to the REST API path. When True, \
             the last numeric state of the final requested day is held up to the \
@@ -519,6 +517,13 @@ class RetrieveHass:
             self-identification to hold short silences at the last recorded state. \
             All three attributes are emptied at the start of every call. Defaults to False
         :type record_staleness: bool, optional
+        :param keep_websocket_gaps: Only applies to the websocket path. When True, \
+            a time step with no statistics for a variable stays NaN instead of \
+            being filled with the last value, so a stretch without data shows up \
+            as a gap, as it does on REST. Used by battery self-identification \
+            only; every other caller, including those that set keep_partial_days, \
+            gets the forward-filled frame. Defaults to False
+        :type keep_websocket_gaps: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -538,7 +543,7 @@ class RetrieveHass:
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
             success = await self.get_data_websocket(
-                days_list, var_list, keep_partial_days=keep_partial_days
+                days_list, var_list, keep_websocket_gaps=keep_websocket_gaps
             )
             if not success:
                 self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
@@ -1100,7 +1105,7 @@ class RetrieveHass:
         self,
         days_list: pd.date_range,
         var_list: list[str],
-        keep_partial_days: bool = False,
+        keep_websocket_gaps: bool = False,
     ) -> bool:
         r"""
         Retrieve the actual data from hass.
@@ -1112,11 +1117,11 @@ class RetrieveHass:
             be the exact name of the sensor in Home Assistant. \
             For example: ['sensor.home_load', 'sensor.home_pv']
         :type var_list: list
-        :param keep_partial_days: When True, a time step with no statistics for a \
+        :param keep_websocket_gaps: When True, a time step with no statistics for a \
             variable stays NaN instead of being filled with the last value, so a \
             stretch without data shows up as a gap. Used by battery \
-            self-identification. Defaults to False
-        :type keep_partial_days: bool, optional
+            self-identification only. Defaults to False
+        :type keep_websocket_gaps: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -1154,7 +1159,7 @@ class RetrieveHass:
 
             # Convert statistics data to DataFrame
             self.df_final = self._convert_statistics_to_dataframe(
-                stats_data, var_list, forward_fill=not keep_partial_days
+                stats_data, var_list, forward_fill=not keep_websocket_gaps
             )
 
             t1 = time.time()

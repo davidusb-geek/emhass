@@ -2055,10 +2055,13 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         finally:
             self.rh.freq = freq
 
-    async def test_get_data_websocket_keep_partial_days_keeps_gaps(self):
-        """G1 (#1360): battery_id's keep_partial_days=True reaches the websocket path."""
+    # battery_id passes both flags (command_line._retrieve_from_hass).
+    _BATTERY_ID_FLAGS = {"keep_partial_days": True, "keep_websocket_gaps": True}
+
+    async def test_get_data_websocket_keep_websocket_gaps_keeps_gaps(self):
+        """G1 (#1360): battery_id's keep_websocket_gaps=True reaches the websocket path."""
         stats, var_list, expected_nan = self._ws_gap_stats()
-        gaps = await self._ws_get_data(stats, var_list, keep_partial_days=True)
+        gaps = await self._ws_get_data(stats, var_list, **self._BATTERY_ID_FLAGS)
         self._assert_gaps_only_where_filled(
             gaps, self._legacy_ws_frame(stats, var_list), expected_nan
         )
@@ -2069,14 +2072,107 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         df = await self._ws_get_data(stats, var_list)
         pd.testing.assert_frame_equal(df, self._legacy_ws_frame(stats, var_list))
 
-    async def test_get_data_websocket_keep_partial_days_does_not_leak(self):
+    async def test_get_data_websocket_keep_websocket_gaps_does_not_leak(self):
         """G3 (#1360): the flag applies to its own call only, not to later calls."""
         stats, var_list, expected_nan = self._ws_gap_stats()
         legacy = self._legacy_ws_frame(stats, var_list)
-        gaps = await self._ws_get_data(stats, var_list, keep_partial_days=True)
+        gaps = await self._ws_get_data(stats, var_list, **self._BATTERY_ID_FLAGS)
         filled = await self._ws_get_data(stats, var_list)
         pd.testing.assert_frame_equal(filled, legacy)
         self._assert_gaps_only_where_filled(gaps, legacy, expected_nan)
+
+    async def test_get_data_websocket_keep_partial_days_alone_still_fills(self):
+        """
+        G4 (#1360): keep_partial_days=True on its own (thermal calibration sets it
+        for REST reasons, #1380) leaves the websocket frame forward-filled, byte
+        for byte as before.
+        """
+        stats, var_list, _ = self._ws_gap_stats()
+        df = await self._ws_get_data(stats, var_list, keep_partial_days=True)
+        pd.testing.assert_frame_equal(df, self._legacy_ws_frame(stats, var_list))
+
+    async def test_thermal_calibration_websocket_history_still_forward_fills(self):
+        """
+        T1 (#1360): _load_thermal_from_ha (#1380) also calls get_data with
+        keep_partial_days=True. Over the websocket it must still get the filled
+        frame: a temperature gap keeps its rows at the last value and a heater
+        power gap holds the last value, not 0 W.
+        """
+        stats2, _, _ = self._ws_gap_stats()
+        t_in, t_out, power = "sensor.ws_t_in", "sensor.ws_t_out", "sensor.ws_heater_power"
+        # Indoor and outdoor temperature miss 02:00-04:00, heater power misses
+        # 02:00-04:00 and 10:00-11:00.
+        stats = {t_in: stats2[self._WS_A], t_out: stats2[self._WS_A], power: stats2[self._WS_B]}
+        var_list = [t_in, t_out, power]
+        start = pd.Timestamp("2024-01-01 00:00", tz="UTC")
+        end = pd.Timestamp("2024-01-01 23:59", tz="UTC")
+        cfg = {
+            "dt_minutes": 30,
+            "dt_hours": 0.5,
+            "has_explicit_window": True,
+            "start_utc": start,
+            "end_utc": end,
+            "lookback_hours": 24,
+            "entity_t_in": t_in,
+            "entity_t_out": t_out,
+            "entity_power": power,
+        }
+        rh_conf = {
+            "hass_url": "http://ha.invalid:8123/",
+            "long_lived_token": "token",
+            "time_zone": self.rh.time_zone,
+            "use_websocket": True,
+        }
+        client = MagicMock()
+        client.get_statistics = AsyncMock(return_value=stats)
+        with (
+            patch("emhass.retrieve_hass.get_websocket_client", new=AsyncMock(return_value=client)),
+            patch.object(
+                RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=False)
+            ) as rest,
+        ):
+            df = await utils._load_thermal_from_ha(emhass_conf, {}, rh_conf, cfg, logger)
+        rest.assert_not_called()
+
+        legacy = self._legacy_ws_frame(stats, var_list)
+        expected = pd.DataFrame(
+            {
+                "T_in": legacy[t_in],
+                "T_out": legacy[t_out],
+                "P_def": legacy[power].clip(lower=0.0),
+            },
+            index=legacy.index,
+        )
+        utc = expected.index.tz_convert("UTC")
+        expected = expected.loc[(utc >= start) & (utc <= end)]
+        self.assertEqual(len(df), 48, "rows in a websocket gap were dropped")
+        pd.testing.assert_frame_equal(df, expected, check_freq=False)
+        # The heater power gap is held at the last value, not read as 0 W.
+        held = df.loc[df.index.tz_convert("UTC") == pd.Timestamp("2024-01-01 10:00", tz="UTC")]
+        self.assertGreater(held["P_def"].iloc[0], 0.0)
+
+    async def test_retrieve_from_hass_keep_websocket_gaps_plumbing(self):
+        """G5 (#1360): _retrieve_from_hass sets keep_websocket_gaps for battery_id only."""
+        from emhass.command_line import _retrieve_from_hass
+
+        retrieve_hass_conf = dict(self.retrieve_hass_conf)
+        retrieve_hass_conf["historic_days_to_retrieve"] = 1
+        retrieve_hass_conf["sensor_power_battery"] = "sensor.power_battery"
+        retrieve_hass_conf["sensor_battery_state_of_charge"] = "sensor.battery_soc"
+        mock_rh = MagicMock()
+        mock_rh.get_data = AsyncMock(return_value=True)
+        for set_type, expected in (
+            ("battery_id", True),
+            ("perfect-optim", False),
+            ("naive-mpc-optim", False),
+        ):
+            with self.subTest(set_type=set_type):
+                mock_rh.get_data.reset_mock()
+                await _retrieve_from_hass(
+                    set_type, retrieve_hass_conf, {"set_use_pv": False}, mock_rh, logger
+                )
+                _, call_kwargs = mock_rh.get_data.call_args
+                self.assertIs(call_kwargs.get("keep_websocket_gaps", False), expected)
 
     async def test_get_data_rest_api_errors(self):
         days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
