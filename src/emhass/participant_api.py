@@ -17,7 +17,6 @@ in the secrets, which every call must present.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import copy
 import hashlib
 import json
@@ -609,9 +608,6 @@ _UNREADABLE = object()
 _STARTED = time.time()  # when this process started (near enough: this import)
 
 
-SNAPSHOT_S = 10.0  # a commit's own snapshot is saved within this of noting it
-
-
 def _is_saved_plan(emhass_conf: dict, res: pd.DataFrame) -> bool:
     """Whether the latest plan saved is `res` (a commit's plan, read back from
     the copy kept for it): the same slots and, in every column of it, the same
@@ -626,6 +622,8 @@ def _is_saved_plan(emhass_conf: dict, res: pd.DataFrame) -> bool:
         if "timestamp" not in saved or not len(saved):
             return False
         stamps = pd.DatetimeIndex(pd.to_datetime(saved.pop("timestamp"), utc=True))
+        if set(saved.columns) != {str(c) for c in res.columns}:
+            return False  # another plan: its columns are not the commit's
         # the same instants, whatever unit each was read with (pandas 3 infers it)
         mine_at = _utc_index(res)
         if len(stamps) != len(mine_at) or not bool((stamps == mine_at).all()):
@@ -652,14 +650,14 @@ def _is_saved_plan(emhass_conf: dict, res: pd.DataFrame) -> bool:
 
 
 def _saved_between(stamp, since, stop) -> bool:
-    """Whether a save stamp (generated_at) is a commit's own snapshot: from
-    `since` (when it noted it was saving one, a time.time()) to SNAPSHOT_S
-    after, and before `stop` and this process's start."""
+    """Whether a save stamp (generated_at) may be a commit's own snapshot:
+    from `since` (when it noted it was saving one, a time.time()), before
+    `stop` and this process's start. Which plan it is, _is_saved_plan says."""
     if not isinstance(stamp, str) or isinstance(since, bool):
         return False
     try:
         lo = float(since) - 1.0  # the stamp's own rounding
-        hi = min(float(since) + SNAPSHOT_S, _STARTED)
+        hi = _STARTED
         if stop is not None and not isinstance(stop, bool):
             hi = min(hi, float(stop))
     except (TypeError, ValueError):
@@ -828,8 +826,9 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
     if last.get("interrupted"):
         # Stopped while publishing: settled once, at the first resume that
         # can read the plan store. The plan saved is its own snapshot only if
-        # saved when it noted it was saving one (`snapshot_at`, while it held
-        # the live-optimization slot), and before the stop: then the stop came
+        # saved after it noted it was saving one (`snapshot_at`, while it held
+        # the live-optimization slot) and before the stop, and if it is its
+        # plan, slot for slot and column for column: then the stop came
         # before its stamp could be noted. Any other is this EMHASS's own,
         # whichever process saved it.
         if (
@@ -961,8 +960,16 @@ def make_service(
             # A restart would not know what it was made over: never published.
             # Nor kept: its record may still read running on disk, and a
             # restart then finds no plan of it, so knows nothing of it ran.
-            with contextlib.suppress(OSError):  # the disk refusing is why: refused all the same
+            try:
                 path.unlink(missing_ok=True)
+            except OSError as exc:
+                # Kept, its record maybe running on disk: a restart may step
+                # it. So not a refusal - one that may run, which a
+                # coordinator keeps counting.
+                raise OSError(
+                    "its record could not be saved, nor its plan removed: nothing was "
+                    "published, but a restart may run it"
+                ) from exc
             return "refused", "its record could not be saved; nothing was published"
 
         def recorded(stamp):  # the plan saved as its own: its stamp at once
