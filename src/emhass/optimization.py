@@ -140,7 +140,7 @@ SELF_CONSUMPTION_BIGM = 1e3
 # costs more than any energy trade the plan could win with it at any step length:
 # 10x over the 100x of SOC_FINAL_DEVIATION_PENALTY_FACTOR and
 # BATTERY_FIRST_IMPORT_PENALTY_FACTOR, so the floor wins against both whenever it can
-# be held. A factor of 100 still lost to soc_final in the #1348 probes. Larger values
+# be held. A factor of 100 still lost to soc_final in testing. Larger values
 # change no plan but scale the objective up whenever the floor cannot be met.
 SOC_FLOOR_SHORTFALL_PENALTY_FACTOR = 1000.0
 # Default big-M (deg C) for the per-source max_supply_temperature gate on
@@ -1125,7 +1125,8 @@ class Optimization:
                 "battery_minimum_state_of_charge."
             )
         # Only the first steps decide flat vs per-battery, so a long flat list is
-        # not scanned past the horizon.
+        # not scanned past the horizon. A 0-d ndarray counts as nested here on
+        # purpose, so it reaches the per-battery length error below.
         if self.n_batt == 1 and not any(
             isinstance(v, list | tuple | np.ndarray) for v in value[: n + 1]
         ):
@@ -1266,9 +1267,9 @@ class Optimization:
             if has_req[0] and wanted[0] > init_wh + tol and init_wh > min_wh:
                 self.logger.info(
                     f"Battery {k}: soc_init={soc_init_list[k]} is under the soc_floor "
-                    f"({req[0]:.3f}) at timestep 0; the floor is held at soc_init, less "
-                    "that shortfall from then on, so the battery stops discharging "
-                    "instead of charging back up."
+                    f"({req[0]:.3f}) at timestep 0; the floor is held at soc_init, apart "
+                    "from any rise in the floor, which is built, so the battery stops "
+                    "discharging instead of charging back up."
                 )
             if lowered is not None:
                 t, w, f = lowered
@@ -9031,8 +9032,8 @@ class Optimization:
 
         ``soc_floor`` (see _soc_floor_energy) is a soft per-step minimum SoC for
         each battery: every Wh the plan stays under it is priced at
-        SOC_FLOOR_SHORTFALL_PENALTY_FACTOR, so it holds whenever it can and never
-        makes the problem infeasible. A run that starts under the floor keeps that
+        SOC_FLOOR_SHORTFALL_PENALTY_FACTOR, so it holds whenever it can and the
+        floor itself never makes the problem infeasible. A run that starts under the floor keeps that
         shortfall instead of charging back up (it holds at ``soc_init``, and a
         later rise is built by its own increase); a floor out of reach is lowered
         to what the battery can reach. ``None`` (the default) changes nothing.

@@ -300,7 +300,7 @@ class TestSocFloorHolds(unittest.TestCase):
 
     def test_a_run_under_the_reserve_holds_and_does_not_charge_back_up(self):
         """soc_init 0.5 under a 0.7 floor at a price peak: the battery stops
-        discharging and is not charged back up (David on #1348: hold, not climb)."""
+        discharging and is not charged back up (#1348: hold, not climb)."""
         # Counterfactual 1: without the floor it drains in the dear steps.
         free = build_optimization(plant_overrides=EFF_95)
         soc_free = run(free, soc_init=0.5, load_cost=RESERVE_PRICES)["SOC_opt"].to_numpy()
