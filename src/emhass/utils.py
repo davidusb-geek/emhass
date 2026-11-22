@@ -3306,6 +3306,16 @@ async def treat_runtimeparams(
             params["passed_data"]["battery_discharge_availability"] = runtimeparams.get(
                 "battery_discharge_availability", None
             )
+            # Soft per-step SoC floor (#1348), runtime-only, default None (no floor). A
+            # percentage is rejected here like soc_target; shape and range checks
+            # happen in Optimization.perform_optimization.
+            soc_floor = runtimeparams.get("soc_floor", None)
+            params["passed_data"]["soc_floor"] = soc_floor
+            reject_soc_fraction_above_one("soc_floor", soc_floor, logger)
+            if isinstance(soc_floor, list):
+                for k, entry in enumerate(soc_floor):
+                    if isinstance(entry, list):
+                        reject_soc_fraction_above_one(f"soc_floor[{k}]", entry, logger)
             # Per-deferrable-load availability, same shape and validation as
             # battery_availability (done in Optimization.perform_optimization).
             params["passed_data"]["def_availability"] = runtimeparams.get("def_availability", None)
@@ -7922,6 +7932,7 @@ async def build_params(
         "battery_availability": None,
         "battery_discharge_energy_max": None,
         "battery_discharge_availability": None,
+        "soc_floor": None,
         "def_availability": None,
         "current_period_peak": None,
         "capacity_charge_window": None,

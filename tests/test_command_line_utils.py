@@ -4229,6 +4229,73 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(key_next, key)
         np.testing.assert_allclose(res_next["P_batt"], res_free["P_batt"], atol=1e-6)
 
+    async def test_mpc_soc_floor_end_to_end(self):
+        """#1348: a soc_floor in the runtime JSON reaches the optimizer (it used to
+        be dropped silently), holds the reserve over its window and leaves the
+        battery free after it. Over four ticks on the one cached Optimization
+        (none, floor, none, floor) the soft floor term is built, dropped and built
+        again, and each tick plans as a fresh problem with the same inputs would."""
+        tick = self._reserve_day_setup()
+        window = list(range(9, 24))
+        floor = [None] * 9 + [0.6] * 15
+
+        async def tick_and_shape(extra):
+            res, opt_k, key_k = await tick(extra)
+            shape = ("soc_floor_shortfall" in opt_k.vars, len(opt_k.prob.constraints))
+            return res, opt_k, key_k, shape
+
+        with fixture_clock():
+            runs = [
+                await tick_and_shape(extra)
+                for extra in ({}, {"soc_floor": floor}, {}, {"soc_floor": floor})
+            ]
+            fresh = []
+            for extra in ({}, {"soc_floor": floor}):
+                OptimizationCache.clear()
+                fresh.append(await tick_and_shape(extra))
+        res_free, res_floor = runs[0][0], runs[1][0]
+        soc_free = res_free["SOC_opt"].to_numpy()
+        soc_floor = res_floor["SOC_opt"].to_numpy()
+        # Counterfactual: without the floor the battery drains inside the window.
+        self.assertLess(soc_free[window].min(), 0.6 - 0.1)
+        self.assertEqual(res_floor["optim_status"].iloc[0], "Optimal")
+        self.assertGreaterEqual(soc_floor[window].min(), 0.6 - 1e-4)
+        # free after the window: the dear block right after it is served from the battery
+        self.assertLess(soc_floor[24:30].min(), 0.6 - 0.05)
+        # one cached problem for every tick, one cache key
+        for _, opt_k, key_k, _ in runs:
+            self.assertIs(opt_k, runs[0][1])
+            self.assertEqual(key_k, runs[0][2])
+        # none -> floor -> none -> floor: built like a fresh problem each time, and
+        # the same plan
+        self.assertEqual(fresh[0][3][0], False)
+        self.assertEqual(fresh[1][3][0], True)
+        for (res, _, _, shape), (res_fresh, _, _, shape_fresh) in zip(runs, fresh * 2, strict=True):
+            self.assertEqual(shape, shape_fresh)
+            np.testing.assert_allclose(res["P_batt"], res_fresh["P_batt"], atol=1e-6)
+        np.testing.assert_array_equal(runs[2][0]["P_batt"], fresh[0][0]["P_batt"])
+
+    async def test_mpc_soc_floor_tick_under_the_reserve_holds(self):
+        """#1348 regression (the grounding repro): an MPC tick that starts at 0.3
+        inside a 0.6 reserve. A hard floor on master's soc_target Parameter made this
+        run infeasible; the soft floor holds the battery at 0.3 instead, with no
+        charge at the dear start of the day and no extra solve."""
+        tick = self._reserve_day_setup()
+        floor = [0.6] * 14
+        with fixture_clock():
+            res_free, _, _ = await tick({"soc_init": 0.3})
+            with self.assertLogs(logger, level="INFO") as logs:
+                res, _, _ = await tick({"soc_init": 0.3, "soc_floor": floor})
+        # Counterfactual: without the floor the battery is used in the dear steps 0-5.
+        self.assertLess(res_free["SOC_opt"].to_numpy()[:6].min(), 0.3 - 0.05)
+        self.assertEqual(res["optim_status"].iloc[0], "Optimal")
+        soc = res["SOC_opt"].to_numpy()
+        self.assertGreaterEqual(soc[:14].min(), 0.3 - 1e-4)
+        # held, not climbed: no charging in the dear steps 0-5
+        self.assertGreaterEqual(res["P_batt"].to_numpy()[:6].min(), -1e-6)
+        self.assertTrue(any("held at soc_init" in line for line in logs.output), logs.output)
+        self.assertFalse(any("stays under the soc_floor" in line for line in logs.output))
+
     async def test_mpc_cache_hit_with_capacity_charge_consideration_change(self):
         """Issue #540 follow-up: capacity_charge_consideration is
         runtime-only (never an optim_conf key, exactly like

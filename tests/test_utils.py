@@ -2815,6 +2815,28 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             orjson.loads(params_out)["passed_data"].get("battery_discharge_availability")
         )
 
+    async def test_treat_runtimeparams_passes_soc_floor(self):
+        """soc_floor (#1348) reaches naive-mpc-optim unchanged; shape and range are
+        checked in Optimization.perform_optimization. dayahead-optim does not use it."""
+        floor = [None, [None, 0.6, 0.6]]
+        params_out, _, _, _ = await self._treat_soc_runtime(
+            {"prediction_horizon": 10, "soc_floor": floor}
+        )
+        self.assertEqual(orjson.loads(params_out)["passed_data"].get("soc_floor"), floor)
+        params_out, _, _, _ = await self._treat_soc_runtime({"soc_floor": floor}, "dayahead-optim")
+        self.assertIsNone(orjson.loads(params_out)["passed_data"].get("soc_floor"))
+
+    async def test_treat_runtimeparams_rejects_soc_floor_above_one(self):
+        """A percentage in soc_floor fails before the solver like soc_target (#935)."""
+        for value, expected in (
+            ([0.5, 60], "soc_floor[1]=60"),
+            ([None, [0.5, 60]], "soc_floor[1][1]=60"),
+        ):
+            with self.subTest(expected=expected):
+                with self.assertRaises(utils.SocFractionError) as ctx:
+                    await self._treat_soc_runtime({"prediction_horizon": 10, "soc_floor": value})
+                self.assertIn(expected, str(ctx.exception))
+
     async def test_treat_runtimeparams_rejects_configured_soc_without_runtime(self):
         """A percentage saved in the plant config fails even when the request adds nothing."""
         params = await TestUtils.get_test_params()

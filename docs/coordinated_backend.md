@@ -65,7 +65,7 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 - `deferrable_load_groups` with `mutual_exclusion` across groups, a group on two parents, a limit that holds part of a group
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
-- more than one inverter (`number_of_inverters`), and the runtime `battery_availability`, `battery_discharge_energy_max`, `def_availability` and per-plant PV split (`p_pv_plants`): the coordinator does not model them yet
+- more than one inverter (`number_of_inverters`), and the runtime `battery_availability`, `battery_discharge_availability`, `battery_discharge_energy_max`, `soc_floor`, `def_availability` and per-plant PV split (`p_pv_plants`): the coordinator does not model them yet
 - per-slot grid limits (`maximum_power_from_grid` / `maximum_power_to_grid` as a list), a thermal load with `internal_gains_factor` (its heat demand follows the house's load), and a further battery named in `site` (`battery1`, ...)
 - a non-electric load (`is_electric_load: false`) and `battery_soc_final_reward_factor` (EMHASS prices each at the import tariff, which the coordinator varies), and a thermal load with `thermal_inertia_time_constant` but no `q_input_initial` (its heat input is carried from one run to the next)
 
