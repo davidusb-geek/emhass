@@ -194,7 +194,8 @@ def test_the_web_page_shows_which_backend_made_the_plan():
     with mock.patch("emhass.coordinator.backend.optimize", _raises):
         _, res = _plan(*_site(), optimization_backend="dantzig_wolfe")
     page = get_injection_dict(res.copy())
-    assert "backend_used" in page["table2"] and "cvxpy" in page["table2"]
+    assert "backend_used" in page["table2"]
+    assert "cvxpy" in page["table2"]
     assert "coordinator exploded" in page["table2"]
     assert "backend_used" not in page["table1"]
 
@@ -400,9 +401,11 @@ def test_four_ders_on_one_site():
     assert res["P_hybrid_inverter"].abs().max() <= 4000 + 1e-3
     garage = res["P_deferrable0"] + res["P_deferrable1"]
     assert res["P_deferrable1"].max() <= 500 + 1e-3
-    assert garage.max() <= 3000 + 1e-3 and garage.min() >= -1e-3  # the budget; no backfeed
+    assert garage.max() <= 3000 + 1e-3  # the budget; no backfeed
+    assert garage.min() >= -1e-3
     for node in ("inverter", "garage", "heat"):
-        assert f"fed_local_price_{node}" in res.columns and f"fed_node_power_{node}" in res.columns
+        assert f"fed_local_price_{node}" in res.columns
+        assert f"fed_node_power_{node}" in res.columns
     assert np.allclose(-res["fed_node_power_garage"], garage, atol=1e-3)  # + = up the tree
     shares = {f"fed_share_{p}" for p in ("solar", "battery", "deferrable0", "deferrable1")}
     assert shares <= set(res.columns)
@@ -500,7 +503,8 @@ def test_a_load_with_a_binary_is_never_blended(load):
         rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
     )
     p = EmhassParticipant(opt, "deferrable1", False, [1], data, None, None, {}, buy)
-    assert not p.modulating and p.onoff
+    assert not p.modulating
+    assert p.onoff
     plain = EmhassParticipant(
         Optimization(
             rh,
@@ -525,7 +529,8 @@ def test_a_load_with_a_binary_is_never_blended(load):
         {},
         buy,
     )
-    assert plain.modulating and not plain.onoff
+    assert plain.modulating
+    assert not plain.onoff
 
 
 def test_a_sequence_load_runs_its_sequence():
@@ -721,7 +726,8 @@ def test_a_cheaper_plan_with_the_same_power_replaces_the_dearer():
     assert dev.add(Column(power, np.zeros(3), 10.0, "baseline"))
     assert not dev.add(Column(power.copy(), np.zeros(3), 12.0, "price"))
     assert dev.add(Column(power.copy(), np.ones(3), 0.0, "price"))
-    assert len(dev.columns) == 1 and dev.columns[0].cost == 0.0
+    assert len(dev.columns) == 1
+    assert dev.columns[0].cost == 0.0
     assert np.all(dev.columns[0].trajectory == 1.0)
 
 
@@ -948,7 +954,8 @@ def test_a_plan_past_the_ceiling_with_nothing_to_curtail_scores_infinite_and_is_
 
     with mock.patch.object(DWCoordinator, "run", night_export):
         _, res = _coordinated()
-    assert scored and scored[0] == np.inf
+    assert scored
+    assert scored[0] == np.inf
     assert (res["backend_used"] == "cvxpy").all()
     assert res["backend_fallback_reason"].str.contains("within the export ceiling").all()
 
@@ -997,7 +1004,8 @@ def test_a_thermal_battery_with_an_overshoot_gate_is_never_blended():
         rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", emhass_conf, logger
     )
     p = EmhassParticipant(opt, "deferrable1", False, [1], data, None, None, {}, buy)
-    assert not p.modulating and p.onoff
+    assert not p.modulating
+    assert p.onoff
 
 
 def test_an_lp_with_every_variable_fixed_is_solved_or_refused():
@@ -1008,7 +1016,9 @@ def test_an_lp_with_every_variable_fixed_is_solved_or_refused():
     A = Triplets((1, 1))
     A[0, 0] = 1.0
     ok = linprog(np.array([2.0]), A, np.array([5.0]), np.array([5.0]), np.array([5.0]))
-    assert ok.status == 0 and np.allclose(ok.x, [5.0]) and ok.fun == pytest.approx(10.0)
+    assert ok.status == 0
+    assert np.allclose(ok.x, [5.0])
+    assert ok.fun == pytest.approx(10.0)
     bad = linprog(np.array([2.0]), A, np.array([4.0]), np.array([5.0]), np.array([5.0]))
     assert bad.status != 0
 
@@ -1044,7 +1054,8 @@ def test_only_main_bus_pv_is_curtailed_for_the_export_ceiling():
     flows = site_meter(co.cfg, co.fc, {k: c.power for k, c in pushed.items()})
     assert np.any(-flows.net > co.export_ceiling + 1e-6)
     assert co._delivered(flows) is None
-    assert co.score(pushed) == np.inf and co.parts(pushed)["total"] == np.inf
+    assert co.score(pushed) == np.inf
+    assert co.parts(pushed)["total"] == np.inf
 
 
 def test_the_coordinators_inputs_are_checked():
@@ -1120,7 +1131,8 @@ def test_a_nodes_own_clipping_leaves_the_main_bus_pv_to_curtail():
     co = DWCoordinator(cfg, fc, export_ceiling=np.zeros(2))
     flows = site_meter(cfg, co.fc, {})
     delivered = co._delivered(flows)
-    assert delivered is not None and np.allclose(delivered, 0.0)
+    assert delivered is not None
+    assert np.allclose(delivered, 0.0)
 
 
 def test_a_grid_connection_may_not_take_a_reserved_name():
@@ -1231,7 +1243,8 @@ def test_the_ledger_counts_the_pv_the_export_ceiling_curtails():
 
     flows = site_meter(co.cfg, co.fc, {k: c.power for k, c in pushed.items()})
     delivered = co._delivered(flows)
-    assert delivered is not None and np.any(delivered - flows.net > 1e-6)
+    assert delivered is not None
+    assert np.any(delivered - flows.net > 1e-6)
     expected = float((flows.curtail + (delivered - flows.net)).sum() * co.dt)
     assert totals["curtailed_kwh"] == pytest.approx(expected)
 
@@ -1278,7 +1291,8 @@ def test_the_baseline_bills_add_up_under_an_export_ceiling(monkeypatch):
     with mock.patch.object(DWCoordinator, "run", keep):
         _, res = _coordinated(set_nodischarge_to_grid=True)
     (co, plan), (co_dark, plan_dark) = seen[0], seen[1]
-    assert co.fc.export_ceiling is not None and not co.cfg.has_tree
+    assert co.fc.export_ceiling is not None
+    assert not co.cfg.has_tree
     baseline = settlement._baseline
 
     def exporting(c, key):
@@ -1380,7 +1394,8 @@ def _schema_accepts(site) -> bool:
 def test_the_site_schema_accepts_what_the_site_check_accepts(site):
     from emhass.coordinator import site as site_mod
 
-    assert site_mod.site_problem(site) is None and _schema_accepts(site)
+    assert site_mod.site_problem(site) is None
+    assert _schema_accepts(site)
 
 
 @pytest.mark.parametrize(

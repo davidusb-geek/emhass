@@ -271,12 +271,14 @@ def test_config_defaults_values_match_param_definitions():
     classified = _SCALAR_INPUT_TYPES | _NON_SCALAR_INPUT_TYPES
     overlap = _SCALAR_INPUT_TYPES & _NON_SCALAR_INPUT_TYPES
     unclassified = (set(_INPUT_TYPE_TO_PY_TYPES) | set(pd_input.values())) - classified
-    assert not overlap and not unclassified, (
+    classification_message = (
         "every input type must be classified as scalar or non-scalar. "
         f"overlap: {sorted(overlap) or 'none'}; "
         f"unclassified: {sorted(unclassified) or 'none'}. "
         "Add the type to _SCALAR_INPUT_TYPES or _NON_SCALAR_INPUT_TYPES."
     )
+    assert not overlap, classification_message
+    assert not unclassified, classification_message
 
     only_in_param_definitions = set(pd_flat) - set(cd)
     assert only_in_param_definitions == _PARAM_DEFINITIONS_ONLY, (

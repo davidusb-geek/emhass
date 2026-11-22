@@ -670,7 +670,8 @@ def test_inverter_config_faults_returns_messages_and_leaves_the_input_alone():
     assert faults(_two()) == []
     # One inverter: only the specific fault.
     one = faults({"inverter_efficiency_dc_ac": [0.9, 0.9]})
-    assert len(one) == 1 and "inverter_efficiency_dc_ac" in one[0]
+    assert len(one) == 1
+    assert "inverter_efficiency_dc_ac" in one[0]
     assert faults({"number_of_inverters": "abc"}) == [
         "number_of_inverters must be a positive integer, got 'abc'"
     ]
@@ -752,7 +753,8 @@ def test_require_usable_inverter_config_logs_every_fault_and_nothing_else(caplog
     assert not any("not supported" in m for m in errors)
     # The raised error carries all of them, so a body built from it says so too.
     message = str(excinfo.value)
-    assert "inverter_ac_output_max" in message and "not supported" not in message
+    assert "inverter_ac_output_max" in message
+    assert "not supported" not in message
     assert ".." not in message
 
 
@@ -956,7 +958,8 @@ def test_check_inverter_params_reports_every_fault_in_check_order():
         _get_func("check_inverter_params")(conf, logger)
     message = str(excinfo.value)
     problems = getattr(excinfo.value, "problems", None)
-    assert problems is not None and len(problems) == 4, message
+    assert problems is not None, message
+    assert len(problems) == 4, message
     for problem, name in zip(problems, _FOUR_FAULTS, strict=True):
         assert name in str(problem), problem
     assert message == ". ".join(str(p) for p in problems)
@@ -999,7 +1002,8 @@ def test_one_inverter_faults_are_collected_too():
     with pytest.raises(_error_class()) as excinfo:
         _get_func("check_inverter_params")(conf, logger)
     message = str(excinfo.value)
-    assert "inverter_efficiency_dc_ac" in message and "inverter_ac_output_max" in message
+    assert "inverter_efficiency_dc_ac" in message
+    assert "inverter_ac_output_max" in message
     assert conf == {"inverter_efficiency_dc_ac": [0.9, 0.9], "inverter_ac_output_max": [1, 2]}
 
 

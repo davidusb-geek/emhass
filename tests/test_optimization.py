@@ -12974,7 +12974,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         load0 = res["P_def_bin2_0"].to_numpy()
         load1 = res["P_def_bin2_1"].to_numpy()
         np.testing.assert_allclose(load0, [1, 0, 1, 0, 1, 0, 1, 0, 0, 0], atol=1e-4)
-        self.assertEqual(round(float(load1.sum())), 4)
+        self.assertAlmostEqual(float(load1.sum()), 4, delta=0.5)
         self.assertGreaterEqual(
             self._min_run_length(load1),
             3,

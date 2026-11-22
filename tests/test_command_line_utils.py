@@ -2368,8 +2368,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res_df["ghi"].isnull().sum(), 0)
         # Verify the resolution warning was actually triggered
         warning_logs = str(cm.output)
-        self.assertTrue(
-            "much coarser than dayahead" in warning_logs, "Resolution warning should have triggered"
+        self.assertIn(
+            "much coarser than dayahead", warning_logs, "Resolution warning should have triggered"
         )
 
         # Test 3b: supplied-but-rejected runtime temperature must fail closed,
@@ -2843,8 +2843,8 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
         # C. Check for NaNs (The Critical Fix Verification)
         nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
         self.assertEqual(
-            0,
             nan_count,
+            0,
             f"Found {nan_count} NaNs. The alignment fix in command_line.py is not working.",
         )
 
@@ -2853,8 +2853,8 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
         # should be extremely close to the source value (20.0).
         first_val = df_result["outdoor_temperature_forecast"].iloc[0]
         self.assertAlmostEqual(
-            20.0,
             first_val,
+            20.0,
             delta=0.5,
             msg="Mapped temperature value diverged significantly from source.",
         )
@@ -3873,7 +3873,8 @@ class TestDstFixes(unittest.TestCase):
         idx_utc = pd.date_range("2025-03-30 00:00", periods=8, freq="15min", tz="UTC")
         idx_paris = idx_utc.tz_convert("Europe/Paris")
         # Verify the test assumption: both offsets must be present
-        assert "+01:00" in str(idx_paris[0]) and "+02:00" in str(idx_paris[-1])
+        assert "+01:00" in str(idx_paris[0])
+        assert "+02:00" in str(idx_paris[-1])
 
         df = pd.DataFrame({"P_pv": range(8), "P_load": range(8)}, index=idx_paris)
 
