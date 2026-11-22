@@ -1827,7 +1827,8 @@ def test_the_input_pipeline_compiles_the_site():
     assert plant["inverter_is_hybrid"] is True
     assert plant["inverter_ac_output_max"] == 4000
     assert plant["maximum_power_to_grid"] == 5000
-    _, optim = asyncio.run(run({"site": [REMOTE]}))
+    # a site that is whole but for its remote: refused for the remote alone
+    _, optim = asyncio.run(run({"site": SITE + [REMOTE]}))
     assert optim["site"] == SITE  # the configured one, kept
 
 

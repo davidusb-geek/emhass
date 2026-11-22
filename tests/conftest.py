@@ -60,6 +60,9 @@ def _no_plan_stepper_left():
 
     participant_api = sys.modules.get("emhass.participant_api")
     if participant_api is not None:
-        for stepper in list(getattr(participant_api, "_steppers", {}).values()):
+        steppers = list(getattr(participant_api, "_steppers", {}).values())
+        for stepper in steppers:
             stepper.stop()
+        for stepper in steppers:  # a slot being published finishes first
+            assert stepper.join(10.0), "a plan stepper did not stop"
         participant_api._steppers.clear()

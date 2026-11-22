@@ -457,9 +457,19 @@ def test_the_commit_log_outlives_a_restart(tmp_path):
     again = CommitLog(path)
     assert again.get("done")["state"] == "accepted"
     assert again.get("cut")["state"] == "partial" and "stopped" in again.get("cut")["reason"]
+    assert again.get("cut").get("interrupted") is True
     old = CommitLog(path, keep_s=0.0)  # past its keeping time
-    assert old.get("done") is None  # pruned: a later commit ran since
     assert old.get("cut") is not None  # kept: the latest that ran (in part)
+    # kept too while the one after it was cut off by the stop: its host may
+    # find nothing of that one ran, and then this plan is the one that runs
+    assert old.get("done") is not None
+    old.end("cut", "refused", "EMHASS stopped before it published this plan")
+    old.records()  # pruned as it is read
+    assert old.get("done") is not None  # the latest that ran now
+    old.begin("next", [1.0])
+    old.end("next", "accepted", "")
+    old.records()
+    assert old.get("done") is None and old.get("cut") is None  # pruned: a later one ran whole
 
 
 def test_a_wrong_token_is_refused(data_path):
@@ -725,14 +735,14 @@ def test_a_commit_that_gets_no_answer_keeps_the_remotes_part(data_path, monkeypa
     call = RemoteParticipant._call
     sent, asked = [], []
 
-    def no_answer_to_commits(self, method, path, body=None, query_id=None):
+    def no_answer_to_commits(self, method, path, body=None, query_id=None, deadline=None):
         if path == "/v1/commit":
             sent.append(body)
             raise RemoteError(f"{self.key}: timed out")  # status 0: nothing came back
         if path.startswith("/v1/commit/"):
             asked.append(path)
             raise RemoteError(f"{self.key}: timed out")
-        return call(self, method, path, body, query_id)
+        return call(self, method, path, body, query_id, deadline)
 
     monkeypatch.setattr(RemoteParticipant, "_call", no_answer_to_commits)
     monkeypatch.setattr(backend, "REMOTE_COMMIT_WAIT_S", 0.5)
@@ -1137,6 +1147,15 @@ def test_a_commit_through_the_route_publishes_and_records_the_plan_it_names(data
     assert plan and len(plan["plan"]) == len(answer["plan_kw"])
     assert pd.Timestamp(plan["plan"][0]["timestamp"]) == pd.Timestamp(horizon["start"])
     assert last_run.read(data_path)["action"] == "naive-mpc-optim"
+    # it noted it was saving its own snapshot just before: a stop then would
+    # leave a plan a later process takes for this commit's
+    record = participant_api.commit_log({"data_path": data_path}).get("q1")
+    later = pd.Timestamp.now(tz="UTC").timestamp() + 3600.0
+    with mock.patch.object(participant_api, "_STARTED", later):
+        assert participant_api._saved_between(plan["generated_at"], record["snapshot_at"], None), (
+            plan["generated_at"],
+            record["snapshot_at"],
+        )
 
 
 def test_a_commit_home_assistant_did_not_take_is_partial_and_not_recorded(data_path):
@@ -1991,11 +2010,22 @@ def test_a_horizon_is_answered_only_while_its_first_slot_is_current():
         current=current,
     )
     body = json.dumps(_HORIZON).encode()
+    query = json.dumps(
+        {
+            "version": SCHEMA_VERSION,
+            "kind": "price_response",
+            "horizon": _HORIZON,
+            "price_draw": [0.1, 0.2],
+            "rho": 0.0,
+        }
+    ).encode()
     assert service.handle("POST", "/v1/baseline", {"Query-Id": "q1"}, body)[0] == 200
     assert service.handle("POST", "/v1/baseline", {"Query-Id": "q2"}, body)[0] == 200
+    assert service.handle("POST", "/v1/query", {"Query-Id": "q2"}, query)[0] == 200
     assert service.handle("POST", "/v1/commit", {}, _commit_body(qid="q1"))[0] == 202
     now["start"] = "2026-11-21T10:30:00+00:00"  # the next slot
     assert service.handle("POST", "/v1/baseline", {"Query-Id": "q3"}, body)[0] == 409
+    assert service.handle("POST", "/v1/query", {"Query-Id": "q2"}, query)[0] == 409
     assert service.handle("POST", "/v1/commit", {}, _commit_body(qid="q2"))[0] == 409
     assert service.handle("POST", "/v1/commit", {}, _commit_body(qid="q1"))[0] in (200, 202)
 
@@ -2886,15 +2916,23 @@ def test_a_slot_that_is_busy_for_a_moment_is_published_when_it_is_free(data_path
         calls.append(1)
         raise RuntimeError("Home Assistant is down")
 
-    failing.follow("a", stamp, case.ec, case.params, case.res, logger, publish=boom, now_first=True)
-    for _ in range(100):
-        if calls:
-            break
-        threading.Event().wait(0.02)
-    assert calls == [1]
-    threading.Event().wait(0.1)
-    assert failing._gen == 1 and not failing._wake.is_set()  # still stepping
-    failing.stop()
+    # its next slot begins in a moment: a publish that raised loses that
+    # slot, never the plan, and the next slot is published
+    soon = pd.Timestamp.now(tz="UTC") + pd.Timedelta(seconds=0.3)
+    case.res.index = pd.date_range(soon - pd.Timedelta(minutes=30), periods=4, freq="30min")
+    try:
+        failing.follow(
+            "a", stamp, case.ec, case.params, case.res, logger, publish=boom, now_first=True
+        )
+        for _ in range(250):
+            if len(calls) >= 2:
+                break
+            threading.Event().wait(0.02)
+        assert calls == [1, 1]  # the slot that raised, then the next
+        assert failing._gen == 1  # still stepping
+    finally:
+        failing.stop()
+        assert failing.join(10.0)
 
 
 def test_a_commit_waits_briefly_for_a_slot_the_stepper_holds(data_path):
@@ -3433,7 +3471,7 @@ def test_an_accepted_commit_names_its_own_plan_as_soon_as_it_is_saved(data_path,
     ec = _conf(data_path)
     seen = {}
 
-    async def publishing(conf, params, res, logger, on_recorded=None):
+    async def publishing(conf, params, res, logger, on_recorded=None, on_snapshot=None):
         plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
         on_recorded((plan_store.read(data_path) or {}).get("generated_at"))
         seen["stamp"] = log.get("c1").get("plan_stamp")
@@ -3759,3 +3797,385 @@ def test_continual_publish_ends_a_plan_even_with_its_prefix_unknown(data_path, m
         pd.Timestamp("2026-11-21T10:30:01Z"),
     )
     assert out == "stop" and case.stepper.superseded
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit's review of 9c21e919
+# --------------------------------------------------------------------------
+
+
+def test_a_carried_plan_is_averaged_over_each_slots_time():
+    """Each window slot runs, on average, what the plan runs over its time:
+    a 20-minute plan [0, 6, 0] gives a 30-minute slot 10 minutes at 6 kW (2 kW,
+    not the 3 kW of its two samples), and a plan that starts within a slot
+    counts from its start."""
+    from emhass.coordinator.backend import _carried
+
+    rec = _record([0.0, 6.0, 0.0], step=20.0)
+    assert np.allclose(_carried(rec, _at("2026-11-21T10:00:00+00:00", 2), True), [2.0, 2.0])
+    # aligned and equal slots: as before
+    rec = _record([7.0, 0.0])
+    assert _carried(rec, _at("2026-11-21T10:00:00+00:00", 3), True).tolist() == [7, 0, 0]
+    # a plan from 10:10: the slot from 10:00 runs it for 20 of its 30 minutes
+    rec = _record([6.0], start="2026-11-21T10:10:00+00:00", step=60.0)
+    assert np.allclose(_carried(rec, _at("2026-11-21T10:00:00+00:00", 2), True), [4.0, 6.0])
+    # a window that ends before the plan begins: nothing of it
+    assert _carried(rec, _at("2026-11-21T09:00:00+00:00", 1), True) is None
+    # a remote that does not step is weighted the same way in that slot
+    assert np.allclose(_carried(rec, _at("2026-11-21T10:00:00+00:00", 2), False), [4.0, 6.0])
+    assert _carried(rec, _at("2026-11-21T09:00:00+00:00", 1), False) is None
+
+
+def test_a_carried_plan_of_tiny_slots_needs_no_sample_per_slot():
+    """A record whose slots are tiny (any step is valid) is carried by its own
+    boundaries, not one sample per plan slot: 48 slots of 30 minutes over a
+    two-value plan of 0.001 minutes (30,000 plan slots in each) take a few kB,
+    and run its last value."""
+    import tracemalloc
+
+    from emhass.coordinator.backend import _carried
+
+    rec = _record([5.0, 3.0], step=1e-3)
+    tracemalloc.start()
+    try:
+        out = _carried(rec, _at("2026-11-21T10:00:00+00:00", 48), True)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000, peak  # one sample per plan slot: over 10 MB
+    # 0.001 of the first slot's 30 minutes at 5 kW, then 3 kW for good
+    assert out[0] == pytest.approx(3.0 + 2.0 * 1e-3 / 30.0) and np.allclose(out[1:], 3.0)
+
+
+def test_a_commits_outcome_is_never_asked_for_past_its_wait():
+    """The wait for a commit's outcome bounds every call: a status poll to a
+    remote that hangs is cut off when the wait ends, not at the call's
+    timeout, and no call starts once it has passed."""
+    import time as _time
+
+    from emhass.coordinator.remote import RemoteParticipant
+
+    polls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, status, body):
+            raw = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            if self.path.endswith("/v1/describe"):
+                return self._send(
+                    200,
+                    {
+                        "version": 1,
+                        "kinds": ["price_response"],
+                        "max_power_kw": 1.0,
+                        "features": ["commit_status"],
+                    },
+                )
+            polls.append(self.path)
+            _time.sleep(3.0)  # a remote that hangs on the status poll
+            with contextlib.suppress(OSError):
+                self._send(202, _RUNNING)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self._send(202, _RUNNING)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        rp = RemoteParticipant(
+            "r",
+            f"http://127.0.0.1:{server.server_address[1]}",
+            PlanWindow(30, 2, "x"),
+            timeout=10.0,
+            commit_wait_s=0.4,
+        )
+        t0 = _time.monotonic()
+        ok, _ = rp.commit({"query_id": "q"}, np.zeros(2))
+        took = _time.monotonic() - t0
+        assert ok is None  # not known: its part stays in the plan
+        assert polls and took < 2.0, took  # cut off at the wait, not after 3 s
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_call_is_cut_off_at_what_is_left_of_the_wait():
+    """The default transport takes a shorter time for one call: a poll near
+    the end of a commit's wait is cut off there, not at the call's timeout."""
+    import socket
+    import time as _time
+
+    from emhass.coordinator.remote import urllib_transport
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)  # accepts, never answers
+    try:
+        send = urllib_transport(10.0)
+        url = f"http://127.0.0.1:{server.getsockname()[1]}/v1/commit/q"
+        t0 = _time.monotonic()
+        with pytest.raises(TimeoutError):
+            send("GET", url, {}, None, 0.3)
+        assert _time.monotonic() - t0 < 2.0
+    finally:
+        server.close()
+
+
+def test_a_commit_whose_record_cannot_be_saved_never_runs(tmp_path, monkeypatch):
+    """A commit that ran without its record on disk would be lost to a
+    restart: its plan in Home Assistant, nothing stepping or reporting it. So
+    a record that cannot be saved refuses the commit (409), and nothing runs."""
+    from emhass.coordinator import remote
+    from emhass.coordinator.remote import CommitLog, CommitNotRecorded
+
+    log = CommitLog(tmp_path / "participant_commits.json")
+    real = remote.os.replace
+
+    def fails(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(remote.os, "replace", fails)
+    with pytest.raises(CommitNotRecorded):
+        log.begin("a", [1.0])
+    assert log.get("a") is None
+    ran = []
+    service = _service(lambda p, a: ran.append(1) or ("accepted", ""), log=log)
+    status, problem = service.handle("POST", "/v1/commit", {}, _commit_body())
+    assert status == 409 and "could not be saved" in problem["detail"]
+    assert ran == [] and log.get("q1") is None
+    monkeypatch.setattr(remote.os, "replace", real)
+    status, _ = service.handle("POST", "/v1/commit", {}, _commit_body())
+    assert status == 202
+    assert _until_final(service)[1]["state"] == "accepted" and ran == [1]
+
+
+def test_a_commit_cut_off_after_saving_its_plan_is_resumed_as_its_own(data_path, monkeypatch):
+    """Stopped after its plan was saved as its own, before that was noted:
+    the plan saved since its stamp, before this process started, is its own
+    (it held the live-optimization slot), so it is resumed - once settled, a
+    plan saved later is this EMHASS's own and supersedes it."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    # its own plan, saved before the stop; then the restart reads it back
+    plan_store.record(data_path, [], "2026-11-21T10:00:05Z", "1.0")
+    own = (plan_store.read(data_path) or {}).get("generated_at")
+    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()  # it was saving one
+    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
+    params = _params(ec, **GARAGE)
+    pa._resume(ec, params, logger, stepper, None)
+    assert followed == [("b", own)] and not stepper.superseded
+    assert log.get("b")["plan_stamp"] == own and log.get("b")["interrupted"] is False
+    # a plan of its own after that (even before a later restart): superseded
+    plan_store.record(data_path, [], "2026-11-21T10:20:00Z", "1.0")
+    stepper.resumed = None
+    pa._resume(ec, params, logger, stepper, None)
+    assert followed == [("b", own)] and stepper.superseded
+
+
+def test_a_plan_saved_after_start_up_is_never_taken_for_an_interrupted_commits(
+    data_path, monkeypatch
+):
+    """A plan saved after this process started is a run of its own, whatever
+    the commit before was: it supersedes the commit."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    now = pd.Timestamp.now(tz="UTC")
+    log._records["b"].update(state="partial", interrupted=True, snapshot_at=now.timestamp())
+    plan_store.record(data_path, [], now.isoformat(), "1.0")
+    monkeypatch.setattr(pa, "_STARTED", pd.Timestamp.now(tz="UTC").timestamp() - 60.0)
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.superseded
+
+
+def test_a_committed_plan_that_cannot_be_read_is_resumed_later(data_path, monkeypatch):
+    """A committed plan that cannot be read back at a resume is tried again at
+    the next, rather than never."""
+    import emhass.participant_api as pa
+
+    ec, stepper, followed, _ = _resume_case(data_path, monkeypatch, [("a", "accepted", {})])
+    params = _params(ec, **GARAGE)
+    read = pd.read_csv
+    fails = {"n": 1}
+
+    def flaky(*a, **k):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise OSError("busy")
+        return read(*a, **k)
+
+    monkeypatch.setattr(pa.pd, "read_csv", flaky)
+    pa._resume(ec, params, logger, stepper, None)
+    assert followed == [] and stepper.resumed is None
+    pa._resume(ec, params, logger, stepper, None)
+    assert [f[0] for f in followed] == ["a"]
+
+
+def test_the_active_commit_is_never_superseded_by_a_stamp_read_before_it(monkeypatch):
+    """The saved stamp is read while a commit may be followed on another
+    thread: a stamp read before that commit never marks it superseded."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.remote import CommitLog
+
+    log = CommitLog()
+    for cid in ("a", "b"):
+        log.begin(cid, [1.0], _HORIZON)
+        log.end(cid, "accepted", "")
+    stepper = pa.PlanStepper()
+    stepper.following, stepper.stamp = "a", "s1"
+
+    def read_then_followed(conf):
+        # the stamp read is s1; meanwhile commit b is followed, made over s2
+        with stepper._lock:
+            stepper._gen += 1
+            stepper.following, stepper.stamp, stepper.superseded = "b", "s2", False
+        return "s1"
+
+    monkeypatch.setattr(pa, "_saved_stamp", read_then_followed)
+    assert pa._active_commit(log, stepper, "/nowhere")["commit_id"] in ("a", "b")
+    assert not stepper.superseded
+    # a plan of its own replacing the one followed is still seen
+    monkeypatch.setattr(pa, "_saved_stamp", lambda conf: "s3")
+    assert pa._active_commit(log, stepper, "/nowhere") is None and stepper.superseded
+
+
+def test_the_default_solver_takes_a_remotes_supply_as_less_load_never_below_zero(monkeypatch):
+    """A remote supplying more than the house draws (3 kW against 0.4 kW):
+    the default solver's load stays >= 0 W, so self-consumption still solves,
+    and the surplus is logged."""
+    from emhass import optimization
+
+    rh, oc, pc, data, pv, load, buy, sell = _house(_now())
+    oc = copy.deepcopy(oc)
+    oc.update(optimization_backend="dantzig_wolfe")
+    opt = Optimization(
+        rh,
+        oc,
+        copy.deepcopy(pc),
+        "unit_load_cost",
+        "unit_prod_price",
+        "self-consumption",
+        EMHASS_CONF,
+        logger,
+    )
+    monkeypatch.setattr(optimization, "_coordinated_plan", lambda *a, **k: (None, "declined"))
+    monkeypatch.setattr(optimization, "_remotes_running_w", lambda o: np.full(len(load), -3000.0))
+    with mock.patch.object(opt.logger, "warning") as warned:
+        res = opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
+    assert str(res["optim_status"].iloc[0]).lower() == "optimal"
+    assert (res["P_Load"] >= 0).all()
+    assert np.allclose(res["P_Load"].values, np.maximum(np.asarray(load) - 3000.0, 0.0))
+    assert any("supply more than the house" in str(c) for c in warned.call_args_list)
+
+
+def test_an_interrupted_commit_keeps_when_its_stop_was_first_seen(tmp_path):
+    """A commit read back as cut off by a stop is saved so, with when that
+    stop was first seen: a later restart reads back the same time."""
+    from emhass.coordinator.remote import CommitLog
+
+    path = tmp_path / "participant_commits.json"
+    CommitLog(path).begin("b", [1.0])  # never ended: the process stopped
+    first = CommitLog(path).get("b")
+    assert first["interrupted"] is True and isinstance(first["interrupted_at"], float)
+    stored = json.loads(path.read_text())
+    assert (
+        stored[0]["state"] == "partial" and stored[0]["interrupted_at"] == first["interrupted_at"]
+    )
+    assert CommitLog(path).get("b")["interrupted_at"] == first["interrupted_at"]
+
+
+def test_a_plan_saved_after_the_stop_is_never_taken_for_the_interrupted_commits(
+    data_path, monkeypatch
+):
+    """A plan saved after the stop that cut a commit off - by a process that
+    then never settled it, before this one started - is this EMHASS's own:
+    it supersedes the commit, never is taken for the commit's own."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    stop = pd.Timestamp("2026-11-21T10:05:00Z").timestamp()
+    noted = pd.Timestamp("2026-11-21T10:00:02Z").timestamp()
+    log._records["b"].update(
+        state="partial", interrupted=True, interrupted_at=stop, snapshot_at=noted
+    )
+    # a run of its own after the stop, in a process that never resumed b
+    plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")
+    gen = stepper.generation()
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == []
+    g, following, _, superseded = stepper.view()
+    assert following == "b" and superseded and g > gen  # marked under its lock
+    assert log.get("b")["superseded"] is True
+
+
+@pytest.mark.parametrize("fields", [{}, {"snapshot_at": None}, {"interrupted_at": None}])
+def test_only_a_plan_saved_as_the_commits_snapshot_is_taken_for_its_own(
+    data_path, monkeypatch, fields
+):
+    """Whatever recorded the stop (or nothing did: a process that never read
+    the commit log), a plan is the commit's own snapshot only if it was saved
+    within moments of the commit noting it was saving one. A plan of its own
+    an hour later, before this process started, supersedes the commit."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    noted = pd.Timestamp("2026-11-21T10:00:02Z").timestamp()
+    record = {"state": "partial", "interrupted": True, "snapshot_at": noted}
+    # interrupted_at stamped late (by the process that loaded it, long after)
+    record["interrupted_at"] = pd.Timestamp("2026-11-22T09:00:00Z").timestamp()
+    record.update(fields)
+    log._records["b"].update(record)
+    plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.view()[3]
+
+
+def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_meanwhile(
+    data_path, monkeypatch
+):
+    """A resume that finds the last commit superseded marks it so only if no
+    commit was followed meanwhile: one followed while it read the plans keeps
+    being stepped."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(
+        data_path, monkeypatch, [("b", "accepted", {"plan_stamp": before})]
+    )
+    plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")  # its own since
+    read = pa._saved_stamp
+
+    def commit_followed_meanwhile(conf):
+        with stepper._lock:  # as follow("c") does
+            stepper._gen += 1
+            stepper.following, stepper.stamp, stepper.superseded = "c", "sc", False
+        return read(conf)
+
+    monkeypatch.setattr(pa, "_saved_stamp", commit_followed_meanwhile)
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    _, following, stamp, superseded = stepper.view()
+    assert (following, stamp, superseded) == ("c", "sc", False)

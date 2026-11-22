@@ -36,7 +36,12 @@ CURATED = {
     "/api/v1/dry-run/{action_name}": {"POST"},
     "/healthz": {"GET"},
     "/participant/v1/{op}": {"GET", "POST"},
+    # served by the same route as /participant/v1/{op} (its path takes a slash)
+    "/participant/v1/commit/{commit_id}": {"GET"},
 }
+
+# documented paths served by another path's route: kept while that one is live
+SERVED_BY = {"/participant/v1/commit/{commit_id}": "/participant/v1/{op}"}
 
 _ATOMIC = {
     "string": {"type": "string"},
@@ -342,8 +347,7 @@ def build_spec(routes: set | None = None) -> dict:
                 "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
                 "security": [{"participantToken": []}],
                 "responses": {
-                    "200": {"description": "Its description, or a commit's outcome (commit/{id})"},
-                    "202": {"description": "A commit still running (commit/{id})"},
+                    "200": {"description": "Its description (describe)"},
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
                     "503": {
@@ -390,6 +394,40 @@ def build_spec(routes: set | None = None) -> dict:
                         "one web worker (WEB_CONCURRENCY), or, for a commit, the "
                         "live-optimization lock unavailable (retry after Retry-After)",
                         "headers": _RETRY_AFTER_HEADER,
+                    },
+                },
+            },
+        },
+        "/participant/v1/commit/{commit_id}": {
+            "parameters": [
+                {
+                    "name": "commit_id",
+                    "in": "path",
+                    "required": True,
+                    "description": "The commit's id: the query_id its POST named",
+                    "schema": {"type": "string"},
+                }
+            ],
+            "get": {
+                "summary": "A commit's outcome (participant API, opt-in)",
+                "description": (
+                    "The record of a commit (CommitResult in participant-api.v1.json): running, "
+                    "accepted, refused or partial. Asked for after a commit's answer, or after "
+                    "none came, to learn whether it ran."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "responses": {
+                    "200": {"description": "Its record: it ended (accepted, refused or partial)"},
+                    "202": {"description": "Its record: still running"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {
+                        "description": "No commit of that id (never received, or forgotten), "
+                        "or participant_api is not set"
+                    },
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
                     },
                 },
             },
@@ -463,7 +501,7 @@ def build_spec(routes: set | None = None) -> dict:
 
     # filter CURATED paths down to what actually exists in url_map (e.g. /healthz pre-AC-4)
     live = {p for p, _ in routes}
-    paths = {p: v for p, v in paths.items() if p in live}
+    paths = {p: v for p, v in paths.items() if p in live or SERVED_BY.get(p) in live}
 
     # Access control (emhass.api_auth): every operation but the health check needs the token.
     for path, item in paths.items():

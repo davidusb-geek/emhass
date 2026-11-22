@@ -1047,29 +1047,28 @@ def _carried(
         start, now = pd.Timestamp(horizon.start), pd.Timestamp(window.start)
         start = start if start.tzinfo else start.tz_localize("UTC")
         now = now if now.tzinfo else now.tz_localize("UTC")
+        # Each of this window's slots runs, on average, what the plan runs
+        # over that slot's time (whatever either's slot length): nothing
+        # before the plan begins.
+        edges = (now - start).total_seconds() + 60.0 * window.step_minutes * np.arange(
+            window.slots + 1
+        )
+        if edges[-1] <= 1e-6:
+            return None  # the window ends before the plan begins
         if not steps:
             # the value its commit published, from then on, with no end
-            since_s = (now - start).total_seconds() + 60.0 * window.step_minutes * np.arange(
-                window.slots
-            )
-            held = np.where(since_s >= -1e-6, plan[0], 0.0)
-            return None if np.all(since_s < -1e-6) else held
-        # each of this window's slots runs the plan's slot it starts in (by
-        # time, whatever either's slot length); before the plan, nothing of
-        # it; after its end, its last value
-        # finer slots than this window's: the mean of those within each (the
-        # same energy)
-        m = max(1, int(round(window.step_minutes / horizon.step_minutes)))
-        within = 60.0 * horizon.step_minutes * np.arange(m) if m > 1 else np.zeros(1)
-        since_s = (
-            (now - start).total_seconds()
-            + 60.0 * window.step_minutes * np.arange(window.slots)[:, None]
-            + within[None, :]
-        )
-        k = np.floor(since_s / (60.0 * horizon.step_minutes) + 1e-6).astype(int)
-        values = plan[np.clip(k, 0, len(plan) - 1)]
-        values[k < 0] = 0.0
-        return None if np.all(k < 0) else values.mean(axis=1)
+            within = np.clip(edges[1:], 0.0, None) - np.clip(edges[:-1], 0.0, None)
+            return plan[0] * within / np.diff(edges)
+        # Its last value after its end. The energy, as the integral of the
+        # plan's power, at the plan's own boundaries - never one sample per
+        # plan slot within a window slot.
+        h = 60.0 * horizon.step_minutes
+        knots = h * np.arange(len(plan) + 1)
+        energy = np.concatenate([[0.0], np.cumsum(plan) * h])
+        t = np.maximum(edges, 0.0)
+        within = np.interp(np.minimum(t, knots[-1]), knots, energy)
+        e = within + plan[-1] * np.maximum(t - knots[-1], 0.0)
+        return np.diff(e) / np.diff(edges)
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
