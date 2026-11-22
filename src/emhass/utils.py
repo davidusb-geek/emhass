@@ -33,7 +33,12 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from emhass.connection_manager import is_supervisor_url
+from emhass.connection_manager import (
+    SUPERVISOR_TOKEN_REFUSED,
+    canonical_supervisor_url,
+    is_supervisor_token_for_another_host,
+    is_supervisor_url,
+)
 from emhass.coordinator.site import (
     compile_site,
     reserved_secret_values,
@@ -7535,6 +7540,7 @@ async def build_secrets(
                 else:
                     # For addons, use supervisor API for both REST and WebSocket access
                     params_secrets["hass_url"] = "http://supervisor/core/api"
+                params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
                 config_hass = None
                 if is_supervisor_url(params_secrets["hass_url"]):
                     headers = {
@@ -7556,9 +7562,10 @@ async def build_secrets(
                 else:
                     # The Supervisor token is only for the Supervisor proxy, so it is never sent
                     # to the Home Assistant URL set in the options. Use the options instead.
-                    logger.debug(
-                        "hass_url in options.json is not the Supervisor, not calling the "
-                        "Supervisor API"
+                    logger.info(
+                        "hass_url in the add-on options is not the Supervisor, so the "
+                        "Supervisor API is not called. Time zone and location come from the "
+                        "options, the environment or the defaults."
                     )
                 if config_hass is not None:
                     params_secrets.update(
@@ -7692,6 +7699,14 @@ async def build_secrets(
     if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
         logger.debug("Obtaining long_lived_token from passed argument")
+
+    # Whichever source set them, never hand on the Supervisor token with another URL.
+    params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
+    if is_supervisor_token_for_another_host(
+        params_secrets["hass_url"], params_secrets["long_lived_token"]
+    ):
+        logger.error(SUPERVISOR_TOKEN_REFUSED)
+        params_secrets["long_lived_token"] = ""
 
     return emhass_conf, params_secrets
 

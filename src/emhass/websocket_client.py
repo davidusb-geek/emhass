@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import ssl
 import time
@@ -9,6 +10,11 @@ import orjson
 import websockets
 
 logger = logging.getLogger(__name__)
+
+# websockets 15 and later connect through a proxy taken from the environment by default.
+# The token goes in the first message, so never route it through a proxy. The REST calls
+# (aiohttp) do not use environment proxies either.
+_NO_PROXY = {"proxy": None} if "proxy" in inspect.signature(websockets.connect).parameters else {}
 
 
 class WebSocketError(Exception):
@@ -114,7 +120,7 @@ class AsyncWebSocketClient:
         """Internal connect/authenticate and start background tasks."""
         ssl_ctx = self._get_ssl_context()
         self._ws = await websockets.connect(
-            self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None
+            self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None, **_NO_PROXY
         )
         # Authenticate
         msg = await asyncio.wait_for(self._ws.recv(), timeout=5.0)

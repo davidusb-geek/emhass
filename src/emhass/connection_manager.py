@@ -12,8 +12,10 @@ _lock = asyncio.Lock()
 SUPERVISOR_URLS = frozenset({"http://supervisor/core/api", "https://supervisor/core/api"})
 
 SUPERVISOR_TOKEN_REFUSED = (
-    "The Supervisor token is set as the token for a Home Assistant URL that is not "
-    "the Supervisor. It will not be sent. Set a long-lived access token for that URL."
+    "The Supervisor token is only sent to the Supervisor, and the Home Assistant URL is "
+    "another host, so the token will not be sent. Give a long-lived access token for that "
+    "URL in the add-on options (long_lived_token), the secrets file or --key, not in "
+    "SUPERVISOR_TOKEN."
 )
 
 
@@ -22,6 +24,19 @@ def is_supervisor_url(url: str | None) -> bool:
     if url is None or not str(url).strip() or str(url).strip() == "empty":
         return True
     return str(url).strip().rstrip("/").lower() in SUPERVISOR_URLS
+
+
+def canonical_supervisor_url(url: str | None) -> str | None:
+    """The Supervisor proxy URL in the exact form the request code builds on.
+
+    A Supervisor form written with other case, spaces or a trailing slash is returned as
+    ``http://supervisor/core/api`` or ``https://supervisor/core/api``. Anything else,
+    including an unset or ``"empty"`` URL, is returned unchanged.
+    """
+    if url is None:
+        return None
+    normalised = str(url).strip().rstrip("/").lower()
+    return normalised if normalised in SUPERVISOR_URLS else url
 
 
 def is_supervisor_token_for_another_host(hass_url: str | None, token: str | None) -> bool:
@@ -39,7 +54,8 @@ async def _create_and_start_client(
     hass_url: str, token: str, logger: logging.Logger | None
 ) -> AsyncWebSocketClient:
     """Helper to create and start a new WebSocket client."""
-    # Every WebSocket connection is made here, so this one check covers them all.
+    # Every WebSocket client is created here, so this check covers them all. Reconnects
+    # reuse the URL and token checked here, which nothing changes afterwards.
     if is_supervisor_token_for_another_host(hass_url, token):
         if logger:
             logger.error(SUPERVISOR_TOKEN_REFUSED)
