@@ -1682,6 +1682,26 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         session.assert_not_called()
         self.assertEqual(secrets["long_lived_token"], "env.key")
 
+    async def test_build_secrets_emhass_key_keeps_options_url(self):
+        environ = self.enterContext(patch.dict(os.environ))
+        environ.pop("EMHASS_URL", None)
+        environ["EMHASS_KEY"] = "env.key"
+        environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        with tempfile.TemporaryDirectory() as tmp:
+            options_path = pathlib.Path(tmp) / "options.json"
+            options_path.write_text(json.dumps({"hass_url": "http://options.local:8123/"}))
+            with patch("aiohttp.ClientSession") as session:
+                _, secrets = await utils.build_secrets(
+                    emhass_conf,
+                    logger,
+                    options_path=str(options_path),
+                    secrets_path="",
+                    no_response=False,
+                )
+        session.assert_not_called()
+        self.assertEqual(secrets["long_lived_token"], "env.key")
+        self.assertEqual(secrets["hass_url"], "http://options.local:8123/")
+
     def test_get_injection_dict_with_thermal(self):
         # Add thermal columns to dummy df
         self.df["predicted_temp_heater1"] = 21.0
