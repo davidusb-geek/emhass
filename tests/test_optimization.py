@@ -11465,34 +11465,57 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     def test_deferrable_load_group_one_of_two_per_step_lists_back_to_a_scalar(self):
         """Two per-step groups, then the first goes back to a number on the same
         Optimization (#1366): only the second keeps its Parameter, the problem is
-        rebuilt, and each group is held by its own limit."""
+        rebuilt, and each group is held by its own limit. deferrable0 can only start
+        at step 12, so the cheapest steps (0 to 11) would go to deferrable1, but the
+        second list is 0 there. After step 24 the loads run above the first list's
+        1000 W, so a stale first list would show."""
+        n = 48
         first = [2500.0] * 24 + [1000.0] * 24
         second = [0.0] * 12 + [3000.0] * 36
         self.optim_conf.update(
             {
                 "treat_deferrable_load_as_semi_cont": [False, False],
+                "operating_hours_of_each_deferrable_load": [4, 2],
+                "start_timesteps_of_each_deferrable_load": [12, 0],
+                "end_timesteps_of_each_deferrable_load": [0, 0],
                 "deferrable_load_groups": [
                     {"names": ["deferrable0", "deferrable1"], "max_power": first},
                     {"names": ["deferrable1"], "max_power": second},
                 ],
             }
         )
+        unit_load_cost = np.full(n, 0.40)
+        unit_load_cost[:12] = 0.05
+        unit_load_cost[24:36] = 0.10
+
+        def solve():
+            return opt.perform_optimization(
+                self.prepare_forecast_data(),
+                np.zeros(n),
+                np.full(n, 300.0),
+                unit_load_cost,
+                np.zeros(n),
+            )
+
         opt = self.create_optimization()
-        df = self.prepare_forecast_data()
-        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        solve()
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertEqual(sorted(opt.param_group_max_power), [0, 1])
         prob = opt.prob
         opt.optim_conf["deferrable_load_groups"][0]["max_power"] = 1500.0
-        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        res = solve()
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertIsNot(opt.prob, prob)
         self.assertEqual(list(opt.param_group_max_power), [1])
         np.testing.assert_array_equal(opt.param_group_max_power[1].value, second)
         self.assertTrue(any(p is opt.param_group_max_power[1] for p in opt.prob.parameters()))
-        combined = (res["P_deferrable0"] + res["P_deferrable1"]).to_numpy()
+        d0, d1 = res["P_deferrable0"].to_numpy(), res["P_deferrable1"].to_numpy()
+        combined = d0 + d1
         self.assertLessEqual(combined.max(), 1500 + 1e-3)
-        self.assertTrue((res["P_deferrable1"].to_numpy() <= np.array(second) + 1e-3).all())
+        self.assertAlmostEqual(d1.sum() * 0.5, 750.0 * 2, delta=1)
+        self.assertLessEqual(d1[:12].max(), 1e-3)
+        self.assertTrue((d1 <= np.array(second) + 1e-3).all())
+        self.assertGreater(combined[24:].max(), 1000 + 1)
 
     def test_deferrable_load_group_battery_term_survives_relaxed_retry(self):
         """The relaxed retry rebuilds the group row with the battery term (#1366)."""
@@ -11705,14 +11728,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     def test_deferrable_load_group_battery_availability_with_a_battery_member(self):
         """Where battery_availability is 0 the battery member adds nothing to the row
         (#1366): no charging there, the load may take the whole 3000 W budget, and the
-        budget holds at every step."""
+        budget holds at every step. Half the load's cheap steps (4 to 6) are also the
+        battery's, where load plus charging would reach 5400 W without the battery in
+        the group; the other half (30 to 32) is while the battery is away."""
         self._setup_shared_supply([{"names": ["deferrable0", "battery0"], "max_power": 3000}])
         self.optim_conf["operating_hours_of_each_deferrable_load"] = [3, 0]
         opt = self.create_optimization()
         n = 48
         unit_load_cost = np.full(n, 0.40)
-        unit_load_cost[4:10] = 0.10  # the battery can charge here
-        unit_load_cost[30:36] = 0.05  # the load's window, with the battery away
+        unit_load_cost[4:7] = 0.05  # the load and the battery both want these steps
+        unit_load_cost[30:33] = 0.05  # the rest of the load's window, with the battery away
         availability = [1.0] * 24 + [0.0] * 24
         res = opt.perform_optimization(
             self.prepare_forecast_data(),
@@ -11728,8 +11753,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         load = res["P_deferrable0"]
         charge = (-res["P_batt"]).clip(lower=0)
         self.assertLessEqual((load + charge).max(), 3000 + 1e-3)
+        self.assertAlmostEqual((load + charge).iloc[4:7].min(), 3000, delta=1)
         self.assertLessEqual(res["P_batt"].iloc[24:].abs().max(), 1e-3)
-        self.assertAlmostEqual(load.iloc[30:36].min(), 3000, delta=1)
+        self.assertAlmostEqual(load.iloc[30:33].min(), 3000, delta=1)
         self.assertGreater(charge.iloc[:24].max(), 1000)
 
     def test_deferrable_load_groups_without_new_fields_build_the_same_problem(self):

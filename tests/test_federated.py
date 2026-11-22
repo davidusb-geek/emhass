@@ -394,17 +394,35 @@ def test_a_weighted_load_group_inside_one_participant_keeps_its_weight():
     """A weighted group (#1366) whose loads are all one participant's stays in
     that participant's own model, which numbers its loads from 0: the weight
     follows the load. deferrable1 (750 W, 2 h, on/off) under a 375 W budget
-    can only run at weight 0.5, so the plan runs it its hours within 0.5 x
-    its power <= 375."""
+    can only run at full power at weight 0.5, so it runs its 2 h as 4 steps at
+    750 W. With the weight lost it ran at 375 W for 8 steps."""
     rh, oc, pc, data, pv, load, buy, sell = _site()
     groups = [{"names": ["deferrable1"], "max_power": 375, "weights": {"deferrable1": 0.5}}]
     site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
     opt, res = _plan(*site, optimization_backend="dantzig_wolfe")
     assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
     assert opt.optim_status in ("Optimal", "Optimal_Inaccurate")
+    p = res["P_deferrable1"].to_numpy()
+    assert (p > 1).sum() == 4
+    np.testing.assert_allclose(p[p > 1], 750.0, atol=1e-3)
+
+
+def test_a_per_step_load_group_list_inside_one_participant_is_held():
+    """A per-step max_power list (#1366) on a group whose loads are all one
+    participant's stays in that participant's own model, with deferrable1
+    renumbered to its deferrable0. Without the group it runs in the PV hours;
+    the list is 0 there, so it runs at night, and the plan is the default
+    solver's."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    limit = [750.0] * 12 + [0.0] * 24 + [750.0] * 12
+    groups = [{"names": ["deferrable1"], "max_power": limit}]
+    site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert (res["P_deferrable1"].to_numpy() <= np.array(limit) + 1e-3).all()
     assert res["P_deferrable1"].sum() * 0.5 == pytest.approx(750.0 * 2, rel=1e-6)
-    assert (0.5 * res["P_deferrable1"]).max() <= 375 + 1e-3
-    assert res["P_deferrable1"].max() > 375 + 1
+    assert _bill(res) == pytest.approx(_bill(milp), abs=1e-6)
 
 
 def test_a_site_limit_holds_and_is_priced():

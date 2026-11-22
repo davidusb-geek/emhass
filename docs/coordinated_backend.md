@@ -48,7 +48,7 @@ The coordinator sees a group only as its total, so a group's devices share one p
 
 **EMHASS's own keys.** The main meter's limits, and a node of type `hybrid_inverter` on the main meter that holds the PV and the battery (and nothing else), set EMHASS's own keys - `maximum_power_from_grid` / `maximum_power_to_grid`, `inverter_is_hybrid`, `inverter_ac_output_max`, `inverter_ac_input_max` and both `inverter_efficiency_*` - so the default solver plans the same meter and inverter (`site` wins where they disagree, with a warning). Every other node and every limit is the coordinator's: the default solver does not hold them, and when the coordinator falls back the log says so. For deferrable loads alone, `deferrable_load_groups` is held either way. With no node in `site`, EMHASS's inverter keys describe a hybrid inverter as before.
 
-**`deferrable_load_groups`**, EMHASS's own key for deferrable loads (`max_power`, `mutual_exclusion`), still works: when all of a group's loads are in one `group`, that group's own model holds it, exactly as the default solver would; otherwise the coordinator holds its `max_power` as a limit (`mutual_exclusion` across groups falls back).
+**`deferrable_load_groups`**, EMHASS's own key for deferrable loads (`max_power`, `mutual_exclusion`, `weights`), still works: when all of a group's loads are in one `group`, that group's own model holds it, exactly as the default solver would, per-step `max_power` lists and `weights` included; otherwise the coordinator holds its `max_power` as a limit (`mutual_exclusion`, `weights` or a per-step `max_power` list across groups falls back; a one-entry list is read as its number). A group with a battery member (`battery0`, ...) falls back wherever its loads are.
 
 **Prices.** The coordinator holds each node as a balance of its own, so the devices on it are priced at the node's own price (`fed_local_price_<id>`): the parent's price through the connection's efficiency while it has headroom, apart from it while it is at a rating - a hybrid inverter's falls to zero while its PV is being clipped. A limit adds its own premium while it binds (`fed_limit_price_<id>`).
 
@@ -62,7 +62,7 @@ Some options tie a device to PV or to another device, so they cannot be split pe
 - `set_nocharge_from_grid`, `set_battery_first_priority`, more than one battery
 - a hybrid inverter (or the battery and the PV on one node) with `set_nodischarge_to_grid`, `inverter_stress_cost`, an inverter rated only by `pv_inverter_model` name, or the battery in a group with other devices
 - `heat_topology`, shared thermal tanks
-- `deferrable_load_groups` with `mutual_exclusion` across groups, a group on two parents, a limit that holds part of a group
+- `deferrable_load_groups` with a battery member, or with `mutual_exclusion`, `weights` or a per-step `max_power` list across groups, a group on two parents, a limit that holds part of a group
 - `cost_forecast_per_deferrable_load`, `set_deferrable_startup_penalty`, `deferrable_load_max_cost`
 - capacity charges, and the runtime `soc_target`
 - more than one inverter (`number_of_inverters`), and the runtime `battery_availability`, `battery_discharge_energy_max`, `def_availability` and per-plant PV split (`p_pv_plants`): the coordinator does not model them yet
