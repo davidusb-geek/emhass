@@ -2051,8 +2051,9 @@ def test_the_coordinator_gets_the_battery_endpoints_the_default_solver_uses(init
 
 
 def test_a_cached_problem_takes_the_remote_tokens_as_configured_now():
-    """A rotated token reaches the coordinator on a cache hit too: the cached
-    problem keeps the retrieve_hass_conf it was built with otherwise."""
+    """A rotated token reaches the coordinator: the token map is part of the
+    cache key (as a digest), so other tokens get their own optimizer - never
+    the one another request may be solving with - and the same tokens reuse it."""
 
     async def build(data_path, token):
         params = await _params(data_path)
@@ -2070,8 +2071,11 @@ def test_a_cached_problem_takes_the_remote_tokens_as_configured_now():
     with _data_copy() as data_path:
         first = asyncio.run(build(data_path, "old"))
         second = asyncio.run(build(data_path, "rotated"))
-    assert second["opt"] is first["opt"], "the second run should hit the cache"
+        third = asyncio.run(build(data_path, "rotated"))
+    assert second["opt"] is not first["opt"], "other tokens: another optimizer"
+    assert first["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": "old"}
     assert second["opt"].retrieve_hass_conf["remote_tokens"] == {"garage_token": "rotated"}
+    assert third["opt"] is second["opt"], "the same tokens: the cache"
 
 
 def test_remote_tokens_are_masked_as_the_other_secrets(caplog):

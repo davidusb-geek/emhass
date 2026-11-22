@@ -693,11 +693,8 @@ class CommitLog:
                     **r,
                     "state": "partial",
                     "reason": "EMHASS stopped while it was publishing this plan",
-                    # what it published, if anything, is for its host to tell;
-                    # when the stop was first seen, so a plan saved after it
-                    # is never taken for this commit's
+                    # what it published, if anything, is for its host to tell
                     "interrupted": True,
-                    "interrupted_at": time.time(),
                 }
                 changed = True
             self._records[r["commit_id"]] = r
@@ -850,6 +847,9 @@ def commit_view(r: dict[str, Any]) -> dict[str, Any]:
         "updated": r.get("updated"),
         "terms": r.get("terms"),
         "signatures": r.get("signatures", []),
+        # the plan ended with its final slots not published: the slot whose
+        # value Home Assistant keeps (absent: the plan's last)
+        **({"held_slot": r["held_slot"]} if isinstance(r.get("held_slot"), int) else {}),
     }
 
 
@@ -891,6 +891,31 @@ def _anchored(d: Any) -> PlanWindow:
     if window.start is None:
         raise ValueError("horizon.start is required: the first slot planned")
     return window
+
+
+def _same_horizon(stored: Any, window: PlanWindow) -> bool:
+    """Whether a commit's recorded horizon is `window` (the same slots, the
+    same first instant however written). A record with none: not known, so
+    not refused."""
+    if stored is None:
+        return True
+    try:
+        known = PlanWindow.from_dict(stored)
+    except ValueError:
+        return False
+    if (known.step_minutes, known.slots) != (window.step_minutes, window.slots):
+        return False
+    if known.start is None or window.start is None:
+        return known.start == window.start
+    try:
+        import pandas as pd
+
+        a, b = pd.Timestamp(known.start), pd.Timestamp(window.start)
+        a = a if a.tzinfo else a.tz_localize("UTC")
+        b = b if b.tzinfo else b.tz_localize("UTC")
+        return bool(a == b)
+    except (ValueError, TypeError):
+        return known.start == window.start
 
 
 def _problem(status: int, title: str, detail: str = "") -> tuple[int, dict[str, Any]]:
@@ -1028,6 +1053,14 @@ class ParticipantService:
                 rho = req.get("rho", 0.0)
                 if isinstance(rho, bool) or not isinstance(rho, (int, float)):
                     return _problem(400, "Bad Request", "rho must be a number")
+                for name in ("price_draw", "price_supply", "residual_kw", "target_kw"):
+                    v = req.get(name)
+                    # JSON numbers only: "1", true or null inside would be read as numbers
+                    if v is not None and not (
+                        isinstance(v, list)
+                        and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+                    ):
+                        return _problem(400, "Bad Request", f"{name} must be a list of numbers")
                 q = query_from_dict(req)
                 if q.kind in ("price_response", "best_response") and q.price_draw is None:
                     return _problem(400, "Bad Request", f"a {q.kind} needs price_draw")
@@ -1060,6 +1093,8 @@ class ParticipantService:
                     plan, known["plan_kw"], atol=1e-6
                 ):
                     return _problem(409, "Conflict", "that commit was made with another plan_kw")
+                if not _same_horizon(known.get("horizon"), window):
+                    return _problem(409, "Conflict", "that commit was made for another horizon")
                 return (202 if known["state"] == "running" else 200), commit_view(known)
             self._fresh(window)  # a new commit of a horizon whose slot has passed: 409
             s = self._session(window, create=False)
@@ -1085,6 +1120,8 @@ class ParticipantService:
                 record, new = self.log.begin(cid, [float(x) for x in plan], window.to_dict())
             except CommitNotRecorded as exc:  # never run: it would be lost to a restart
                 return _problem(409, "Conflict", f"the commit could not start ({exc})")
+            if not new and not _same_horizon(record.get("horizon"), window):
+                return _problem(409, "Conflict", "that commit was made for another horizon")
             if not new:  # the same commit, sent twice at once: the first runs it
                 return (202 if record["state"] == "running" else 200), commit_view(record)
             try:
@@ -1098,6 +1135,15 @@ class ParticipantService:
                 if taken == "busy":
                     return _problem(429, "Too Many Requests", "a live optimization is running")
                 return _problem(409, "Conflict", f"the commit could not start ({release})")
+            try:
+                # again, now it holds the slot: waiting for it may have taken
+                # this horizon's first slot past
+                self._fresh(window)
+            except Exception:  # never left running, the slot held: nothing ran
+                self.log.drop(cid)
+                if release is not None:
+                    release()
+                raise
             participant, commit = s.participant, self._commit
             takes_id = _takes_commit_id(commit)
 

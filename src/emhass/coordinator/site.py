@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from typing import Any
 
 _SITE_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SITE_DEVICE = re.compile(r"^(pv|battery[0-9]?|deferrable[0-9]{1,3})$")
@@ -46,6 +47,29 @@ _SITE_RESERVED_SECRETS = frozenset(
         "victoriametrics_password",
     }
 )
+
+
+def reserved_secret_values(params_secrets: Any) -> set[str]:
+    """The values of EMHASS's own secrets in `params_secrets` (its own: the
+    names a token_secret may not take, and any API token or key): a remote's
+    token with one of these values would send that secret to the remote. Not
+    participant_token: a remote expecting that value already holds it (two
+    EMHASS coordinating each other with one token)."""
+    if not isinstance(params_secrets, dict):
+        return set()
+    return {
+        str(v)
+        for k, v in params_secrets.items()
+        if isinstance(k, str)
+        and k.lower() != "participant_token"
+        and (
+            k.lower() in _SITE_RESERVED_SECRETS
+            or "api_token" in k.lower()
+            or "api_key" in k.lower()
+        )
+        and isinstance(v, str)
+        and v
+    }
 
 
 def site_token_secret_usable(name) -> bool:

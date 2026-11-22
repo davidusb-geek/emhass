@@ -327,18 +327,15 @@ def build_spec(routes: set | None = None) -> dict:
             }
         },
         "/participant/v1/{op}": {
-            "parameters": [
-                {
-                    "name": "op",
-                    "in": "path",
-                    "required": True,
-                    "schema": {
-                        "type": "string",
-                        "enum": ["describe", "baseline", "query", "commit"],
-                    },
-                }
-            ],
             "get": {
+                "parameters": [
+                    {
+                        "name": "op",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string", "enum": ["describe"]},
+                    }
+                ],
                 "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
                 "description": (
                     "The participant API (draft), off unless participant_api is set; every call "
@@ -357,6 +354,14 @@ def build_spec(routes: set | None = None) -> dict:
                 },
             },
             "post": {
+                "parameters": [
+                    {
+                        "name": "op",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string", "enum": ["baseline", "query", "commit"]},
+                    }
+                ],
                 "summary": "baseline, query or commit (participant API, opt-in)",
                 "description": (
                     "Queries have no effect; a commit publishes the chosen plan, saves it as the "
@@ -382,7 +387,11 @@ def build_spec(routes: set | None = None) -> dict:
                     "401": {"description": "No or a wrong token"},
                     "404": {"description": "participant_api is not set"},
                     "408": {"description": "The body did not arrive within 30 s"},
-                    "409": {"description": "A horizon it cannot plan, or a plan it did not give"},
+                    "409": {
+                        "description": "A horizon it cannot plan, a plan it did not give, or a "
+                        "commit that could not start (the live-optimization lock unavailable, its "
+                        "record not saved): nothing ran"
+                    },
                     "413": {"description": "A body over 1 MiB"},
                     "429": {
                         "description": "A commit while a live optimization runs; retry after "
@@ -390,9 +399,8 @@ def build_spec(routes: set | None = None) -> dict:
                         "headers": _RETRY_AFTER_HEADER,
                     },
                     "503": {
-                        "description": "No participant_token, params.pkl unreadable, more than "
-                        "one web worker (WEB_CONCURRENCY), or, for a commit, the "
-                        "live-optimization lock unavailable (retry after Retry-After)",
+                        "description": "No participant_token, params.pkl unreadable, or more "
+                        "than one web worker (WEB_CONCURRENCY); retry after Retry-After",
                         "headers": _RETRY_AFTER_HEADER,
                     },
                 },
@@ -531,6 +539,9 @@ def build_spec(routes: set | None = None) -> dict:
                 "secrets file), or the token EMHASS generated into `<data folder>/emhass_api_token` "
                 "when none is configured. With no usable token the server answers 503. Home Assistant "
                 "add-on users reach the web UI through ingress, which needs no token. "
+                "The participant API (`/participant/v1/...`, opt-in) is the exception: it takes "
+                "the `participant_token` secret as its bearer token instead (participantToken), "
+                "never the API token, and is not served through ingress. "
                 "See docs/api_authentication.md."
             ),
         },

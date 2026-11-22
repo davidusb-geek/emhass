@@ -320,6 +320,14 @@ def _net_of_remotes(
     return out, surplus
 
 
+def _plus(values: pd.Series | np.ndarray, extra_w: np.ndarray) -> pd.Series | np.ndarray:
+    """`values` + `extra_w`, keeping a Series' index and name."""
+    out = np.asarray(values, dtype=float) + np.asarray(extra_w, dtype=float)
+    if isinstance(values, pd.Series):
+        return pd.Series(out, index=values.index, name=values.name)
+    return out
+
+
 def _warn_unheld_limits(opt) -> None:
     """On a fallback, say what of `site` the default solver does not hold:
     its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
@@ -8815,6 +8823,19 @@ class Optimization:
                 pv_plant_inverters=pv_plant_inverters,
             )
 
+    def _surplus_is_generation(self, p_pv) -> bool:
+        """Whether power supplied behind the meter can be planned as PV exactly:
+        one inverter, not hybrid (PV not routed through it), no curtailment
+        (the solver could not curtail it), PV not all sold (it would be
+        priced as this house's production), one PV series."""
+        return (
+            self.n_inv == 1
+            and not self.plant_conf.get("inverter_is_hybrid")
+            and not self.plant_conf.get("compute_curtailment")
+            and not self.optim_conf.get("set_total_pv_sell")
+            and np.ndim(p_pv) == 1
+        )
+
     def _perform_optimization_locked(
         self,
         data_opt: pd.DataFrame,
@@ -8852,12 +8873,20 @@ class Optimization:
         # The house's own load, for what heats it (thermal internal gains):
         # what remote solvers draw or supply is not heat in this house
         p_load_gains = p_load
+        p_pv_results = None  # the house's own PV, when the plan's PV counts more
         if backend not in (None, "cvxpy"):
             inputs = {
                 k: v
                 for k, v in locals().items()
                 if k
-                not in ("self", "_build_start_perf", "backend", "fallback_reason", "p_load_gains")
+                not in (
+                    "self",
+                    "_build_start_perf",
+                    "backend",
+                    "fallback_reason",
+                    "p_load_gains",
+                    "p_pv_results",
+                )
             }
             res, fallback_reason = _coordinated_plan(self, **inputs)
             if res is not None:
@@ -8874,12 +8903,38 @@ class Optimization:
                     "optimization_backend: the default solver plans around the power of the "
                     "remote solvers already running their plans (counted in the load)"
                 )
-                if np.any(surplus_w > 0.0):
+                if np.any(surplus_w > 0.0) and self._surplus_is_generation(p_pv):
+                    # What they supply beyond the house's load meets its other
+                    # loads, or goes to the grid, as PV does here: counted as
+                    # generation, exactly so with one inverter that is not
+                    # hybrid, no curtailment and PV not all sold - up to what
+                    # the grid can take beside the house's own PV, since the
+                    # export limit is hard and none of it can be curtailed
+                    # the same per-slot limit the export constraint holds
+                    to_grid = self._prepare_power_limit_array(
+                        self.plant_conf.get("maximum_power_to_grid", 9000),
+                        "maximum_power_to_grid",
+                        len(surplus_w),
+                    )
+                    own_export = np.maximum(
+                        np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
+                    )
+                    planned = np.minimum(surplus_w, np.maximum(to_grid - own_export, 0.0))
+                    p_pv_results = p_pv
+                    p_pv = _plus(p_pv, planned)
+                    surplus_w = surplus_w - planned
+                    self.logger.info(
+                        "optimization_backend: the remote solvers' supply beyond the house's "
+                        "load is planned as generation"
+                    )
+                if np.any(surplus_w > 1e-6):
                     self.logger.warning(
                         "optimization_backend: the remote solvers supply more than the house "
-                        f"draws in {int(np.sum(surplus_w > 0.0))} slots; that surplus "
+                        f"draws in {int(np.sum(surplus_w > 1e-6))} slots; that surplus "
                         f"({float(np.max(surplus_w)):.0f} W at most) goes to the grid, beyond "
-                        "what the default solver plans"
+                        "what the default solver plans (it is planned as generation only with one "
+                        "inverter that is not hybrid, no curtailment and set_total_pv_sell off, "
+                        "and within the export limit)"
                     )
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
         # Rebuild problem when forecast inputs change to ensure fresh forecasts are applied.
@@ -10482,7 +10537,7 @@ class Optimization:
             unit_load_cost,
             unit_prod_price,
             p_load,
-            p_pv,
+            p_pv if p_pv_results is None else p_pv_results,
             soc_init_for_results,
             predicted_temps,
             heating_demands,
