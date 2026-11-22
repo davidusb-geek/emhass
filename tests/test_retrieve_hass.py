@@ -20,6 +20,7 @@ import orjson
 import pandas as pd
 
 from emhass import utils
+from emhass.command_line import _retrieve_from_hass
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import get_days_list, get_logger, get_yaml_parse
 from tests.aioresponses_compat import aioresponses
@@ -1913,6 +1914,275 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         # Reset side effect
         mock_get_ws.side_effect = None
         self.rh.use_websocket = False
+
+    # -- #1360: websocket statistics gaps for battery identification ----------------
+
+    _WS_A, _WS_B = "sensor.ws_power_a", "sensor.ws_power_b"
+
+    def _ws_gap_stats(self):
+        """
+        One day of 5-minute statistics for two sensors, as the HA websocket returns
+        them. Both have no rows 02:00-04:00 UTC and sensor B alone has none
+        10:00-11:00 UTC. Returns the statistics and, per sensor, the 30-minute
+        buckets (UTC) that hold no statistics row at all.
+        """
+        idx = pd.date_range("2024-01-01", periods=288, freq="5min", tz="UTC")
+        values = np.arange(288, dtype=float)
+        stats = {}
+        for entity_id, offset, holes in (
+            (self._WS_A, 0.0, [("02:00", "04:00")]),
+            (self._WS_B, 1000.0, [("02:00", "04:00"), ("10:00", "11:00")]),
+        ):
+            keep = np.ones(len(idx), dtype=bool)
+            for start, end in holes:
+                keep &= ~(
+                    (idx >= pd.Timestamp(f"2024-01-01 {start}", tz="UTC"))
+                    & (idx < pd.Timestamp(f"2024-01-01 {end}", tz="UTC"))
+                )
+            starts_ms = (idx[keep].as_unit("ns").asi8 // 1_000_000).tolist()
+            stats[entity_id] = [
+                {"start": ms, "mean": v + offset}
+                for ms, v in zip(starts_ms, values[keep], strict=True)
+            ]
+        common = ["2024-01-01 02:00", "2024-01-01 02:30", "2024-01-01 03:00", "2024-01-01 03:30"]
+        expected_nan = {
+            self._WS_A: common,
+            self._WS_B: common + ["2024-01-01 10:00", "2024-01-01 10:30"],
+        }
+        return stats, [self._WS_A, self._WS_B], expected_nan
+
+    def _legacy_ws_frame(self, stats, var_list):
+        """The websocket frame as built before #1360: resample, forward-fill, set freq."""
+        df = None
+        for entity_id in var_list:
+            rows = stats[entity_id]
+            entity_df = pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime([r["start"] for r in rows], unit="ms", utc=True),
+                    entity_id: [float(r["mean"]) for r in rows],
+                }
+            ).set_index("timestamp")
+            df = entity_df if df is None else df.join(entity_df, how="outer")
+        df.index = df.index.tz_convert(self.rh.time_zone)
+        df = df.sort_index().resample(self.rh.freq).mean().ffill()
+        return utils.set_df_index_freq(df)
+
+    def _assert_gaps_only_where_filled(self, gaps, filled, expected_nan):
+        """gaps differs from the filled frame only by NaN in the buckets with no rows."""
+        pd.testing.assert_index_equal(gaps.index, filled.index)
+        pd.testing.assert_index_equal(gaps.columns, filled.columns)
+        self.assertFalse(filled.isna().any().any(), "the filled frame should have no NaN")
+        utc = gaps.index.tz_convert("UTC")
+        for entity_id, buckets in expected_nan.items():
+            nan_at = [ts.strftime("%Y-%m-%d %H:%M") for ts in utc[gaps[entity_id].isna()]]
+            self.assertEqual(nan_at, buckets, entity_id)
+        pd.testing.assert_frame_equal(gaps.ffill(), filled)
+
+    async def _ws_get_data(self, stats, var_list, **kwargs):
+        """get_data on the websocket path with a fake client; REST must not be reached."""
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        client = MagicMock()
+        client.get_statistics = AsyncMock(return_value=stats)
+        self.rh.use_websocket = True
+        try:
+            with (
+                patch(
+                    "emhass.retrieve_hass.get_websocket_client",
+                    new=AsyncMock(return_value=client),
+                ),
+                patch.object(
+                    RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=False)
+                ) as rest,
+            ):
+                success = await self.rh.get_data(days_list, var_list, **kwargs)
+        finally:
+            self.rh.use_websocket = False
+        rest.assert_not_called()
+        self.assertTrue(success)
+        return self.rh.df_final.copy()
+
+    def _no_forward_fill_kwargs(self):
+        """forward_fill=False, only when the converter has the parameter (so the tests also run, red, on base)."""
+        params = inspect.signature(self.rh._convert_statistics_to_dataframe).parameters
+        return {"forward_fill": False} if "forward_fill" in params else {}
+
+    def test_convert_statistics_without_forward_fill_keeps_gaps(self):
+        """C1 (#1360): forward_fill=False leaves every bucket with no rows as NaN."""
+        stats, var_list, expected_nan = self._ws_gap_stats()
+        kwargs = self._no_forward_fill_kwargs()
+        gaps = self.rh._convert_statistics_to_dataframe(stats, var_list, **kwargs)
+        filled = self.rh._convert_statistics_to_dataframe(stats, var_list)
+        self._assert_gaps_only_where_filled(gaps, filled, expected_nan)
+
+    def test_convert_statistics_default_is_unchanged(self):
+        """C2 (#1360): called as before, the converter still forward-fills, byte for byte."""
+        stats, var_list, _ = self._ws_gap_stats()
+        pd.testing.assert_frame_equal(
+            self.rh._convert_statistics_to_dataframe(stats, var_list),
+            self._legacy_ws_frame(stats, var_list),
+        )
+
+    def test_convert_statistics_without_forward_fill_short_time_step(self):
+        """
+        C3 (#1360): with a time step under 5 minutes, each statistics row still
+        covers its own 5-minute period, so only the real holes stay NaN. At 5
+        and 7 minutes nothing is held (the hold == 0 branch).
+        """
+        stats, var_list, _ = self._ws_gap_stats()
+        holes = {
+            self._WS_A: [("02:00", "04:00")],
+            self._WS_B: [("02:00", "04:00"), ("10:00", "11:00")],
+        }
+        kwargs = self._no_forward_fill_kwargs()
+        freq = self.rh.freq
+        try:
+            for minutes in (1, 2, 3, 4, 5, 7):
+                with self.subTest(minutes=minutes):
+                    self.rh.freq = pd.Timedelta(minutes=minutes)
+                    gaps = self.rh._convert_statistics_to_dataframe(stats, var_list, **kwargs)
+                    filled = self.rh._convert_statistics_to_dataframe(stats, var_list)
+                    utc = gaps.index.tz_convert("UTC")
+                    for entity_id, windows in holes.items():
+                        in_hole = np.zeros(len(utc), dtype=bool)
+                        for start, end in windows:
+                            in_hole |= (utc >= pd.Timestamp(f"2024-01-01 {start}", tz="UTC")) & (
+                                utc < pd.Timestamp(f"2024-01-01 {end}", tz="UTC")
+                            )
+                        is_nan = gaps[entity_id].isna().to_numpy()
+                        if minutes == 7:
+                            # A 7-minute bin can straddle the edge of a hole, so check
+                            # against the rows: a bin is NaN exactly when no row starts in it.
+                            rows = pd.to_datetime(
+                                [r["start"] for r in stats[entity_id]], unit="ms", utc=True
+                            )
+                            nxt = np.minimum(rows.searchsorted(utc), len(rows) - 1)
+                            has_row = (rows[nxt] >= utc) & (rows[nxt] < utc + self.rh.freq)
+                            np.testing.assert_array_equal(is_nan, ~has_row, err_msg=entity_id)
+                        else:
+                            np.testing.assert_array_equal(is_nan, in_hole, err_msg=entity_id)
+                        keep = ~in_hole & ~is_nan
+                        np.testing.assert_array_equal(
+                            gaps[entity_id].to_numpy()[keep], filled[entity_id].to_numpy()[keep]
+                        )
+        finally:
+            self.rh.freq = freq
+
+    # battery_id passes both flags (command_line._retrieve_from_hass).
+    _BATTERY_ID_FLAGS = {"keep_partial_days": True, "keep_websocket_gaps": True}
+
+    async def test_get_data_websocket_keep_websocket_gaps_keeps_gaps(self):
+        """G1 (#1360): battery_id's keep_websocket_gaps=True reaches the websocket path."""
+        stats, var_list, expected_nan = self._ws_gap_stats()
+        gaps = await self._ws_get_data(stats, var_list, **self._BATTERY_ID_FLAGS)
+        self._assert_gaps_only_where_filled(
+            gaps, self._legacy_ws_frame(stats, var_list), expected_nan
+        )
+
+    async def test_get_data_websocket_default_is_unchanged(self):
+        """G2 (#1360): every other websocket retrieval gets today's frame, byte for byte."""
+        stats, var_list, _ = self._ws_gap_stats()
+        df = await self._ws_get_data(stats, var_list)
+        pd.testing.assert_frame_equal(df, self._legacy_ws_frame(stats, var_list))
+
+    async def test_get_data_websocket_keep_websocket_gaps_does_not_leak(self):
+        """G3 (#1360): the flag applies to its own call only, not to later calls."""
+        stats, var_list, expected_nan = self._ws_gap_stats()
+        legacy = self._legacy_ws_frame(stats, var_list)
+        gaps = await self._ws_get_data(stats, var_list, **self._BATTERY_ID_FLAGS)
+        filled = await self._ws_get_data(stats, var_list)
+        pd.testing.assert_frame_equal(filled, legacy)
+        self._assert_gaps_only_where_filled(gaps, legacy, expected_nan)
+
+    async def test_get_data_websocket_keep_partial_days_alone_still_fills(self):
+        """
+        G4 (#1360): keep_partial_days=True on its own (thermal calibration sets it
+        for REST reasons, #1380) leaves the websocket frame forward-filled, byte
+        for byte as before.
+        """
+        stats, var_list, _ = self._ws_gap_stats()
+        df = await self._ws_get_data(stats, var_list, keep_partial_days=True)
+        pd.testing.assert_frame_equal(df, self._legacy_ws_frame(stats, var_list))
+
+    async def test_thermal_calibration_websocket_history_still_forward_fills(self):
+        """
+        T1 (#1360): _load_thermal_from_ha (#1380) also calls get_data with
+        keep_partial_days=True. Over the websocket it must still get the filled
+        frame: a temperature gap keeps its rows at the last value and a heater
+        power gap holds the last value, not 0 W.
+        """
+        stats2, _, _ = self._ws_gap_stats()
+        t_in, t_out, power = "sensor.ws_t_in", "sensor.ws_t_out", "sensor.ws_heater_power"
+        # Indoor and outdoor temperature miss 02:00-04:00, heater power misses
+        # 02:00-04:00 and 10:00-11:00.
+        stats = {t_in: stats2[self._WS_A], t_out: stats2[self._WS_A], power: stats2[self._WS_B]}
+        var_list = [t_in, t_out, power]
+        start = pd.Timestamp("2024-01-01 00:00", tz="UTC")
+        end = pd.Timestamp("2024-01-01 23:59", tz="UTC")
+        cfg = {
+            "dt_minutes": 30,
+            "dt_hours": 0.5,
+            "has_explicit_window": True,
+            "start_utc": start,
+            "end_utc": end,
+            "lookback_hours": 24,
+            "entity_t_in": t_in,
+            "entity_t_out": t_out,
+            "entity_power": power,
+        }
+        rh_conf = {
+            "hass_url": "http://ha.invalid:8123/",
+            "long_lived_token": "token",
+            "time_zone": self.rh.time_zone,
+            "use_websocket": True,
+        }
+        client = MagicMock()
+        client.get_statistics = AsyncMock(return_value=stats)
+        with (
+            patch("emhass.retrieve_hass.get_websocket_client", new=AsyncMock(return_value=client)),
+            patch.object(
+                RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=False)
+            ) as rest,
+        ):
+            df = await utils._load_thermal_from_ha(emhass_conf, {}, rh_conf, cfg, logger)
+        rest.assert_not_called()
+
+        legacy = self._legacy_ws_frame(stats, var_list)
+        expected = pd.DataFrame(
+            {
+                "T_in": legacy[t_in],
+                "T_out": legacy[t_out],
+                "P_def": legacy[power].clip(lower=0.0),
+            },
+            index=legacy.index,
+        )
+        utc = expected.index.tz_convert("UTC")
+        expected = expected.loc[(utc >= start) & (utc <= end)]
+        self.assertEqual(len(df), 48, "rows in a websocket gap were dropped")
+        pd.testing.assert_frame_equal(df, expected, check_freq=False)
+        # The heater power gap is held at the last value, not read as 0 W.
+        held = df.loc[df.index.tz_convert("UTC") == pd.Timestamp("2024-01-01 10:00", tz="UTC")]
+        self.assertGreater(held["P_def"].iloc[0], 0.0)
+
+    async def test_retrieve_from_hass_keep_websocket_gaps_plumbing(self):
+        """G5 (#1360): _retrieve_from_hass sets keep_websocket_gaps for battery_id only."""
+        retrieve_hass_conf = dict(self.retrieve_hass_conf)
+        retrieve_hass_conf["historic_days_to_retrieve"] = 1
+        retrieve_hass_conf["sensor_power_battery"] = "sensor.power_battery"
+        retrieve_hass_conf["sensor_battery_state_of_charge"] = "sensor.battery_soc"
+        mock_rh = MagicMock()
+        mock_rh.get_data = AsyncMock(return_value=True)
+        for set_type, expected in (
+            ("battery_id", True),
+            ("perfect-optim", False),
+            ("naive-mpc-optim", False),
+        ):
+            with self.subTest(set_type=set_type):
+                mock_rh.get_data.reset_mock()
+                await _retrieve_from_hass(
+                    set_type, retrieve_hass_conf, {"set_use_pv": False}, mock_rh, logger
+                )
+                _, call_kwargs = mock_rh.get_data.call_args
+                self.assertIs(call_kwargs.get("keep_websocket_gaps", False), expected)
 
     async def test_get_data_rest_api_errors(self):
         days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")

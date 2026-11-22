@@ -44,6 +44,8 @@ header_auth = "Bearer"
 _RECORDER_COMMIT_GRACE = pd.Timedelta(seconds=10)
 # Rounding of the timestamps Home Assistant returns for the same change.
 _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
+# Each Home Assistant statistics row covers one 5-minute period (period="5minute").
+_STATISTICS_PERIOD = pd.Timedelta(minutes=5)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
 # The forms of the Supervisor proxy URL the code accepts (compared without a trailing slash).
@@ -466,6 +468,7 @@ class RetrieveHass:
         keep_partial_days: bool = False,
         hold_unchanged_tail: bool = False,
         record_staleness: bool = False,
+        keep_websocket_gaps: bool = False,
     ) -> None:
         r"""
         Retrieve the actual data from hass.
@@ -516,6 +519,13 @@ class RetrieveHass:
             self-identification to hold short silences at the last recorded state. \
             All three attributes are emptied at the start of every call. Defaults to False
         :type record_staleness: bool, optional
+        :param keep_websocket_gaps: Only applies to the websocket path. When True, \
+            a time step with no statistics for a variable stays NaN instead of \
+            being filled with the last value, so a stretch without data shows up \
+            as a gap, as it does on REST. Used by battery self-identification \
+            only; every other caller, including those that set keep_partial_days, \
+            gets the forward-filled frame. Defaults to False
+        :type keep_websocket_gaps: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -534,7 +544,9 @@ class RetrieveHass:
 
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
-            success = await self.get_data_websocket(days_list, var_list)
+            success = await self.get_data_websocket(
+                days_list, var_list, keep_websocket_gaps=keep_websocket_gaps
+            )
             if not success:
                 self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
                 # Fall back to REST API if websocket fails
@@ -1095,6 +1107,7 @@ class RetrieveHass:
         self,
         days_list: pd.date_range,
         var_list: list[str],
+        keep_websocket_gaps: bool = False,
     ) -> bool:
         r"""
         Retrieve the actual data from hass.
@@ -1106,6 +1119,11 @@ class RetrieveHass:
             be the exact name of the sensor in Home Assistant. \
             For example: ['sensor.home_load', 'sensor.home_pv']
         :type var_list: list
+        :param keep_websocket_gaps: When True, a time step with no statistics for a \
+            variable stays NaN instead of being filled with the last value, so a \
+            stretch without data shows up as a gap. Used by battery \
+            self-identification only. Defaults to False
+        :type keep_websocket_gaps: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
@@ -1142,7 +1160,9 @@ class RetrieveHass:
             )
 
             # Convert statistics data to DataFrame
-            self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
+            self.df_final = self._convert_statistics_to_dataframe(
+                stats_data, var_list, forward_fill=not keep_websocket_gaps
+            )
 
             t1 = time.time()
             self.logger.info(f"Statistics data retrieval took {t1 - t0:.2f} seconds")
@@ -2789,9 +2809,24 @@ class RetrieveHass:
             return False
 
     def _convert_statistics_to_dataframe(
-        self, stats_data: dict[str, Any], var_list: list[str]
+        self, stats_data: dict[str, Any], var_list: list[str], forward_fill: bool = True
     ) -> pd.DataFrame:
-        """Convert WebSocket statistics data to DataFrame."""
+        r"""
+        Convert WebSocket statistics data to DataFrame.
+
+        :param stats_data: Statistics rows from the websocket, keyed by entity id.
+        :type stats_data: dict[str, Any]
+        :param var_list: Entity ids to include as columns.
+        :type var_list: list[str]
+        :param forward_fill: Fill time steps that have no statistics with the last \
+            value (default). When False they stay NaN, so a stretch without data \
+            is kept as a gap. A time step shorter than the 5-minute statistics \
+            period still takes the value of the row whose period it falls in.
+        :type forward_fill: bool, optional
+        :return: Statistics resampled to the time step, indexed in the local \
+            time zone. Empty when no entity has usable statistics.
+        :rtype: pd.DataFrame
+        """
         import pandas as pd
 
         # Initialize empty DataFrame
@@ -2872,8 +2907,20 @@ class RetrieveHass:
             except Exception as e:
                 self.logger.warning(f"Could not resample data to {self.freq}: {e}")
 
-            # Forward fill missing values
-            df_final = df_final.ffill()
+            # Forward fill missing values. Callers that need to see a stretch with
+            # no statistics as a gap pass forward_fill=False: a missing row there
+            # means no statistics were compiled for that period, not that the value
+            # stayed the same.
+            if forward_fill:
+                df_final = df_final.ffill()
+            else:
+                # Each statistics row covers a 5-minute period. With a time step
+                # shorter than that, hold a row over the steps inside its own period
+                # only, so the normal 5-minute spacing is not read as a gap.
+                # hold = ceil(period / freq) - 1 steps (floor division on the negative).
+                hold = -(-_STATISTICS_PERIOD // pd.Timedelta(self.freq)) - 1
+                if hold > 0:
+                    df_final = df_final.ffill(limit=hold)
 
             # Set frequency for the DataFrame index
             df_final = set_df_index_freq(df_final)
