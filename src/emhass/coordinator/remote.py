@@ -763,14 +763,22 @@ class CommitLog:
             self._prune()
             return [dict(r) for r in self._records.values()]
 
-    def annotate(self, commit_id: str, fields: dict[str, Any]) -> None:
-        """Add its host's own fields to a record (never the core ones)."""
+    def annotate(self, commit_id: str, fields: dict[str, Any]) -> bool | None:
+        """Add its host's own fields to a record (never the core ones).
+        Whether the record has them on disk; None for no such record."""
         core = ("commit_id", "state", "reason", "plan_kw", "horizon", "version")
         with self._lock:
             r = self._records.get(commit_id)
-            if r is not None:
-                r.update({k: v for k, v in fields.items() if k not in core})
-                self._save()
+            if r is None:
+                return None
+            before = dict(r)
+            r.update({k: v for k, v in fields.items() if k not in core})
+            if self._save():
+                return True
+            # not on disk: not in memory either, so a later save never writes it
+            r.clear()
+            r.update(before)
+            return False
 
     def begin(
         self, commit_id: str, plan_kw: list[float], horizon: dict[str, Any] | None = None

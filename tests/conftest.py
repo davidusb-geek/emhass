@@ -52,17 +52,25 @@ def _own_remote_commits(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_plan_stepper_left():
+def _no_plan_stepper_left(monkeypatch):
     """A participant's plan stepper runs a thread: none outlives its test (it
-    would publish into a later test's data folder)."""
-    yield
-    import sys
+    would publish into a later test's data folder, or call a mock that is
+    gone). Every stepper made during the test - registered for a data folder
+    or made directly - is stopped and joined, whether the test passed or not."""
+    from emhass import participant_api
 
-    participant_api = sys.modules.get("emhass.participant_api")
-    if participant_api is not None:
-        steppers = list(getattr(participant_api, "_steppers", {}).values())
-        for stepper in steppers:
-            stepper.stop()
-        for stepper in steppers:  # a slot being published finishes first
-            assert stepper.join(10.0), "a plan stepper did not stop"
-        participant_api._steppers.clear()
+    made = []
+    init = participant_api.PlanStepper.__init__
+
+    def tracked(self, *a, **k):
+        init(self, *a, **k)
+        made.append(self)
+
+    monkeypatch.setattr(participant_api.PlanStepper, "__init__", tracked)
+    yield
+    steppers = made + [s for s in participant_api._steppers.values() if s not in made]
+    for stepper in steppers:
+        stepper.stop()
+    for stepper in steppers:  # a slot being published finishes first
+        assert stepper.join(10.0), "a plan stepper did not stop"
+    participant_api._steppers.clear()

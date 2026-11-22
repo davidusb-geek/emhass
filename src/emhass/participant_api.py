@@ -17,6 +17,7 @@ in the secrets, which every call must present.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import json
@@ -30,6 +31,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+import numpy as np
 import orjson
 import pandas as pd
 
@@ -258,10 +260,10 @@ async def publish_commit(
 
     async def record(idd: dict) -> None:
         # The latest plan, whole, only once it is published.
+        if on_snapshot is not None:
+            on_snapshot()  # before anything of the latest plan changes
         csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
         await utils.replace_file(csv, res.to_csv(index_label="timestamp"))
-        if on_snapshot is not None:
-            on_snapshot()
         _record_optim_snapshot(idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger)
         if on_recorded is not None:
             on_recorded(
@@ -610,6 +612,45 @@ _STARTED = time.time()  # when this process started (near enough: this import)
 SNAPSHOT_S = 10.0  # a commit's own snapshot is saved within this of noting it
 
 
+def _is_saved_plan(emhass_conf: dict, res: pd.DataFrame) -> bool:
+    """Whether the latest plan saved is `res` (a commit's plan, read back from
+    the copy kept for it): the same slots and, in every column of it, the same
+    values. A plan of this EMHASS's own differs; one that did not would be
+    the same plan."""
+    latest = plan_store.read(pathlib.Path(emhass_conf["data_path"]))
+    rows = (latest or {}).get("plan")
+    if not isinstance(rows, list) or len(rows) != len(res):
+        return False
+    try:
+        saved = pd.DataFrame(rows)
+        if "timestamp" not in saved or not len(saved):
+            return False
+        stamps = pd.DatetimeIndex(pd.to_datetime(saved.pop("timestamp"), utc=True))
+        # the same instants, whatever unit each was read with (pandas 3 infers it)
+        mine_at = _utc_index(res)
+        if len(stamps) != len(mine_at) or not bool((stamps == mine_at).all()):
+            return False
+        for col in res.columns:
+            if col not in saved:
+                return False
+            mine, theirs = res[col], saved[col]
+            if pd.api.types.is_numeric_dtype(mine) and pd.api.types.is_numeric_dtype(theirs):
+                a = np.asarray(mine, dtype=float)
+                b = np.asarray(theirs, dtype=float)
+                # the saved plan's JSON writes inf as null: any non-finite is NaN
+                a = np.where(np.isfinite(a), a, np.nan)
+                b = np.where(np.isfinite(b), b, np.nan)
+                if not np.allclose(a, b, rtol=1e-9, atol=1e-9, equal_nan=True):
+                    return False
+            elif [None if pd.isna(x) else str(x) for x in mine] != [
+                None if pd.isna(x) else str(x) for x in theirs
+            ]:
+                return False
+    except (ValueError, TypeError, KeyError):
+        return False
+    return True
+
+
 def _saved_between(stamp, since, stop) -> bool:
     """Whether a save stamp (generated_at) is a commit's own snapshot: from
     `since` (when it noted it was saving one, a time.time()) to SNAPSHOT_S
@@ -791,10 +832,14 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         # the live-optimization slot), and before the stop: then the stop came
         # before its stamp could be noted. Any other is this EMHASS's own,
         # whichever process saved it.
-        if saved != stamp and _saved_between(
-            saved,
-            last.get("snapshot_at"),
-            last.get("interrupted_at", _STARTED),
+        if (
+            saved != stamp
+            and _saved_between(
+                saved,
+                last.get("snapshot_at"),
+                last.get("interrupted_at", _STARTED),
+            )
+            and _is_saved_plan(emhass_conf, res)
         ):
             stamp = saved
         log.annotate(last["commit_id"], {"plan_stamp": stamp, "interrupted": False})
@@ -908,16 +953,28 @@ def make_service(
         # what it is made over, and the prefix it is published under, in its
         # record before anything is published: a restart part way through
         # leaves it the right stamp, and a later resume the right prefix
-        log.annotate(
+        kept_record = log.annotate(
             commit_id,
             {"plan_stamp": before, "participant_api": params["optim_conf"].get("participant_api")},
         )
+        if kept_record is False:
+            # A restart would not know what it was made over: never published.
+            # Nor kept: its record may still read running on disk, and a
+            # restart then finds no plan of it, so knows nothing of it ran.
+            with contextlib.suppress(OSError):  # the disk refusing is why: refused all the same
+                path.unlink(missing_ok=True)
+            return "refused", "its record could not be saved; nothing was published"
 
         def recorded(stamp):  # the plan saved as its own: its stamp at once
             log.annotate(commit_id, {"plan_stamp": stamp})
 
-        def snapshotting():  # about to save it as its own: a stop now is told apart
-            log.annotate(commit_id, {"snapshot_at": time.time()})
+        def snapshotting():
+            # About to save it as the latest plan: noted first, so a stop
+            # after is told apart from a plan of this EMHASS's own. Not
+            # noted, not saved: it is then published part way, the plan
+            # before it still the latest, which a restart resumes it over.
+            if log.annotate(commit_id, {"snapshot_at": time.time()}) is False:
+                raise OSError("the commit's record could not be saved")
 
         try:
             state, why = asyncio.run(
