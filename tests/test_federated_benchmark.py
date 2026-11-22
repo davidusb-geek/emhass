@@ -2,6 +2,7 @@
 it leaves out (a fallback, a solve that published no plan)."""
 
 import importlib.util
+import math
 import pathlib
 import types
 
@@ -26,9 +27,7 @@ def test_the_milp_is_read_from_the_plan_it_published():
     opt = types.SimpleNamespace(solved_value=-5.0, optim_status="Optimal (Relaxed)")
     assert bench._objective(opt, capture, "cvxpy", None) == 5.0
     failed = types.SimpleNamespace(solved_value=-5.0, optim_status="Infeasible")
-    assert bench._objective(failed, capture, "cvxpy", None) != bench._objective(
-        failed, capture, "cvxpy", None
-    )  # NaN
+    assert math.isnan(bench._objective(failed, capture, "cvxpy", None))
 
 
 def test_a_coordinated_run_that_fell_back_is_not_compared(capsys):
@@ -37,7 +36,7 @@ def test_a_coordinated_run_that_fell_back_is_not_compared(capsys):
     capture = bench._Capture()
     capture.result = types.SimpleNamespace(upper=1.0)  # the coordinator had planned
     cost = bench._objective(None, capture, "dantzig_wolfe", _res("cvxpy", "a limit, 0.2 kWh"))
-    assert cost != cost  # NaN
+    assert math.isnan(cost)
     out = capsys.readouterr().out
     assert "not compared" in out and "a limit, 0.2 kWh" in out
     assert bench._objective(None, capture, "dantzig_wolfe", _res("dantzig_wolfe")) == 1.0
@@ -66,7 +65,7 @@ def test_a_pair_that_straddles_a_slot_is_run_again(capsys):
         return (1.0, 0.1, next(n))
 
     milp, coord = bench._pair(drifting, tries=2)
-    assert coord[0] != coord[0]  # NaN: not compared
+    assert math.isnan(coord[0])  # not compared
     assert "not compared" in capsys.readouterr().out
 
 
