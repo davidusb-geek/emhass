@@ -332,6 +332,81 @@ def test_a_load_group_across_groups_is_held_and_priced():
     assert "fed_limit_price_deferrable0+deferrable1" in res.columns
 
 
+@pytest.mark.parametrize(
+    "group, reason",
+    [
+        (
+            {"names": ["deferrable0", "deferrable1"], "max_power": [3000.0] * 48},
+            "deferrable_load_groups ['deferrable0', 'deferrable1']: a per-step max_power list "
+            "across participants",
+        ),
+        (
+            {
+                "names": ["deferrable0", "deferrable1"],
+                "max_power": 3000,
+                "weights": {"deferrable1": 0.5},
+            },
+            "deferrable_load_groups ['deferrable0', 'deferrable1']: weights across participants",
+        ),
+        (
+            {"names": ["deferrable0", "battery0"], "max_power": 4000},
+            "deferrable_load_groups ['deferrable0', 'battery0']: a battery member ['battery0']",
+        ),
+    ],
+    ids=["per_step_list", "weights", "battery_member"],
+)
+def test_a_load_group_feature_the_coordinator_cannot_plan_falls_back(group, reason):
+    """deferrable_load_groups features (#1366) the coordinator does not plan
+    across participants (a per-step max_power list, weights) or at all (a
+    battery member): the default solver plans exactly its own plan, the
+    reason names the feature, and nothing is logged as an error."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    assert len(data) == 48
+    site = (rh, dict(oc, deferrable_load_groups=[group]), pc, data, pv, load, buy, sell)
+    _, milp = _plan(*site)
+    with (
+        mock.patch.object(logger, "error") as error,
+        mock.patch.object(logger, "warning") as warning,
+    ):
+        _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    _fell_back(res, milp, reason)
+    error.assert_not_called()
+    assert any(reason in str(c) for c in warning.call_args_list)
+
+
+def test_a_one_entry_load_group_list_plans_as_the_number_does():
+    """A one-entry max_power list is the same limit as the number (#1366):
+    the coordinator holds it and makes the plan it makes for the number."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    plans = []
+    for max_power in (3000, [3000.0]):
+        groups = [{"names": ["deferrable0", "deferrable1"], "max_power": max_power}]
+        site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
+        _, res = _plan(*site, optimization_backend="dantzig_wolfe")
+        why = res["backend_fallback_reason"].iloc[0]
+        assert (res["backend_used"] == "dantzig_wolfe").all(), why
+        assert (res["P_deferrable0"] + res["P_deferrable1"]).max() <= 3000 + 1e-3
+        plans.append(res)
+    pd.testing.assert_frame_equal(plans[0], plans[1])
+
+
+def test_a_weighted_load_group_inside_one_participant_keeps_its_weight():
+    """A weighted group (#1366) whose loads are all one participant's stays in
+    that participant's own model, which numbers its loads from 0: the weight
+    follows the load. deferrable1 (750 W, 2 h, on/off) under a 375 W budget
+    can only run at weight 0.5, so the plan runs it its hours within 0.5 x
+    its power <= 375."""
+    rh, oc, pc, data, pv, load, buy, sell = _site()
+    groups = [{"names": ["deferrable1"], "max_power": 375, "weights": {"deferrable1": 0.5}}]
+    site = (rh, dict(oc, deferrable_load_groups=groups), pc, data, pv, load, buy, sell)
+    opt, res = _plan(*site, optimization_backend="dantzig_wolfe")
+    assert (res["backend_used"] == "dantzig_wolfe").all(), res["backend_fallback_reason"].iloc[0]
+    assert opt.optim_status in ("Optimal", "Optimal_Inaccurate")
+    assert res["P_deferrable1"].sum() * 0.5 == pytest.approx(750.0 * 2, rel=1e-6)
+    assert (0.5 * res["P_deferrable1"]).max() <= 375 + 1e-3
+    assert res["P_deferrable1"].max() > 375 + 1
+
+
 def test_a_site_limit_holds_and_is_priced():
     """A limit over the two loads (each planned on its own): their total stays
     within 3.5 kW and its premium is fed_limit_price_<id>; a group that sits
