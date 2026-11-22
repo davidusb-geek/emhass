@@ -332,7 +332,7 @@ The forecast is often already AC. The built-in PVLib forecast includes the `pv_i
 
 If you pass an AC forecast at runtime (`pv_power_forecast`, see [Passing data](passing_data.md)), divide each value by `inverter_efficiency_dc_ac` before you send it, or each inverter's series by that inverter's efficiency when there is more than one. A forecast that is already DC, before the inverter, needs no change. At 0.97, sending 1030.9 W gives 1000 W of AC. `P_PV` in the results and the published `sensor.p_pv_forecast` then show the divided values, about 3 % above the AC you will measure. Keep in mind:
 
-- On a hybrid, don't set the efficiency to 1.0 instead: it also covers battery discharge. A PV-only inverter (above one inverter) has no battery behind it, so with an AC forecast its `inverter_efficiency_dc_ac` entry can simply stay at 1.0.
+- On a hybrid, don't set the efficiency to 1.0 instead: it also covers battery discharge. A PV-only inverter (above one inverter) has no battery behind it, so with an AC forecast its `inverter_efficiency_dc_ac` entry can simply be 1.0.
 - With a `dc_ac` curve the loss changes with power, so one factor is only approximate.
 - Dividing can't bring back PV that the forecast already clipped at its inverter's rating, and a forecast EMHASS gets itself (the built-in PVLib one, or Solcast through `weather_forecast_method`) can't be scaled this way.
 - With `set_use_adjusted_pv` on, the forecast, a runtime one included, is refitted to `sensor_power_photovoltaics` after you send it, so the division may not carry through and the plan follows what that sensor measures. If it reads the hybrid's DC PV input, the adjusted forecast is already close to DC and there is nothing to divide.
