@@ -1416,11 +1416,7 @@ class TestWebsocketGapsReachIdentify(unittest.IsolatedAsyncioTestCase):
 
     async def _retrieve(self, stats: dict, retrieve_hass_conf: dict) -> pd.DataFrame:
         """battery_id retrieval through the real entry point, websocket client faked."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from emhass.retrieve_hass import RetrieveHass
-
-        rh = RetrieveHass(
+        rh = command_line.RetrieveHass(
             "http://ha.invalid:8123",
             "token",
             pd.Timedelta("30min"),
@@ -1429,11 +1425,18 @@ class TestWebsocketGapsReachIdentify(unittest.IsolatedAsyncioTestCase):
             {},
             self.logger,
         )
-        client = MagicMock()
-        client.get_statistics = AsyncMock(return_value=stats)
+        client = unittest.mock.MagicMock()
+        client.get_statistics = unittest.mock.AsyncMock(return_value=stats)
         with (
-            patch("emhass.retrieve_hass.get_websocket_client", new=AsyncMock(return_value=client)),
-            patch.object(RetrieveHass, "_get_data_rest_api", new=AsyncMock(return_value=False)),
+            unittest.mock.patch(
+                "emhass.retrieve_hass.get_websocket_client",
+                new=unittest.mock.AsyncMock(return_value=client),
+            ),
+            unittest.mock.patch.object(
+                command_line.RetrieveHass,
+                "_get_data_rest_api",
+                new=unittest.mock.AsyncMock(return_value=False),
+            ),
         ):
             ok, df, _ = await command_line.retrieve_home_assistant_data(
                 "battery_id",
