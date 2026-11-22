@@ -8782,13 +8782,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
         unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
 
+        p_pv = self.p_pv_forecast.values.ravel()
+        p_load = self.p_load_forecast.values.ravel()
         with self.assertRaises(ValueError):
             opt.perform_optimization(
-                self.df_input_data_dayahead,
-                self.p_pv_forecast.values.ravel(),
-                self.p_load_forecast.values.ravel(),
-                unit_load_cost,
-                unit_prod_price,
+                self.df_input_data_dayahead, p_pv, p_load, unit_load_cost, unit_prod_price
             )
 
     def test_thermal_battery_inertia_q_input_initial(self):
@@ -9462,14 +9460,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # If this fails, the solver is "leaking" energy from the battery to satisfy SOC constraints
         # without passing it through the inverter variable to avoid the stress cost.
         for name, res in [("No Stress", opt_res_no_stress), ("With Stress", opt_res_with_stress)]:
-            try:
+            with self.subTest(optimization=name):
                 assert_series_equal(
                     res["P_batt"], res["P_hybrid_inverter"], check_names=False, atol=1e-3
-                )
-            except AssertionError as e:
-                self.fail(
-                    f"{name} optimization failed P_batt == P_hybrid_inverter check. "
-                    f"Likely missing constraint on P_hybrid_inverter.\n{e}"
                 )
 
         # Without stress cost: should discharge at max power in the most expensive period
@@ -9991,18 +9984,15 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         def_end_timestep = [n_steps] * 7
 
         # Run Optimization
-        try:
-            opt_res = opt.perform_naive_mpc_optim(
-                df_extended,
-                P_PV,
-                P_Load,
-                prediction_horizon=n_steps,
-                def_total_timestep=def_total_timestep,
-                def_start_timestep=def_start_timestep,
-                def_end_timestep=def_end_timestep,
-            )
-        except Exception as e:
-            self.fail(f"Complex optimization failed with error: {e}")
+        opt_res = opt.perform_naive_mpc_optim(
+            df_extended,
+            P_PV,
+            P_Load,
+            prediction_horizon=n_steps,
+            def_total_timestep=def_total_timestep,
+            def_start_timestep=def_start_timestep,
+            def_end_timestep=def_end_timestep,
+        )
 
         # Assertions - accept both Optimal (MIP gap may help) and Optimal (Relaxed)
         status = opt_res["optim_status"].iloc[0]
@@ -10309,16 +10299,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
         unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
 
-        try:
-            self.opt_res_dayahead = self.opt.perform_optimization(
-                self.df_input_data_dayahead,
-                self.p_pv_forecast.values.ravel(),
-                self.p_load_forecast.values.ravel(),
-                unit_load_cost,
-                unit_prod_price,
-            )
-        except Exception as e:
-            self.fail(f"Optimization failed when handling NaN temperatures: {e}")
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
 
         # SUCCESS CRITERIA: The optimization finished without crashing
         self.assertEqual(self.opt.optim_status, "Optimal")
@@ -10360,16 +10347,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
         unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
 
-        try:
-            self.opt.perform_optimization(
-                self.df_input_data_dayahead,
-                self.p_pv_forecast.values.ravel(),
-                self.p_load_forecast.values.ravel(),
-                unit_load_cost,
-                unit_prod_price,
-            )
-        except Exception as e:
-            self.fail(f"Optimization failed with partial NaN data: {e}")
+        self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
         self.assertEqual(self.opt.optim_status, "Optimal")
 
     def test_thermal_battery_soft_constraints(self):
