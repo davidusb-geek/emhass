@@ -10,6 +10,8 @@ import pandas as pd
 
 from emhass import web_server
 
+from .snapshot_state_support import isolated_snapshot_state
+
 # Disable logging propagation to avoid spamming console during tests
 logging.getLogger("quart.app").setLevel(logging.CRITICAL)
 logging.getLogger("emhass").setLevel(logging.CRITICAL)
@@ -28,19 +30,19 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             "legacy_config_path": pathlib.Path("/tmp/emhass/legacy.yaml"),
             "root_path": pathlib.Path("/tmp/emhass/root"),
         }
-        # Save original config to prevent leaks
-        self.original_conf = web_server.emhass_conf.copy()
-        web_server.emhass_conf = self.mock_conf
-        # Mock params_secrets
-        web_server.params_secrets = {"hass_url": "http://localhost", "long_lived_token": "token"}
-        # Save original handlers to restore later
-        self.original_handlers = web_server.app.logger.handlers[:]
-
-    async def asyncTearDown(self):
-        # Restore original config
-        web_server.emhass_conf = self.original_conf
-        # Restore original log handlers to prevent 'MagicMock' level errors in subsequent tests
-        web_server.app.logger.handlers = self.original_handlers
+        # Each patch is undone after the test, even if setup fails part-way.
+        self.enterContext(patch.object(web_server, "emhass_conf", self.mock_conf))
+        self.enterContext(
+            patch.object(
+                web_server,
+                "params_secrets",
+                {"hass_url": "http://localhost", "long_lived_token": "token"},
+            )
+        )
+        # Restoring the log handlers prevents 'MagicMock' level errors in subsequent tests
+        self.enterContext(
+            patch.object(web_server.app.logger, "handlers", web_server.app.logger.handlers[:])
+        )
 
     def test_mark_safe(self):
         self.assertEqual(web_server.mark_safe(None), "")
@@ -978,20 +980,9 @@ class TestAPIV1LastRun(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.client = web_server.app.test_client()
-        self.original_conf = web_server.emhass_conf.copy()
         self.tmp_path = pathlib.Path(tempfile.mkdtemp())
-        web_server.emhass_conf = {
-            "data_path": self.tmp_path,
-        }
-        from emhass import last_run
-
-        last_run._cache = None
-
-    async def asyncTearDown(self):
-        web_server.emhass_conf = self.original_conf
-        from emhass import last_run
-
-        last_run._cache = None
+        self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": self.tmp_path}))
+        self.enterContext(isolated_snapshot_state())
 
     async def test_api_v1_last_run_no_run(self):
         """GET before any optim returns 200 with status='no-run' and nullable fields."""
@@ -1096,20 +1087,9 @@ class TestAPIV1Plan(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.client = web_server.app.test_client()
-        self.original_conf = web_server.emhass_conf.copy()
         self.tmp_path = pathlib.Path(tempfile.mkdtemp())
-        web_server.emhass_conf = {
-            "data_path": self.tmp_path,
-        }
-        from emhass import plan_store
-
-        plan_store._cache = None
-
-    async def asyncTearDown(self):
-        web_server.emhass_conf = self.original_conf
-        from emhass import plan_store
-
-        plan_store._cache = None
+        self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": self.tmp_path}))
+        self.enterContext(isolated_snapshot_state())
 
     async def test_api_v1_plan_no_run(self):
         """GET before any optim returns 200 with status='no-run' and null plan."""
@@ -1164,13 +1144,11 @@ class TestHealthz(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.client = web_server.app.test_client()
-        self.original_conf = web_server.emhass_conf.copy()
-        web_server.emhass_conf = {"data_path": pathlib.Path(tempfile.mkdtemp())}
+        self.enterContext(
+            patch.object(web_server, "emhass_conf", {"data_path": pathlib.Path(tempfile.mkdtemp())})
+        )
         # before_serving may not run under test_client(); set boot_ts explicitly
-        web_server.app.config["boot_ts"] = "2026-05-29T08:00:00Z"
-
-    async def asyncTearDown(self):
-        web_server.emhass_conf = self.original_conf
+        self.enterContext(patch.dict(web_server.app.config, {"boot_ts": "2026-05-29T08:00:00Z"}))
 
     def _snap(self, status="ok", ts="2026-05-29T09:55:00Z"):
         return {
@@ -1272,6 +1250,8 @@ class TestBootTs(unittest.IsolatedAsyncioTestCase):
         self, mock_init, _mock_auth
     ):
         mock_init.side_effect = RuntimeError("init boom")
+        # before_serving sets boot_ts; patch.dict removes it again afterwards
+        self.enterContext(patch.dict(web_server.app.config))
         web_server.app.config.pop("boot_ts", None)
         await web_server.before_serving()  # before_serving catches the init error and continues
         boot_ts = web_server.app.config.get("boot_ts")
@@ -1304,14 +1284,9 @@ class TestHealthzSchema(unittest.TestCase):
 class TestThermalCalibrationAndUiMetadata(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client = web_server.app.test_client()
-        self._orig_data_path = web_server.emhass_conf.get("data_path")
-        web_server.emhass_conf["data_path"] = pathlib.Path("/tmp/test_data")
-
-    async def asyncTearDown(self):
-        if self._orig_data_path is None:
-            web_server.emhass_conf.pop("data_path", None)
-        else:
-            web_server.emhass_conf["data_path"] = self._orig_data_path
+        self.enterContext(
+            patch.dict(web_server.emhass_conf, {"data_path": pathlib.Path("/tmp/test_data")})
+        )
 
     @patch("emhass.web_server._save_injection_dict", new_callable=AsyncMock)
     @patch("emhass.web_server.get_injection_dict_thermal_calibration", return_value={"title": "ok"})

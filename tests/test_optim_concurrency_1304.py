@@ -18,8 +18,13 @@ import pandas as pd
 from emhass import command_line, last_run, plan_store, utils, web_server
 from emhass.atomic_file import atomic_write
 
+from .snapshot_state_support import isolated_snapshot_state
+
 
 class TestAtomicResults(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(isolated_snapshot_state())
+
     def test_reader_sees_old_complete_csv_until_new_complete_csv_is_replaced(self):
         with TemporaryDirectory() as directory:
             target = Path(directory) / "opt_res_latest.csv"
@@ -217,34 +222,25 @@ class TestAtomicResults(unittest.TestCase):
     def test_json_snapshots_are_valid_and_reads_follow_another_workers_write(self):
         with TemporaryDirectory() as directory:
             data = Path(directory)
-            last_run._cache = None
-            plan_store._cache = None
-            try:
-                ts = last_run.record(
-                    data,
-                    action=last_run.ACTION_NAIVE_MPC_OPTIM,
-                    stage_times={},
-                    optim_status="Optimal",
-                    infeasible=False,
-                    duration_total_seconds=1.0,
-                    schema_version="1.0",
-                )
-                plan_store.record(
-                    data, plan=[{"P_grid": 42}], generated_at=ts, schema_version="1.0"
-                )
-                # Simulate a second worker which has already cached a previous run.
-                last_run._cache = {"timestamp": "stale"}
-                plan_store._cache = {"generated_at": "stale"}
-                self.assertEqual(last_run.read(data)["timestamp"], ts)
-                self.assertEqual(plan_store.read(data)["generated_at"], ts)
-                self.assertEqual(json.loads((data / "last_run.json").read_text())["timestamp"], ts)
-                self.assertEqual(
-                    json.loads((data / "plan_latest.json").read_text())["generated_at"], ts
-                )
-            finally:
-                last_run._cache = None
-                plan_store._cache = None
-                last_run._unpersisted = plan_store._unpersisted = False
+            ts = last_run.record(
+                data,
+                action=last_run.ACTION_NAIVE_MPC_OPTIM,
+                stage_times={},
+                optim_status="Optimal",
+                infeasible=False,
+                duration_total_seconds=1.0,
+                schema_version="1.0",
+            )
+            plan_store.record(data, plan=[{"P_grid": 42}], generated_at=ts, schema_version="1.0")
+            # Simulate a second worker which has already cached a previous run.
+            last_run._cache = {"timestamp": "stale"}
+            plan_store._cache = {"generated_at": "stale"}
+            self.assertEqual(last_run.read(data)["timestamp"], ts)
+            self.assertEqual(plan_store.read(data)["generated_at"], ts)
+            self.assertEqual(json.loads((data / "last_run.json").read_text())["timestamp"], ts)
+            self.assertEqual(
+                json.loads((data / "plan_latest.json").read_text())["generated_at"], ts
+            )
 
 
 class TestAtomicSymlinkDestination(unittest.TestCase):
@@ -274,12 +270,7 @@ class TestSnapshotOrdering(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.data = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
-        # Isolate all three snapshot fields, restoring prior process state
-        # even if a test exits early or raises.
-        for module in (last_run, plan_store):
-            self.enterContext(patch.object(module, "_cache", None))
-            self.enterContext(patch.object(module, "_unpersisted", False))
-            self.enterContext(patch.object(module, "_persisted", None))
+        self.enterContext(isolated_snapshot_state())
 
     @staticmethod
     def _reset():
@@ -414,10 +405,7 @@ class TestLiveOptimizationSlot(unittest.IsolatedAsyncioTestCase):
         self.data_path = Path(self.tmp.name)
         self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": self.data_path}))
         self.client = web_server.app.test_client()
-        for module in (last_run, plan_store):
-            self.enterContext(patch.object(module, "_cache", None))
-            self.enterContext(patch.object(module, "_unpersisted", False))
-            self.enterContext(patch.object(module, "_persisted", None))
+        self.enterContext(isolated_snapshot_state())
 
     async def test_second_live_request_gets_429_and_cannot_overwrite_first_plan(self):
         started = asyncio.Event()
