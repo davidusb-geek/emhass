@@ -7462,6 +7462,14 @@ async def build_secrets(
                         f"Directory {default_config_path.parent} does not exist, keeping current legacy default"
                     )
 
+            if (
+                not no_response
+                and os.getenv("SUPERVISOR_TOKEN", None) is not None
+                and os.getenv("EMHASS_KEY")
+                and url_from_options not in ("empty", "")
+            ):
+                params_secrets["hass_url"] = url_from_options
+
             # Check to use Home Assistant local API
             if (
                 not no_response
