@@ -4495,8 +4495,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_deferrable_load_groups_runtime_no_op_shapes_pass(self):
         """Runtime group shapes that always built as "nothing to add" still pass the
-        final check: no groups as "", {}, 0 or false, a group with neither field, and a
-        null mutual_exclusion read as false (#1366)."""
+        final check: no groups as "", {}, 0 or false, a group with neither field (a
+        repeated name included), and a null mutual_exclusion read as false (#1366)."""
         d01 = ["deferrable0", "deferrable1"]
         for groups in (
             "",
@@ -4505,6 +4505,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             False,
             [{"names": d01}],
             [{"names": d01, "max_power": 4000, "mutual_exclusion": None}],
+            [{"names": ["deferrable0", "deferrable0"]}],
+            [{"names": ["deferrable0", "deferrable0"], "mutual_exclusion": None}],
         ):
             with self.subTest(groups=groups):
                 _, _, optim_conf, _ = await self._treat_with_groups(
@@ -4565,6 +4567,21 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             False,
             [battery_group],
             [{"names": ["deferrable0", "battery0"], "max_power": 5000, "weights": {}}],
+            # An unsigned NumPy charge must not wrap around when negated.
+            [
+                {
+                    "names": ["deferrable0", "battery0"],
+                    "max_power": 5000,
+                    "weights": {"battery0": {"charge": np.uint8(1), "discharge": -1.0}},
+                }
+            ],
+            [
+                {
+                    "names": ["deferrable0", "battery0"],
+                    "max_power": 5000,
+                    "weights": {"battery0": {"charge": np.uint64(1), "discharge": -0.5}},
+                }
+            ],
             [{"names": ["deferrable0"], "max_power": 5000, "note": "unknown keys are ignored"}],
             [{"names": ["deferrable0"], "max_power": float("inf")}],
             [
@@ -4599,6 +4616,11 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             [{"names": ["deferrable0", "deferrable1"]}],
             [{"names": ["deferrable0", "deferrable1"], "mutual_exclusion": False}],
             [{"names": ["deferrable0"], "max_power": 5000, "mutual_exclusion": None}],
+            # A repeated name in such a group adds nothing either (a heat_topology
+            # actuator group can list the same flow twice).
+            [{"names": ["deferrable0", "deferrable0"]}],
+            [{"names": ["deferrable0", "deferrable 0"], "mutual_exclusion": False}],
+            [{"names": ["deferrable0", "deferrable0"], "mutual_exclusion": None}],
         ]
         for groups in both:
             for config_file in (True, False):
@@ -4622,6 +4644,8 @@ class TestCheckDeferrableLoadGroups(unittest.TestCase):
             ("battery with underscore", [{"names": [d0, "battery_0"], "max_power": 1}], {}, {}),
             ("load out of range", [{"names": ["deferrable3"], "max_power": 1}], {}, {}),
             ("duplicate", [{"names": [d0, "deferrable 0"], "max_power": 1}], {}, {}),
+            ("duplicate in a list budget", [{"names": [d0, d0], "max_power": [1]}], {}, {}),
+            ("duplicate in a mutex", [{"names": [d0, d0], "mutual_exclusion": True}], {}, {}),
             ("battery only", [{"names": ["battery0"], "max_power": 1}], {}, {}),
             (
                 "battery in mutex",

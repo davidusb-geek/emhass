@@ -11449,12 +11449,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((combined <= np.array(limits) + 1e-3).all())
         prob = opt.prob
         # Swap the halves: the same problem object, the new values bind.
-        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = limits[24:] + limits[:24]
+        swapped = limits[24:] + limits[:24]
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = swapped
         res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
         self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
         self.assertIs(opt.prob, prob)
         combined = (res["P_deferrable0"] + res["P_deferrable1"]).to_numpy()
-        self.assertTrue((combined[:24] <= 1e-3).all())
+        self.assertTrue((combined <= np.array(swapped) + 1e-3).all())
         self.assertGreater(combined[24:].max(), 1)
         # Back to a scalar: the Parameter is dropped and the problem is rebuilt.
         opt.optim_conf["deferrable_load_groups"][0]["max_power"] = 2500.0
@@ -11568,21 +11569,27 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_deferrable_load_group_forced_power_above_budget_fails_clearly(self):
         """Power forced into a step above the group's max_power ends Infeasible, as
-        before, and the log names the budget groups as the likely cause (#1366)."""
+        before, and the log names the budget groups as the likely cause (#1366). The
+        budget is only below the pin at the first step, so without the pin the same
+        case solves."""
         self.optim_conf.update(
             {
                 "treat_deferrable_load_as_semi_cont": [False, False],
                 "operating_hours_of_each_deferrable_load": [2, 0],
                 "deferrable_load_groups": [
-                    {"names": ["deferrable0", "deferrable1"], "max_power": [0.0] * 48}
+                    {"names": ["deferrable0", "deferrable1"], "max_power": [500.0] + [5000.0] * 47}
                 ],
             }
         )
+        df = self.prepare_forecast_data()
+        opt = self.create_optimization()
+        opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Pin load 0 at 1500 W now (below its nominal power, so the pin is kept).
+        self.optim_conf["def_current_power"] = [1500.0, 0.0]
         opt = self.create_optimization()
         with self.assertLogs(logger, level="WARNING") as logs:
-            opt.perform_dayahead_forecast_optim(
-                self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
-            )
+            opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
         self.assertEqual(opt.optim_status, "Infeasible")
         self.assertTrue(
             any("deferrable_load_groups [0] set a max_power" in line for line in logs.output),
@@ -11851,6 +11858,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 {},
                 [{"names": d01, "mutual_exclusion": False}],
             ),
+            "no-op group with a repeated name": (
+                {},
+                [{"names": ["deferrable0", "deferrable0"], "mutual_exclusion": False}],
+            ),
             "mutual_exclusion null": (
                 {},
                 [{"names": d01, "max_power": 2500, "mutual_exclusion": None}],
@@ -11884,6 +11895,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     if hasattr(old_value, "toarray"):
                         self.assertEqual(old_value.shape, new_value.shape, key)
                         self.assertEqual((old_value != new_value).nnz, 0, key)
+                    elif isinstance(old_value, list):
+                        # bool_vars_idx and int_vars_idx: the same integer columns.
+                        self.assertEqual(old_value, new_value, key)
                     elif isinstance(old_value, np.ndarray):
                         # A no-limit step goes into the Parameter as a finite value
                         # that never binds (cvxpy before 1.9 refuses inf there); the

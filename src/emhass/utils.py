@@ -7691,7 +7691,8 @@ def _check_group_battery_weight(weight, label: str) -> None:
     discharge = weight.get("discharge", 0.0)
     if not _is_real_number(charge) or not 0 < charge <= 1:
         raise ValueError(f"{label}: 'charge' must be a number above 0 and at most 1")
-    if not _is_real_number(discharge) or not -charge <= discharge <= 0:
+    # float() first: negating an unsigned NumPy charge would wrap around.
+    if not _is_real_number(discharge) or not -float(charge) <= discharge <= 0:
         raise ValueError(f"{label}: 'discharge' must be a number from minus 'charge' to 0")
 
 
@@ -7714,6 +7715,15 @@ def _deferrable_group_problem(
         num_def_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
     except (TypeError, ValueError):
         num_def_loads = 0
+    # On the final parameters a group with neither a budget nor mutual exclusion
+    # adds nothing, so a repeated name there stays harmless, as it always was (a
+    # heat_topology actuator group can list the same flow twice).
+    raw_mutex = group.get("mutual_exclusion", False)
+    no_op_final = (
+        not config_file
+        and group.get("max_power") is None
+        and (raw_mutex is None or raw_mutex is False)
+    )
     members = []
     seen = set()
     for j, name in enumerate(names):
@@ -7728,7 +7738,7 @@ def _deferrable_group_problem(
                 f"{prefix} names[{j}] refers to a deferrable load that is not configured "
                 f"(number_of_deferrable_loads is {num_def_loads})"
             )
-        if (kind, idx) in seen:
+        if (kind, idx) in seen and not no_op_final:
             return f"{prefix} names[{j}] is duplicated within the group"
         seen.add((kind, idx))
         members.append((kind, idx))
@@ -7856,9 +7866,9 @@ def check_deferrable_load_groups(
     checked against the horizon by the optimizer), mutual exclusion groups may
     overlap, as runtime and heat_topology groups always could, and a group with
     neither ``max_power`` nor mutual exclusion (``mutual_exclusion`` false or null)
-    is accepted and adds nothing, as before. A missing or empty
-    ``deferrable_load_groups`` (any false value, 0 included) means no groups on both
-    paths.
+    is accepted and adds nothing, as before, even with a repeated name. A missing or
+    empty ``deferrable_load_groups`` (any false value, 0 included) means no groups on
+    both paths.
 
     The first fault is raised as ``error_cls``; the message names the group and
     member by position and never repeats a value from the request.
