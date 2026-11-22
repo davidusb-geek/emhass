@@ -920,7 +920,9 @@ class RetrieveHass:
                 )
             else:
                 self.logger.error(
-                    "No valid authentication token found. Set a long_lived_token or run as a HA addon."
+                    "No valid authentication token found. Set a long-lived access token for "
+                    "this Home Assistant URL (add-on option long_lived_token, the secrets file "
+                    "or --key). The add-on's Supervisor token is only used with the Supervisor URL."
                 )
                 return False
         headers = {

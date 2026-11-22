@@ -1284,7 +1284,8 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
                 ("no URL or token set", None, {}, {}),
                 ("secrets file URL only", None, {}, {"secrets_path": str(secrets_file)}),
                 ("argument URL only", None, {}, {"argument": {"url": self.OTHER}}),
-                ("no_response", other_only, {}, {"no_response": True}),
+                # no_response skips the options, so the URL comes from EMHASS_URL here.
+                ("no_response", other_only, {"EMHASS_URL": self.OTHER}, {"no_response": True}),
             ]
             for name, options, env, kwargs in cases:
                 with (
@@ -1389,9 +1390,30 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
         self.assertIs(reconnect.await_args.args[0], first)
         self.assertEqual(client_class.call_count, 1)
 
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_is_not_opened_without_a_token(self, client_class):
+        import emhass.connection_manager as cm
+        from emhass.connection_manager import get_websocket_client
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        for url in (self.OTHER, "http://supervisor/core/api"):
+            for token in ("", " ", "empty", None):
+                with (
+                    self.subTest(url=url, token=token),
+                    self.assertLogs(logger, level="ERROR"),
+                    self.assertRaises(WsConnectionError),
+                ):
+                    await get_websocket_client(url, token, logger)
+        client_class.assert_not_called()
+        self.assertIsNone(cm._global_client)
+
     async def test_websocket_connect_ignores_environment_proxies(self):
+        from emhass import websocket_client
         from emhass.websocket_client import AsyncWebSocketClient
 
+        if not websocket_client._NO_PROXY:
+            self.skipTest("this websockets version never uses an environment proxy")
         client = AsyncWebSocketClient("http://supervisor/core/api", "sv-token", logger)
         connect = AsyncMock(side_effect=OSError("stop here"))
         with (

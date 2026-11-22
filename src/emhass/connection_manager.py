@@ -18,6 +18,10 @@ SUPERVISOR_TOKEN_REFUSED = (
     "SUPERVISOR_TOKEN."
 )
 
+NO_WEBSOCKET_TOKEN = (
+    "No Home Assistant token is set for this URL, so the WebSocket connection is not opened."
+)
+
 
 def is_supervisor_url(url: str | None) -> bool:
     """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
@@ -60,6 +64,11 @@ async def _create_and_start_client(
         if logger:
             logger.error(SUPERVISOR_TOKEN_REFUSED)
         raise ConnectionError(SUPERVISOR_TOKEN_REFUSED)
+    # An empty token can never authenticate, so don't open a connection just to send it.
+    if not str(token or "").strip() or str(token).strip() == "empty":
+        if logger:
+            logger.error(NO_WEBSOCKET_TOKEN)
+        raise ConnectionError(NO_WEBSOCKET_TOKEN)
     if logger:
         logger.debug(f"Creating new WebSocket client for {hass_url}")
     client = AsyncWebSocketClient(hass_url=hass_url, long_lived_token=token, logger=logger)
