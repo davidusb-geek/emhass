@@ -8849,11 +8849,15 @@ class Optimization:
         # participants. None means it cannot plan this configuration, so cvxpy runs below.
         backend = self.optim_conf.get("optimization_backend", "cvxpy")
         fallback_reason = None
+        # The house's own load, for what heats it (thermal internal gains):
+        # what remote solvers draw or supply is not heat in this house
+        p_load_gains = p_load
         if backend not in (None, "cvxpy"):
             inputs = {
                 k: v
                 for k, v in locals().items()
-                if k not in ("self", "_build_start_perf", "backend", "fallback_reason")
+                if k
+                not in ("self", "_build_start_perf", "backend", "fallback_reason", "p_load_gains")
             }
             res, fallback_reason = _coordinated_plan(self, **inputs)
             if res is not None:
@@ -8885,8 +8889,9 @@ class Optimization:
                 fp_parts.append(data_opt["outdoor_temperature_forecast"].to_numpy().tobytes())
             if "ghi" in data_opt.columns:
                 fp_parts.append(data_opt["ghi"].to_numpy().tobytes())
-            if p_load is not None:
-                fp_parts.append(np.asarray(p_load).tobytes())
+            # the load the tanks' internal gains bake in: the house's own
+            if p_load_gains is not None:
+                fp_parts.append(np.asarray(p_load_gains).tobytes())
             current_fp = hash(tuple(fp_parts))
             if getattr(self, "_shared_tank_fp", None) != current_fp:
                 if getattr(self, "_shared_tank_fp", None) is not None:
@@ -9479,7 +9484,7 @@ class Optimization:
         # On first call, these will be set during constraint building
         # On subsequent calls (cache hit), this ensures parameters reflect new forecasts
         if self.prob is not None and self.param_thermal:
-            self.update_thermal_params(self.optim_conf, data_opt, p_load)
+            self.update_thermal_params(self.optim_conf, data_opt, p_load_gains)
             # Refresh heating_demands for result building (stale numpy refs from first call)
             for k, params in self.param_thermal.items():
                 if params["type"] == "thermal_battery":
@@ -10076,7 +10081,7 @@ class Optimization:
                     def_end_timestep,
                     def_init_temp,
                     min_power_of_deferrable_loads,
-                    p_load,
+                    p_load_gains,
                 )
             )
 
@@ -10349,7 +10354,7 @@ class Optimization:
                         def_end_timestep,
                         def_init_temp,
                         min_power_of_deferrable_loads,
-                        p_load,
+                        p_load_gains,
                     )
                 )
 

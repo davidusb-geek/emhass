@@ -1049,8 +1049,9 @@ def _commit(
     published: list,
     ok: bool = True,
     refuse: str | None = None,
+    **kw,
 ):
-    """publish_commit on the saved test data; `published` gets each
+    """publish_commit on the saved test data (`kw`: its own keywords); `published` gets each
     (entity_id, publish_prefix) posted to Home Assistant, which refuses (HTTP
     500) the entities whose id contains `refuse`."""
 
@@ -1068,7 +1069,7 @@ def _commit(
         else contextlib.nullcontext(),
     ):
         out = asyncio.run(
-            participant_api.publish_commit(ec, params, res, logger, get_data_from_file=True)
+            participant_api.publish_commit(ec, params, res, logger, get_data_from_file=True, **kw)
         )
     return out, saved
 
@@ -1156,6 +1157,10 @@ def test_a_commit_through_the_route_publishes_and_records_the_plan_it_names(data
             plan["generated_at"],
             record["snapshot_at"],
         )
+    # and the plan saved is the commit's own, as read back from its kept copy
+    ec = {"data_path": data_path}
+    kept = pd.read_csv(participant_api.committed_plan_path(ec, "q1"), index_col="timestamp")
+    assert participant_api._is_saved_plan(ec, kept)
 
 
 def test_a_commit_home_assistant_did_not_take_is_partial_and_not_recorded(data_path):
@@ -3136,6 +3141,15 @@ def test_what_a_stepping_remote_reports_corrects_the_saved_record(tmp_path):
 # --------------------------------------------------------------------------
 
 
+def _kept_rows(ec, cid):
+    """The plan kept for commit `cid`, as the plan store saves a plan."""
+    import emhass.participant_api as pa
+
+    kept = pd.read_csv(pa.committed_plan_path(ec, cid), index_col="timestamp")
+    kept.index = pd.to_datetime(kept.index, utc=True)
+    return plan_store.serialize(kept)
+
+
 def _resume_case(data_path, monkeypatch, records):
     """A participant restarting with these commit records (id, state, fields),
     each with its plan kept; returns (stepper, followed, log)."""
@@ -3971,7 +3985,7 @@ def test_a_commit_cut_off_after_saving_its_plan_is_resumed_as_its_own(data_path,
     ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
     log.annotate("b", {"plan_stamp": before})
     # its own plan, saved before the stop; then the restart reads it back
-    plan_store.record(data_path, [], "2026-11-21T10:00:05Z", "1.0")
+    plan_store.record(data_path, _kept_rows(ec, "b"), "2026-11-21T10:00:05Z", "1.0")
     own = (plan_store.read(data_path) or {}).get("generated_at")
     noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()  # it was saving one
     log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
@@ -4179,3 +4193,219 @@ def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_m
     pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     _, following, stamp, superseded = stepper.view()
     assert (following, stamp, superseded) == ("c", "sc", False)
+
+
+def test_a_commits_snapshot_is_noted_before_anything_of_the_latest_plan_changes(data_path):
+    """publish_commit notes the snapshot (on_snapshot) before it writes the
+    latest results or the plan store: a note that fails leaves both as they
+    were, so a restart never sees a plan of the commit's it did not note."""
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    latest = data_path / "opt_res_latest.csv"
+    results_before = latest.read_bytes() if latest.exists() else None
+    plan_before = plan_store.read(data_path)
+
+    def cannot_note():
+        raise OSError("the commit's record could not be saved")
+
+    with pytest.raises(OSError, match="could not be saved"):
+        _commit(ec, params, res, [], on_snapshot=cannot_note)
+    assert plan_store.read(data_path) == plan_before
+    assert (latest.read_bytes() if latest.exists() else None) == results_before
+
+
+def test_a_commit_whose_snapshot_cannot_be_noted_is_resumed_over_the_plan_before(
+    data_path, monkeypatch
+):
+    """If the note of its snapshot cannot be saved, the commit is published
+    part way (Home Assistant holds its current slot), its plan is not saved
+    as the latest, and its record keeps the stamp it was made over: a restart
+    resumes it rather than take it for one a plan of its own replaced."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+
+    ec = _conf(data_path)
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+
+    async def publishing(conf, params, res, logger, on_recorded=None, on_snapshot=None):
+        on_snapshot()  # as publish_commit does, before it saves the plan
+        plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
+        return "accepted", ""
+
+    monkeypatch.setattr(pa, "publish_commit", publishing)
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    followed = []
+    stepper = pa.plan_stepper(ec)
+    monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    log = service.log
+    log.begin("c1", [1.0], _HORIZON)
+    annotate = log.annotate
+    monkeypatch.setattr(
+        log,
+        "annotate",
+        lambda cid, fields: False if "snapshot_at" in fields else annotate(cid, fields),
+    )
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+    assert out[0] == "partial"
+    assert (plan_store.read(data_path) or {}).get("generated_at") == before  # not saved
+    assert log.get("c1")["plan_stamp"] == before and "snapshot_at" not in log.get("c1")
+    assert followed == [("c1", before)]  # stepped over the plan before it
+
+
+def test_a_commit_whose_record_cannot_be_annotated_is_refused_before_publishing(
+    data_path, monkeypatch
+):
+    """The stamp and prefix a commit is made with are saved before anything
+    is published: if they cannot be, nothing is published (refused)."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+
+    ec = _conf(data_path)
+    called = []
+
+    async def publishing(*a, **k):
+        called.append(1)
+        return "accepted", ""
+
+    monkeypatch.setattr(pa, "publish_commit", publishing)
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    service.log.begin("c1", [1.0], _HORIZON)
+    monkeypatch.setattr(service.log, "annotate", lambda cid, fields: False)
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+    assert out[0] == "refused" and "nothing was published" in out[1] and called == []
+
+
+def test_the_default_solver_heats_the_house_with_its_own_load_alone(monkeypatch):
+    """Thermal internal gains come from the house's own load: what a remote
+    draws (counted in P_Load on a fallback) is not heat in this house."""
+    from emhass import optimization
+
+    rh, oc, pc, data, pv, load, buy, sell = _house(_now())
+    oc = copy.deepcopy(oc)
+    oc.update(optimization_backend="dantzig_wolfe")
+    opt = Optimization(
+        rh,
+        oc,
+        copy.deepcopy(pc),
+        "unit_load_cost",
+        "unit_prod_price",
+        "profit",
+        EMHASS_CONF,
+        logger,
+    )
+    monkeypatch.setattr(optimization, "_coordinated_plan", lambda *a, **k: (None, "declined"))
+    monkeypatch.setattr(optimization, "_remotes_running_w", lambda o: np.full(len(load), 3000.0))
+    seen = []
+    build = Optimization._add_deferrable_load_constraints
+
+    def spy(self, *a):
+        seen.append(np.asarray(a[-1], dtype=float))
+        return build(self, *a)
+
+    monkeypatch.setattr(Optimization, "_add_deferrable_load_constraints", spy)
+    gains = []
+    update = Optimization.update_thermal_params
+
+    def spy_update(self, optim_conf, data_opt, p_load, *a, **k):
+        gains.append(np.asarray(p_load, dtype=float))
+        return update(self, optim_conf, data_opt, p_load, *a, **k)
+
+    monkeypatch.setattr(Optimization, "update_thermal_params", spy_update)
+    res = opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
+    assert np.allclose(res["P_Load"].values, np.asarray(load) + 3000.0)
+    assert seen and all(np.allclose(s, load) for s in seen)
+    # planned again over the same problem: its thermal inputs refreshed alike
+    opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
+    assert all(np.allclose(g, load) for g in gains)
+
+
+def test_a_plan_of_its_own_saved_within_the_window_is_never_taken_for_the_commits(
+    data_path, monkeypatch
+):
+    """A plan of this EMHASS's own saved within moments of the commit noting
+    its snapshot (a process started at once, that never read the commit log)
+    is not the commit's plan: it supersedes the commit. Only the commit's own
+    plan, slot for slot, is taken for its snapshot."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
+    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
+    rows = _kept_rows(ec, "b")
+    for row in rows:
+        row["P_deferrable0"] = 0.0  # its own plan: the same slots, other values
+    plan_store.record(data_path, rows, "2026-11-21T10:00:06Z", "1.0")
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.view()[3]
+
+
+def test_a_failed_note_leaves_the_record_as_it_was(tmp_path, monkeypatch):
+    """A field that could not be saved is not kept in memory either, so a
+    later save never writes it."""
+    from emhass.coordinator import remote
+    from emhass.coordinator.remote import CommitLog
+
+    log = CommitLog(tmp_path / "participant_commits.json")
+    log.begin("c1", [1.0])
+
+    def fails(*a, **k):
+        raise OSError("disk full")
+
+    real = remote.os.replace
+    monkeypatch.setattr(remote.os, "replace", fails)
+    assert log.annotate("c1", {"snapshot_at": 1.0}) is False
+    assert "snapshot_at" not in log.get("c1")
+    monkeypatch.setattr(remote.os, "replace", real)
+    assert log.annotate("c1", {"plan_stamp": "s"}) is True
+    stored = json.loads((tmp_path / "participant_commits.json").read_text())
+    assert "snapshot_at" not in stored[0] and stored[0]["plan_stamp"] == "s"
+    assert log.annotate("nope", {"x": 1}) is None
+
+
+def test_a_commit_refused_for_its_record_keeps_no_plan_to_resume(data_path, monkeypatch):
+    """Refused because its record could not be saved, the commit keeps no
+    plan: its record may still read running on disk, and a restart then
+    finds nothing of it to step."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+
+    ec = _conf(data_path)
+
+    async def publishing(*a, **k):
+        raise AssertionError("never published")
+
+    monkeypatch.setattr(pa, "publish_commit", publishing)
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    service.log.begin("c1", [1.0], _HORIZON)
+    monkeypatch.setattr(service.log, "annotate", lambda cid, fields: False)
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+    assert out[0] == "refused" and not pa.committed_plan_path(ec, "c1").exists()
+
+
+def test_the_saved_plan_is_matched_by_its_instants_and_values_alone(data_path):
+    """The saved plan and the commit's kept copy are read back with
+    timestamps of different units (pandas 3 infers them) and with infinite
+    values the saved JSON writes as null: still the same plan."""
+    import emhass.participant_api as pa
+
+    ec = {"data_path": data_path}
+    index = pd.date_range("2026-11-21T10:00:00+00:00", periods=3, freq="30min")
+    res = pd.DataFrame({"P_deferrable0": [1.0, np.inf, 0.5]}, index=index)
+    rows = plan_store.serialize(res)
+    plan_store.record(data_path, rows, "2026-11-21T10:00:05Z", "1.0")
+    kept = res.copy()
+    kept.index = kept.index.as_unit("s")  # as a CSV reads back under pandas 3
+    assert pa._is_saved_plan(ec, kept)
+    kept.iloc[2, 0] = 0.75
+    assert not pa._is_saved_plan(ec, kept)
