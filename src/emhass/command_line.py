@@ -70,8 +70,12 @@ def _record_optim_snapshot(
     opt_res,
     t0_monotonic: float,
     logger: logging.Logger,
-) -> None:
+    origin: str | None = None,
+) -> bool:
     """Persist a last_run snapshot after an optim wrapper completes.
+
+    ``origin``: what made the plan, when not this EMHASS's own run (see
+    plan_store.record). Returns whether the structured plan was saved.
 
     A dry run stores nothing: the snapshot it would have stored goes in
     ``input_data_dict["run_record"]``, for the dry-run response.
@@ -95,7 +99,7 @@ def _record_optim_snapshot(
         }
         if is_dry_run(input_data_dict):
             input_data_dict["run_record"] = last_run.snapshot(**run)
-            return
+            return False
         ts = last_run.record(input_data_dict["emhass_conf"]["data_path"], **run)
         # Publish the structured plan ONLY for a successful run (OK_OPTIM_STATUSES), reusing
         # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
@@ -106,14 +110,16 @@ def _record_optim_snapshot(
         # last_run.OK_OPTIM_STATUSES reuses last_run's own "ok" criterion, so the
         # two endpoints stay consistent (plan published iff last-run is "ok").
         if optim_status in last_run.OK_OPTIM_STATUSES:
-            plan_store.record(
+            return plan_store.record(
                 input_data_dict["emhass_conf"]["data_path"],
                 plan=plan_store.serialize(opt_res),
                 generated_at=ts,
                 schema_version=EMHASS_SCHEMA_VERSION,
+                origin=origin,
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
+    return False
 
 
 def _write_results(input_data_dict: dict, opt_res: pd.DataFrame, filename: str) -> None:
@@ -210,6 +216,19 @@ class PublishContext:
         return self.input_data_dict["fcst"]
 
 
+_TOKENS_SALT = os.urandom(16)  # per process: a digest says nothing of a token
+
+
+def _tokens_digest(tokens) -> str:
+    """A salted digest of a remote-token map (empty for none)."""
+    if not isinstance(tokens, dict) or not tokens:
+        return ""
+    import hashlib
+
+    data = json.dumps(sorted((str(k), str(v)) for k, v in tokens.items())).encode()
+    return hashlib.sha256(_TOKENS_SALT + data).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class OptimizationCacheKey:
     """
@@ -242,6 +261,10 @@ class OptimizationCacheKey:
     costfun: str
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
+    # The remote solvers' tokens a coordinator presents, as a salted digest (a
+    # field's value is logged when the cache misses): each token map has its
+    # own optimizer, so no request solves with another's tokens
+    remote_tokens_digest: str = ""
 
 
 class OptimizationCache:
@@ -502,6 +525,7 @@ class OptimizationCache:
             costfun=costfun,
             plant_conf_hash=config_hash(plant_conf, plant_hash_skips),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
+            remote_tokens_digest=_tokens_digest(retrieve_hass_conf.get("remote_tokens")),
         )
 
     @classmethod

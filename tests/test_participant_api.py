@@ -19,6 +19,7 @@ import tempfile
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Self
 from unittest import mock
 
 import numpy as np
@@ -69,6 +70,29 @@ class _Server(ThreadingHTTPServer):
     service: ParticipantService
     url: str
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
+        self.server_close()
+
+
+_servers: list[_Server] = []  # every server a test started, closed after it
+
+
+@pytest.fixture(autouse=True)
+def _servers_closed():
+    """Every server a test started is shut down and closed after it, however
+    the test ended - one started before a later one failed to start too."""
+    yield
+    while _servers:
+        server = _servers.pop()
+        with contextlib.suppress(Exception):
+            server.shutdown()
+        with contextlib.suppress(Exception):
+            server.server_close()
+
 
 class _Handler(BaseHTTPRequestHandler):
     """The participant API on the standard library's HTTP server: another
@@ -97,8 +121,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 def serve(service: ParticipantService) -> _Server:
     """Serve `service` on a free local port from a daemon thread; `url` is
-    the API's base, `shutdown()` stops it."""
+    the API's base. Usable as a context manager; whatever a test leaves
+    running is shut down and closed after it (_servers_closed)."""
     server = _Server(("127.0.0.1", 0), _Handler)
+    _servers.append(server)
     server.service = service
     server.url = f"http://127.0.0.1:{server.server_address[1]}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -1148,19 +1174,8 @@ def test_a_commit_through_the_route_publishes_and_records_the_plan_it_names(data
     assert plan and len(plan["plan"]) == len(answer["plan_kw"])
     assert pd.Timestamp(plan["plan"][0]["timestamp"]) == pd.Timestamp(horizon["start"])
     assert last_run.read(data_path)["action"] == "naive-mpc-optim"
-    # it noted it was saving its own snapshot just before: a stop then would
-    # leave a plan a later process takes for this commit's
-    record = participant_api.commit_log({"data_path": data_path}).get("q1")
-    later = pd.Timestamp.now(tz="UTC").timestamp() + 3600.0
-    with mock.patch.object(participant_api, "_STARTED", later):
-        assert participant_api._saved_between(plan["generated_at"], record["snapshot_at"], None), (
-            plan["generated_at"],
-            record["snapshot_at"],
-        )
-    # and the plan saved is the commit's own, as read back from its kept copy
-    ec = {"data_path": data_path}
-    kept = pd.read_csv(participant_api.committed_plan_path(ec, "q1"), index_col="timestamp")
-    assert participant_api._is_saved_plan(ec, kept)
+    # saved as made by that commit: known for its own whatever its record says
+    assert plan.get("origin") == "commit:q1"
 
 
 def test_a_commit_home_assistant_did_not_take_is_partial_and_not_recorded(data_path):
@@ -1537,7 +1552,9 @@ def test_the_published_api_says_how_to_authenticate():
     # a commit's 429 and lock-unavailable 503 are retryable: the client is told when
     for code in ("429", "503"):
         assert "Retry-After" in path["post"]["responses"][code]["headers"]
-    assert "lock" in path["post"]["responses"]["503"]["description"]
+    # the lock unavailable refuses a commit (409): nothing ran
+    assert "lock" in path["post"]["responses"]["409"]["description"]
+    assert "lock" not in path["post"]["responses"]["503"]["description"]
 
 
 # --------------------------------------------------------------------------
@@ -3141,15 +3158,6 @@ def test_what_a_stepping_remote_reports_corrects_the_saved_record(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def _kept_rows(ec, cid):
-    """The plan kept for commit `cid`, as the plan store saves a plan."""
-    import emhass.participant_api as pa
-
-    kept = pd.read_csv(pa.committed_plan_path(ec, cid), index_col="timestamp")
-    kept.index = pd.to_datetime(kept.index, utc=True)
-    return plan_store.serialize(kept)
-
-
 def _resume_case(data_path, monkeypatch, records):
     """A participant restarting with these commit records (id, state, fields),
     each with its plan kept; returns (stepper, followed, log)."""
@@ -3485,7 +3493,7 @@ def test_an_accepted_commit_names_its_own_plan_as_soon_as_it_is_saved(data_path,
     ec = _conf(data_path)
     seen = {}
 
-    async def publishing(conf, params, res, logger, on_recorded=None, on_snapshot=None):
+    async def publishing(conf, params, res, logger, on_recorded=None, **k):
         plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
         on_recorded((plan_store.read(data_path) or {}).get("generated_at"))
         seen["stamp"] = log.get("c1").get("plan_stamp")
@@ -3973,52 +3981,6 @@ def test_a_commit_whose_record_cannot_be_saved_never_runs(tmp_path, monkeypatch)
     assert _until_final(service)[1]["state"] == "accepted" and ran == [1]
 
 
-def test_a_commit_cut_off_after_saving_its_plan_is_resumed_as_its_own(data_path, monkeypatch):
-    """Stopped after its plan was saved as its own, before that was noted:
-    the plan saved since its stamp, before this process started, is its own
-    (it held the live-optimization slot), so it is resumed - once settled, a
-    plan saved later is this EMHASS's own and supersedes it."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    # its own plan, saved before the stop; then the restart reads it back
-    plan_store.record(data_path, _kept_rows(ec, "b"), "2026-11-21T10:00:05Z", "1.0")
-    own = (plan_store.read(data_path) or {}).get("generated_at")
-    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()  # it was saving one
-    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
-    params = _params(ec, **GARAGE)
-    pa._resume(ec, params, logger, stepper, None)
-    assert followed == [("b", own)] and not stepper.superseded
-    assert log.get("b")["plan_stamp"] == own and log.get("b")["interrupted"] is False
-    # a plan of its own after that (even before a later restart): superseded
-    plan_store.record(data_path, [], "2026-11-21T10:20:00Z", "1.0")
-    stepper.resumed = None
-    pa._resume(ec, params, logger, stepper, None)
-    assert followed == [("b", own)] and stepper.superseded
-
-
-def test_a_plan_saved_after_start_up_is_never_taken_for_an_interrupted_commits(
-    data_path, monkeypatch
-):
-    """A plan saved after this process started is a run of its own, whatever
-    the commit before was: it supersedes the commit."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    now = pd.Timestamp.now(tz="UTC")
-    log._records["b"].update(state="partial", interrupted=True, snapshot_at=now.timestamp())
-    plan_store.record(data_path, [], now.isoformat(), "1.0")
-    monkeypatch.setattr(pa, "_STARTED", pd.Timestamp.now(tz="UTC").timestamp() - 60.0)
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == [] and stepper.superseded
-
-
 def test_a_committed_plan_that_cannot_be_read_is_resumed_later(data_path, monkeypatch):
     """A committed plan that cannot be read back at a resume is tried again at
     the next, rather than never."""
@@ -4070,15 +4032,20 @@ def test_the_active_commit_is_never_superseded_by_a_stamp_read_before_it(monkeyp
     assert pa._active_commit(log, stepper, "/nowhere") is None and stepper.superseded
 
 
-def test_the_default_solver_takes_a_remotes_supply_as_less_load_never_below_zero(monkeypatch):
+@pytest.mark.parametrize("pv_all_sold", [False, True])
+def test_the_default_solver_takes_a_remotes_supply_as_less_load_never_below_zero(
+    monkeypatch, pv_all_sold
+):
     """A remote supplying more than the house draws (3 kW against 0.4 kW):
-    the default solver's load stays >= 0 W, so self-consumption still solves,
-    and the surplus is logged."""
+    the default solver's load stays >= 0 W, so self-consumption still
+    solves. The surplus is planned as generation (P_PV still shows the
+    house's own) where that is exact; with set_total_pv_sell on it is not,
+    and the log says it goes to the grid unplanned."""
     from emhass import optimization
 
     rh, oc, pc, data, pv, load, buy, sell = _house(_now())
     oc = copy.deepcopy(oc)
-    oc.update(optimization_backend="dantzig_wolfe")
+    oc.update(optimization_backend="dantzig_wolfe", set_total_pv_sell=pv_all_sold)
     opt = Optimization(
         rh,
         oc,
@@ -4091,80 +4058,56 @@ def test_the_default_solver_takes_a_remotes_supply_as_less_load_never_below_zero
     )
     monkeypatch.setattr(optimization, "_coordinated_plan", lambda *a, **k: (None, "declined"))
     monkeypatch.setattr(optimization, "_remotes_running_w", lambda o: np.full(len(load), -3000.0))
-    with mock.patch.object(opt.logger, "warning") as warned:
+    with (
+        mock.patch.object(opt.logger, "warning") as warned,
+        mock.patch.object(opt.logger, "info") as told,
+    ):
         res = opt.perform_optimization(data, pv, load, buy, sell, soc_init=0.5, soc_final=0.5)
     assert str(res["optim_status"].iloc[0]).lower() == "optimal"
     assert (res["P_Load"] >= 0).all()
     assert np.allclose(res["P_Load"].values, np.maximum(np.asarray(load) - 3000.0, 0.0))
-    assert any("supply more than the house" in str(c) for c in warned.call_args_list)
+    assert np.allclose(res["P_PV"].values, np.asarray(pv))  # the house's own PV
+    as_generation = any("planned as generation" in str(c) for c in told.call_args_list)
+    unplanned = any("supply more than the house" in str(c) for c in warned.call_args_list)
+    assert (as_generation, unplanned) == ((False, True) if pv_all_sold else (True, False))
 
 
-def test_an_interrupted_commit_keeps_when_its_stop_was_first_seen(tmp_path):
-    """A commit read back as cut off by a stop is saved so, with when that
-    stop was first seen: a later restart reads back the same time."""
-    from emhass.coordinator.remote import CommitLog
+def test_a_remotes_surplus_meets_the_houses_other_loads_within_the_import_limit(monkeypatch):
+    """A remote supplying 3 kW, the house drawing 0.4 kW, and a 2 kW load that
+    must run, under a 1 kW import limit: the meter would export 0.6 kW, so the
+    default solver must find that schedule rather than see 2 kW of import."""
+    from emhass import optimization
 
-    path = tmp_path / "participant_commits.json"
-    CommitLog(path).begin("b", [1.0])  # never ended: the process stopped
-    first = CommitLog(path).get("b")
-    assert first["interrupted"] is True and isinstance(first["interrupted_at"], float)
-    stored = json.loads(path.read_text())
-    assert (
-        stored[0]["state"] == "partial" and stored[0]["interrupted_at"] == first["interrupted_at"]
+    rh, oc, pc, data, pv, load, buy, sell = _house(_now())
+    oc = copy.deepcopy(oc)
+    oc.update(
+        optimization_backend="dantzig_wolfe",
+        number_of_deferrable_loads=1,
+        nominal_power_of_deferrable_loads=[2000],
+        operating_hours_of_each_deferrable_load=[24],
+        treat_deferrable_load_as_semi_cont=[True],
+        set_deferrable_load_single_constant=[False],
+        start_timesteps_of_each_deferrable_load=[0],
+        end_timesteps_of_each_deferrable_load=[0],
+        set_use_battery=False,
     )
-    assert CommitLog(path).get("b")["interrupted_at"] == first["interrupted_at"]
-
-
-def test_a_plan_saved_after_the_stop_is_never_taken_for_the_interrupted_commits(
-    data_path, monkeypatch
-):
-    """A plan saved after the stop that cut a commit off - by a process that
-    then never settled it, before this one started - is this EMHASS's own:
-    it supersedes the commit, never is taken for the commit's own."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    stop = pd.Timestamp("2026-11-21T10:05:00Z").timestamp()
-    noted = pd.Timestamp("2026-11-21T10:00:02Z").timestamp()
-    log._records["b"].update(
-        state="partial", interrupted=True, interrupted_at=stop, snapshot_at=noted
+    pc = copy.deepcopy(pc)
+    pc.update(maximum_power_from_grid=1000, maximum_power_to_grid=1000)
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", EMHASS_CONF, logger
     )
-    # a run of its own after the stop, in a process that never resumed b
-    plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")
-    gen = stepper.generation()
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == []
-    g, following, _, superseded = stepper.view()
-    assert following == "b" and superseded and g > gen  # marked under its lock
-    assert log.get("b")["superseded"] is True
-
-
-@pytest.mark.parametrize("fields", [{}, {"snapshot_at": None}, {"interrupted_at": None}])
-def test_only_a_plan_saved_as_the_commits_snapshot_is_taken_for_its_own(
-    data_path, monkeypatch, fields
-):
-    """Whatever recorded the stop (or nothing did: a process that never read
-    the commit log), a plan is the commit's own snapshot only if it was saved
-    within moments of the commit noting it was saving one. A plan of its own
-    an hour later, before this process started, supersedes the commit."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    noted = pd.Timestamp("2026-11-21T10:00:02Z").timestamp()
-    record = {"state": "partial", "interrupted": True, "snapshot_at": noted}
-    # interrupted_at stamped late (by the process that loaded it, long after)
-    record["interrupted_at"] = pd.Timestamp("2026-11-22T09:00:00Z").timestamp()
-    record.update(fields)
-    log._records["b"].update(record)
-    plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == [] and stepper.view()[3]
+    monkeypatch.setattr(optimization, "_coordinated_plan", lambda *a, **k: (None, "declined"))
+    monkeypatch.setattr(optimization, "_remotes_running_w", lambda o: np.full(len(load), -3000.0))
+    house = np.full(len(load), 400.0)
+    res = opt.perform_optimization(
+        data, np.zeros(len(load)), house, buy, sell, soc_init=0.5, soc_final=0.5
+    )
+    # the meter: 0.4 + 2 - 3 = -0.6 kW, an export within its limit. The solver
+    # counts the surplus as generation up to the export limit (1 kW), so it
+    # plans 1 kW of import at most: within the import limit, where it saw 2 kW
+    assert str(res["optim_status"].iloc[0]).lower() == "optimal"
+    assert np.allclose(res["P_deferrable0"].values, 2000.0)
+    assert (res["P_grid"].values <= 1000.0 + 1e-6).all()
 
 
 def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_meanwhile(
@@ -4193,80 +4136,6 @@ def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_m
     pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     _, following, stamp, superseded = stepper.view()
     assert (following, stamp, superseded) == ("c", "sc", False)
-
-
-def test_a_commits_snapshot_is_noted_before_anything_of_the_latest_plan_changes(data_path):
-    """publish_commit notes the snapshot (on_snapshot) before it writes the
-    latest results or the plan store: a note that fails leaves both as they
-    were, so a restart never sees a plan of the commit's it did not note."""
-    ec = _conf(data_path)
-    params = _params(ec, **GARAGE)
-    res = _a_plan(ec, params)
-    latest = data_path / "opt_res_latest.csv"
-    results_before = latest.read_bytes() if latest.exists() else None
-    plan_before = plan_store.read(data_path)
-
-    def cannot_note():
-        raise OSError("the commit's record could not be saved")
-
-    with pytest.raises(OSError, match="could not be saved"):
-        _commit(ec, params, res, [], on_snapshot=cannot_note)
-    assert plan_store.read(data_path) == plan_before
-    assert (latest.read_bytes() if latest.exists() else None) == results_before
-
-
-def test_a_commit_whose_snapshot_cannot_be_noted_is_resumed_over_the_plan_before(
-    data_path, monkeypatch
-):
-    """If the note of its snapshot cannot be saved, the commit is published
-    part way (Home Assistant holds its current slot), its plan is not saved
-    as the latest, and its record keeps the stamp it was made over: a restart
-    resumes it rather than take it for one a plan of its own replaced."""
-    import emhass.participant_api as pa
-    from emhass.coordinator.interface import Answer
-
-    ec = _conf(data_path)
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-
-    async def publishing(conf, params, res, logger, on_recorded=None, on_snapshot=None):
-        on_snapshot()  # as publish_commit does, before it saves the plan
-        plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
-        return "accepted", ""
-
-    from emhass.coordinator.remote import CommitLog
-
-    monkeypatch.setattr(pa, "publish_commit", publishing)
-    resume = pa._resume
-    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
-    followed = []
-    stepper = pa.plan_stepper(ec)
-    monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
-    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
-    log = service.log
-    log.begin("c1", [1.0], _HORIZON)
-    annotate = log.annotate
-    monkeypatch.setattr(
-        log,
-        "annotate",
-        lambda cid, fields: False if "snapshot_at" in fields else annotate(cid, fields),
-    )
-    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
-    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
-    assert out[0] == "partial"
-    assert (plan_store.read(data_path) or {}).get("generated_at") == before  # not saved
-    assert log.get("c1")["plan_stamp"] == before and "snapshot_at" not in log.get("c1")
-    assert followed == [("c1", before)]  # stepped over the plan before it
-    # a restart: the record read back from disk, resumed over the plan before
-    monkeypatch.setattr(log, "annotate", annotate)
-    log.end("c1", out[0], out[1], out[2] if len(out) > 2 else None)
-    again = CommitLog(data_path / pa.COMMIT_LOG_FILE)
-    monkeypatch.setattr(pa, "_commit_logs", {data_path / pa.COMMIT_LOG_FILE: again})
-    after = pa.PlanStepper()
-    resumed = []
-    monkeypatch.setattr(after, "follow", lambda *a, **k: resumed.append(a[:2]))
-    resume(ec, _params(ec, **GARAGE), logger, after, None)
-    assert resumed == [("c1", before)]
 
 
 def test_a_commit_whose_record_cannot_be_annotated_is_refused_before_publishing(
@@ -4338,29 +4207,6 @@ def test_the_default_solver_heats_the_house_with_its_own_load_alone(monkeypatch)
     assert all(np.allclose(g, load) for g in gains)
 
 
-def test_a_plan_of_its_own_saved_within_the_window_is_never_taken_for_the_commits(
-    data_path, monkeypatch
-):
-    """A plan of this EMHASS's own saved within moments of the commit noting
-    its snapshot (a process started at once, that never read the commit log)
-    is not the commit's plan: it supersedes the commit. Only the commit's own
-    plan, slot for slot, is taken for its snapshot."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
-    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
-    rows = _kept_rows(ec, "b")
-    for row in rows:
-        row["P_deferrable0"] = 0.0  # its own plan: the same slots, other values
-    plan_store.record(data_path, rows, "2026-11-21T10:00:06Z", "1.0")
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == [] and stepper.view()[3]
-
-
 def test_a_failed_note_leaves_the_record_as_it_was(tmp_path, monkeypatch):
     """A field that could not be saved is not kept in memory either, so a
     later save never writes it."""
@@ -4375,12 +4221,12 @@ def test_a_failed_note_leaves_the_record_as_it_was(tmp_path, monkeypatch):
 
     real = remote.os.replace
     monkeypatch.setattr(remote.os, "replace", fails)
-    assert log.annotate("c1", {"snapshot_at": 1.0}) is False
-    assert "snapshot_at" not in log.get("c1")
+    assert log.annotate("c1", {"note": 1.0}) is False
+    assert "note" not in log.get("c1")
     monkeypatch.setattr(remote.os, "replace", real)
     assert log.annotate("c1", {"plan_stamp": "s"}) is True
     stored = json.loads((tmp_path / "participant_commits.json").read_text())
-    assert "snapshot_at" not in stored[0] and stored[0]["plan_stamp"] == "s"
+    assert "note" not in stored[0] and stored[0]["plan_stamp"] == "s"
     assert log.annotate("nope", {"x": 1}) is None
 
 
@@ -4404,58 +4250,6 @@ def test_a_commit_refused_for_its_record_keeps_no_plan_to_resume(data_path, monk
     res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
     out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
     assert out[0] == "refused" and not pa.committed_plan_path(ec, "c1").exists()
-
-
-def test_the_saved_plan_is_matched_by_its_instants_and_values_alone(data_path):
-    """The saved plan and the commit's kept copy are read back with
-    timestamps of different units (pandas 3 infers them) and with infinite
-    values the saved JSON writes as null: still the same plan."""
-    import emhass.participant_api as pa
-
-    ec = {"data_path": data_path}
-    index = pd.date_range("2026-11-21T10:00:00+00:00", periods=3, freq="30min")
-    res = pd.DataFrame({"P_deferrable0": [1.0, np.inf, 0.5]}, index=index)
-    rows = plan_store.serialize(res)
-    plan_store.record(data_path, rows, "2026-11-21T10:00:05Z", "1.0")
-    kept = res.copy()
-    kept.index = kept.index.as_unit("s")  # as a CSV reads back under pandas 3
-    assert pa._is_saved_plan(ec, kept)
-    kept.iloc[2, 0] = 0.75
-    assert not pa._is_saved_plan(ec, kept)
-
-
-def test_a_plan_with_other_columns_is_never_taken_for_the_commits(data_path, monkeypatch):
-    """A plan of this EMHASS's own with the commit's columns and one more is
-    another plan: it supersedes the commit."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
-    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
-    rows = [{**row, "P_deferrable1": 0.0} for row in _kept_rows(ec, "b")]
-    plan_store.record(data_path, rows, "2026-11-21T10:00:06Z", "1.0")
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == [] and stepper.view()[3]
-
-
-def test_a_commits_snapshot_saved_slowly_is_still_its_own(data_path, monkeypatch):
-    """However long the save took after the commit noted it, its own plan,
-    slot for slot, saved before the stop is its snapshot."""
-    import emhass.participant_api as pa
-
-    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
-    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
-    log.annotate("b", {"plan_stamp": before})
-    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
-    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
-    plan_store.record(data_path, _kept_rows(ec, "b"), "2026-11-21T10:01:30Z", "1.0")
-    own = (plan_store.read(data_path) or {}).get("generated_at")
-    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
-    assert followed == [("b", own)]
 
 
 def test_a_commit_whose_plan_cannot_be_removed_is_not_reported_refused(data_path, monkeypatch):
@@ -4483,3 +4277,467 @@ def test_a_commit_whose_plan_cannot_be_removed_is_not_reported_refused(data_path
     res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
     with pytest.raises(OSError, match="a restart may run it"):
         service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+
+
+# --------------------------------------------------------------------------
+# A commit's plan knows its commit (plan_store's origin)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("annotated", [False, True])
+def test_a_commits_own_plan_is_known_by_its_origin_after_a_stop(data_path, monkeypatch, annotated):
+    """A commit stopped after its plan was saved - before its stamp was noted
+    (`annotated=False`), or a record that could not be saved - is resumed:
+    the plan says it is that commit's, however long the save took. Then a
+    plan of this EMHASS's own supersedes it."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    log._records["b"].update(state="partial", interrupted=annotated is False)
+    plan_store.record(data_path, [], "2026-11-21T11:30:00Z", "1.0", origin="commit:b")
+    own = (plan_store.read(data_path) or {}).get("generated_at")
+    params = _params(ec, **GARAGE)
+    pa._resume(ec, params, logger, stepper, None)
+    assert followed == [("b", own)] and log.get("b")["plan_stamp"] == own
+    assert log.get("b").get("interrupted") in (None, False)
+    plan_store.record(data_path, [], "2026-11-21T12:00:00Z", "1.0")  # its own run
+    stepper.resumed = None
+    pa._resume(ec, params, logger, stepper, None)
+    assert followed == [("b", own)] and stepper.view()[3]
+
+
+@pytest.mark.parametrize("origin", [None, "commit:other"])
+def test_a_plan_without_the_commits_origin_supersedes_it(data_path, monkeypatch, origin):
+    """A plan saved since the commit's stamp that is not that commit's - of
+    this EMHASS's own, or another commit's - supersedes it, whatever its
+    content or timing."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    log._records["b"].update(state="partial", interrupted=True)
+    plan_store.record(data_path, [], "2026-11-21T10:00:01Z", "1.0", origin=origin)
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.view()[3]
+
+
+def test_a_stepper_keeps_stepping_its_commits_own_plan_under_another_stamp(data_path):
+    """The stamp a stepper was given may be stale (its record could not be
+    saved): a plan saved by its own commit is still its plan, stepped on; a
+    plan of this EMHASS's own ends it."""
+    case = _StepperCase(data_path)
+    case.stepper.following = "c"
+    plan_store.record(data_path, [], "2026-11-21T10:00:05Z", "1.0", origin="commit:c")
+    assert case.tick("2026-11-21T10:30:01Z") == "published"
+    plan_store.record(data_path, [], "2026-11-21T10:40:00Z", "1.0")
+    assert case.tick("2026-11-21T11:00:01Z") == "stop" and case.stepper.superseded
+
+
+def test_a_commit_names_its_plan_and_follows_its_stamp_even_if_its_record_fails(
+    data_path, monkeypatch
+):
+    """The commit's plan is saved with its origin; the stepper follows the
+    stamp it was saved under even when that stamp cannot be recorded (the
+    record keeps the one before), and returns it for the final record."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+
+    ec = _conf(data_path)
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    seen = {}
+
+    async def publishing(conf, params, res, logger, on_recorded=None, origin=None):
+        seen["origin"] = origin
+        plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0", origin=origin)
+        on_recorded((plan_store.read(data_path) or {}).get("generated_at"))
+        return "accepted", ""
+
+    monkeypatch.setattr(pa, "publish_commit", publishing)
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    followed = []
+    stepper = pa.plan_stepper(ec)
+    monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    log = service.log
+    log.begin("c1", [1.0], _HORIZON)
+    annotate = log.annotate
+    monkeypatch.setattr(
+        log,
+        "annotate",
+        lambda cid, fields: False if set(fields) == {"plan_stamp"} else annotate(cid, fields),
+    )
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+    saved = (plan_store.read(data_path) or {}).get("generated_at")
+    assert seen["origin"] == "commit:c1" and out[0] == "accepted"
+    assert followed == [("c1", saved)] and out[2] == {"plan_stamp": saved}
+
+
+def test_a_plan_not_saved_never_names_a_stamp(data_path, monkeypatch):
+    """publish_commit reports a stamp only for a plan it saved: one that
+    could not be saved never hands over the plan before's stamp."""
+    from emhass import command_line
+
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    monkeypatch.setattr(command_line.plan_store, "record", lambda *a, **k: False)
+    stamps = []
+    (state, why), _ = _commit(ec, params, res, [], on_recorded=stamps.append)
+    assert state == "accepted", why
+    assert stamps == []
+
+
+def test_the_plan_endpoint_never_serves_a_plans_origin(data_path, monkeypatch):
+    """What made a plan (a commit) is this server's own bookkeeping."""
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0", origin="commit:c1")
+    monkeypatch.setattr(
+        web_server, "emhass_conf", {**web_server.emhass_conf, "data_path": data_path}
+    )
+
+    async def get():
+        async with web_server.app.app_context():
+            response = await web_server.api_v1_plan()
+            return json.loads(await response.get_data())
+
+    body = asyncio.run(get())
+    assert body["status"] == "ok" and "origin" not in body
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit's review of 1d68bf81
+# --------------------------------------------------------------------------
+
+
+def test_the_remote_commit_file_keeps_every_other_runs_record(tmp_path):
+    """Two runs sharing a data folder: each records only the remotes it
+    committed, so one never drops the other's record (read and written under
+    one lock)."""
+    from emhass.coordinator import backend
+
+    opt = mock.MagicMock(fed_dry_run=False)
+    path = tmp_path / "coordinator_remote_commits.json"
+    a, b = {"state": "committed", "url": "http://a"}, {"state": "committed", "url": "http://b"}
+    snapshot = backend._read_remote_commits(opt)  # both runs read it empty
+    assert snapshot == {}
+    backend._write_remote_commits(opt, {"garage": a})
+    backend._write_remote_commits(opt, {"shed": b})  # the other run, from its older view
+    assert json.loads(path.read_text()) == {"garage": a, "shed": b}
+    backend._write_remote_commits(opt, {"garage": None})
+    assert json.loads(path.read_text()) == {"shed": b}
+    assert (tmp_path / "coordinator_remote_commits.json.lock").exists()
+
+
+@pytest.mark.parametrize("start", ["NaT", "not a time"])
+def test_a_record_whose_start_is_no_time_carries_nothing(start):
+    """A saved record with no time for its start never becomes non-finite
+    load in the default solver: it is not carried."""
+    from emhass.coordinator.backend import _carried
+
+    rec = _record([7.0, 0.0], start=start)
+    for steps in (True, False):
+        assert _carried(rec, _at("2026-11-21T10:00:00+00:00"), steps) is None
+    assert _carried(_record([7.0]), _at("NaT"), True) is None
+
+
+@pytest.mark.parametrize("site", [{}, "invalid", 42])
+def test_a_site_that_is_not_a_list_holds_what_was_committed(tmp_path, site):
+    """A configured site that cannot be read (not a list) is not an absent
+    one: the remotes this coordinator committed are still held."""
+    from emhass.coordinator import backend
+
+    record = {**_record([7.0, 7.0, 0.0, 0.0]), "url": "http://g", "steps": True}
+    (tmp_path / "coordinator_remote_commits.json").write_text(json.dumps({"garage": record}))
+    opt = mock.MagicMock(fed_dry_run=False, optim_conf={"site": site}, time_step=0.5)
+    data_opt = pd.DataFrame(index=pd.date_range("2026-11-21T10:00:00Z", periods=4, freq="30min"))
+    running, _, _ = backend.note_running(opt, data_opt)
+    assert running["garage"].tolist() == [7.0, 7.0, 0.0, 0.0]
+    for empty in (None, []):
+        opt.optim_conf = {"site": empty}
+        assert backend.note_running(opt, data_opt)[0] == {}
+
+
+def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(data_path):
+    """The final slot's publish failed: Home Assistant keeps the slot before.
+    The commit records that slot, and a coordinator carries its value after
+    the plan's end, not the plan's last."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.backend import _carried
+    from emhass.coordinator.remote import CommitLog, commit_view
+
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    log = CommitLog()
+    log.begin("c", [7.0, 7.0, 0.0], _HORIZON)
+    log.end("c", "accepted", "")
+    stepper = pa.PlanStepper()
+    stepper.log = log
+    now = pd.Timestamp.now(tz="UTC")
+    # slot 0 now (its commit published it), slot 1 - the last - in a moment
+    res = pd.DataFrame(
+        {"P_deferrable0": [7000.0, 7000.0]},
+        index=pd.DatetimeIndex([now - pd.Timedelta(seconds=0.1), now + pd.Timedelta(seconds=0.9)]),
+    )
+    stepper.RETRY_S = 0.05
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+
+    def refuses(*a):
+        return "partial", "Home Assistant refused it"
+
+    # its commit published slot 0 (accepted); slot 1, the last, never publishes
+    with mock.patch.object(pa, "_step", lambda p: pd.Timedelta(seconds=2)):
+        stepper.follow("c", stamp, ec, params, res, logger, publish=refuses)
+        for _ in range(300):
+            if (log.get("c") or {}).get("held_slot") is not None:
+                break
+            threading.Event().wait(0.02)
+    stepper.stop()
+    assert stepper.join(5.0)
+    record = commit_view(log.get("c"))
+    assert record["held_slot"] == 0
+    rec = {**_record([7.0, 0.0]), "held_slot": 0}
+    assert _carried(rec, _at("2026-11-21T11:00:00+00:00", 2), True).tolist() == [7.0, 7.0]
+    assert _carried(_record([7.0, 0.0]), _at("2026-11-21T11:00:00+00:00", 2), True).tolist() == [
+        0,
+        0,
+    ]
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("price_draw", ["0.1", 0.2]), ("price_draw", [True, 0.2]), ("price_supply", [None, 0.1])],
+)
+def test_a_query_with_arrays_of_anything_but_numbers_is_a_bad_request(field, value):
+    service = _service(lambda p, a: ("accepted", ""))
+    query = {
+        "version": SCHEMA_VERSION,
+        "kind": "price_response",
+        "horizon": _HORIZON,
+        "price_draw": [0.1, 0.2],
+        field: value,
+    }
+    status, problem = service.handle("POST", "/v1/query", {}, json.dumps(query).encode())
+    assert status == 400 and field in problem["detail"]
+
+
+def test_a_commit_sent_again_for_another_horizon_is_refused():
+    """A commit replayed with its plan but another horizon is not that
+    commit: refused (409), the record unchanged; the same horizon, written
+    another way, is the same."""
+    service = _service(lambda p, a: ("accepted", ""))
+    assert service.handle("POST", "/v1/commit", {}, _commit_body())[0] == 202
+    _until_final(service)
+    body = json.loads(_commit_body())
+    body["horizon"] = {**_HORIZON, "start": "2026-11-21T10:30:00+00:00"}
+    status, problem = service.handle("POST", "/v1/commit", {}, json.dumps(body).encode())
+    assert status == 409 and "another horizon" in problem["detail"]
+    body["horizon"] = {**_HORIZON, "start": "2026-11-21T11:00:00+01:00"}  # the same instant
+    assert service.handle("POST", "/v1/commit", {}, json.dumps(body).encode())[0] == 200
+
+
+def test_a_commit_whose_slot_passes_while_it_waits_for_the_lock_never_runs():
+    """A commit waits for the live-optimization slot; if its horizon's first
+    slot has passed by then, it is refused (409) and nothing runs."""
+    from emhass.coordinator.remote import CommitLog, WindowRefused
+
+    now = {"start": _HORIZON["start"]}
+    released, ran = [], []
+
+    def current(window):
+        if window.start != now["start"]:
+            raise WindowRefused("the coordinator and this EMHASS must agree on the slot")
+
+    def begin():
+        now["start"] = "2026-11-21T10:30:00+00:00"  # the slot passed while it waited
+        return "ok", lambda: released.append(1)
+
+    log = CommitLog()
+    service = ParticipantService(
+        lambda: {"key": "fixed", "max_power_kw": 1.0},
+        lambda window: _Fixed(),
+        lambda p, a: ran.append(1) or ("accepted", ""),
+        begin=begin,
+        log=log,
+        current=current,
+    )
+    assert (
+        service.handle("POST", "/v1/baseline", {"Query-Id": "q1"}, json.dumps(_HORIZON).encode())[0]
+        == 200
+    )
+    status, _ = service.handle("POST", "/v1/commit", {}, _commit_body())
+    assert status == 409 and ran == [] and released == [1] and log.get("q1") is None
+
+
+def test_a_remote_token_with_the_value_of_one_of_emhass_own_secrets_is_never_sent():
+    """A token_secret of its own name, holding Home Assistant's token (or the
+    API token): never among the remotes' tokens."""
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "http://elsewhere.example/x", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    for own in ({"long_lived_token": "HA"}, {"emhass_api_token": "HA"}):
+        out = asyncio.run(build({**own, "garage_token": "HA"}))
+        assert "remote_tokens" not in out["retrieve_hass_conf"]
+    out = asyncio.run(build({"long_lived_token": "HA", "garage_token": "G"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
+
+
+def test_each_remote_token_map_has_its_own_cached_optimizer():
+    """The optimizer cache keys a salted digest of the remotes' tokens: a
+    request with other tokens never shares the optimizer (nor its tokens)
+    with one in flight, and no token appears in the key."""
+    from emhass.command_line import OptimizationCache
+
+    rh = {"optimization_time_step": pd.Timedelta(minutes=30), "remote_tokens": {"g": "s3cr3t-a"}}
+    oc = {"number_of_deferrable_loads": 0}
+    pc = {}
+    a = OptimizationCache._compute_cache_key(oc, pc, "profit", rh)
+    b = OptimizationCache._compute_cache_key(
+        oc, pc, "profit", {**rh, "remote_tokens": {"g": "s3cr3t-b"}}
+    )
+    c = OptimizationCache._compute_cache_key(oc, pc, "profit", dict(rh))
+    assert a != b and a == c
+    assert "s3cr3t" not in repr(a) and "s3cr3t" not in repr(b)
+
+
+@pytest.mark.parametrize("limit", ["scalar", "per slot"])
+def test_a_remotes_surplus_planned_as_generation_stays_within_the_export_limit(monkeypatch, limit):
+    """The export limit is hard and no PV can be curtailed: the surplus is
+    planned as generation only up to what the grid can take beside the
+    house's own PV, so a fallback that solved before still solves."""
+    from emhass import optimization
+
+    rh, oc, pc, data, pv, load, buy, sell = _house(_now())
+    oc = copy.deepcopy(oc)
+    oc.update(optimization_backend="dantzig_wolfe", set_use_battery=False)
+    pc = copy.deepcopy(pc)
+    # a scalar, or a limit per slot (5 kW, then 4.6 kW from the 10th slot)
+    n = len(load)
+    limits = [5000.0] * 10 + [4600.0] * (n - 10)
+    pc.update(maximum_power_to_grid=5000 if limit == "scalar" else limits)
+    opt = Optimization(
+        rh, oc, pc, "unit_load_cost", "unit_prod_price", "profit", EMHASS_CONF, logger
+    )
+    monkeypatch.setattr(optimization, "_coordinated_plan", lambda *a, **k: (None, "declined"))
+    monkeypatch.setattr(optimization, "_remotes_running_w", lambda o: np.full(len(load), -3000.0))
+    house_pv = np.full(len(load), 4000.0)
+    res = opt.perform_optimization(
+        data, house_pv, np.full(len(load), 400.0), buy, sell, soc_init=0.5, soc_final=0.5
+    )
+    assert str(res["optim_status"].iloc[0]).lower() == "optimal"
+    assert np.allclose(res["P_PV"].values, house_pv)
+    bound = np.full(n, 5000.0) if limit == "scalar" else np.asarray(limits)
+    assert (res["P_grid"].values >= -bound - 1e-6).all()
+
+
+@pytest.mark.parametrize(
+    "rounding, expected", [("nearest", 1), ("first", 1), ("last", 2), (None, 1)]
+)
+def test_the_slot_recorded_published_is_the_one_publishing_picks(rounding, expected):
+    from emhass.participant_api import _slot_of
+
+    index = pd.date_range("2026-11-21T10:00:00Z", periods=4, freq="30min")
+    at = pd.Timestamp("2026-11-21T10:40:30Z")  # within slot 1; the minute: 10:40
+    assert _slot_of(index, at, rounding) == expected
+    assert _slot_of(index, pd.Timestamp("2026-11-21T10:30:01Z"), rounding) == 1  # a boundary
+
+
+def test_an_ended_plan_published_again_clears_what_it_held(data_path):
+    """A plan that ended with its last slot not published records the slot
+    held; published again after a restart (its last value), that record is
+    cleared, so a coordinator carries the last value again."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.remote import CommitLog, commit_view
+
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    log = CommitLog()
+    log.begin("c", [7.0, 0.0], _HORIZON)
+    log.end("c", "accepted", "", {"held_slot": 0})
+    assert commit_view(log.get("c"))["held_slot"] == 0
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    res = pd.DataFrame(
+        {"P_deferrable0": [7000.0, 0.0]},
+        index=pd.date_range("2026-11-21T09:00:00Z", periods=2, freq="30min"),  # ended
+    )
+    stepper = pa.PlanStepper()
+    stepper.log = log
+    stepper.follow(
+        "c", stamp, ec, params, res, logger, publish=lambda *a: ("accepted", ""), now_first=True
+    )
+    for _ in range(200):
+        if "held_slot" not in commit_view(log.get("c")):
+            break
+        threading.Event().wait(0.02)
+    stepper.stop()
+    assert stepper.join(5.0)
+    assert "held_slot" not in commit_view(log.get("c"))
+
+
+def test_an_unreadable_commit_file_is_never_rewritten(tmp_path):
+    """A commit file there but not readable now is left as it is: rewriting
+    it would lose every other remote's record."""
+    from emhass.coordinator import backend
+
+    opt = mock.MagicMock(fed_dry_run=False)
+    path = tmp_path / "coordinator_remote_commits.json"
+    path.write_text('{"garage": {"state": "committed"')  # cut short
+    backend._write_remote_commits(opt, {"shed": {"state": "committed"}})
+    assert path.read_text() == '{"garage": {"state": "committed"'
+    assert any("cannot be read" in str(c) for c in opt.logger.warning.call_args_list)
+
+
+def test_the_commit_file_is_written_without_a_file_lock_when_none_exists(tmp_path, monkeypatch):
+    """No file-locking primitive: written under this process's lock alone,
+    said once, rather than never recorded."""
+    from emhass import forecast
+    from emhass.coordinator import backend
+
+    for name in ("_fcntl", "_msvcrt"):
+        monkeypatch.delattr(forecast, name, raising=False)
+    monkeypatch.setattr(backend, "_warned_no_file_lock", False)
+    opt = mock.MagicMock(fed_dry_run=False)
+    backend._write_remote_commits(opt, {"garage": {"state": "committed"}})
+    backend._write_remote_commits(opt, {"shed": {"state": "committed"}})
+    stored = json.loads((tmp_path / "coordinator_remote_commits.json").read_text())
+    assert set(stored) == {"garage", "shed"}
+    warnings = [c for c in opt.logger.warning.call_args_list if "no file lock" in str(c)]
+    assert len(warnings) == 1
+
+
+def test_a_remote_token_that_is_this_emhass_participant_token_is_sent():
+    """Two EMHASS coordinating each other with one token: the remote expects
+    the value this EMHASS's participant_token holds, which it already has."""
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "http://elsewhere.example/x", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build({"participant_token": "shared", "garage_token": "shared"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "shared"}

@@ -33,7 +33,12 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from emhass.coordinator.site import compile_site, site_problem, site_token_secret_usable
+from emhass.coordinator.site import (
+    compile_site,
+    reserved_secret_values,
+    site_problem,
+    site_token_secret_usable,
+)
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
@@ -7890,13 +7895,21 @@ async def build_params(
     # The tokens site's remote solvers are reached with: only the secrets a
     # remote names (its token_secret), for the coordinator
     configured_site = params["optim_conf"].get("site")
+    reserved = reserved_secret_values(params_secrets)
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
-        if site_token_secret_usable(name) and params_secrets.get(name) is not None:
-            params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[
-                name
-            ]
+        if not site_token_secret_usable(name) or params_secrets.get(name) is None:
+            continue
+        if str(params_secrets[name]) in reserved:
+            # the same value as one of EMHASS's own secrets (Home Assistant's
+            # token, say): never sent to a remote - it is reached without one
+            logger.warning(
+                f"site: the secret {name!r} holds the value of one of EMHASS's own secrets; "
+                "it is not sent to the remote solver"
+            )
+            continue
+        params["retrieve_hass_conf"].setdefault("remote_tokens", {})[name] = params_secrets[name]
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":

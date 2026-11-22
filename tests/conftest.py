@@ -69,8 +69,13 @@ def _no_plan_stepper_left(monkeypatch):
     monkeypatch.setattr(participant_api.PlanStepper, "__init__", tracked)
     yield
     steppers = made + [s for s in participant_api._steppers.values() if s not in made]
-    for stepper in steppers:
-        stepper.stop()
-    for stepper in steppers:  # a slot being published finishes first
-        assert stepper.join(10.0), "a plan stepper did not stop"
-    participant_api._steppers.clear()
+    stuck = []
+    try:
+        for stepper in steppers:
+            stepper.stop()
+        for stepper in steppers:  # a slot being published finishes first
+            if not stepper.join(10.0):
+                stuck.append(stepper)
+    finally:
+        participant_api._steppers.clear()
+    assert not stuck, f"{len(stuck)} plan stepper(s) did not stop"

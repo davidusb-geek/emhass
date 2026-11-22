@@ -39,11 +39,21 @@ def serialize(opt_res: pd.DataFrame) -> list[dict]:
     return json.loads(df.reset_index().to_json(orient="records", date_format="iso"))
 
 
-def record(data_path: Path, plan: list[dict], generated_at: str, schema_version: str) -> None:
+def record(
+    data_path: Path,
+    plan: list[dict],
+    generated_at: str,
+    schema_version: str,
+    origin: str | None = None,
+) -> bool:
     """Persist the latest plan snapshot to cache + <data_path>/plan_latest.json.
 
+    ``origin`` names what made the plan when it was not this EMHASS's own run
+    (``commit:<id>``, a participant API commit): kept with it, never served.
+
     Best-effort file write: an OSError is logged-and-swallowed so a disk error
-    never breaks the optimization wrapper's return path.
+    never breaks the optimization wrapper's return path. Returns whether the
+    file was written.
     """
     global _cache, _unpersisted, _persisted
     snap = {
@@ -51,6 +61,8 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
         "generated_at": generated_at,
         "plan": plan,
     }
+    if origin is not None:
+        snap["origin"] = origin
     with _lock:
         _cache = snap
         try:
@@ -60,6 +72,8 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
         except OSError as exc:
             _unpersisted = True
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
+            return False
+    return True
 
 
 def read(data_path: Path) -> dict | None:

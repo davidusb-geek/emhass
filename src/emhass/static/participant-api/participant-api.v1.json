@@ -201,6 +201,7 @@
                       "description": "The horizon of the plan committed."},
           "plan_kw": {"type": ["array", "null"], "items": {"type": "number"},
                       "description": "The plan committed (kW per slot from the horizon's start). A coordinator that does not commit this participant again still counts what of it is left, while it is accepted, partial or running."},
+          "held_slot": {"type": "integer", "minimum": 0, "description": "Present when the plan ended with its final slots not published: the slot whose value Home Assistant keeps. Absent: the plan's last."},
           "received": {"type": ["string", "null"], "format": "date-time"},
           "updated": {"type": ["string", "null"], "format": "date-time"},
           "terms": {"type": ["object", "null"], "description": "Reserved: what following the plan is worth to each side. Null in this version."},

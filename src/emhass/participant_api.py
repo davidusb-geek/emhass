@@ -30,7 +30,6 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-import numpy as np
 import orjson
 import pandas as pd
 
@@ -230,7 +229,7 @@ async def publish_commit(
     logger: logging.Logger,
     get_data_from_file: bool = False,
     on_recorded=None,
-    on_snapshot=None,
+    origin: str | None = None,
 ) -> tuple[str, str]:
     """Run a committed plan as a run would: `res`, its own result for the
     answer chosen, published to Home Assistant under
@@ -241,7 +240,10 @@ async def publish_commit(
     while continual_publish is on (its loop would put an earlier plan back),
     for a plan that starts before the latest one (a late commit must not
     replace a newer plan), or when its inputs cannot be built; "partial" when
-    publishing failed after it began, since Home Assistant keeps what it took."""
+    publishing failed after it began, since Home Assistant keeps what it took.
+    `origin`: what made the plan (`commit:<id>`), saved with it, so that plan is
+    known for that commit's own whatever its records say; `on_recorded`, its
+    save stamp, once it is saved."""
     t0 = time.monotonic()
     if params["retrieve_hass_conf"].get("continual_publish"):
         return (
@@ -259,12 +261,12 @@ async def publish_commit(
 
     async def record(idd: dict) -> None:
         # The latest plan, whole, only once it is published.
-        if on_snapshot is not None:
-            on_snapshot()  # before anything of the latest plan changes
         csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
         await utils.replace_file(csv, res.to_csv(index_label="timestamp"))
-        _record_optim_snapshot(idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger)
-        if on_recorded is not None:
+        saved = _record_optim_snapshot(
+            idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger, origin=origin
+        )
+        if saved and on_recorded is not None:  # its stamp only: never the plan before's
             on_recorded(
                 (plan_store.read(pathlib.Path(emhass_conf["data_path"])) or {}).get("generated_at")
             )
@@ -395,6 +397,7 @@ class PlanStepper:
         self.resumed: bytes | None = None  # the params it last resumed with
         self._warned = -1  # the plan whose missing prefix was logged
         self._threads: list[threading.Thread] = []  # its loops, to wait for
+        self._published: tuple[int, int] | None = None  # (generation, slot) last published
 
     def follow(
         self,
@@ -423,9 +426,14 @@ class PlanStepper:
             self.following, self.stamp, self.superseded = commit_id, stamp, False
         index = _utc_index(res)
         step = _step(params)
+        # the slot Home Assistant holds: the commit's own publish (the current
+        # slot) when it was accepted; not known when resumed or published part way
+        rounding = params["retrieve_hass_conf"].get("method_ts_round", "nearest")
+        held = None if now_first else _slot_of(index, pd.Timestamp.now(tz="UTC"), rounding)
 
         def attempt(slot_end: pd.Timestamp, last: bool = False) -> bool:
             # publish this slot, retrying while the slot is busy; False: stop
+            nonlocal held
             delay = self.RETRY_S
             while True:
                 try:
@@ -444,6 +452,9 @@ class PlanStepper:
                 except Exception as exc:  # noqa: BLE001 - a slot lost, not the plan
                     logger.warning(f"participant_api: stepping the committed plan failed: {exc}")
                     return True
+                with self._lock:
+                    if self._published is not None and self._published[0] == gen:
+                        held = self._published[1]
                 if out != "busy":
                     return out != "stop"
                 # busy, or not (all) published: again within the slot, less
@@ -454,15 +465,30 @@ class PlanStepper:
                     return not wake.is_set()
                 delay = min(2 * delay, max(self.RETRY_S, step.total_seconds() / 4))
 
+        def ended() -> None:
+            # Home Assistant keeps the last value published: recorded when that
+            # is not the plan's last (its final slots not published) and
+            # cleared when it is, so a coordinator carries what runs
+            if held is None or self.log is None:
+                return
+            with self._lock:
+                current = gen == self._gen
+            if current:
+                last_slot = int(held) == len(index) - 1
+                self.log.annotate(commit_id, {"held_slot": None if last_slot else int(held)})
+
         def loop() -> None:
             now = pd.Timestamp.now(tz="UTC")
             if now_first and not attempt(now + step, last=True):
+                if not len(index) or pd.Timestamp.now(tz="UTC") >= index[-1] + step:
+                    ended()  # an ended plan published once (after a restart)
                 return
             while True:
                 now = pd.Timestamp.now(tz="UTC")
                 upcoming = index[index > now]
                 if not len(upcoming):
-                    return  # ended: Home Assistant keeps its last value
+                    ended()
+                    return
                 at = upcoming[0]
                 # just after the plan's own slot boundary
                 if wake.wait((at - now).total_seconds() + 1.0):
@@ -527,6 +553,13 @@ class PlanStepper:
             t.join(None if end is None else max(end - time.monotonic(), 0.0))
         return not any(t.is_alive() for t in threads)
 
+    def _own(self, emhass_conf: dict, gen: int) -> bool:
+        """Whether the latest plan saved is the one this stepper follows (its
+        commit saved it), whatever stamp it was given."""
+        with self._lock:
+            following = self.following if gen == self._gen else None
+        return _is_own_plan(emhass_conf, following)
+
     def _end(self, gen: int) -> None:
         """Its plan no longer runs (a plan of this EMHASS's own replaced it):
         reported as such, and recorded, so no resume brings it back."""
@@ -565,7 +598,7 @@ class PlanStepper:
         saved = _saved_stamp(emhass_conf)
         if saved is _UNREADABLE:
             return "busy"  # the plan store cannot be read now: tried again
-        if saved != stamp:
+        if saved != stamp and not self._own(emhass_conf, gen):
             self._end(gen)  # this EMHASS saved a plan of its own: it runs that
             return "stop"
         if not isinstance(params["optim_conf"].get("participant_api"), dict):
@@ -590,7 +623,7 @@ class PlanStepper:
             saved = _saved_stamp(emhass_conf)
             if saved is _UNREADABLE:
                 return "busy"
-            if saved != stamp:
+            if saved != stamp and not self._own(emhass_conf, gen):
                 self._end(gen)
                 return "stop"
             state, why = (publish or _publish_now)(emhass_conf, params, res, logger)
@@ -598,76 +631,46 @@ class PlanStepper:
                 # not (all) published: this slot is tried again
                 logger.warning(f"participant_api: stepping the committed plan: {state} ({why})")
                 return "busy"
+            with self._lock:
+                self._published = (
+                    gen,
+                    _slot_of(index, now, params["retrieve_hass_conf"].get("method_ts_round")),
+                )
             return "stop" if ended else "published"
         finally:
             if release is not None:
                 release()
 
 
+def _slot_of(index: pd.DatetimeIndex, now: pd.Timestamp, rounding: str | None = None) -> int:
+    """The slot of `index` publishing picks at `now`, as publish-data does
+    (command_line._get_closest_index: the minute, then method_ts_round)."""
+    if not len(index):
+        return 0
+    at = pd.Timestamp(now).floor("min")
+    idx = pd.DatetimeIndex(index)
+    at = at.tz_convert(idx.tz) if idx.tz is not None else at.tz_localize(None)
+    method = {"first": "ffill", "last": "bfill"}.get(rounding or "nearest", "nearest")
+    k = int(idx.get_indexer([at], method=method)[0])
+    if k == -1:
+        k = int(idx.get_indexer([at], method="nearest")[0])
+    return min(max(k, 0), len(idx) - 1)
+
+
 _UNREADABLE = object()
-_STARTED = time.time()  # when this process started (near enough: this import)
 
 
-def _is_saved_plan(emhass_conf: dict, res: pd.DataFrame) -> bool:
-    """Whether the latest plan saved is `res` (a commit's plan, read back from
-    the copy kept for it): the same slots and, in every column of it, the same
-    values. A plan of this EMHASS's own differs; one that did not would be
-    the same plan."""
+def _origin(commit_id: str) -> str:
+    """What a commit's plan is saved as made by (plan_store's origin)."""
+    return f"commit:{commit_id}"
+
+
+def _is_own_plan(emhass_conf: dict, commit_id: str | None) -> bool:
+    """Whether the latest plan saved is commit `commit_id`'s own (its origin)."""
+    if commit_id is None:
+        return False
     latest = plan_store.read(pathlib.Path(emhass_conf["data_path"]))
-    rows = (latest or {}).get("plan")
-    if not isinstance(rows, list) or len(rows) != len(res):
-        return False
-    try:
-        saved = pd.DataFrame(rows)
-        if "timestamp" not in saved or not len(saved):
-            return False
-        stamps = pd.DatetimeIndex(pd.to_datetime(saved.pop("timestamp"), utc=True))
-        if set(saved.columns) != {str(c) for c in res.columns}:
-            return False  # another plan: its columns are not the commit's
-        # the same instants, whatever unit each was read with (pandas 3 infers it)
-        mine_at = _utc_index(res)
-        if len(stamps) != len(mine_at) or not bool((stamps == mine_at).all()):
-            return False
-        for col in res.columns:
-            if col not in saved:
-                return False
-            mine, theirs = res[col], saved[col]
-            if pd.api.types.is_numeric_dtype(mine) and pd.api.types.is_numeric_dtype(theirs):
-                a = np.asarray(mine, dtype=float)
-                b = np.asarray(theirs, dtype=float)
-                # the saved plan's JSON writes inf as null: any non-finite is NaN
-                a = np.where(np.isfinite(a), a, np.nan)
-                b = np.where(np.isfinite(b), b, np.nan)
-                if not np.allclose(a, b, rtol=1e-9, atol=1e-9, equal_nan=True):
-                    return False
-            elif [None if pd.isna(x) else str(x) for x in mine] != [
-                None if pd.isna(x) else str(x) for x in theirs
-            ]:
-                return False
-    except (ValueError, TypeError, KeyError):
-        return False
-    return True
-
-
-def _saved_between(stamp, since, stop) -> bool:
-    """Whether a save stamp (generated_at) may be a commit's own snapshot:
-    from `since` (when it noted it was saving one, a time.time()), before
-    `stop` and this process's start. Which plan it is, _is_saved_plan says."""
-    if not isinstance(stamp, str) or isinstance(since, bool):
-        return False
-    try:
-        lo = float(since) - 1.0  # the stamp's own rounding
-        hi = _STARTED
-        if stop is not None and not isinstance(stop, bool):
-            hi = min(hi, float(stop))
-    except (TypeError, ValueError):
-        return False
-    try:
-        t = pd.Timestamp(stamp)
-        t = t if t.tzinfo else t.tz_localize("UTC")
-        return bool(lo <= t.timestamp() < hi)
-    except (ValueError, TypeError):
-        return False
+    return isinstance(latest, dict) and latest.get("origin") == _origin(commit_id)
 
 
 def _saved_stamp(emhass_conf: dict):
@@ -823,25 +826,13 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         log.annotate(last["commit_id"], {"plan_stamp": saved})
         last = {**last, "plan_stamp": saved}
     stamp = last["plan_stamp"]
+    if saved != stamp and _is_own_plan(emhass_conf, last["commit_id"]):
+        # The plan saved is this commit's own (it says so): saved before its
+        # stamp could be noted (a stop, a record that could not be saved)
+        log.annotate(last["commit_id"], {"plan_stamp": saved})
+        stamp = saved
     if last.get("interrupted"):
-        # Stopped while publishing: settled once, at the first resume that
-        # can read the plan store. The plan saved is its own snapshot only if
-        # saved after it noted it was saving one (`snapshot_at`, while it held
-        # the live-optimization slot) and before the stop, and if it is its
-        # plan, slot for slot and column for column: then the stop came
-        # before its stamp could be noted. Any other is this EMHASS's own,
-        # whichever process saved it.
-        if (
-            saved != stamp
-            and _saved_between(
-                saved,
-                last.get("snapshot_at"),
-                last.get("interrupted_at", _STARTED),
-            )
-            and _is_saved_plan(emhass_conf, res)
-        ):
-            stamp = saved
-        log.annotate(last["commit_id"], {"plan_stamp": stamp, "interrupted": False})
+        log.annotate(last["commit_id"], {"interrupted": False})  # settled
     if saved != stamp:
         stepper.mark(last["commit_id"], stamp, True, expect_gen=gen)  # a commit since wins
         log.annotate(last["commit_id"], {"superseded": True})
@@ -877,7 +868,11 @@ def _active_commit(log, stepper: PlanStepper, data_path=None):
         return None
     if data_path is not None:
         saved = _saved_stamp({"data_path": data_path})
-        if saved is not _UNREADABLE and saved != stamp:
+        if (
+            saved is not _UNREADABLE
+            and saved != stamp
+            and not _is_own_plan({"data_path": data_path}, following)
+        ):
             if stepper.supersede(gen, stamp):
                 return None  # a plan of its own replaced the one it follows
             # a commit followed meanwhile, over what was saved then: that one
@@ -972,16 +967,11 @@ def make_service(
                 ) from exc
             return "refused", "its record could not be saved; nothing was published"
 
-        def recorded(stamp):  # the plan saved as its own: its stamp at once
-            log.annotate(commit_id, {"plan_stamp": stamp})
+        confirmed: dict = {}
 
-        def snapshotting():
-            # About to save it as the latest plan: noted first, so a stop
-            # after is told apart from a plan of this EMHASS's own. Not
-            # noted, not saved: it is then published part way, the plan
-            # before it still the latest, which a restart resumes it over.
-            if log.annotate(commit_id, {"snapshot_at": time.time()}) is False:
-                raise OSError("the commit's record could not be saved")
+        def recorded(stamp):  # the plan saved as its own: its stamp at once
+            confirmed["stamp"] = stamp  # followed and recorded whether or not this save holds
+            log.annotate(commit_id, {"plan_stamp": stamp})
 
         try:
             state, why = asyncio.run(
@@ -991,7 +981,7 @@ def make_service(
                     res,
                     logger,
                     on_recorded=recorded,
-                    on_snapshot=snapshotting,
+                    origin=_origin(commit_id),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - it may have published part of it
@@ -1005,7 +995,7 @@ def make_service(
         # (its own when accepted, the one before when published part way).
         # (its record's: `before`, unless its plan was saved as its own, which
         # `recorded` noted then - not read back here)
-        stamp = (log.get(commit_id) or {}).get("plan_stamp", before)
+        stamp = confirmed.get("stamp", (log.get(commit_id) or {}).get("plan_stamp", before))
         try:
             # published part way: the rest of this slot at once, not at the next
             stepper.follow(

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import pathlib
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -1002,14 +1003,62 @@ def _read_remote_commits(opt: Any) -> dict[str, Any]:
     return out if isinstance(out, dict) else {}
 
 
-def _write_remote_commits(opt: Any, records: dict[str, Any]) -> None:
+_remote_commits_lock = threading.Lock()  # this process's runs; the file lock: others'
+_warned_no_file_lock = False
+
+
+def _note_no_file_lock(opt: Any) -> None:
+    global _warned_no_file_lock
+    _warned_no_file_lock = True
+    opt.logger.warning(
+        "site: no file lock on this platform; the remotes' commits are kept safe from this "
+        "process's other runs only"
+    )
+
+
+def _write_remote_commits(opt: Any, changes: dict[str, Any]) -> None:
+    """Record what this run committed each remote to (`changes`: id -> its
+    record, or None to forget it), leaving every other remote's record as the
+    file has it now: read and written under an exclusive lock, which every run
+    sharing the data folder (the web server's, the command line's) takes."""
     path = _remote_commits_path(opt)
-    if path is None:
+    if path is None or not changes:
         return
+    from emhass import forecast
+
+    # No file-locking primitive on this platform: this process's lock alone
+    # (said once), rather than record nothing - a lost record leaves a remote
+    # that runs a plan not held
+    file_lock = hasattr(forecast, "_fcntl") or hasattr(forecast, "_msvcrt")
+    lock_path = path.with_name(path.name + ".lock")
     tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(records), encoding="utf-8")
-        os.replace(tmp, path)
+        with _remote_commits_lock, open(lock_path, "a+b") as lock:
+            if file_lock:
+                forecast._flock_acquire(lock)
+            elif not _warned_no_file_lock:
+                _note_no_file_lock(opt)
+            try:
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                except (OSError, ValueError) as exc:
+                    # there but not readable now: rewriting it would lose
+                    # every other remote's record
+                    opt.logger.warning(
+                        f"site: the remotes' commits cannot be read ({exc}); not recorded now"
+                    )
+                    return
+                records = current if isinstance(current, dict) else {}
+                for key, record in changes.items():
+                    if record is None:
+                        records.pop(key, None)
+                    else:
+                        records[key] = record
+                tmp.write_text(json.dumps(records), encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                if file_lock:
+                    forecast._flock_release(lock)
     except OSError as exc:
         opt.logger.warning(f"site: could not record the remotes' commits ({exc})")
 
@@ -1045,6 +1094,8 @@ def _carried(
         # within what it can draw or supply: an absurd value is clipped, not dropped
         plan = np.clip(plan, -max_power_kw, max_power_kw)
         start, now = pd.Timestamp(horizon.start), pd.Timestamp(window.start)
+        if pd.isna(start) or pd.isna(now):
+            return None  # a start that is no time ("NaT"): nothing to place
         start = start if start.tzinfo else start.tz_localize("UTC")
         now = now if now.tzinfo else now.tz_localize("UTC")
         # Each of this window's slots runs, on average, what the plan runs
@@ -1059,15 +1110,23 @@ def _carried(
             # the value its commit published, from then on, with no end
             within = np.clip(edges[1:], 0.0, None) - np.clip(edges[:-1], 0.0, None)
             return plan[0] * within / np.diff(edges)
-        # Its last value after its end. The energy, as the integral of the
-        # plan's power, at the plan's own boundaries - never one sample per
-        # plan slot within a window slot.
+        # After its end, the value Home Assistant keeps: its last, or the
+        # slot it says it last published (`held_slot`, its final slots not
+        # published). The energy, as the integral of the plan's power, at the
+        # plan's own boundaries - never one sample per plan slot within a
+        # window slot.
+        held = record.get("held_slot")
+        final = (
+            plan[held]
+            if isinstance(held, int) and not isinstance(held, bool) and 0 <= held < len(plan)
+            else plan[-1]
+        )
         h = 60.0 * horizon.step_minutes
         knots = h * np.arange(len(plan) + 1)
         energy = np.concatenate([[0.0], np.cumsum(plan) * h])
         t = np.maximum(edges, 0.0)
         within = np.interp(np.minimum(t, knots[-1]), knots, energy)
-        e = within + plan[-1] * np.maximum(t - knots[-1], 0.0)
+        e = within + final * np.maximum(t - knots[-1], 0.0)
         return np.diff(e) / np.diff(edges)
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
@@ -1112,7 +1171,7 @@ def note_running(
         remotes = _site_remotes(opt.optim_conf, data_opt, opt)
     except Exception:  # noqa: BLE001 - a site it cannot read: what it committed
         window = _window_of(data_opt, opt)
-        remotes = [(k, str((r or {}).get("url")), window) for k, r in saved.items()]
+        remotes = [(k, str(r.get("url")), window) for k, r in saved.items() if isinstance(r, dict)]
     opt.fed_site_remotes = [key for key, _, _ in remotes]
     for key, url, window in remotes:
         _set_running(running, key, _held_plan(None, key, url, window, saved))
@@ -1150,6 +1209,11 @@ def _heard(
             "max_power_kw": rp.max_power_kw,
             "horizon": active.get("horizon"),
             "plan_kw": active.get("plan_kw"),
+            **(
+                {"held_slot": active["held_slot"]}
+                if isinstance(active.get("held_slot"), int)
+                else {}
+            ),
         }
     )
     if saved.get(rp.key) != record:
@@ -1158,7 +1222,7 @@ def _heard(
         else:
             saved[rp.key] = record
         if not getattr(opt, "fed_dry_run", False):  # a dry run writes nothing
-            _write_remote_commits(opt, saved)
+            _write_remote_commits(opt, {rp.key: record})
 
 
 def _set_running(running: dict[str, np.ndarray], key: str, plan: np.ndarray | None) -> None:
@@ -1171,10 +1235,17 @@ def _set_running(running: dict[str, np.ndarray], key: str, plan: np.ndarray | No
 def _site_remotes(
     oc: Mapping[str, Any], data_opt: Any, opt: Any
 ) -> list[tuple[str, str, PlanWindow]]:
-    """The remote solvers `site` names: (id, url, the horizon planned)."""
+    """The remote solvers `site` names: (id, url, the horizon planned). No
+    site, or an empty one: none. A site that is not a list cannot be read
+    (ValueError): what was committed is then held."""
     window = _window_of(data_opt, opt)
+    site = oc.get("site")
+    if site is None or (isinstance(site, list) and not site):
+        return []
+    if not isinstance(site, list):
+        raise ValueError("site is not a list")
     out = []
-    for e in oc.get("site") or []:
+    for e in site:
         solver = e.get("solver") if isinstance(e, dict) else None
         if isinstance(solver, dict) and isinstance(solver.get("url"), str):
             out.append((str(e.get("id")), solver["url"].rstrip("/"), window))
@@ -1637,7 +1708,8 @@ def optimize(
                 "horizon": rp.window.to_dict(),
                 "plan_kw": [float(x) for x in np.asarray(chosen.power, dtype=float)],
             }
-            _write_remote_commits(opt, saved_commits)  # at once: a crash keeps it
+            # at once: a crash keeps it
+            _write_remote_commits(opt, {rp.key: saved_commits[rp.key]})
         if ok or ok is None:
             # None: its outcome is not known (no answer in time, or published
             # part way) and it may be running - its part stays in the plan
