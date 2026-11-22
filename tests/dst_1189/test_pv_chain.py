@@ -1039,8 +1039,9 @@ def test_a_programming_error_in_the_pv_model_is_not_taken_for_malformed_metadata
         raise RuntimeError("pvlib exploded")
 
     monkeypatch.setattr(fcst, "_calculate_pvlib_power", broken)
+    weather = _frame(2)
     with pytest.raises(RuntimeError, match="pvlib exploded"):
-        fcst._pv_power_from_weather_frame(_frame(2))
+        fcst._pv_power_from_weather_frame(weather)
 
 
 def _elevation(fcst, starts) -> np.ndarray:

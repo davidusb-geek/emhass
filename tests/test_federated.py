@@ -1068,10 +1068,12 @@ def test_the_coordinators_inputs_are_checked():
     h = Horizon(dt=0.5, hours=1.0)
     base = {"buy": np.ones(2), "sell": np.zeros(2), "load": np.zeros(2), "solar": np.zeros(2)}
     for ceiling in (np.array([np.nan, 0.0]), np.array([1.0])):
+        forecasts = Forecasts(**base, export_ceiling=ceiling)
         with pytest.raises(ValueError, match="export_ceiling"):
-            Forecasts(**base, export_ceiling=ceiling).validate(h)
+            forecasts.validate(h)
+    reserved_submeter = SiteConfig(horizon=h, battery=None, submeters=(SubMeter("ac", ("x",)),))
     with pytest.raises(ValueError, match="reserved"):
-        SiteConfig(horizon=h, battery=None, submeters=(SubMeter("ac", ("x",)),)).validate()
+        reserved_submeter.validate()
     assert "reserved" in site_mod.site_problem(
         [{"id": "ac", "parent": "grid", "type": "panel"}, {"id": "deferrable0", "parent": "ac"}]
     )
@@ -1143,8 +1145,9 @@ def test_a_grid_connection_may_not_take_a_reserved_name():
 
     h = Horizon(dt=0.5, hours=1.0)
     for name in ("ac", "set:x"):
+        site = SiteConfig(horizon=h, battery=None, connections=(GridConnection(name),))
         with pytest.raises(ValueError, match="reserved"):
-            SiteConfig(horizon=h, battery=None, connections=(GridConnection(name),)).validate()
+            site.validate()
 
 
 def test_the_soc_miss_is_priced_at_the_participants_own_tariff():

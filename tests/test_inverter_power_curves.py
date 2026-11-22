@@ -361,25 +361,25 @@ def test_runtime_curve_is_validated_on_the_runtime_path():
 
     *_, treated_plant = asyncio.run(_treat({AC_DC: CHARGE_CURVE}))
     assert treated_plant[AC_DC] == CHARGE_CURVE
+    treating_bad_curve = _treat({AC_DC: [[1000, 1.1], [2000, 0.9]]})
     with pytest.raises(ValueError, match=AC_DC):
-        asyncio.run(_treat({AC_DC: [[1000, 1.1], [2000, 0.9]]}))
+        asyncio.run(treating_bad_curve)
     # Strict also when the persisted config had no curve and hybrid is off.
     off = _build_params({"inverter_is_hybrid": False})
     off_json = orjson.dumps(off).decode("utf-8")
     off_rh, off_optim, off_plant = utils.get_yaml_parse(off_json, logger)
+    treating_with_hybrid_off = utils.treat_runtimeparams(
+        orjson.dumps({AC_DC: CHARGE_CURVE}).decode("utf-8"),
+        off_json,
+        off_rh,
+        off_optim,
+        off_plant,
+        "dayahead-optim",
+        logger,
+        EMHASS_CONF,
+    )
     with pytest.raises(ValueError, match="inverter_is_hybrid"):
-        asyncio.run(
-            utils.treat_runtimeparams(
-                orjson.dumps({AC_DC: CHARGE_CURVE}).decode("utf-8"),
-                off_json,
-                off_rh,
-                off_optim,
-                off_plant,
-                "dayahead-optim",
-                logger,
-                EMHASS_CONF,
-            )
-        )
+        asyncio.run(treating_with_hybrid_off)
 
 
 # --------------------------------------------------------------------------- #

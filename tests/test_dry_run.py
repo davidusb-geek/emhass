@@ -689,8 +689,9 @@ def test_with_no_saved_forecast_a_dry_run_calls_no_service(method, dry):
         if dry:
             weather = asyncio.run(fetch())
         else:
+            fetching = fetch()
             with pytest.raises(_Fetched):
-                asyncio.run(fetch())
+                asyncio.run(fetching)
     if dry:
         assert weather is None or weather is False
         assert not budget.called
@@ -1186,8 +1187,9 @@ def test_a_failed_setup_closes_the_home_assistant_session(failure):
             )
 
         if failure == "raises":
+            building = build()
             with pytest.raises(RuntimeError, match="preparing failed"):
-                asyncio.run(build())
+                asyncio.run(building)
         else:
             assert asyncio.run(build()) is False
     close.assert_awaited_once()

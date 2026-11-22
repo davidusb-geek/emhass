@@ -372,8 +372,10 @@ def test_a_non_finite_pv_value_names_the_inverter():
     opt = build_multi(n_inv=2, battery_inverter_index=(0,), pv_plant_inverter_index=(0, 1))
     bad = np.ones(HORIZON)
     bad[3] = np.nan
+    pv_forecast = np.ones(HORIZON)
+    plants = _plants(np.ones(HORIZON), bad)
     with pytest.raises(InverterConfigError, match="inverter 1 has non-finite"):
-        opt._assemble_inverter_pv(np.ones(HORIZON), _plants(np.ones(HORIZON), bad), [0, 1])
+        opt._assemble_inverter_pv(pv_forecast, plants, [0, 1])
     single = build_multi(n_inv=2, battery_inverter_index=(0,), pv_plant_inverter_index=(1,))
     with pytest.raises(InverterConfigError, match="inverter 1 has non-finite"):
         single._assemble_inverter_pv(bad, None, None)
