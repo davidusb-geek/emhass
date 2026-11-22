@@ -4462,7 +4462,7 @@ def test_a_site_that_is_not_a_list_holds_what_was_committed(tmp_path, site):
         assert backend.note_running(opt, data_opt)[0] == {}
 
 
-def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(data_path):
+def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(data_path, request):
     """The final slot's publish failed: Home Assistant keeps the slot before.
     The commit records that slot, and a coordinator carries its value after
     the plan's end, not the plan's last."""
@@ -4477,6 +4477,12 @@ def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(
     log.end("c", "accepted", "")
     stepper = pa.PlanStepper()
     stepper.log = log
+    # mid-minute, so the minute publishing rounds to stays the same throughout
+    traveller = time_machine.travel(
+        pd.Timestamp.now(tz="UTC").floor("min") + pd.Timedelta(seconds=20), tick=True
+    )
+    traveller.start()
+    request.addfinalizer(traveller.stop)
     now = pd.Timestamp.now(tz="UTC")
     # slot 0 now (its commit published it), slot 1 - the last - in a moment
     res = pd.DataFrame(
@@ -4493,7 +4499,9 @@ def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(
     # its commit published slot 0 (accepted); slot 1, the last, never publishes
     with mock.patch.object(pa, "_step", lambda p: pd.Timedelta(seconds=2)):
         stepper.follow("c", stamp, ec, params, res, logger, publish=refuses)
-        for _ in range(300):
+        # its last slot retried until the slot ends, then the plan ends: a
+        # few seconds, longer on a slow runner
+        for _ in range(1000):
             if (log.get("c") or {}).get("held_slot") is not None:
                 break
             threading.Event().wait(0.02)
