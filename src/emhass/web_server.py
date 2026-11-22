@@ -1430,7 +1430,9 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
     except RuntimeParamError as exc:
         # Same as /action: a runtime value the optimizer can only check once the
         # run's horizon is known, e.g. a deferrable_load_groups max_power list (#1366).
-        _explain(f"{exc}. Nothing was solved")
+        # Logged as an error, not explained, so it shows even after an earlier
+        # recoverable error, such as a runtime site that was refused.
+        app.logger.error(f"{exc}. Nothing was solved")
         return not_run, 400
     finally:
         if "rh" in input_data_dict:

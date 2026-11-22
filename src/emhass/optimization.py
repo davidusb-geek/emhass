@@ -8330,7 +8330,9 @@ class Optimization:
         A runtime ``max_power`` list of 2 or more entries is held in a Parameter, so
         a new list on each MPC call reuses the cached problem. A scalar or a
         one-entry list stays a constant in the row, as before. The list must have
-        one entry per step of this run's horizon. Creating, resizing or dropping a
+        one entry per step of this run's horizon. An infinite entry (no limit at
+        that step) is stored as a finite value above anything the group can draw.
+        Creating, resizing or dropping a
         Parameter clears the built problem, so it is rebuilt against the current
         set of Parameters.
 
@@ -8356,7 +8358,29 @@ class Optimization:
                     f"deferrable_load_groups[{gi}]: every 'max_power' entry must be a "
                     "number of 0 or above"
                 )
-            per_step[gi] = np.asarray(max_power, dtype=float)
+            values = np.asarray(max_power, dtype=float)
+            no_limit = np.isinf(values)
+            if no_limit.any():
+                # cvxpy before 1.9 refuses inf in a nonneg Parameter (its check works
+                # out inf - inf), so a no-limit step gets a finite value the group
+                # can never reach: every member at its full power, twice, plus 1 W.
+                # Validation keeps the weights at 1 or below; a larger one from a
+                # direct caller still scales its member's share of the ceiling.
+                weights = group.get("weights") or {}
+                ceiling = 0.0
+                for name in group["names"]:
+                    kind, idx = utils.parse_deferrable_group_member(name)
+                    weight = weights.get(name)
+                    if kind == "deferrable":
+                        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][idx]
+                        factor = 1.0 if weight is None else max(1.0, float(weight))
+                        ceiling += factor * float(np.max(nominal))
+                    elif idx < len(self.param_battery_charge_power_max):
+                        charge_weight = (weight or {}).get("charge", 1)
+                        charge_max = self.param_battery_charge_power_max[idx].value
+                        ceiling += max(1.0, float(charge_weight)) * float(charge_max or 0)
+                values[no_limit] = 2.0 * ceiling + 1.0
+            per_step[gi] = values
         for gi in list(self.param_group_max_power):
             if gi not in per_step:
                 del self.param_group_max_power[gi]

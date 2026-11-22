@@ -1078,6 +1078,25 @@ def test_a_group_budget_list_of_the_wrong_length_is_a_400():
     _conforms(answer)
     assert answer["status"] == "not-run"
     assert "has 3 entries, but this run has 48 timesteps" in answer["errors"][-1]
+    assert sum("has 3 entries" in error for error in answer["errors"]) == 1
+
+    # An earlier recoverable error (a refused runtime site) does not hide the reason.
+    with _data_copy() as data_path:
+        _write_params(data_path)
+        with _web(data_path) as client, _from_file():
+
+            async def post_with_bad_site():
+                response = await client.post(
+                    "/api/v1/dry-run/naive-mpc-optim", json={**body, "site": "bogus"}
+                )
+                return response.status_code, await response.get_json()
+
+            status, answer = asyncio.run(post_with_bad_site())
+    assert status == 400, answer["errors"]
+    _conforms(answer)
+    assert answer["status"] == "not-run"
+    assert any(error.startswith("site ") for error in answer["errors"]), answer["errors"]
+    assert "has 3 entries, but this run has 48 timesteps" in answer["errors"][-1]
 
     # The same request as a live run: /action answers 400 with the reason too.
     with _data_copy() as data_path:

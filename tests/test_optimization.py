@@ -11462,6 +11462,41 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(opt.prob, prob)
         self.assertEqual(opt.param_group_max_power, {})
 
+    def test_deferrable_load_group_per_step_list_no_limit_steps_stay_finite(self):
+        """An inf entry in a per-step max_power list means no limit at that step
+        (#1366). cvxpy before 1.9 refuses inf in a nonneg Parameter, so the step gets
+        a finite value above anything the group can draw: both loads at full power and
+        the battery at full charge, twice, plus 1 W. It never binds, and the next list
+        on the same problem moves the no-limit steps."""
+        self._setup_shared_supply(
+            [
+                {
+                    "names": ["deferrable0", "deferrable1", "battery0"],
+                    "max_power": [float("inf")] * 24 + [1500.0] * 24,
+                }
+            ]
+        )
+        ceiling = 2 * (3000.0 + 2400.0 + 2400.0) + 1
+        opt = self.create_optimization()
+        df = self.prepare_forecast_data()
+        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        value = opt.param_group_max_power[0].value
+        self.assertTrue(np.isfinite(value).all())
+        np.testing.assert_array_equal(value, [ceiling] * 24 + [1500.0] * 24)
+        charge = (-res["P_batt"]).clip(lower=0)
+        combined = (res["P_deferrable0"] + res["P_deferrable1"] + charge).to_numpy()
+        self.assertLessEqual(combined[24:].max(), 1500 + 1e-3)
+        prob = opt.prob
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = [1500.0] * 24 + [
+            float("inf")
+        ] * 24
+        opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIs(opt.prob, prob)
+        np.testing.assert_array_equal(
+            opt.param_group_max_power[0].value, [1500.0] * 24 + [ceiling] * 24
+        )
+
     def test_deferrable_load_group_one_of_two_per_step_lists_back_to_a_scalar(self):
         """Two per-step groups, then the first goes back to a number on the same
         Optimization (#1366): only the second keeps its Parameter, the problem is
@@ -11850,7 +11885,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(old_value.shape, new_value.shape, key)
                         self.assertEqual((old_value != new_value).nnz, 0, key)
                     elif isinstance(old_value, np.ndarray):
-                        self.assertTrue(np.array_equal(old_value, new_value), key)
+                        # A no-limit step goes into the Parameter as a finite value
+                        # that never binds (cvxpy before 1.9 refuses inf there); the
+                        # old builder kept inf as a constant. Every other entry and
+                        # array is unchanged.
+                        self.assertEqual(old_value.shape, new_value.shape, key)
+                        differs = old_value != new_value
+                        if label == "per-step list with no-limit steps" and differs.any():
+                            nominals = new_opt.optim_conf["nominal_power_of_deferrable_loads"]
+                            ceiling = sum(float(np.max(nominal)) for nominal in nominals[:2])
+                            self.assertTrue(np.isposinf(old_value[differs]).all(), key)
+                            self.assertTrue(np.isfinite(new_value[differs]).all(), key)
+                            self.assertTrue((new_value[differs] > ceiling).all(), key)
+                        else:
+                            self.assertTrue(np.array_equal(old_value, new_value), key)
                 self.assertEqual(new_opt.optim_status, old_opt.optim_status)
                 pd.testing.assert_frame_equal(new_res, old_res, check_exact=False, atol=1e-6)
 
