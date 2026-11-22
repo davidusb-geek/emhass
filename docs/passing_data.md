@@ -366,7 +366,7 @@ The target must be *reachable* by its timestep. If the requested SOC cannot be a
 - A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected with an error) and holds **through** that step: the SOC at the end of the step and at its start (the end of the step before) are both kept at or above it, so the level is in place when the step begins. The first value covers the current step, whose start is `soc_init`. A dip of a single step between two higher values therefore has no effect.
 - `null` or a value at or below `battery_minimum_state_of_charge` means no floor at that step. A value above `battery_maximum_state_of_charge` is lowered to it.
 - A list shorter than the horizon means no floor after it, so a reserve never runs past what you sent. A longer list is cut to the horizon.
-- A step where `battery_availability` is `0` gets no floor, since the SOC is frozen there.
+- A step where `battery_availability` is `0` gets no floor, since the SOC is frozen there. Its value is ignored, as if it were `null`.
 
 Example: a 48-step horizon at 30 minutes, keep at least 60 % from step 9 to step 23 and leave the battery free after that:
 

@@ -372,6 +372,11 @@ class TestSocFloorHolds(unittest.TestCase):
                 unavailable_at_2,
                 [hold, 6000, 0, 6000, 6000, 6000] + [0] * 6,
             ),
+            "value at an unavailable step is ignored": (
+                [0.5, 0.8] + [0.6] * 4,
+                {"battery_availability": [1, 0] + [1] * 10},
+                [6000, 0, 6000, 6000, 6000, 6000] + [0] * 6,
+            ),
             # soc_min is 0.3: a value at it is no floor, so it is a step to charge
             # in; a value just above it is a floor under the held level and is not.
             "value at soc_min inside a window": (
@@ -391,6 +396,29 @@ class TestSocFloorHolds(unittest.TestCase):
                 run(opt, soc_floor=soc_floor, **{"soc_init": 0.5, **extra})
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
                 np.testing.assert_allclose(floor_of(opt), expected, atol=1e-6)
+
+    def test_a_value_at_an_unavailable_step_does_not_lower_later_floors(self):
+        """An unreachable 0.8 at a step where the battery is unavailable gets no
+        floor, so it must not count as a shortfall either. The 0.6 after it is
+        built in step 0 and held, the same as with that step left null, and no
+        clip warning names the unavailable step."""
+        opt = build_optimization()
+        with self.assertLogs(opt.logger, level="INFO") as logs:
+            res = run(
+                opt,
+                soc_init=0.5,
+                battery_availability=[1, 0] + [1] * 10,
+                soc_floor=[0.5, 0.8] + [0.6] * 4,
+            )
+            opt.logger.warning("end of run")  # so assertLogs never sees an empty log
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        np.testing.assert_allclose(
+            floor_of(opt), [6000, 0, 6000, 6000, 6000, 6000] + [0] * 6, atol=1e-6
+        )
+        self.assertGreaterEqual(res["SOC_opt"].to_numpy()[:6].min(), 0.6 - 1e-4)
+        clip = [line for line in warnings_of(logs) if "cannot be reached" in line]
+        self.assertEqual(clip, [])
+        self.assertEqual(missed_floor_warnings(logs), [])
 
     def test_a_rising_reserve_is_not_climbed(self):
         """Under a reserve that rises from 0.5 to 0.6 at step 1, a run at 0.4 builds

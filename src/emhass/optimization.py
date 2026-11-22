@@ -1210,9 +1210,10 @@ class Optimization:
            out of reach is built as far as the time before it allows and then held,
            not climbed at full power. A warning names the first such step.
         4. A step where ``battery_availability`` is 0 gets no floor (the SoC is
-           frozen there), and neither does a value left at or below the minimum
-           SoC: the soc_min recovery already keeps the SoC from going under
-           ``soc_init`` there.
+           frozen there): its value is ignored, as if it were null, so it does not
+           steer the walk above. Neither does a value left at or below the minimum
+           SoC get a floor: the soc_min recovery already keeps the SoC from going
+           under ``soc_init`` there.
         5. Each floor is then also set on the step before it (walking back over
            steps where ``battery_availability`` is 0, where the SoC cannot move),
            keeping the larger value there. So the level a step asks for has to be
@@ -1236,7 +1237,9 @@ class Optimization:
             min_wh = batt_conf["soc_min"][k] * cap_k
             tol = 1e-6 * cap_k
             wanted = req * cap_k
-            has_req = ~np.isnan(wanted)
+            # Rule 4: a value at a step where the battery is unavailable is ignored.
+            frozen = ~(avail_list[k] > 0)
+            has_req = ~np.isnan(wanted) & ~frozen
             gain = (
                 np.minimum(
                     batt_conf["eff_chg"][k] * batt_conf["charge_power_max"][k],
@@ -1280,8 +1283,7 @@ class Optimization:
                     "there) and held at that shortfall, given battery_charge_power_max, "
                     "battery_charge_efficiency and battery_availability."
                 )
-            frozen = ~(avail_list[k] > 0)
-            has_floor = has_req & ~frozen & (floor > min_wh)
+            has_floor = has_req & (floor > min_wh)
             if not np.any(has_floor):
                 floors.append(None)
                 continue
