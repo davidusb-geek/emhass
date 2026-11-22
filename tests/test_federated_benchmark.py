@@ -39,7 +39,8 @@ def test_a_coordinated_run_that_fell_back_is_not_compared(capsys):
     cost = bench._objective(None, capture, "dantzig_wolfe", _res("cvxpy", "a limit, 0.2 kWh"))
     assert cost != cost  # NaN
     out = capsys.readouterr().out
-    assert "not compared" in out and "a limit, 0.2 kWh" in out
+    assert "not compared" in out
+    assert "a limit, 0.2 kWh" in out
     assert bench._objective(None, capture, "dantzig_wolfe", _res("dantzig_wolfe")) == 1.0
     rows = [bench._row("a", (1.0, 0.1), (1.0, 0.2)), bench._row("b", (1.0, 0.1), (cost, 0.2))]
     bench._summary("Runs", rows)
@@ -60,7 +61,8 @@ def test_a_pair_that_straddles_a_slot_is_run_again(capsys):
 
     milp, coord = bench._pair(run)
     assert calls == ["cvxpy", "dantzig_wolfe", "cvxpy", "dantzig_wolfe"]
-    assert milp == (1.0, 0.1) and coord == (1.1, 0.1)
+    assert milp == (1.0, 0.1)
+    assert coord == (1.1, 0.1)
 
     def drifting(backend, n=iter(range(100))):
         return (1.0, 0.1, next(n))
@@ -96,7 +98,10 @@ def test_a_study_case_that_plans_nothing_is_not_compared(monkeypatch):
     monkeypatch.setattr(bench, "dayahead_forecast_optim", action)
     answer = {"idd": False, "res": None}
     cost, _, start = asyncio.run(bench.study_case({}, "dayahead-optim", {}, "cvxpy", 0.0))
-    assert cost != cost and start is None
+    assert cost != cost
+    assert start is None
     answer = {"idd": {"rh": Session(), "opt": None}, "res": False}
     cost, _, start = asyncio.run(bench.study_case({}, "dayahead-optim", {}, "cvxpy", 0.0))
-    assert cost != cost and start is None and closed == [True]
+    assert cost != cost
+    assert start is None
+    assert closed == [True]

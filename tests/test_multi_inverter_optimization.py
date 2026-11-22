@@ -173,8 +173,10 @@ def test_n1_has_no_specs_or_per_inverter_state():
         },
     )
     assert opt.n_inv == 1
-    assert opt.inverter_specs == [] and opt.param_pv_inv == []
-    assert "p_hybrid_inverter" in opt.vars and "p_inverter" not in opt.vars
+    assert opt.inverter_specs == []
+    assert opt.param_pv_inv == []
+    assert "p_hybrid_inverter" in opt.vars
+    assert "p_inverter" not in opt.vars
 
 
 def test_hybrid_and_pv_only_shapes():
@@ -202,8 +204,10 @@ def test_curtailment_flag_only_counts_on_an_inverter_with_pv():
     )
     assert [s["curtail"] for s in opt.inverter_specs] == [True, False]
     curt = opt.vars["p_pv_curtailment_inv"]
-    assert curt[0] is not None and curt[1] is None
-    assert curt[0].shape == (HORIZON,) and len(opt.vars["p_inverter"]) == 2
+    assert curt[0] is not None
+    assert curt[1] is None
+    assert curt[0].shape == (HORIZON,)
+    assert len(opt.vars["p_inverter"]) == 2
 
 
 def test_inactive_battery_leaves_an_inert_inverter_and_one_warning(caplog):
@@ -215,7 +219,8 @@ def test_inactive_battery_leaves_an_inert_inverter_and_one_warning(caplog):
     assert opt.inverter_specs[1]["shape"] == "inert"
     assert opt.inverter_specs[1]["batteries"] == []
     warned = [r for r in caplog.records if "Inverter 1" in r.getMessage()]
-    assert len(warned) == 1 and "0 W" in warned[0].getMessage()
+    assert len(warned) == 1
+    assert "0 W" in warned[0].getMessage()
     # A hybrid whose battery is off is a PV-only inverter.
     off = build_multi(
         battery_inverter_index=(0,), pv_plant_inverter_index=(0, 1), use_battery=False
@@ -504,7 +509,8 @@ def test_one_inverter_cache_key_is_unchanged():
         "inverter_stress_cost": 0.0,
     }
     key = _key(single, n_inv=1)
-    assert key.inverter_is_hybrid is True and key.compute_curtailment is True
+    assert key.inverter_is_hybrid is True
+    assert key.compute_curtailment is True
     assert key != _key({**single, "inverter_is_hybrid": False}, n_inv=1)
 
 
@@ -529,7 +535,8 @@ def test_command_line_hands_the_inverter_map_to_the_optimizer(monkeypatch):
         monkeypatch.setattr(command_line, name, lambda *a, **k: None)
     asyncio.run(command_line.dayahead_forecast_optim(data, logging.getLogger("x"), debug=True))
     kwargs = opt.perform_dayahead_forecast_optim.call_args.kwargs
-    assert kwargs["pv_plant_inverters"] == [0, 1] and kwargs["p_pv_plants"] == "plants"
+    assert kwargs["pv_plant_inverters"] == [0, 1]
+    assert kwargs["p_pv_plants"] == "plants"
 
 
 # --------------------------------------------------------------------------- #
@@ -663,7 +670,8 @@ def test_a_pv_only_inverter_never_takes_ac_and_an_inert_one_stays_at_zero():
     cost = [-0.1] * 4 + [0.5] * 4
     res = solve(opt, pv=(0.0,), load=1500.0, cost=cost, soc=0.1)
     internals = opt.vars["inverter_internals"]
-    assert "p_ac_dc" not in internals[0] and "is_dc_sourcing" not in internals[0]
+    assert "p_ac_dc" not in internals[0]
+    assert "is_dc_sourcing" not in internals[0]
     assert internals[2] == {}
     assert col(res, "P_hybrid_inverter_0").min() >= -1e-6
     assert col(res, "P_hybrid_inverter_2") == pytest.approx(0, abs=1e-6)
@@ -879,7 +887,8 @@ def test_stress_cost_is_per_inverter_and_only_on_the_inverters_that_have_it():
         return solve(opt, pv=(4000.0,), load=0.0, prod=prod, soc=0.05, final=0.05)
 
     plain, stressed = run([0.0, 0.0]), run([0.3, 0.0])
-    assert "inv_stress_cost_0" in stressed.columns and "inv_stress_cost_1" not in stressed.columns
+    assert "inv_stress_cost_0" in stressed.columns
+    assert "inv_stress_cost_1" not in stressed.columns
     assert not any(c.startswith("inv_stress_cost") for c in plain.columns)
     p0 = col(stressed, "P_hybrid_inverter_0")
     assert p0.max() < col(plain, "P_hybrid_inverter_0").max() - 500  # power is shed off it
@@ -1034,7 +1043,8 @@ def test_relaxed_retry_rebuilds_the_inverters_and_restores_the_cached_internals(
             pv_plant_inverters=[0, 1],
         )
     relaxed = [p for p in calls[1:] if p.status == "Optimal (Relaxed)"]
-    assert relaxed and opt.optim_status == "Optimal (Relaxed)"
+    assert relaxed
+    assert opt.optim_status == "Optimal (Relaxed)"
     # the rescue built its own internal variables ...
     assert not cached_ids & {v.id for v in relaxed[-1].variables()}
     # ... and the instance points at the cached problem's again afterwards
@@ -1049,7 +1059,8 @@ def test_the_horizon_can_change_between_runs():
     opt = build_multi(battery_inverter_index=(0, 1), curtail=[True, True])
     short = solve(opt)
     longer = solve(opt, n=HORIZON + 4)
-    assert len(short) == HORIZON and len(longer) == HORIZON + 4
+    assert len(short) == HORIZON
+    assert len(longer) == HORIZON + 4
     assert all(len(v.value) == HORIZON + 4 for v in opt.vars["p_inverter"])
 
 

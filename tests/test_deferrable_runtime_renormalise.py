@@ -439,7 +439,10 @@ def test_heat_topology_overwrite_short_runtime_array_matches_compiled_sizing(cap
     assert compiled_count == 1, f"expected the topology to compile to 1 load, got {compiled_count}"
     for name in DEF_ARRAY_NAMES:
         value = optim_conf.get(name)
-        assert isinstance(value, list) and len(value) == compiled_count, (
+        assert isinstance(value, list), (
+            f"{name} must match the compiled count {compiled_count}, got {value!r}"
+        )
+        assert len(value) == compiled_count, (
             f"{name} must match the compiled count {compiled_count}, got {value!r}"
         )
     assert optim_conf.get("nominal_power_of_deferrable_loads") == [10000.0], (

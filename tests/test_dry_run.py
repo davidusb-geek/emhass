@@ -277,7 +277,8 @@ def test_a_live_run_writes_its_results(action, save, config):
         changed = _changed(before, _files(data_path))
     assert isinstance(res, pd.DataFrame)
     assert any(p.endswith(".csv") for p in changed), changed
-    assert "last_run.json" in changed and "plan_latest.json" in changed, changed
+    assert "last_run.json" in changed, changed
+    assert "plan_latest.json" in changed, changed
     if config == "continual_publish":
         assert any(p.startswith("entities") for p in changed), changed
     assert "run_record" not in idd
@@ -295,7 +296,8 @@ def test_a_dry_run_writes_nothing(action, save, config):
         before = _files(data_path)
         idd, res = _run(data_path, action, dry=True, save=save, configure=CONFIGS[config])
         assert _changed(before, _files(data_path)) == []
-    assert isinstance(res, pd.DataFrame) and len(res) > 0
+    assert isinstance(res, pd.DataFrame)
+    assert len(res) > 0
     assert is_dry_run(idd)
     assert idd["run_record"]["action"] == action
     assert idd["run_record"]["status"] == "ok"
@@ -333,7 +335,8 @@ def test_a_dry_run_leaves_the_live_optimisation_untouched():
     configuration and solution to warm-start from."""
     with _data_copy() as data_path:
         _, live = _run(data_path, "dayahead-optim", dry=False)
-        assert isinstance(live, pd.DataFrame) and OptimizationCache._instance is not None
+        assert isinstance(live, pd.DataFrame)
+        assert OptimizationCache._instance is not None
         before = _cache_state()
         prices = [0.5 if i % 2 else 0.01 for i in range(48)]
         _, trial = _run(
@@ -587,7 +590,7 @@ def test_a_live_run_refreshes_a_stale_open_meteo_forecast():
         _log(logging.DEBUG) as (log, _),
         patch(
             "emhass.forecast.aiohttp.ClientSession",
-            lambda *a, **k: _Session(_open_meteo_payload(), calls),
+            return_value=_Session(_open_meteo_payload(), calls),
         ),
         _writes_spied() as opened,
     ):
@@ -602,14 +605,16 @@ def test_a_live_run_refreshes_a_stale_open_meteo_forecast():
         weather = asyncio.run(fetch())
         changed = _changed(before, _files(data_path))
         leftovers = list(data_path.glob("*.tmp"))
-    assert isinstance(weather, pd.DataFrame) and len(weather) > 0
+    assert isinstance(weather, pd.DataFrame)
+    assert len(weather) > 0
     assert len(calls) == 1, calls
     assert {
         "cached-open-meteo-forecast-b.json",
         "weather_forecast_data.pkl",
         "debug-weather-forecast-open-meteo.csv",
     } <= set(changed), changed
-    assert str(json_cache) not in opened and leftovers == []
+    assert str(json_cache) not in opened
+    assert leftovers == []
 
 
 def _stale_open_meteo_caches(data_path: pathlib.Path) -> pathlib.Path:
@@ -649,7 +654,8 @@ def test_a_dry_run_plans_with_the_saved_open_meteo_forecast_however_old():
 
         weather = asyncio.run(fetch())
         assert _changed(before, _files(data_path)) == []
-    assert isinstance(weather, pd.DataFrame) and len(weather) > 0
+    assert isinstance(weather, pd.DataFrame)
+    assert len(weather) > 0
     assert any("saved Open-Meteo forecast" in m and "minutes old" in m for m in messages)
 
 
@@ -722,7 +728,8 @@ def test_the_covariates_are_fetched_only_live(dry, saved):
         assert (data is not None) is saved
         assert changed == []
     else:
-        assert len(calls) == 1 and changed == ["cached-open-meteo-covariates.json"]
+        assert len(calls) == 1
+        assert changed == ["cached-open-meteo-covariates.json"]
 
 
 @pytest.mark.parametrize("dry", [False, True], ids=["live", "dry"])
@@ -777,8 +784,10 @@ def test_the_ml_forecaster_model_is_replaced_whole():
             asyncio.run(command_line.forecast_model_fit(idd, logger, debug=False))
         saved = pickle.loads(target.read_bytes())
         leftovers = list(data_path.glob("*.tmp"))
-    assert isinstance(saved, _Model) and saved.fitted
-    assert opened and str(target) not in opened
+    assert isinstance(saved, _Model)
+    assert saved.fitted
+    assert opened
+    assert str(target) not in opened
     assert leftovers == []
 
 
@@ -796,7 +805,8 @@ def test_replace_file_leaves_the_old_file_until_the_new_one_is_whole(tmp_path):
 
     with patch("emhass.utils.os.replace", replace):
         asyncio.run(utils.replace_file(target, "new"))
-    assert seen == ["old"] and target.read_text() == "new"
+    assert seen == ["old"]
+    assert target.read_text() == "new"
 
     with patch("emhass.utils.os.replace", side_effect=OSError("disk full")):
         with pytest.raises(OSError):
@@ -838,7 +848,8 @@ def test_a_live_run_replaces_the_weather_cache_whole():
         data = asyncio.run(save())
         saved = pickle.loads(cache.read_bytes())
         leftovers = list(data_path.glob("*.tmp"))
-    assert opened and str(cache) not in opened
+    assert opened
+    assert str(cache) not in opened
     pd.testing.assert_frame_equal(saved, data)
     assert leftovers == []
 
@@ -981,8 +992,10 @@ def test_the_dry_run_url_refuses_what_it_cannot_do(action, body):
         status, answer = asyncio.run(post())
     assert status == 400
     _conforms(answer)
-    assert answer["status"] == "not-run" and answer["action"] == action
-    assert answer["errors"] and answer["errors"][-1].endswith("Nothing was run")
+    assert answer["status"] == "not-run"
+    assert answer["action"] == action
+    assert answer["errors"]
+    assert answer["errors"][-1].endswith("Nothing was run")
     build.assert_not_called()
 
 
@@ -1028,8 +1041,10 @@ def test_the_dry_run_url_returns_the_plan_and_writes_nothing(action):
             changed = _changed(before, _files(data_path))
     assert status == 200, answer["errors"]
     _conforms(answer)
-    assert answer["status"] == "ok" and answer["action"] == action
-    assert len(answer["plan"]) > 0 and "optim_status" in answer["plan"][0]
+    assert answer["status"] == "ok"
+    assert answer["action"] == action
+    assert len(answer["plan"]) > 0
+    assert "optim_status" in answer["plan"][0]
     assert headers["Cache-Control"] == "no-store"
     assert changed == []
     inject.assert_not_called()
@@ -1088,7 +1103,8 @@ def test_an_empty_body_is_an_empty_request():
             return response.status_code, await response.get_json()
 
         status, answer = asyncio.run(post())
-    assert status == 200 and answer["errors"] == []
+    assert status == 200
+    assert answer["errors"] == []
     assert built.call_args.args[3] == "{}"
 
 
@@ -1129,8 +1145,10 @@ def test_a_dry_run_flag_left_in_saved_params_does_not_make_a_dry_run():
         before = _files(data_path)
         idd, res = _run(data_path, "dayahead-optim", dry=False, configure=stray)
         changed = _changed(before, _files(data_path))
-    assert isinstance(res, pd.DataFrame) and not is_dry_run(idd)
-    assert "last_run.json" in changed and "opt_res_latest.csv" in changed, changed
+    assert isinstance(res, pd.DataFrame)
+    assert not is_dry_run(idd)
+    assert "last_run.json" in changed, changed
+    assert "opt_res_latest.csv" in changed, changed
 
 
 @pytest.mark.parametrize("failure", ["home-assistant", "inputs", "raises"])
@@ -1194,7 +1212,8 @@ def test_an_oversized_body_is_refused_with_413():
         status, answer = asyncio.run(post())
     assert status == 413
     _conforms(answer)
-    assert answer["errors"] and answer["errors"][-1].endswith("Nothing was run")
+    assert answer["errors"]
+    assert answer["errors"][-1].endswith("Nothing was run")
     build.assert_not_called()
 
 
@@ -1236,8 +1255,10 @@ def test_one_dry_run_runs_at_a_time():
         (first_status, first_body), (second_status, retry, second_body) = asyncio.run(
             asyncio.wait_for(both(), timeout=30)  # a queued second run would deadlock: fail instead
         )
-    assert first_status == 200 and first_body["errors"] == []
-    assert second_status == 429 and retry == "2"
+    assert first_status == 200
+    assert first_body["errors"] == []
+    assert second_status == 429
+    assert retry == "2"
     _conforms(second_body)
     assert "one runs at a time" in second_body["errors"][-1]
     assert built.await_count == 1
@@ -1269,7 +1290,8 @@ def test_a_dry_run_on_another_worker_holds_the_slot():
             finally:
                 utils.unlock_file(other_worker)
         free = asyncio.run(client.post("/api/v1/dry-run/naive-mpc-optim", json={}))
-    assert busy.status_code == 429 and free.status_code == 200
+    assert busy.status_code == 429
+    assert free.status_code == 200
 
 
 def test_accepted_flags_reach_the_run_as_booleans():
@@ -1355,7 +1377,9 @@ def test_a_failing_live_request_does_not_fail_a_dry_run():
         return False
 
     (dry_status, dry_body), live_status, action_log = _overlapping(dry_wrapper, live_wrapper)
-    assert dry_status == 200 and dry_body["errors"] == [] and dry_body["status"] == "ok"
+    assert dry_status == 200
+    assert dry_body["errors"] == []
+    assert dry_body["status"] == "ok"
     _conforms(dry_body)
     assert live_status == 400
     assert "the live solve failed" in action_log
@@ -1379,7 +1403,8 @@ def test_a_failing_dry_run_does_not_fail_a_live_request():
 
     (dry_status, dry_body), live_status, action_log = _overlapping(dry_wrapper, live_wrapper)
     assert live_status == 200
-    assert dry_status == 400 and dry_body["errors"] == ["the trial inputs are infeasible"]
+    assert dry_status == 400
+    assert dry_body["errors"] == ["the trial inputs are infeasible"]
     _conforms(dry_body)
     assert "infeasible" not in action_log
 
@@ -1392,7 +1417,8 @@ def test_a_dry_run_that_raises_answers_500_with_its_error():
         return _plan()
 
     (dry_status, dry_body), live_status, _ = _overlapping(dry_wrapper, live_wrapper)
-    assert dry_status == 500 and live_status == 200
+    assert dry_status == 500
+    assert live_status == 200
     _conforms(dry_body)
     assert any("solver crashed" in e for e in dry_body["errors"])
 
@@ -1498,7 +1524,8 @@ def test_a_failing_coordinator_falls_back_to_the_default_solver(dry, caplog):
         data_path = pathlib.Path(tmp) / "data"
         shutil.copytree(root / "data", data_path)
         res = _coordinated(data_path, {}, dry=dry)
-    assert isinstance(res, pd.DataFrame) and len(res) > 0
+    assert isinstance(res, pd.DataFrame)
+    assert len(res) > 0
     assert (res["optim_status"] == "Optimal").all()
     assert "coordinator raised RuntimeError" in caplog.text
     # ...and the plan says which solver made it, and why
@@ -1589,7 +1616,8 @@ def test_the_site_is_checked_before_anything_reads_it(site, problem):
     first; anything unexpected means the default solver, never an exception or
     an unknown name reaching the coordinator."""
     reason = _coordinated_config_problem({"optimization_backend": "dantzig_wolfe", "site": site})
-    assert reason and problem in reason
+    assert reason
+    assert problem in reason
 
 
 def test_a_known_backend_and_a_valid_site_pass():
@@ -1626,8 +1654,10 @@ def test_the_published_schema_is_the_check():
         assert kinds[title]["additionalProperties"] is False
         assert set(kinds[title]["properties"]) == site_mod._SITE_KEYS[kind]
     pv = kinds["the PV"]
-    assert pv["additionalProperties"] is False and set(pv["properties"]) == {"id", "parent"}
-    assert pv["properties"]["id"] == {"const": "pv"} and "parent" in pv["required"]
+    assert pv["additionalProperties"] is False
+    assert set(pv["properties"]) == {"id", "parent"}
+    assert pv["properties"]["id"] == {"const": "pv"}
+    assert "parent" in pv["required"]
     device = kinds["a device"]["properties"]
     # the PV's id and the devices' together are exactly the check's device names
     for name in ("pv", "battery", "battery0", "battery9", "deferrable0", "deferrable123"):
@@ -1645,7 +1675,8 @@ def test_the_published_schema_is_the_check():
     node = kinds["a node"]["properties"]
     for key in ("efficiency_import", "efficiency_export"):
         assert set(node[key]["type"]) == {"number", "null"}
-        assert node[key]["exclusiveMinimum"] == 0 and node[key]["maximum"] == 1
+        assert node[key]["exclusiveMinimum"] == 0
+        assert node[key]["maximum"] == 1
 
 
 def test_the_sites_meter_and_inverter_set_emhass_keys(caplog):
@@ -1775,7 +1806,8 @@ def test_the_input_pipeline_compiles_the_site():
             return idd["opt"].plant_conf, idd["opt"].optim_conf
 
     plant, _ = asyncio.run(run({}))
-    assert plant["inverter_is_hybrid"] is True and plant["inverter_ac_output_max"] == 4000
+    assert plant["inverter_is_hybrid"] is True
+    assert plant["inverter_ac_output_max"] == 4000
     assert plant["maximum_power_to_grid"] == 5000
     _, optim = asyncio.run(run({"site": [{"id": "battery"}]}))  # no parent
     assert optim["site"] == SITE  # the configured one, kept
@@ -1826,7 +1858,8 @@ def test_a_malformed_site_in_a_request_still_plans(dry, caplog):
         data_path = pathlib.Path(tmp) / "data"
         shutil.copytree(root / "data", data_path)
         res = _coordinated(data_path, {"site": [{"nodevices": 1}]}, site=None, dry=dry)
-    assert isinstance(res, pd.DataFrame) and len(res) > 0
+    assert isinstance(res, pd.DataFrame)
+    assert len(res) > 0
     # the request's site is refused by the check, by name, and the configured one kept
     assert "site (in the request): site[0] must be an object with an id" in caplog.text
     assert "the configured site is kept" in caplog.text
@@ -1900,7 +1933,8 @@ def test_several_inverters_never_reach_the_coordinator():
         lambda *a, **k: pytest.fail("the coordinator was asked"),
     ):
         res, reason = optimization._coordinated_plan(opt)
-    assert res is None and "number_of_inverters is 3" in reason
+    assert res is None
+    assert "number_of_inverters is 3" in reason
 
 
 INVERTER = {"id": "inverter", "parent": "grid", "type": "hybrid_inverter", "max_export": 4000}
@@ -1935,7 +1969,8 @@ def test_a_parent_that_is_not_a_name_is_refused(parent):
     """A parent of the wrong type is reported, not a TypeError."""
     site = [{"id": "grid"}, {"id": "battery", "parent": parent}]
     reason = site_mod.site_problem(site)
-    assert reason and "parent must be" in reason
+    assert reason
+    assert "parent must be" in reason
 
 
 @pytest.mark.parametrize("site", [42, "grid", {"id": "grid"}])
@@ -1990,4 +2025,5 @@ def test_the_coordinator_gets_the_battery_endpoints_the_default_solver_uses(init
     kw = optimization._soc_endpoints_as_the_default_solver(
         opt, {"soc_init": init, "soc_final": final, "debug": False}
     )
-    assert (kw["soc_init"], kw["soc_final"]) == expected and kw["debug"] is False
+    assert (kw["soc_init"], kw["soc_final"]) == expected
+    assert kw["debug"] is False

@@ -206,7 +206,7 @@ class TestDayaheadPlants(PerPlantResultsBase):
             self.assertIn(col, first)
         # serialize() on the result frame gives the same keys (what /api/v1/plan serves).
         serialized = plan_store.serialize(opt_res)
-        self.assertTrue(set(PLANT_COLUMNS) <= set(serialized[0]))
+        self.assertLessEqual(set(PLANT_COLUMNS), set(serialized[0]))
         self.assertEqual(len(serialized), 48)
 
     @fixture_clock()

@@ -769,7 +769,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_config.return_value = False
         with self.assertRaises(Exception) as context:
             await web_server._build_configuration(c_path, l_path, d_path)
-        self.assertTrue("Failed to find default config" in str(context.exception))
+        self.assertIn("Failed to find default config", str(context.exception))
 
     @patch("emhass.web_server.build_secrets", new_callable=AsyncMock)
     @patch("os.getenv")
@@ -821,13 +821,13 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_params.return_value = False
         with self.assertRaises(Exception) as context:
             await web_server._build_and_save_params(config, "cost", "INFO", c_path)
-        self.assertTrue("error has occurred while building params" in str(context.exception))
+        self.assertIn("error has occurred while building params", str(context.exception))
         # Test 3: data_path missing
         mock_build_params.return_value = {"optim_conf": {}}
         mock_os_exists.return_value = False
         with self.assertRaises(Exception) as context:
             await web_server._build_and_save_params(config, "cost", "INFO", c_path)
-        self.assertTrue("missing" in str(context.exception))
+        self.assertIn("missing", str(context.exception))
 
     @patch("emhass.web_server.clear_file_log", new_callable=AsyncMock)
     @patch("logging.FileHandler")

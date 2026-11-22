@@ -156,7 +156,8 @@ def test_a_config_that_cannot_be_written_leaves_both_files_as_they_were(web):
     if status == 500:
         assert any("64-bit" in e for e in errors), errors
     else:
-        assert status == 400 and "64 bits" in text
+        assert status == 400
+        assert "64 bits" in text
     assert written == []
     assert web.files() == before
 
