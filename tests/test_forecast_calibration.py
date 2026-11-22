@@ -214,7 +214,7 @@ class TestForecastCalibration(unittest.TestCase):
         runtime knob reaches the report rather than being ignored."""
         load = build_load(days=80)
         custom_val_days = 21
-        self.assertNotEqual(custom_val_days, fc.CALIBRATION_VAL_DAYS)
+        self.assertNotEqual(fc.CALIBRATION_VAL_DAYS, custom_val_days)
         res = run(
             fc.compute_forecast_calibration(
                 load, FREQ, EMHASS_CONF, logger, test_days=10, val_days=custom_val_days

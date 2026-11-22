@@ -648,7 +648,7 @@ class TestSolverBoundary(unittest.IsolatedAsyncioTestCase):
                         runtimeparams[key][3] = INVALID_VALUES[label]
                         result, calls, _ = await self._run(action, runtimeparams)
                         self.assertEqual(calls, 0)
-                        self.assertFalse(isinstance(result, pd.DataFrame))
+                        self.assertNotIsInstance(result, pd.DataFrame)
                         self.assertFalse(result)
 
     async def test_invalid_external_pv_pair_never_reaches_the_solver(self):

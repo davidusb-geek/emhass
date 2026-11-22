@@ -4787,8 +4787,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Identify the non-zero region: reindex may zero-fill rows that fall outside
         # the anchor window; restrict assertions to rows where P50 result > 1 W.
         nonzero_mask = df_bias0["yhat"].values > 1.0
-        self.assertTrue(
-            nonzero_mask.sum() > 0,
+        self.assertGreater(
+            nonzero_mask.sum(),
+            0,
             "No non-zero P50 rows found — anchor timestamps do not overlap forecast_dates",
         )
 
@@ -4837,7 +4838,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # baseline (pure P50) to measure ratios against
         base = await self._fetch_solcast_with_bias(get_url, payload, 0.0)
         mask = base["yhat"].values > 1.0
-        self.assertTrue(mask.sum() > 0)
+        self.assertGreater(mask.sum(), 0)
         base_vals = base["yhat"].values[mask]
 
         # (bias_value, expected ratio of result to the P50 baseline)

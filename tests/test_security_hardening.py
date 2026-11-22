@@ -310,7 +310,7 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         expected = {n for n in names if "influx" in n or "victoria" in n}
         expected |= {"use_websocket", "hass_url", "long_lived_token", "ssl_no_verify"}
         expected.discard("use_influxdb")
-        self.assertTrue(expected <= RUNTIME_DENIED_KEYS, expected - RUNTIME_DENIED_KEYS)
+        self.assertLessEqual(expected, RUNTIME_DENIED_KEYS, expected - RUNTIME_DENIED_KEYS)
         self.assertNotIn("use_influxdb", RUNTIME_DENIED_KEYS)
         self.assertGreaterEqual(len(RUNTIME_DENIED_KEYS), 23)
 

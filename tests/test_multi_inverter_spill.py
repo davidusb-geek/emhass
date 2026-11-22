@@ -99,8 +99,10 @@ def test_scalar_pv_only_inverter_is_clipped_and_the_totals_follow(caplog):
     assert col(res, "P_hybrid_inverter_1") == pytest.approx(3000, abs=1e-3)
     lines = _messages(caplog, CLIP_MSG)
     assert len(lines) == 1
-    assert "Inverter 1" in lines[0] and "8 steps" in lines[0]
-    assert "3333 W" in lines[0] and "peak 5000 W" in lines[0]
+    assert "Inverter 1" in lines[0]
+    assert "8 steps" in lines[0]
+    assert "3333 W" in lines[0]
+    assert "peak 5000 W" in lines[0]
 
 
 def test_curved_pv_only_inverter_is_clipped_to_the_curve_limit():
@@ -245,7 +247,8 @@ def test_spill_price_follows_the_most_negative_price(costfun, cost, prod, expect
     opt.costfun = costfun
     solve(opt, pv=(7000.0,), load=1000.0, cost=cost, prod=prod, soc=0.95)
     price = getattr(opt, "param_spill_price", None)
-    assert price is not None and price.shape == (HORIZON,)
+    assert price is not None
+    assert price.shape == (HORIZON,)
     np.testing.assert_allclose(price.value, expected)  # the same price in every step here
 
 
@@ -279,7 +282,8 @@ def test_spill_price_follows_new_prices_on_the_cached_problem():
     prob = opt.prob
     np.testing.assert_allclose(opt.param_spill_price.value, 0.4)
     solve(opt, pv=(7000.0,), prod=-0.5, soc=0.95)
-    assert opt.prob is prob and opt.prob.is_dcp(dpp=True)
+    assert opt.prob is prob
+    assert opt.prob.is_dcp(dpp=True)
     np.testing.assert_allclose(opt.param_spill_price.value, 1.0)
     solve(opt, pv=(7000.0,), prod=0.05, soc=0.95)  # back to the floor
     np.testing.assert_allclose(opt.param_spill_price.value, 0.002)
@@ -370,11 +374,13 @@ def test_the_horizon_can_change_with_a_spill_variable():
     price = getattr(opt, "param_spill_price", None)
     short = solve(opt, pv=(7000.0,), load=1000.0, soc=0.95)
     longer = solve(opt, pv=(7000.0,), load=1000.0, soc=0.95, n=HORIZON + 4)
-    assert len(short) == HORIZON and len(longer) == HORIZON + 4
+    assert len(short) == HORIZON
+    assert len(longer) == HORIZON + 4
     assert opt.vars["p_pv_spill_inv"][0].shape == (HORIZON + 4,)
     np.testing.assert_allclose(_spill(longer), 2000.0, atol=1e-3)
     # the per-step price follows the horizon: a new vector of the new length, set for the run
-    assert price is not None and opt.param_spill_price.shape == (HORIZON + 4,)
+    assert price is not None
+    assert opt.param_spill_price.shape == (HORIZON + 4,)
     assert (opt.param_spill_price.value > 0).all()
 
 
@@ -384,7 +390,8 @@ def test_the_spill_log_is_bounded_to_ten_steps_plus_a_count(caplog):
     solve(opt, pv=(7000.0,), load=1000.0, soc=0.95, n=16)
     lines = _messages(caplog, "spilled PV")
     assert len(lines) == 1
-    assert "Inverter 0" in lines[0] and "16 steps" in lines[0]
+    assert "Inverter 0" in lines[0]
+    assert "16 steps" in lines[0]
     assert len(re.findall(r"\d\+0\d:\d\d: 2000 W", lines[0])) == 10  # timestamp: N W
     assert lines[0].endswith("and 6 more")
     assert "could not or would not take" in lines[0]
@@ -396,7 +403,9 @@ def test_the_spill_log_lists_every_step_when_there_are_few_and_is_silent_without
     pv = np.array([7000, 7000, 7000, 1000, 1000, 1000, 1000, 1000], dtype=float)
     solve(opt, pv=(pv,), load=1000.0, soc=0.95)
     lines = _messages(caplog, "spilled PV")
-    assert len(lines) == 1 and "3 steps" in lines[0] and "more" not in lines[0]
+    assert len(lines) == 1
+    assert "3 steps" in lines[0]
+    assert "more" not in lines[0]
     assert len(re.findall(r": 2000 W", lines[0])) == 3
     caplog.clear()
     solve(opt, pv=(1000.0,), load=1000.0, soc=0.95)
@@ -616,7 +625,8 @@ def test_no_step_spills_and_discharges_the_battery_on_the_same_inverter():
     assert _throughput_wh(res) < 1  # and the battery stays still
     # on a bell day with a weight, discharge and spill both happen, but never together
     _, day = _bell_day(curtail=False, weight=0.05)
-    assert (_spill(day) > 1000).any() and (col(day, "P_batt") > 1000).any()
+    assert (_spill(day) > 1000).any()
+    assert (col(day, "P_batt") > 1000).any()
     assert not _overlap(day).any()
 
 
@@ -629,7 +639,8 @@ def test_the_relaxed_retry_keeps_the_no_discharge_while_spilling_rule():
         df_input, p_pv, p_load = _frame(pv=7000.0, load=1000.0)
         res = opt.perform_dayahead_forecast_optim(df_input, p_pv, p_load, 0.95, 0.95)
     assert opt.optim_status == "Optimal (Relaxed)"
-    assert _spill(res).min() > 1000 and not _overlap(res).any()
+    assert _spill(res).min() > 1000
+    assert not _overlap(res).any()
 
 
 def test_a_battery_above_its_soc_target_cannot_shed_energy_through_a_clipping_inverter():
@@ -683,7 +694,9 @@ def test_two_lossless_inverters_with_batteries_warn_once_per_optimization(caplog
     solve(opt)
     lines = _warnings(caplog)
     assert len(lines) == 1
-    assert "[0, 1]" in lines[0] and "arbitrary" in lines[0] and "efficiency" in lines[0]
+    assert "[0, 1]" in lines[0]
+    assert "arbitrary" in lines[0]
+    assert "efficiency" in lines[0]
 
 
 def test_a_string_inverter_with_a_battery_only_inverter_does_not_warn(caplog):
@@ -728,7 +741,8 @@ def test_a_third_inverter_joins_the_pair_in_the_warning(caplog):
         logger=log,
     )
     lines = _warnings(caplog)
-    assert len(lines) == 1 and "[0, 1]" in lines[0]
+    assert len(lines) == 1
+    assert "[0, 1]" in lines[0]
 
 
 def test_an_inactive_battery_does_not_count(caplog):
@@ -810,4 +824,5 @@ def test_the_clip_and_spill_are_not_used_at_one_inverter():
             },
         )
     warn.assert_not_called()
-    assert not hasattr(opt, "param_spill_price") and "p_pv_spill_inv" not in opt.vars
+    assert not hasattr(opt, "param_spill_price")
+    assert "p_pv_spill_inv" not in opt.vars

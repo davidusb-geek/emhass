@@ -322,7 +322,9 @@ def test_issue1287_hourly_pv_keeps_utc_instant_through_saved_plan_and_publish(
                 plan = run_async(
                     cl.dayahead_forecast_optim(idd, LOG, save_data_to_file=False, debug=False)
                 )
-        assert plan is not None and "P_PV" in plan and "P_Load" in plan
+        assert plan is not None
+        assert "P_PV" in plan
+        assert "P_Load" in plan
 
         # Independent time-labelled PV series from the Open-Meteo -> pvlib
         # pipeline, computed without the optimisation solver or publish path.
@@ -444,9 +446,11 @@ def test_pv_plants_of_a_step_average_add_up_to_the_aggregate():
         df_weather = idd["df_weather"]
         total = fcst.get_power_from_weather(df_weather)
         raw = fcst.pv_plant_raw
-        assert raw is not None and raw.shape[1] == 2
+        assert raw is not None
+        assert raw.shape[1] == 2
         assert np.allclose(raw.sum(axis=1).to_numpy(), total.to_numpy(), atol=1.0)
-        assert raw.index.equals(total.index) and len(total) == len(df_weather)
+        assert raw.index.equals(total.index)
+        assert len(total) == len(df_weather)
     finally:
         env.close()
 
@@ -790,7 +794,8 @@ def test_native_weather_that_does_not_fit_the_frame_is_rejected_and_logged(fcst,
     finally:
         fcst.logger.removeHandler(handler)
         fcst.logger.setLevel(old_level)
-    assert len(calls) == 1 and calls[0] is frame, "the native weather was used"
+    assert len(calls) == 1, "the native weather was used"
+    assert calls[0] is frame, "the native weather was used"
     np.testing.assert_allclose(got.to_numpy(), np.arange(len(frame), dtype=float))
     assert any(REJECTED_LOG in m for m in handler.messages)
 
@@ -802,7 +807,8 @@ def test_native_weather_on_a_timezone_naive_frame_falls_back_to_the_step_start(f
     frame = _frame(3)
     frame.index = frame.index.tz_convert("UTC").tz_localize(None)
     got = fcst._pv_power_from_weather_frame(frame)
-    assert len(calls) == 1 and calls[0] is frame
+    assert len(calls) == 1
+    assert calls[0] is frame
     assert got.to_numpy().tolist() == [0.0, 1.0, 2.0]
 
 
@@ -902,7 +908,8 @@ def test_only_the_missing_final_endpoint_is_held(fcst, monkeypatch):
     """The documented policy: data that stops at the last step start holds its last weather at the
     one missing right-hand endpoint."""
     got = _build_native(fcst, monkeypatch, _raw_15min(9, drop=(8,)))
-    assert got is not None and len(got["time"]) == 9
+    assert got is not None
+    assert len(got["time"]) == 9
     assert got["ghi"][8] == got["ghi"][7]
 
 
@@ -910,7 +917,8 @@ def test_data_stopping_at_the_last_step_start_still_builds_and_a_hole_inside_it_
     fcst, monkeypatch
 ):
     held = _build_native(fcst, monkeypatch, _raw_15min(9, drop=(5, 6, 7, 8)))
-    assert held is not None and held["ghi"][5:] == [held["ghi"][4]] * 4
+    assert held is not None
+    assert held["ghi"][5:] == [held["ghi"][4]] * 4
     assert _build_native(fcst, monkeypatch, _raw_15min(9, drop=(6,))) is None
 
 
@@ -1017,7 +1025,8 @@ def test_malformed_native_weather_metadata_falls_back_to_the_step_start(fcst, mo
     frame = _frame(2)
     damage(frame.attrs["pv_native_weather"])
     got = fcst._pv_power_from_weather_frame(frame)
-    assert len(calls) == 1 and calls[0] is frame, "the damaged native weather was used"
+    assert len(calls) == 1, "the damaged native weather was used"
+    assert calls[0] is frame, "the damaged native weather was used"
     np.testing.assert_allclose(got.to_numpy(), [0.0, 1.0])
 
 

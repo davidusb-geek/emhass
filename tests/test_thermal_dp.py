@@ -306,7 +306,8 @@ def test_dp_respects_max_thermal_power():
         params=ThermalDPParams(demand_kw=demand, max_thermal_power=6.0, **base),
         tank_start=25.0,
     )
-    assert not uncapped.meta["infeasible"] and not capped.meta["infeasible"]
+    assert not uncapped.meta["infeasible"]
+    assert not capped.meta["infeasible"]
     # Load-bearing: the uncapped DP must exceed the cap somewhere, else the
     # capped assertion proves nothing.
     assert delivered_per_step(uncapped, base).max() > 6.0 + 0.5
