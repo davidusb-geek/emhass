@@ -1265,7 +1265,7 @@ def _battery_identification_last_attempt(entry) -> dict | None:
     return attempt
 
 
-def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = None) -> bool:
+def _battery_id_agreement_hold(entry) -> bool:
     """
     True when a retained ok record must not be served because a fit attempt
     since it was stored was held back by the same-source agreement gate and
@@ -1282,9 +1282,10 @@ def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = Non
     served as before. A record above the edge is held whatever its own
     cross-check said: newer data agreeing near the ceiling counts against it.
 
-    ``current_pair`` (N>1 only) binds the hold to the ``(power, soc)`` pair the
-    attempt was made against, like every other N>1 read of last_attempt. The
-    N=1 cache hit is sensor-indifferent, so it passes no pair.
+    No sensor pair is checked here. At N>1 the flag only ever means the
+    record's own pair was held (the failure recorder never records a hold
+    for another pair, it only carries one), and the N>1 publish gate already
+    requires the record's sensors to match the current pair before asking.
 
     Anything malformed returns False and the record is served as before, so a
     hand-edited file can never become a silent permanent suppression.
@@ -1297,9 +1298,7 @@ def _battery_id_agreement_hold(entry, current_pair: tuple[str, str] | None = Non
     if isinstance(eta, bool) or not isinstance(eta, (int, float)) or not edge < eta < float("inf"):
         return False
     attempt = _battery_identification_last_attempt(entry)
-    if attempt is None or attempt.get("agreement_hold") is not True:
-        return False
-    return current_pair is None or _battery_id_sensors_match(attempt.get("sensors"), *current_pair)
+    return attempt is not None and attempt.get("agreement_hold") is True
 
 
 def _record_battery_identification_failed_attempt(
@@ -1329,11 +1328,17 @@ def _record_battery_identification_failed_attempt(
     there would be dead data.
 
     ``agreement_hold`` is the result's flag from the same-source agreement
-    gate; ``"agreement_hold": true`` is recorded in ``last_attempt`` when it
-    is True, or when the retained ok record's previous well-formed
-    last_attempt already carried it for the same ``sensors``. Every other
-    attempt keeps the same keys as before. It is what stops a retained
-    near-ceiling record being served (see :func:`_battery_id_agreement_hold`).
+    gate. Against a retained ok record the flag means "the record's own
+    sensor pair was held and no fit has passed since":
+    ``"agreement_hold": true`` is recorded in ``last_attempt`` when the gate
+    held this attempt and it was made against the record's own pair (always
+    at N=1, which passes no ``sensors``), or when the previous well-formed
+    last_attempt already carried it, whatever pair this attempt used. A gate
+    hold against another pair is not recorded, so it can never suppress this
+    record after the list is edited back. With no retained ok record the
+    flag is recorded as given. Every other attempt keeps the same keys as
+    before. It is what stops a retained near-ceiling record being served
+    (see :func:`_battery_id_agreement_hold`).
 
     ``existing`` must already be known to be the SAME schema shape this
     caller expects (flat v1 at N=1, a v2 container slot at N>1): this
@@ -1351,21 +1356,26 @@ def _record_battery_identification_failed_attempt(
     }
     if sensors is not None:
         attempt["sensors"] = sensors
-    if agreement_hold is True:
-        attempt["agreement_hold"] = True
     if isinstance(existing, dict) and existing.get("status") == "ok":
         new_payload = dict(existing)
-        # A hold lasts until a fit passes (a pass replaces the record and its
-        # last_attempt), so a later failure for another reason against the
-        # same sensors keeps it rather than serving the record again.
+        # Only a hold of the record's own pair counts. A hold lasts until a fit
+        # passes (a pass replaces the record and its last_attempt), so a later
+        # failure for another reason, or against another pair and back, keeps
+        # it rather than serving the record again.
+        own_pair = sensors is None or (
+            isinstance(sensors, dict)
+            and _battery_id_sensors_match(
+                existing.get("sensors"), sensors.get("power"), sensors.get("soc")
+            )
+        )
         previous = _battery_identification_last_attempt(existing)
-        if (
-            previous is not None
-            and previous.get("agreement_hold") is True
-            and previous.get("sensors") == sensors
+        if (agreement_hold is True and own_pair) or (
+            previous is not None and previous.get("agreement_hold") is True
         ):
             attempt["agreement_hold"] = True
     else:
+        if agreement_hold is True:
+            attempt["agreement_hold"] = True
         new_payload = {"schema_version": _BATTERY_ID_SCHEMA_VERSION_V1}
     new_payload["last_attempt"] = attempt
     return new_payload
@@ -2004,7 +2014,7 @@ async def _identify_battery_impl(
                 and entry.get("status") == "ok"
                 and entry_matches_current_pair
             ):
-                if _battery_id_agreement_hold(entry, (power_list[k], soc_list[k])):
+                if _battery_id_agreement_hold(entry):
                     logger.info(
                         "Battery %d identification: stored estimate (one-way efficiency %s) is "
                         "above %.3f and a later fit was held back by the agreement check "

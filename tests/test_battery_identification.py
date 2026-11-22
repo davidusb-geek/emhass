@@ -894,19 +894,20 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
             with self.subTest(case=name):
                 self.assertTrue(await self._serves(payload))
 
-    async def test_n2_flagged_attempt_for_another_sensor_pair_is_served(self):
-        """At N>1 the hold is bound to the sensor pair the attempt was made
-        against, like every other N>1 read of last_attempt."""
+    async def test_n2_flagged_attempt_for_another_sensor_pair_is_held(self):
+        """At N>1 the flag always means the record's own pair was held (a
+        hold against another pair is never recorded, only carried), so a
+        flagged attempt made against another pair still holds the record."""
         seed = await self._flagged_n2_seed({"power": "pX", "soc": "socX"})
         self._json_path().write_text(json.dumps(seed))
         rh = await self._run(self._conf(24))
         self.assertIsNone(self.last_retrieve_sensor_config)
-        self.assertIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
         self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
 
     async def test_n2_flagged_attempt_for_the_current_sensor_pair_is_held(self):
-        """Counterfactual for the test above: same seed, attempt against the
-        current pair, so battery 0 is held and battery 1 is still served."""
+        """Same seed with the attempt against the current pair: battery 0 is
+        held and battery 1 is still served."""
         seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
         self._json_path().write_text(json.dumps(seed))
         rh = await self._run(self._conf(24))
@@ -976,14 +977,71 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
         self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
 
-    async def test_n2_hold_is_not_carried_to_another_sensor_pair(self):
-        """Counterfactual for the test above: the earlier hold was against
-        another pair, so the new attempt does not inherit it and the record
-        is served."""
+    async def test_n2_carried_hold_is_kept_whatever_pair_the_flagged_attempt_used(self):
+        """A flagged attempt recorded against another pair is a carried hold
+        of the record's own pair, so a later failure for another reason
+        against the record's pair keeps it."""
         seed = await self._flagged_n2_seed({"power": "pX", "soc": "socX"})
         self._json_path().write_text(json.dumps(seed))
         await self._run(self._conf(0), df=self._n2_df_above_ceiling_b0())
         attempt = json.loads(self._json_path().read_text())["batteries"]["0"]["last_attempt"]
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertIs(attempt.get("agreement_hold"), True)
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    def _n2_df_b0_on(self, power_col, soc_col, eta, n_cycles):
+        b0 = _make_history(10000.0, eta, n_cycles=n_cycles).rename(
+            columns={"sensor_power_battery": power_col, "sensor_battery_state_of_charge": soc_col}
+        )
+        healthy = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        return pd.concat([b0, healthy], axis=1)
+
+    def _n2_last_attempt_b0(self):
+        return json.loads(self._json_path().read_text())["batteries"]["0"]["last_attempt"]
+
+    async def test_n2_hold_survives_a_sensor_pair_round_trip(self):
+        """Hold on pair A, the list edited to pair B where a fit fails for
+        another reason, then edited back to A where a fit fails for another
+        reason again: the A record is still not served."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        seed["batteries"]["0"]["fitted_at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+        self._json_path().write_text(json.dumps(seed))
+        self._set_n2_config(["pB", "p1"], ["socB", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("pB", "socB", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["sensors"], {"power": "pB", "soc": "socB"})
+        self.assertIs(attempt.get("agreement_hold"), True, "carried through pair B")
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("p0", "soc0", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertIs(attempt.get("agreement_hold"), True, "carried back on pair A")
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    async def test_n2_gate_hold_on_another_pair_does_not_suppress_the_record(self):
+        """Counterfactual for the test above: the record was never held, and a
+        gate hold against pair B is not recorded, so after the edit back to A
+        and a failure for another reason the A record is served."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        del seed["batteries"]["0"]["last_attempt"]
+        seed["batteries"]["0"]["fitted_at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+        self._json_path().write_text(json.dumps(seed))
+        self._set_n2_config(["pB", "p1"], ["socB", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("pB", "socB", 0.988, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["status"], "low_confidence")
+        self.assertNotIn("agreement_hold", attempt)
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("p0", "soc0", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
         self.assertEqual(attempt["status"], "rejected_sanity_check")
         self.assertNotIn("agreement_hold", attempt)
         rh = await self._run(self._conf(24))
