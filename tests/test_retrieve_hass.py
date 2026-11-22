@@ -2050,11 +2050,14 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                             )
                         is_nan = gaps[entity_id].isna().to_numpy()
                         if minutes == 7:
-                            # A 7-minute bin can straddle the edge of a hole: at most one
-                            # bin per edge differs, and nothing is held across the hole.
-                            self.assertLessEqual(
-                                (is_nan != in_hole).sum(), 2 * len(windows), entity_id
+                            # A 7-minute bin can straddle the edge of a hole, so check
+                            # against the rows: a bin is NaN exactly when no row starts in it.
+                            rows = pd.to_datetime(
+                                [r["start"] for r in stats[entity_id]], unit="ms", utc=True
                             )
+                            nxt = np.minimum(rows.searchsorted(utc), len(rows) - 1)
+                            has_row = (rows[nxt] >= utc) & (rows[nxt] < utc + self.rh.freq)
+                            np.testing.assert_array_equal(is_nan, ~has_row, err_msg=entity_id)
                         else:
                             np.testing.assert_array_equal(is_nan, in_hole, err_msg=entity_id)
                         keep = ~in_hole & ~is_nan
