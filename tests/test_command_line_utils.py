@@ -514,6 +514,106 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         opt4, _ = await self._mpc_with_group_limit(2500.0)
         self.assertIsNot(opt4, opt3, "a scalar max_power is still keyed by value")
 
+    async def test_naive_mpc_overlapping_per_step_groups_swapped_on_a_cache_hit(self):
+        """Two overlapping per-step budgets, one with a weighted battery (#1366). The
+        second MPC call swaps the two lists: it reuses the cached problem, each group
+        is held by its own new list at every step, and the plan's status and objective
+        equal a fresh build of the second call (the #1364 guarantee with groups)."""
+        self.enterContext(
+            patch(
+                "emhass.forecast.Forecast._get_weather_open_meteo",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
+        OptimizationCache.clear(logger)
+        self.addCleanup(OptimizationCache.clear, logger)
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config.update(
+            {
+                "set_use_battery": True,
+                "inverter_is_hybrid": False,
+                "battery_nominal_energy_capacity": 5000,
+                "battery_charge_power_max": 2400,
+                "battery_discharge_power_max": 2400,
+            }
+        )
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        params["optim_conf"]["set_use_pv"] = True
+        n = 48
+        # A cheap first third. list_a is tight there (1500 W), list_b in the rest
+        # (3500 W), so the plan depends on which group holds which list.
+        prices = [0.05] * 16 + [0.40] * 32
+        list_a = [1500.0] * 16 + [6000.0] * 32
+        list_b = [6000.0] * 16 + [3500.0] * 32
+        battery_weights = {"battery0": {"charge": 0.8, "discharge": -0.5}}
+
+        def runtime(g0_list, g1_list):
+            return {
+                "prediction_horizon": n,
+                "pv_power_forecast": [0.0] * n,
+                "load_power_forecast": [400.0] * n,
+                "load_cost_forecast": prices,
+                "prod_price_forecast": [0.0] * n,
+                "soc_init": 0.1,
+                "soc_final": 0.9,
+                "number_of_deferrable_loads": 2,
+                "nominal_power_of_deferrable_loads": [3000.0, 1500.0],
+                "operating_hours_of_each_deferrable_load": [3, 6],
+                "treat_deferrable_load_as_semi_cont": [True, False],
+                "set_deferrable_load_single_constant": [False, False],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": g0_list},
+                    {
+                        "names": ["deferrable0", "deferrable1", "battery0"],
+                        "max_power": g1_list,
+                        "weights": battery_weights,
+                    },
+                ],
+            }
+
+        async def solve(rt):
+            p = copy.deepcopy(params)
+            p["passed_data"] = rt
+            idd = await set_input_data_dict(
+                emhass_conf,
+                "profit",
+                orjson.dumps(p).decode("utf-8"),
+                orjson.dumps(rt).decode("utf-8"),
+                "naive-mpc-optim",
+                logger,
+                get_data_from_file=True,
+            )
+            res = await naive_mpc_optim(idd, logger)
+            return idd["opt"], res
+
+        run_1, run_2 = runtime(list_a, list_b), runtime(list_b, list_a)
+        opt_fresh, _ = await solve(run_2)
+        status_fresh, objective_fresh = opt_fresh.optim_status, float(opt_fresh.prob.value)
+        OptimizationCache.clear(logger)
+        opt_1, _ = await solve(run_1)
+        self.assertEqual(opt_1.optim_status, "Optimal")
+        prob_1, objective_1 = opt_1.prob, float(opt_1.prob.value)
+        # The swap matters: run 1 and run 2 do not plan to the same objective.
+        self.assertGreater(abs(objective_1 - objective_fresh), 1e-3)
+        opt_2, res = await solve(run_2)
+        self.assertIs(opt_2, opt_1, "the swapped lists must hit the cache")
+        self.assertIs(opt_2.prob, prob_1, "the cached problem must not be rebuilt")
+        self.assertEqual(status_fresh, "Optimal")
+        self.assertEqual(opt_2.optim_status, status_fresh)
+        self.assertAlmostEqual(
+            float(opt_2.prob.value), objective_fresh, delta=1e-6 * max(1.0, abs(objective_fresh))
+        )
+        d0, d1 = res["P_deferrable0"].to_numpy(), res["P_deferrable1"].to_numpy()
+        p_batt = res["P_batt"].to_numpy()
+        charge, discharge = np.clip(-p_batt, 0, None), np.clip(p_batt, 0, None)
+        self.assertTrue((d0 + d1 <= np.array(list_b) + 1e-3).all(), "g0 holds list_b")
+        self.assertTrue(
+            (d0 + d1 + 0.8 * charge - 0.5 * discharge <= np.array(list_a) + 1e-3).all(),
+            "g1 holds list_a",
+        )
+
     async def test_naive_mpc_per_step_group_limit_wrong_length(self):
         """A per-step list that does not match the horizon is a RuntimeParamError naming
         both lengths, so /action answers 400 (#1366)."""
@@ -3442,6 +3542,26 @@ class TestOptimizationCache(unittest.TestCase):
             key, self._key_with_groups([{**per_step, "names": [*names, "battery0"]}])
         )
         self.assertNotEqual(key, self._key_with_groups([{**per_step, "mutual_exclusion": True}]))
+
+    def test_cache_key_deferrable_load_groups_battery_weights(self):
+        """#1366: battery weights are constants in the row, so a change to either the
+        charge or the discharge weight misses the cache; key order inside the weight
+        object does not."""
+        names = ["deferrable0", "battery0"]
+
+        def key(battery_weight):
+            group = {"names": names, "max_power": 3000.0}
+            if battery_weight is not None:
+                group["weights"] = {"battery0": battery_weight}
+            return self._key_with_groups([group])
+
+        no_netting = key({"charge": 1, "discharge": 0})
+        self.assertNotEqual(no_netting, key({"charge": 1, "discharge": -1}))
+        self.assertNotEqual(no_netting, key({"charge": 0.5, "discharge": 0}))
+        self.assertNotEqual(key({"charge": 1}), key({"charge": 0.5}))
+        self.assertNotEqual(key({"discharge": -0.5}), key({"discharge": -1}))
+        self.assertNotEqual(key(None), key({"discharge": -1}))
+        self.assertEqual(no_netting, key({"discharge": 0, "charge": 1}))
 
     def test_cache_key_deferrable_load_groups_empty_values_mean_no_groups(self):
         """#1366: every false value the group check reads as no groups keys like no
