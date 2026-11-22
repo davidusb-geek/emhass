@@ -44,6 +44,8 @@ header_auth = "Bearer"
 _RECORDER_COMMIT_GRACE = pd.Timedelta(seconds=10)
 # Rounding of the timestamps Home Assistant returns for the same change.
 _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
+# Each Home Assistant statistics row covers one 5-minute period (period="5minute").
+_STATISTICS_PERIOD = pd.Timedelta(minutes=5)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
 # The forms of the Supervisor proxy URL the code accepts (compared without a trailing slash).
@@ -2812,11 +2814,17 @@ class RetrieveHass:
         r"""
         Convert WebSocket statistics data to DataFrame.
 
+        :param stats_data: Statistics rows from the websocket, keyed by entity id.
+        :type stats_data: dict[str, Any]
+        :param var_list: Entity ids to include as columns.
+        :type var_list: list[str]
         :param forward_fill: Fill time steps that have no statistics with the last \
             value (default). When False they stay NaN, so a stretch without data \
             is kept as a gap. A time step shorter than the 5-minute statistics \
             period still takes the value of the row whose period it falls in.
         :type forward_fill: bool, optional
+        :return: Statistics resampled to the time step, indexed in the local             time zone. Empty when no entity has usable statistics.
+        :rtype: pd.DataFrame
         """
         import pandas as pd
 
@@ -2908,7 +2916,8 @@ class RetrieveHass:
                 # Each statistics row covers a 5-minute period. With a time step
                 # shorter than that, hold a row over the steps inside its own period
                 # only, so the normal 5-minute spacing is not read as a gap.
-                hold = -(-pd.Timedelta(minutes=5) // pd.Timedelta(self.freq)) - 1
+                # hold = ceil(period / freq) - 1 steps (floor division on the negative).
+                hold = -(-_STATISTICS_PERIOD // pd.Timedelta(self.freq)) - 1
                 if hold > 0:
                     df_final = df_final.ffill(limit=hold)
 

@@ -20,6 +20,7 @@ import orjson
 import pandas as pd
 
 from emhass import utils
+from emhass.command_line import _retrieve_from_hass
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import get_days_list, get_logger, get_yaml_parse
 from tests.aioresponses_compat import aioresponses
@@ -2000,12 +2001,15 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(success)
         return self.rh.df_final.copy()
 
+    def _no_forward_fill_kwargs(self):
+        """forward_fill=False, only when the converter has the parameter (so the tests also run, red, on base)."""
+        params = inspect.signature(self.rh._convert_statistics_to_dataframe).parameters
+        return {"forward_fill": False} if "forward_fill" in params else {}
+
     def test_convert_statistics_without_forward_fill_keeps_gaps(self):
         """C1 (#1360): forward_fill=False leaves every bucket with no rows as NaN."""
         stats, var_list, expected_nan = self._ws_gap_stats()
-        kwargs = {}
-        if "forward_fill" in inspect.signature(self.rh._convert_statistics_to_dataframe).parameters:
-            kwargs["forward_fill"] = False
+        kwargs = self._no_forward_fill_kwargs()
         gaps = self.rh._convert_statistics_to_dataframe(stats, var_list, **kwargs)
         filled = self.rh._convert_statistics_to_dataframe(stats, var_list)
         self._assert_gaps_only_where_filled(gaps, filled, expected_nan)
@@ -2021,19 +2025,18 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     def test_convert_statistics_without_forward_fill_short_time_step(self):
         """
         C3 (#1360): with a time step under 5 minutes, each statistics row still
-        covers its own 5-minute period, so only the real holes stay NaN.
+        covers its own 5-minute period, so only the real holes stay NaN. At 5
+        and 7 minutes nothing is held (the hold == 0 branch).
         """
         stats, var_list, _ = self._ws_gap_stats()
         holes = {
             self._WS_A: [("02:00", "04:00")],
             self._WS_B: [("02:00", "04:00"), ("10:00", "11:00")],
         }
-        kwargs = {}
-        if "forward_fill" in inspect.signature(self.rh._convert_statistics_to_dataframe).parameters:
-            kwargs["forward_fill"] = False
+        kwargs = self._no_forward_fill_kwargs()
         freq = self.rh.freq
         try:
-            for minutes in (1, 2, 3, 4):
+            for minutes in (1, 2, 3, 4, 5, 7):
                 with self.subTest(minutes=minutes):
                     self.rh.freq = pd.Timedelta(minutes=minutes)
                     gaps = self.rh._convert_statistics_to_dataframe(stats, var_list, **kwargs)
@@ -2045,12 +2048,18 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                             in_hole |= (utc >= pd.Timestamp(f"2024-01-01 {start}", tz="UTC")) & (
                                 utc < pd.Timestamp(f"2024-01-01 {end}", tz="UTC")
                             )
+                        is_nan = gaps[entity_id].isna().to_numpy()
+                        if minutes == 7:
+                            # A 7-minute bin can straddle the edge of a hole: at most one
+                            # bin per edge differs, and nothing is held across the hole.
+                            self.assertLessEqual(
+                                (is_nan != in_hole).sum(), 2 * len(windows), entity_id
+                            )
+                        else:
+                            np.testing.assert_array_equal(is_nan, in_hole, err_msg=entity_id)
+                        keep = ~in_hole & ~is_nan
                         np.testing.assert_array_equal(
-                            gaps[entity_id].isna().to_numpy(), in_hole, err_msg=entity_id
-                        )
-                        np.testing.assert_array_equal(
-                            gaps[entity_id].to_numpy()[~in_hole],
-                            filled[entity_id].to_numpy()[~in_hole],
+                            gaps[entity_id].to_numpy()[keep], filled[entity_id].to_numpy()[keep]
                         )
         finally:
             self.rh.freq = freq
@@ -2153,8 +2162,6 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
     async def test_retrieve_from_hass_keep_websocket_gaps_plumbing(self):
         """G5 (#1360): _retrieve_from_hass sets keep_websocket_gaps for battery_id only."""
-        from emhass.command_line import _retrieve_from_hass
-
         retrieve_hass_conf = dict(self.retrieve_hass_conf)
         retrieve_hass_conf["historic_days_to_retrieve"] = 1
         retrieve_hass_conf["sensor_power_battery"] = "sensor.power_battery"
