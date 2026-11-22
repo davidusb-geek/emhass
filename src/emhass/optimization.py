@@ -1259,12 +1259,19 @@ class Optimization:
             floor = np.zeros(n)
             shortfall = None
             lowered = None
+            prev = None
             for t in np.flatnonzero(has_req):
                 w = wanted[t]
                 if shortfall is None:
                     shortfall = max(w - free[t], 0.0)
                     if t > 0 and shortfall > tol:
                         lowered = (t, w, free[t])
+                else:
+                    # Rule 2: the steps with no floor since the last floor are
+                    # free to charge in, so they make up that much of the
+                    # shortfall, on top of the level any rise has built.
+                    shortfall = max(shortfall - (free[t] - free[prev]), 0.0)
+                prev = t
                 held = min(w, max(free[t], w - shortfall))
                 f = min(held, reach[t])
                 if held - f > tol and lowered is None:

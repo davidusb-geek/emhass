@@ -31,6 +31,8 @@ CAP = 10000.0  # build_optimization default battery: 10 kWh, 5 kW, soc 0.3..0.8,
 # A real charge efficiency, so a cost-neutral charge and discharge at one price
 # cannot tie with holding.
 EFF_95 = {"battery_charge_efficiency": 0.95, "battery_discharge_efficiency": 0.95}
+# 2 kW at efficiency 1: 1000 Wh per 30-minute step.
+SLOW_CHARGE = {"battery_charge_power_max": 2000.0}
 
 # The keys this file exercises. Older sources do not take them; the helpers
 # drop them there so the behavioural assertions are what fails, not a TypeError.
@@ -329,9 +331,10 @@ class TestSocFloorHolds(unittest.TestCase):
         """The shortfall a run starts with is carried, never made up: a rise is
         built by its own increase, a lower value or a dip never lowers the floor
         under the held level, and only a step with no floor gives the plan time to
-        build more. Each floor also binds the start of its step, so it is set on
-        the step before it too (over a step where the battery is unavailable).
-        5 kW at efficiency 1 adds 2500 Wh per 30-minute step."""
+        build more, on top of what a rise before it built. Each floor also binds
+        the start of its step, so it is set on the step before it too (over a
+        step where the battery is unavailable). 5 kW at efficiency 1 adds 2500 Wh
+        per 30-minute step."""
         hold = 0.5 * CAP
         unavailable_at_2 = {"battery_availability": [1, 1, 0] + [1] * 9}
         cases = {
@@ -389,10 +392,39 @@ class TestSocFloorHolds(unittest.TestCase):
                 {"soc_init": 0.4},
                 [4000] * N,
             ),
+            # A gap after a rise builds on the risen level, not on soc_init.
+            # At 2 kW one step adds 1000 Wh, under what the floor still lacks.
+            "flat then a gap": (
+                [0.6, 0.6, None] + [0.6] * 9,
+                {"soc_init": 0.4, "plant": SLOW_CHARGE},
+                [4000, 4000] + [5000] * 10,
+            ),
+            "rise then a gap": (
+                [0.6, 0.7, None] + [0.7] * 9,
+                {"soc_init": 0.4, "plant": SLOW_CHARGE},
+                [5000, 5000] + [6000] * 10,
+            ),
+            "rise, gap, rise": (
+                [0.6, 0.7, None, 0.7, 0.8] + [0.8] * 7,
+                {"soc_init": 0.4, "plant": SLOW_CHARGE},
+                [5000, 5000, 6000] + [7000] * 9,
+            ),
+            "rise then a gap, 8192 Wh at 4096 W": (
+                [0.625, 0.75, None, 0.75, 0.75] + [None] * 7,
+                {
+                    "soc_init": 0.375,
+                    "plant": {
+                        "battery_nominal_energy_capacity": 8192,
+                        "battery_charge_power_max": 4096,
+                    },
+                },
+                [4096, 4096] + [6144] * 3 + [0] * 7,
+            ),
         }
         for label, (soc_floor, extra, expected) in cases.items():
             with self.subTest(label):
-                opt = build_optimization()
+                extra = dict(extra)
+                opt = build_optimization(plant_overrides=extra.pop("plant", None))
                 run(opt, soc_floor=soc_floor, **{"soc_init": 0.5, **extra})
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
                 np.testing.assert_allclose(floor_of(opt), expected, atol=1e-6)
