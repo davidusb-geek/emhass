@@ -20,7 +20,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import last_run, plan_store, utils
+from emhass import battery_identification, last_run, plan_store, utils
 from emhass.atomic_file import atomic_write
 from emhass.battery_identification import SCHEMA_VERSION as _BATTERY_ID_SCHEMA_VERSION_V1
 from emhass.battery_identification import BatteryIdentification, apply_staleness_fill
@@ -1247,7 +1247,7 @@ def _battery_identification_last_attempt(entry) -> dict | None:
     recorded failure - a dict with a truthy ``status`` and a parsable
     ``attempted_at`` - else ``None``.
 
-    Both call sites (the N=1 cache-hit branch and :func:`_battery_fit_is_stale`)
+    The backoff readers (the N=1 cache-hit branch and :func:`_battery_fit_is_stale`)
     fall through to a re-fit when this returns ``None``, so a malformed
     last_attempt (missing, not a dict, no status, unparsable attempted_at -
     e.g. a hand-edited or truncated file) can never become a permanent no-fit
@@ -1265,8 +1265,48 @@ def _battery_identification_last_attempt(entry) -> dict | None:
     return attempt
 
 
+def _battery_id_agreement_hold(entry) -> bool:
+    """
+    True when a retained ok record must not be served because a fit attempt
+    since it was stored was held back by the same-source agreement gate and
+    none has passed since (#1072, #1294).
+
+    The gate holds back a fresh fit above the 0.985 one-way efficiency edge
+    when its cross-check agrees, but a record in that range stored before the
+    gate existed, or fitted from a history too short for the cross-check to
+    run, would otherwise keep being served as the retained record (#1052). So
+    the record is held only when its stored ``eta_charge_symmetric`` is above
+    that same edge and its well-formed ``last_attempt`` carries
+    ``agreement_hold: true`` (the failure recorder keeps the flag through
+    later failures until a fit passes). A record at or below the edge is
+    served as before. A record above the edge is held whatever its own
+    cross-check said: newer data agreeing near the ceiling counts against it.
+
+    No sensor pair is checked here. At N>1 the flag only ever means the
+    record's own pair was held (the failure recorder never records a hold
+    for another pair, it only carries one), and the N>1 publish gate already
+    requires the record's sensors to match the current pair before asking.
+
+    Anything malformed returns False and the record is served as before, so a
+    hand-edited file can never become a silent permanent suppression.
+    """
+    if not isinstance(entry, dict) or entry.get("status") != "ok":
+        return False
+    eta = entry.get("eta_charge_symmetric")
+    edge = battery_identification.SQRT_RTE_HIGH - battery_identification.AGREEMENT_EDGE_MARGIN
+    # bool is an int subclass; NaN and infinity fail the chained comparison.
+    if isinstance(eta, bool) or not isinstance(eta, (int, float)) or not edge < eta < float("inf"):
+        return False
+    attempt = _battery_identification_last_attempt(entry)
+    return attempt is not None and attempt.get("agreement_hold") is True
+
+
 def _record_battery_identification_failed_attempt(
-    existing: dict | None, status: str, messages: list[str], sensors: dict | None = None
+    existing: dict | None,
+    status: str,
+    messages: list[str],
+    sensors: dict | None = None,
+    agreement_hold: bool = False,
 ) -> dict:
     """
     Build the payload/slot to persist for a failed identification attempt.
@@ -1287,6 +1327,19 @@ def _record_battery_identification_failed_attempt(
     sensor_battery_state_of_charge on a cache hit), so recording sensors
     there would be dead data.
 
+    ``agreement_hold`` is the result's flag from the same-source agreement
+    gate. Against a retained ok record the flag means "the record's own
+    sensor pair was held and no fit has passed since":
+    ``"agreement_hold": true`` is recorded in ``last_attempt`` when the gate
+    held this attempt and it was made against the record's own pair (always
+    at N=1, which passes no ``sensors``), or when the previous well-formed
+    last_attempt already carried it, whatever pair this attempt used. A gate
+    hold against another pair is not recorded, so it can never suppress this
+    record after the list is edited back. With no retained ok record the
+    flag is recorded as given. Every other attempt keeps the same keys as
+    before. It is what stops a retained near-ceiling record being served
+    (see :func:`_battery_id_agreement_hold`).
+
     ``existing`` must already be known to be the SAME schema shape this
     caller expects (flat v1 at N=1, a v2 container slot at N>1): this
     function only distinguishes "ok" from "not ok" within that shape, it
@@ -1305,7 +1358,24 @@ def _record_battery_identification_failed_attempt(
         attempt["sensors"] = sensors
     if isinstance(existing, dict) and existing.get("status") == "ok":
         new_payload = dict(existing)
+        # Only a hold of the record's own pair counts. A hold lasts until a fit
+        # passes (a pass replaces the record and its last_attempt), so a later
+        # failure for another reason, or against another pair and back, keeps
+        # it rather than serving the record again.
+        own_pair = sensors is None or (
+            isinstance(sensors, dict)
+            and _battery_id_sensors_match(
+                existing.get("sensors"), sensors.get("power"), sensors.get("soc")
+            )
+        )
+        previous = _battery_identification_last_attempt(existing)
+        if (agreement_hold is True and own_pair) or (
+            previous is not None and previous.get("agreement_hold") is True
+        ):
+            attempt["agreement_hold"] = True
     else:
+        if agreement_hold is True:
+            attempt["agreement_hold"] = True
         new_payload = {"schema_version": _BATTERY_ID_SCHEMA_VERSION_V1}
     new_payload["last_attempt"] = attempt
     return new_payload
@@ -1687,6 +1757,17 @@ async def _identify_battery_impl(
                 )
                 payload = None
             if payload is not None and payload.get("status") == "ok":
+                if _battery_id_agreement_hold(payload):
+                    logger.info(
+                        "Battery identification: stored estimate (one-way efficiency %s) is "
+                        "above %.3f and a later fit was held back by the agreement check "
+                        "with none passing since, so it is not served; keeping configured "
+                        "battery values, backing off until max_age.",
+                        _battery_id_safe_log_value(payload.get("eta_charge_symmetric")),
+                        battery_identification.SQRT_RTE_HIGH
+                        - battery_identification.AGREEMENT_EDGE_MARGIN,
+                    )
+                    return
                 _log_battery_identification_summary(logger, payload, plant_conf)
                 if tier == "suggest":
                     _log_battery_identification_recommendation(logger, payload, plant_conf)
@@ -1814,7 +1895,7 @@ async def _identify_battery_impl(
                 )
                 return
             new_payload = _record_battery_identification_failed_attempt(
-                existing, result.status, result.messages
+                existing, result.status, result.messages, agreement_hold=result.agreement_hold
             )
             _atomic_json_write(json_path, new_payload)
             logger.warning(
@@ -1933,6 +2014,18 @@ async def _identify_battery_impl(
                 and entry.get("status") == "ok"
                 and entry_matches_current_pair
             ):
+                if _battery_id_agreement_hold(entry):
+                    logger.info(
+                        "Battery %d identification: stored estimate (one-way efficiency %s) is "
+                        "above %.3f and a later fit was held back by the agreement check "
+                        "with none passing since, so it is not served; keeping configured "
+                        "battery values, backing off until max_age.",
+                        k,
+                        _battery_id_safe_log_value(entry.get("eta_charge_symmetric")),
+                        battery_identification.SQRT_RTE_HIGH
+                        - battery_identification.AGREEMENT_EDGE_MARGIN,
+                    )
+                    continue
                 _log_battery_identification_summary(logger, entry, plant_conf, k=k)
                 if tier == "suggest":
                     _log_battery_identification_recommendation(logger, entry, plant_conf, k=k)
@@ -2018,7 +2111,11 @@ async def _identify_battery_impl(
                 str(k)
             )
             failed_entry = _record_battery_identification_failed_attempt(
-                prior, result.status, result.messages, sensors={"power": power_col, "soc": soc_col}
+                prior,
+                result.status,
+                result.messages,
+                sensors={"power": power_col, "soc": soc_col},
+                agreement_hold=result.agreement_hold,
             )
             _write_battery_identification_container(json_path, logger, k, failed_entry)
             logger.warning(

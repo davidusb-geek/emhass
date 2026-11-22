@@ -258,6 +258,58 @@ class TestBatteryIdentification(unittest.TestCase):
                 self.assertEqual(res.rte_crosscheck_energy_balance, rte_eb)
                 self.assertEqual(res.status, expected, msg=str(res.messages))
 
+    # -- #1294: the result says when the agreement gate held the fit back ------
+    def test_agreement_hold_flag_set_when_gate_holds(self):
+        # RED-on-base: base has no agreement_hold attribute. The flag is what
+        # the failure recorder carries into last_attempt so the cache-hit path
+        # can stop serving a retained near-ceiling record. It must not leak
+        # into the persisted ok payload shape.
+        df = _make_history(10000.0, 0.988, n_cycles=8)
+        res = self._identify(df)
+        self.assertEqual(res.status, "low_confidence", msg=str(res.messages))
+        self.assertIs(getattr(res, "agreement_hold", None), True)
+        self.assertNotIn("agreement_hold", res.to_dict())
+
+    def test_agreement_hold_flag_false_when_gate_does_not_hold(self):
+        # Counterfactuals: the flag is False (present, not missing) for a fit
+        # the gate did not hold, whatever its status.
+        cases = (
+            # Too few runs for the cross-check: ok, nothing to agree with.
+            ("short_history_ok", _make_history(10000.0, 0.988, n_cycles=7), "ok"),
+            # Below the edge: agreement there is what a healthy fit looks like.
+            ("healthy_ok", _make_history(10000.0, 0.90, n_cycles=8), "ok"),
+            # Held back for another reason (implausibly tight CI).
+            ("other_low_confidence", _make_history(10000.0, 0.90, n_cycles=3), "low_confidence"),
+        )
+        for name, df, expected_status in cases:
+            with self.subTest(case=name):
+                res = self._identify(df)
+                self.assertEqual(res.status, expected_status, msg=str(res.messages))
+                self.assertIs(getattr(res, "agreement_hold", None), False)
+
+    def test_agreement_hold_flag_follows_the_gap_condition(self):
+        # Same near-ceiling fit; only the cross-check gap decides the flag.
+        df = _make_history(10000.0, 0.988, n_cycles=8)
+        for rte_eb, expected in ((0.980, True), (0.977, False)):
+            with self.subTest(rte_eb=rte_eb):
+                bid = BatteryIdentification(self.logger)
+                bid._energy_balance_rte = lambda segments, capacity_wh, v=rte_eb: (v, 8)
+                res = bid.identify(df, self.power_col, self.soc_col, 10000.0)
+                self.assertIs(getattr(res, "agreement_hold", None), expected)
+
+    def test_agreement_hold_flag_set_on_an_already_downgraded_fit(self):
+        # The gate condition alone sets the flag, even when an undefined CI
+        # had already made the fit low_confidence.
+        df = _make_history(10000.0, 0.988, n_cycles=8)
+
+        def _nan_ci(segments, n):
+            return (float("nan"), float("nan")), (float("nan"), float("nan"))
+
+        self.bid._bootstrap_ci = _nan_ci
+        res = self._identify(df)
+        self.assertEqual(res.status, "low_confidence", msg=str(res.messages))
+        self.assertIs(getattr(res, "agreement_hold", None), True)
+
     # -- default-no-op sanity: to_dict is JSON-serialisable scalars -----------
     def test_result_to_dict_is_scalar_json(self):
         import json
@@ -596,6 +648,406 @@ class TestIdentifyBatteryOrchestrator(unittest.IsolatedAsyncioTestCase):
             rh3.published,
             "the retained ok record must keep being published across failed attempts",
         )
+
+    # -- #1294: a retained near-ceiling record is not served once a later fit
+    # -- was held back by the #1072 agreement gate, until a fit passes --------
+    _HOLD_LINE = "held back by the agreement check"
+    _SUMMARY_LINE = "identification: capacity"
+
+    @staticmethod
+    def _conf(max_age, tier="suggest"):
+        return {
+            "battery_identification_trust_tier": tier,
+            "battery_identification_model_max_age": max_age,
+        }
+
+    async def _hold_n1(self):
+        """Run 1: 7 runs each way at RTE 0.988 (one-way 0.994), too few for the
+        energy-balance cross-check, so the fit passes and is served. Run 2: 8
+        runs, forced re-fit, held back by the agreement gate; the ok record is
+        kept on disk (#1052). Base-safe: holds on master too."""
+        rh1 = await self._run(self._conf(24), df=_make_history(10000.0, 0.988, n_cycles=7))
+        self.assertIn("sensor.battery_identified_capacity", rh1.published)
+        rh2 = await self._run(self._conf(0), df=_make_history(10000.0, 0.988, n_cycles=8))
+        self.assertEqual(rh2.published, {})
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(payload.get("status"), "ok", "the retained record stays on disk")
+        self.assertEqual(payload["last_attempt"]["status"], "low_confidence")
+        return payload
+
+    async def _flagged_n1_seed(self):
+        """An ok record at one-way 0.994 plus a well-formed last_attempt
+        flagged the way the failure recorder writes a gate hold."""
+        await self._run(self._conf(24), df=_make_history(10000.0, 0.988, n_cycles=7))
+        seed = json.loads(self._json_path().read_text())
+        self.assertEqual(seed.get("status"), "ok")
+        self.assertGreater(seed["eta_charge_symmetric"], 0.985)
+        seed["last_attempt"] = {
+            "status": "low_confidence",
+            "attempted_at": datetime.now(UTC).isoformat(),
+            "messages": ["held back by the agreement gate"],
+            "agreement_hold": True,
+        }
+        return seed
+
+    async def _flagged_n2_seed(self, attempt_sensors):
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        near = _make_history(10000.0, 0.988, n_cycles=7).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        healthy = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        await self._run(self._conf(24), df=pd.concat([near, healthy], axis=1))
+        seed = json.loads(self._json_path().read_text())
+        self.assertEqual(seed["batteries"]["0"]["status"], "ok")
+        self.assertGreater(seed["batteries"]["0"]["eta_charge_symmetric"], 0.985)
+        seed["batteries"]["0"]["last_attempt"] = {
+            "status": "low_confidence",
+            "attempted_at": datetime.now(UTC).isoformat(),
+            "messages": ["held back by the agreement gate"],
+            "sensors": attempt_sensors,
+            "agreement_hold": True,
+        }
+        return seed
+
+    async def _serves(self, payload):
+        """Write ``payload`` (fresh mtime, so a cache hit) and report whether
+        the cache-hit run publishes it."""
+        self._json_path().write_text(json.dumps(payload))
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config, "a cache hit never retrieves")
+        return "sensor.battery_identified_capacity" in rh.published
+
+    async def test_n1_retained_near_ceiling_record_not_served_after_agreement_hold(self):
+        """#1294 case 2. RED-on-base: master keeps publishing the retained
+        0.988 record and recommending 0.994 on every cache hit after the gate
+        held the re-fit back. Now the cache hit serves nothing, logs one line
+        saying why, retrieves nothing and writes nothing."""
+        await self._hold_n1()
+        before = self._json_path().read_bytes()
+        mtime_before = self._json_path().stat().st_mtime_ns
+        with self.assertLogs("test_identify_battery", level="INFO") as cm:
+            rh3 = await self._run(self._conf(24), df=_make_history(10000.0, 0.988, n_cycles=8))
+        self.assertEqual(rh3.published, {}, "the held record must not be published")
+        self.assertIsNone(self.last_retrieve_sensor_config, "a held record is not a refit trigger")
+        self.assertFalse(any("recommendation" in m for m in cm.output), msg=cm.output)
+        self.assertFalse(any(self._SUMMARY_LINE in m for m in cm.output), msg=cm.output)
+        self.assertEqual(sum(self._HOLD_LINE in m for m in cm.output), 1, msg=cm.output)
+        self.assertEqual(self._json_path().read_bytes(), before, "a cache hit writes nothing")
+        self.assertEqual(self._json_path().stat().st_mtime_ns, mtime_before)
+        payload = json.loads(before)
+        self.assertEqual(payload.get("status"), "ok", "the record itself is kept (#1052)")
+        self.assertIs(payload["last_attempt"].get("agreement_hold"), True)
+
+    async def test_n1_pre_gate_record_not_served_after_agreement_hold_in_observe(self):
+        """#1294 case 1: an ok record stored before the gate existed, whose
+        own cross-check agrees. It is served until the first re-fit, and once
+        that re-fit is held back by the gate it stops being served, in the
+        observe tier too (there the summary line is the estimate)."""
+        df8 = _make_history(10000.0, 0.988, n_cycles=8)
+        res = BatteryIdentification(self.logger).identify(
+            df8, "sensor_power_battery", "sensor_battery_state_of_charge", 10000.0
+        )
+        pre_gate = res.to_dict()
+        self.assertIsNotNone(pre_gate["round_trip_efficiency"]["crosscheck_energy_balance"])
+        pre_gate["status"] = "ok"
+        pre_gate["messages"] = []
+        pre_gate["fitted_at"] = datetime.now(UTC).isoformat()
+        pre_gate["trust_tier"] = "observe"
+        self._json_path().write_text(json.dumps(pre_gate))
+
+        with self.assertLogs("test_identify_battery", level="INFO") as cm1:
+            await self._run(self._conf(24, tier="observe"), df=df8)
+        self.assertTrue(any(self._SUMMARY_LINE in m for m in cm1.output), "served before a refit")
+
+        await self._run(self._conf(0, tier="observe"), df=df8)
+        with self.assertLogs("test_identify_battery", level="INFO") as cm:
+            rh = await self._run(self._conf(24, tier="observe"), df=df8)
+        self.assertFalse(any(self._SUMMARY_LINE in m for m in cm.output), msg=cm.output)
+        self.assertEqual(sum(self._HOLD_LINE in m for m in cm.output), 1, msg=cm.output)
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertEqual(rh.published, {})
+
+    async def test_n2_agreement_hold_is_per_battery(self):
+        """Battery 0 at RTE 0.988 is held back on its re-fit; battery 1 is a
+        healthy pack. The next cache hit serves battery 1 only."""
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+
+        def _df(n_cycles_0):
+            near = _make_history(10000.0, 0.988, n_cycles=n_cycles_0).rename(
+                columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+            )
+            healthy = _make_history(10000.0, 0.90, n_cycles=6).rename(
+                columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+            )
+            return pd.concat([near, healthy], axis=1)
+
+        rh1 = await self._run(self._conf(24), df=_df(7))
+        self.assertIn("sensor.battery_identified_capacity_battery0", rh1.published)
+        await self._run(self._conf(0), df=_df(8))
+        payload = json.loads(self._json_path().read_text())
+        slot0 = payload["batteries"]["0"]
+        self.assertEqual(slot0["status"], "ok")
+        self.assertEqual(slot0["last_attempt"]["status"], "low_confidence")
+        self.assertNotIn("last_attempt", payload["batteries"]["1"])
+
+        before = self._json_path().read_bytes()
+        with self.assertLogs("test_identify_battery", level="INFO") as cm:
+            rh3 = await self._run(self._conf(24), df=_df(8))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertEqual(
+            set(rh3.published),
+            {
+                "sensor.battery_identified_capacity_battery1",
+                "sensor.battery_identified_round_trip_efficiency_battery1",
+            },
+        )
+        hold_lines = [m for m in cm.output if self._HOLD_LINE in m]
+        self.assertEqual(len(hold_lines), 1, msg=cm.output)
+        self.assertIn("Battery 0", hold_lines[0])
+        self.assertFalse(any("Battery 0 identification recommendation" in m for m in cm.output))
+        self.assertTrue(any("Battery 1 identification recommendation" in m for m in cm.output))
+        self.assertEqual(self._json_path().read_bytes(), before)
+        slot0 = json.loads(before)["batteries"]["0"]
+        self.assertIs(slot0["last_attempt"].get("agreement_hold"), True)
+        self.assertEqual(slot0["last_attempt"]["sensors"], {"power": "p0", "soc": "soc0"})
+
+    async def test_n1_flagged_attempt_with_record_at_or_below_the_edge_is_served(self):
+        """A gate hold says nothing against a retained record the gate would
+        pass, so a record at or below the 0.985 edge is served as on master."""
+        seed = await self._flagged_n1_seed()
+        for eta in (0.95, 0.985):
+            with self.subTest(eta=eta):
+                self.assertTrue(await self._serves({**seed, "eta_charge_symmetric": eta}))
+
+    async def test_n1_flagged_record_above_the_edge_is_held(self):
+        """Counterfactual for the served cases around it: the same seed with
+        its stored one-way efficiency just above the edge, or as fitted, is
+        held."""
+        seed = await self._flagged_n1_seed()
+        for eta in (0.9851, seed["eta_charge_symmetric"]):
+            with self.subTest(eta=eta):
+                self.assertFalse(await self._serves({**seed, "eta_charge_symmetric": eta}))
+
+    async def test_n1_non_gate_failure_adds_no_hold_key(self):
+        """A failure the gate did not hold (here an implausibly tight CI)
+        writes exactly master's last_attempt keys, and the record is served."""
+        await self._run(self._conf(24), df=self.df_good)
+        await self._run(self._conf(0), df=_make_history(10000.0, 0.90, n_cycles=3))
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(payload["last_attempt"]["status"], "low_confidence")
+        self.assertEqual(set(payload["last_attempt"]), {"status", "attempted_at", "messages"})
+        rh = await self._run(self._conf(24))
+        self.assertIn("sensor.battery_identified_capacity", rh.published)
+
+    async def test_n2_non_gate_failure_adds_no_hold_key(self):
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        good = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        await self._run(self._conf(24), df=pd.concat([good, shallow], axis=1))
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(
+            set(payload["batteries"]["1"]["last_attempt"]),
+            {"status", "attempted_at", "messages", "sensors"},
+        )
+
+    async def test_n1_passing_fit_after_agreement_hold_is_served(self):
+        """A passing re-fit replaces the whole file, which ends the hold."""
+        await self._hold_n1()
+        rh3 = await self._run(self._conf(0), df=self.df_good)
+        self.assertIn("sensor.battery_identified_capacity", rh3.published)
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(payload.get("status"), "ok")
+        self.assertNotIn("last_attempt", payload)
+        rh4 = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertIn("sensor.battery_identified_capacity", rh4.published)
+
+    async def test_n1_malformed_hold_data_fails_open(self):
+        """Hand-edited or truncated data never becomes a silent suppression:
+        anything short of a well-formed hold serves the record as on master,
+        without raising."""
+        seed = await self._flagged_n1_seed()
+
+        def attempt(**changes):
+            return {**seed, "last_attempt": {**seed["last_attempt"], **changes}}
+
+        no_eta = {k: v for k, v in seed.items() if k != "eta_charge_symmetric"}
+        variants = {
+            "hold_is_string": attempt(agreement_hold="true"),
+            "hold_is_int": attempt(agreement_hold=1),
+            "attempt_status_empty": attempt(status=""),
+            "attempted_at_unparsable": attempt(attempted_at="not a date"),
+            "attempt_not_a_dict": {**seed, "last_attempt": ["low_confidence"]},
+            "eta_is_string": {**seed, "eta_charge_symmetric": "0.994"},
+            "eta_is_nan": {**seed, "eta_charge_symmetric": float("nan")},
+            "eta_is_inf": {**seed, "eta_charge_symmetric": float("inf")},
+            "eta_is_bool": {**seed, "eta_charge_symmetric": True},
+            "eta_missing": no_eta,
+        }
+        for name, payload in variants.items():
+            with self.subTest(case=name):
+                self.assertTrue(await self._serves(payload))
+
+    async def test_n2_flagged_attempt_for_another_sensor_pair_is_held(self):
+        """At N>1 the flag always means the record's own pair was held (a
+        hold against another pair is never recorded, only carried), so a
+        flagged attempt made against another pair still holds the record."""
+        seed = await self._flagged_n2_seed({"power": "pX", "soc": "socX"})
+        self._json_path().write_text(json.dumps(seed))
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    async def test_n2_flagged_attempt_for_the_current_sensor_pair_is_held(self):
+        """Same seed with the attempt against the current pair: battery 0 is
+        held and battery 1 is still served."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        self._json_path().write_text(json.dumps(seed))
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    async def test_n1_non_gate_failure_after_agreement_hold_keeps_the_hold(self):
+        """Pins the chosen behaviour: the hold lasts until
+        a fit passes. A later failure for another reason (too few runs, say
+        after a recorder purge) keeps the flag, so the retained record is still
+        not served; the next passing fit ends the hold."""
+        payload = await self._hold_n1()
+        self.assertIs(payload["last_attempt"].get("agreement_hold"), True)
+        shallow = _make_history(10000.0, 0.90, n_cycles=1, soc_low=50.0, soc_high=54.0)
+        await self._run(self._conf(0), df=shallow)
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(payload.get("status"), "ok", "the record itself is kept (#1052)")
+        self.assertEqual(payload["last_attempt"]["status"], "insufficient_data")
+        self.assertIs(payload["last_attempt"].get("agreement_hold"), True)
+        with self.assertLogs("test_identify_battery", level="INFO") as cm:
+            rh4 = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertEqual(rh4.published, {})
+        self.assertEqual(sum(self._HOLD_LINE in m for m in cm.output), 1, msg=cm.output)
+        rh5 = await self._run(self._conf(0), df=self.df_good)
+        self.assertIn("sensor.battery_identified_capacity", rh5.published)
+        self.assertNotIn("last_attempt", json.loads(self._json_path().read_text()))
+
+    async def test_n1_refit_above_the_ceiling_after_agreement_hold_keeps_the_hold(self):
+        """The likeliest follow-up for a pack the gate held back: the next fit
+        lands above the 0.995 ceiling and is rejected by the sanity check,
+        before the gate runs. That must not bring the retained 0.988 record
+        and its recommendation back."""
+        await self._hold_n1()
+        await self._run(self._conf(0), df=_make_history(10000.0, 0.996, n_cycles=8))
+        payload = json.loads(self._json_path().read_text())
+        self.assertEqual(payload["last_attempt"]["status"], "rejected_sanity_check")
+        self.assertIs(payload["last_attempt"].get("agreement_hold"), True)
+        with self.assertLogs("test_identify_battery", level="INFO") as cm:
+            rh4 = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertEqual(rh4.published, {})
+        self.assertFalse(any("recommendation" in m for m in cm.output), msg=cm.output)
+        self.assertEqual(sum(self._HOLD_LINE in m for m in cm.output), 1, msg=cm.output)
+
+    def _n2_df_above_ceiling_b0(self):
+        above = _make_history(10000.0, 0.996, n_cycles=8).rename(
+            columns={"sensor_power_battery": "p0", "sensor_battery_state_of_charge": "soc0"}
+        )
+        healthy = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        return pd.concat([above, healthy], axis=1)
+
+    async def test_n2_failure_after_agreement_hold_keeps_the_hold_for_the_same_pair(self):
+        """At N>1 the flag is carried through a later failure for another
+        reason when that attempt used the same sensor pair."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        self._json_path().write_text(json.dumps(seed))
+        await self._run(self._conf(0), df=self._n2_df_above_ceiling_b0())
+        attempt = json.loads(self._json_path().read_text())["batteries"]["0"]["last_attempt"]
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertIs(attempt.get("agreement_hold"), True)
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    async def test_n2_carried_hold_is_kept_whatever_pair_the_flagged_attempt_used(self):
+        """A flagged attempt recorded against another pair is a carried hold
+        of the record's own pair, so a later failure for another reason
+        against the record's pair keeps it."""
+        seed = await self._flagged_n2_seed({"power": "pX", "soc": "socX"})
+        self._json_path().write_text(json.dumps(seed))
+        await self._run(self._conf(0), df=self._n2_df_above_ceiling_b0())
+        attempt = json.loads(self._json_path().read_text())["batteries"]["0"]["last_attempt"]
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertIs(attempt.get("agreement_hold"), True)
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    def _n2_df_b0_on(self, power_col, soc_col, eta, n_cycles):
+        b0 = _make_history(10000.0, eta, n_cycles=n_cycles).rename(
+            columns={"sensor_power_battery": power_col, "sensor_battery_state_of_charge": soc_col}
+        )
+        healthy = _make_history(10000.0, 0.90, n_cycles=6).rename(
+            columns={"sensor_power_battery": "p1", "sensor_battery_state_of_charge": "soc1"}
+        )
+        return pd.concat([b0, healthy], axis=1)
+
+    def _n2_last_attempt_b0(self):
+        return json.loads(self._json_path().read_text())["batteries"]["0"]["last_attempt"]
+
+    async def test_n2_hold_survives_a_sensor_pair_round_trip(self):
+        """Hold on pair A, the list edited to pair B where a fit fails for
+        another reason, then edited back to A where a fit fails for another
+        reason again: the A record is still not served."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        seed["batteries"]["0"]["fitted_at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+        self._json_path().write_text(json.dumps(seed))
+        self._set_n2_config(["pB", "p1"], ["socB", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("pB", "socB", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["sensors"], {"power": "pB", "soc": "socB"})
+        self.assertIs(attempt.get("agreement_hold"), True, "carried through pair B")
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("p0", "soc0", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertIs(attempt.get("agreement_hold"), True, "carried back on pair A")
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertNotIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
+
+    async def test_n2_gate_hold_on_another_pair_does_not_suppress_the_record(self):
+        """Counterfactual for the test above: the record was never held, and a
+        gate hold against pair B is not recorded, so after the edit back to A
+        and a failure for another reason the A record is served."""
+        seed = await self._flagged_n2_seed({"power": "p0", "soc": "soc0"})
+        del seed["batteries"]["0"]["last_attempt"]
+        seed["batteries"]["0"]["fitted_at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+        self._json_path().write_text(json.dumps(seed))
+        self._set_n2_config(["pB", "p1"], ["socB", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("pB", "socB", 0.988, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["status"], "low_confidence")
+        self.assertNotIn("agreement_hold", attempt)
+        self._set_n2_config(["p0", "p1"], ["soc0", "soc1"])
+        await self._run(self._conf(24), df=self._n2_df_b0_on("p0", "soc0", 0.996, 8))
+        attempt = self._n2_last_attempt_b0()
+        self.assertEqual(attempt["status"], "rejected_sanity_check")
+        self.assertNotIn("agreement_hold", attempt)
+        rh = await self._run(self._conf(24))
+        self.assertIsNone(self.last_retrieve_sensor_config)
+        self.assertIn("sensor.battery_identified_capacity_battery0", rh.published)
+        self.assertIn("sensor.battery_identified_capacity_battery1", rh.published)
 
     async def test_missing_sensor_columns_is_graceful(self):
         bad = self.df_good.rename(columns={"sensor_power_battery": "something_else"})
