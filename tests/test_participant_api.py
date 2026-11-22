@@ -4234,7 +4234,10 @@ def test_a_commit_whose_snapshot_cannot_be_noted_is_resumed_over_the_plan_before
         plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
         return "accepted", ""
 
+    from emhass.coordinator.remote import CommitLog
+
     monkeypatch.setattr(pa, "publish_commit", publishing)
+    resume = pa._resume
     monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
     followed = []
     stepper = pa.plan_stepper(ec)
@@ -4254,6 +4257,16 @@ def test_a_commit_whose_snapshot_cannot_be_noted_is_resumed_over_the_plan_before
     assert (plan_store.read(data_path) or {}).get("generated_at") == before  # not saved
     assert log.get("c1")["plan_stamp"] == before and "snapshot_at" not in log.get("c1")
     assert followed == [("c1", before)]  # stepped over the plan before it
+    # a restart: the record read back from disk, resumed over the plan before
+    monkeypatch.setattr(log, "annotate", annotate)
+    log.end("c1", out[0], out[1], out[2] if len(out) > 2 else None)
+    again = CommitLog(data_path / pa.COMMIT_LOG_FILE)
+    monkeypatch.setattr(pa, "_commit_logs", {data_path / pa.COMMIT_LOG_FILE: again})
+    after = pa.PlanStepper()
+    resumed = []
+    monkeypatch.setattr(after, "follow", lambda *a, **k: resumed.append(a[:2]))
+    resume(ec, _params(ec, **GARAGE), logger, after, None)
+    assert resumed == [("c1", before)]
 
 
 def test_a_commit_whose_record_cannot_be_annotated_is_refused_before_publishing(
@@ -4409,3 +4422,64 @@ def test_the_saved_plan_is_matched_by_its_instants_and_values_alone(data_path):
     assert pa._is_saved_plan(ec, kept)
     kept.iloc[2, 0] = 0.75
     assert not pa._is_saved_plan(ec, kept)
+
+
+def test_a_plan_with_other_columns_is_never_taken_for_the_commits(data_path, monkeypatch):
+    """A plan of this EMHASS's own with the commit's columns and one more is
+    another plan: it supersedes the commit."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
+    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
+    rows = [{**row, "P_deferrable1": 0.0} for row in _kept_rows(ec, "b")]
+    plan_store.record(data_path, rows, "2026-11-21T10:00:06Z", "1.0")
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.view()[3]
+
+
+def test_a_commits_snapshot_saved_slowly_is_still_its_own(data_path, monkeypatch):
+    """However long the save took after the commit noted it, its own plan,
+    slot for slot, saved before the stop is its snapshot."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = (plan_store.read(data_path) or {}).get("generated_at")
+    ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
+    log.annotate("b", {"plan_stamp": before})
+    noted = pd.Timestamp("2026-11-21T10:00:04Z").timestamp()
+    log._records["b"].update(state="partial", interrupted=True, snapshot_at=noted)
+    plan_store.record(data_path, _kept_rows(ec, "b"), "2026-11-21T10:01:30Z", "1.0")
+    own = (plan_store.read(data_path) or {}).get("generated_at")
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [("b", own)]
+
+
+def test_a_commit_whose_plan_cannot_be_removed_is_not_reported_refused(data_path, monkeypatch):
+    """Its record not saved and its kept plan not removable: a restart may
+    step it, so it is not reported refused - it raises, which the service
+    records as a commit that may have run (partial)."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+
+    ec = _conf(data_path)
+
+    async def publishing(*a, **k):
+        raise AssertionError("never published")
+
+    monkeypatch.setattr(pa, "publish_commit", publishing)
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    service.log.begin("c1", [1.0], _HORIZON)
+    monkeypatch.setattr(service.log, "annotate", lambda cid, fields: False)
+
+    def cannot(self, missing_ok=False):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(pathlib.Path, "unlink", cannot)
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    with pytest.raises(OSError, match="a restart may run it"):
+        service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
