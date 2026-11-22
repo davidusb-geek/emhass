@@ -304,6 +304,22 @@ def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
     return {**kwargs, "soc_init": init, "soc_final": final}
 
 
+def _net_of_remotes(
+    p_load: pd.Series | np.ndarray, committed_w: np.ndarray
+) -> tuple[pd.Series | np.ndarray, np.ndarray]:
+    """The house's load with what the remote solvers run (W, + = drawn) added,
+    kept >= 0 W (a physical power, as the default solver takes it); and what
+    they supply beyond that load (W per slot, >= 0). `p_load`'s type (a
+    Series or an array) is kept."""
+    load = np.asarray(p_load, dtype=float)
+    net = load + np.asarray(committed_w, dtype=float)
+    surplus = np.maximum(-net, 0.0)
+    out = np.maximum(net, 0.0)
+    if isinstance(p_load, pd.Series):
+        return pd.Series(out, index=p_load.index, name=p_load.name), surplus
+    return out, surplus
+
+
 def _warn_unheld_limits(opt) -> None:
     """On a fallback, say what of `site` the default solver does not hold:
     its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
@@ -8845,12 +8861,22 @@ class Optimization:
             _warn_unheld_limits(self)
             committed = _remotes_running_w(self)
             if committed is not None:
-                # remotes run their parts already: their power is load here
-                p_load = p_load + np.asarray(committed, dtype=float)
+                # Remotes run their parts already: what they draw is load here,
+                # and what they supply meets the house's load. Load stays a
+                # physical power, >= 0 W: what they supply beyond the house's
+                # load flows to the grid unplanned, which the log says.
+                p_load, surplus_w = _net_of_remotes(p_load, committed)
                 self.logger.warning(
                     "optimization_backend: the default solver plans around the power of the "
                     "remote solvers already running their plans (counted in the load)"
                 )
+                if np.any(surplus_w > 0.0):
+                    self.logger.warning(
+                        "optimization_backend: the remote solvers supply more than the house "
+                        f"draws in {int(np.sum(surplus_w > 0.0))} slots; that surplus "
+                        f"({float(np.max(surplus_w)):.0f} W at most) goes to the grid, beyond "
+                        "what the default solver plans"
+                    )
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
         # Rebuild problem when forecast inputs change to ensure fresh forecasts are applied.
         if self.optim_conf.get("shared_thermal_tanks"):

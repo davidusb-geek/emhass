@@ -275,10 +275,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Its description, or a commit's outcome (commit/{id})"
-          },
-          "202": {
-            "description": "A commit still running (commit/{id})"
+            "description": "Its description (describe)"
           },
           "401": {
             "description": "No or a wrong token"
@@ -361,6 +358,49 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/participant/v1/commit/{commit_id}": {
+      "parameters": [
+        {
+          "name": "commit_id",
+          "in": "path",
+          "required": true,
+          "description": "The commit's id: the query_id its POST named",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "A commit's outcome (participant API, opt-in)",
+        "description": "The record of a commit (CommitResult in participant-api.v1.json): running, accepted, refused or partial. Asked for after a commit's answer, or after none came, to learn whether it ran.",
+        "externalDocs": {
+          "url": "https://github.com/davidusb-geek/emhass/blob/master/src/emhass/static/participant-api/participant-api.v1.json",
+          "description": "participant-api.v1.json"
+        },
+        "security": [
+          {
+            "participantToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Its record: it ended (accepted, refused or partial)"
+          },
+          "202": {
+            "description": "Its record: still running"
+          },
+          "401": {
+            "description": "No or a wrong token"
+          },
+          "404": {
+            "description": "No commit of that id (never received, or forgotten), or participant_api is not set"
+          },
+          "503": {
+            "description": "No participant_token, params.pkl unreadable, or more than one web worker (WEB_CONCURRENCY)"
           }
         }
       }

@@ -35,7 +35,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -52,8 +52,28 @@ from emhass.coordinator.interface import (
     query_to_dict,
 )
 
+
 # method, URL, headers, body -> HTTP status, body
-Transport = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes]]
+class Transport(Protocol):
+    """How a call is sent: (method, url, headers, body) -> (status, body).
+    The default one (urllib_transport) also takes `within`, a shorter time
+    for that call; others are called without it."""
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None, /
+    ) -> tuple[int, bytes]: ...
+
+
+class _BoundedTransport(Protocol):
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+        within: float | None = None,
+        /,
+    ) -> tuple[int, bytes]: ...
 
 
 @dataclass(frozen=True)
@@ -222,13 +242,18 @@ class _HTTPSHandler(urllib.request.HTTPSHandler):
         )
 
 
-def urllib_transport(timeout: float) -> Transport:
+def urllib_transport(timeout: float) -> _BoundedTransport:
     """The standard library's HTTP client as a Transport: `timeout` seconds
     for the whole call - resolving the host, connecting, the headers and the
     body -, redirects not followed, answers of at most MAX_RESPONSE_BYTES."""
 
     def call(
-        method: str, url: str, headers: dict[str, str], body: bytes | None, this: _Call
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+        this: _Call,
+        limit: float,
     ) -> tuple[int, bytes]:
         track = _Tracked(this)
         # No proxy from the environment (HTTP_PROXY): a proxy would receive the
@@ -237,34 +262,40 @@ def urllib_transport(timeout: float) -> Transport:
             urllib.request.ProxyHandler({}), _NoRedirect, _HTTPHandler(track), _HTTPSHandler(track)
         )
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + limit
         try:
-            with opener.open(req, timeout=timeout) as r:  # http(s) only, checked by the caller
+            with opener.open(req, timeout=limit) as r:  # http(s) only, checked by the caller
                 return int(r.status), _read(r, deadline)
         except urllib.error.HTTPError as exc:
             return int(exc.code), _read(exc, deadline)
 
     def send(
-        method: str, url: str, headers: dict[str, str], body: bytes | None
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+        within: float | None = None,
     ) -> tuple[int, bytes]:
         # A socket timeout bounds each read, not the call: a remote sending
         # its headers a byte at a time would hold the plan. The call runs in
         # a thread, and past the deadline its socket is shut, which ends it.
+        # `within`: a shorter time for this call (what is left of a wait).
+        limit = timeout if within is None else max(min(timeout, within), 0.001)
         this = _Call()
         out: dict[str, Any] = {}
 
         def run() -> None:
             try:
-                out["answer"] = call(method, url, headers, body, this)
+                out["answer"] = call(method, url, headers, body, this, limit)
             except BaseException as exc:  # noqa: BLE001 - raised again below
                 out["error"] = exc
 
         worker = threading.Thread(target=run, name="emhass-remote-call", daemon=True)
         worker.start()
-        worker.join(timeout)
+        worker.join(limit)
         if worker.is_alive():
             this.cancel()  # past its deadline: it sends nothing more
-            raise TimeoutError(f"no answer within {timeout:g} s")
+            raise TimeoutError(f"no answer within {limit:g} s")
         if "error" in out:
             raise out["error"]
         return out["answer"]
@@ -316,7 +347,13 @@ class RemoteParticipant:
                 f"{key}: its token would be sent over plain http:// to another machine; "
                 "use https://, or set trusted_network: true on its solver"
             )
-        self._send = transport or urllib_transport(timeout)
+        # the default transport also takes a shorter time for one call (`within`)
+        self._bounded: _BoundedTransport | None = None
+        self._send: Transport
+        if transport is None:
+            self._bounded = self._send = urllib_transport(timeout)
+        else:
+            self._send = transport
         d = self._call("GET", "/v1/describe")
         if d.get("version") != SCHEMA_VERSION:
             raise RemoteError(
@@ -371,8 +408,15 @@ class RemoteParticipant:
         self._baseline: Answer | None = None
 
     def _call(
-        self, method: str, path: str, body: Any = None, query_id: str | None = None
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        query_id: str | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
+        """`deadline` (time.monotonic()): the call is not started past it, and
+        with the default transport it is cut off there."""
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -381,8 +425,14 @@ class RemoteParticipant:
         if query_id:
             headers["Query-Id"] = query_id
         data = None if body is None else json.dumps(body).encode()
+        left = None if deadline is None else deadline - time.monotonic()
+        if left is not None and left <= 0:
+            raise RemoteError(f"{self.key}: no time left to ask")
         try:
-            status, raw = self._send(method, self.url + path, headers, data)
+            if left is not None and self._bounded is not None:
+                status, raw = self._bounded(method, self.url + path, headers, data, left)
+            else:
+                status, raw = self._send(method, self.url + path, headers, data)
         except (
             OSError,
             http.client.HTTPException,
@@ -476,7 +526,8 @@ class RemoteParticipant:
 
         The remote answers at once (202) and runs the plan after; its
         outcome is then asked for (GET /v1/commit/{id}) until it is known or
-        the timeout passes. A commit that got no answer at all is asked about
+        `commit_wait_s` has passed since that answer (or the lack of one),
+        no call running past it. A commit that got no answer at all is asked about
         the same way; one the remote never received (404) is sent again,
         which is safe: a commit it already has is never run twice. Published
         part way (partial), or no outcome in time: None."""
@@ -488,7 +539,6 @@ class RemoteParticipant:
         cid = detail.get("query_id") if isinstance(detail, dict) else None
         if isinstance(cid, str):
             body["query_id"] = cid
-        deadline = time.monotonic() + self._commit_wait_s
         try:
             r: dict[str, Any] | None = self._call("POST", "/v1/commit", body)
             why = ""
@@ -502,8 +552,11 @@ class RemoteParticipant:
             r, why = None, str(exc)
         except Exception as exc:  # noqa: BLE001 - whatever failed, it may have been sent
             r, why = None, f"{type(exc).__name__}: {exc}"
-        asks = isinstance(cid, str) and "commit_status" in self.features
-        if asks and (r is None or r.get("state") == "running"):
+        asks = "commit_status" in self.features
+        if isinstance(cid, str) and asks and (r is None or r.get("state") == "running"):
+            # the wait for its outcome, from the commit's answer: at most
+            # one call's timeout and then commit_wait_s in all
+            deadline = time.monotonic() + self._commit_wait_s
             r, why = self._settle(cid, body, deadline, r is not None, why)
         return _verdict(r, why)
 
@@ -516,8 +569,10 @@ class RemoteParticipant:
         path = f"/v1/commit/{urllib.parse.quote(cid, safe='')}"
         delay = 0.1
         while True:
+            if time.monotonic() >= deadline:  # no time for another call
+                return None, why or "no outcome in time"
             try:
-                r = self._call("GET", path)
+                r = self._call("GET", path, deadline=deadline)
                 if not _a_record(r):
                     why = "an answer about the commit that is not a commit record"
                 elif r.get("state") != "running":  # ended, or a state it does not know
@@ -530,8 +585,10 @@ class RemoteParticipant:
                     # twice. A refusal of that (busy, 409) says nothing of the
                     # first, which may still be on its way: asked about again
                     received = True
+                    if time.monotonic() >= deadline:
+                        return None, "no outcome in time"
                     try:
-                        r = self._call("POST", "/v1/commit", body)
+                        r = self._call("POST", "/v1/commit", body, deadline=deadline)
                         if _a_record(r) and r.get("state") != "running":
                             return r, ""
                     except RemoteError as again:
@@ -589,6 +646,10 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
+class CommitNotRecorded(OSError):
+    """A commit's record could not be saved, so it is not run."""
+
+
 class CommitLog:
     """Each commit's record, by its id (the query_id it names): what the
     remote did with it, so a commit can be asked about again
@@ -618,6 +679,7 @@ class CommitLog:
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
+        changed = False
         for r in data if isinstance(data, list) else []:
             if not (
                 isinstance(r, dict)
@@ -631,23 +693,35 @@ class CommitLog:
                     **r,
                     "state": "partial",
                     "reason": "EMHASS stopped while it was publishing this plan",
+                    # what it published, if anything, is for its host to tell;
+                    # when the stop was first seen, so a plan saved after it
+                    # is never taken for this commit's
+                    "interrupted": True,
+                    "interrupted_at": time.time(),
                 }
+                changed = True
             self._records[r["commit_id"]] = r
         self._prune()
+        if changed:
+            self._save()  # read back the same after another stop
 
     def _prune(self) -> None:  # under the lock, or before any thread sees the log
         # Never the latest commit that ran (accepted or partial), nor one still
         # publishing: its host may run its plan for as long as Home Assistant
-        # keeps it, however long ago it was made.
-        ran = next(
-            (
-                c
-                for c, r in reversed(self._records.items())
-                if r["state"] in ("accepted", "partial")
-            ),
-            None,
-        )
-        keep = {ran} | {c for c, r in self._records.items() if r["state"] == "running"}
+        # keeps it, however long ago it was made. Nor, while the latest was
+        # cut off by a stop (its host may find nothing of it ran), the latest
+        # that ran whole before it.
+        def latest(interrupted_too: bool) -> str | None:
+            for c, r in reversed(self._records.items()):
+                if r["state"] in ("accepted", "partial") and (
+                    interrupted_too or not r.get("interrupted")
+                ):
+                    return c
+            return None
+
+        keep = {latest(True), latest(False)} | {
+            c for c, r in self._records.items() if r["state"] == "running"
+        }
         cutoff = time.time() - self.keep_s
         for cid in [c for c, r in self._records.items() if r["received_ts"] < cutoff]:
             if cid not in keep:
@@ -656,15 +730,17 @@ class CommitLog:
         for cid in [c for c in self._records if c not in keep][: max(extra, 0)]:
             del self._records[cid]
 
-    def _save(self) -> None:  # under the lock
+    def _save(self) -> bool:  # under the lock
+        """Whether the records are on disk (always, with no file)."""
         if self._path is None:
-            return
+            return True
         tmp = self._path.with_name(self._path.name + ".tmp")
         try:
             tmp.write_text(json.dumps(list(self._records.values())), encoding="utf-8")
             os.replace(tmp, self._path)
         except OSError:
-            pass  # kept in memory: a restart would forget it
+            return False  # kept in memory: a restart would forget the change
+        return True
 
     def get(self, commit_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -700,7 +776,9 @@ class CommitLog:
         self, commit_id: str, plan_kw: list[float], horizon: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any], bool]:
         """Its record as running, and True; or the record it already has
-        (a commit sent again), and False."""
+        (a commit sent again), and False. CommitNotRecorded, and no record,
+        when the record cannot be saved: a commit that ran would be lost to
+        a restart, so it must not run."""
         with self._lock:
             known = self._records.get(commit_id)
             if known is not None:
@@ -721,7 +799,9 @@ class CommitLog:
             }
             self._records[commit_id] = r
             self._prune()
-            self._save()
+            if not self._save():
+                del self._records[commit_id]
+                raise CommitNotRecorded(f"its record could not be saved in {self._path}")
             return dict(r), True
 
     def drop(self, commit_id: str) -> None:
@@ -838,7 +918,8 @@ class ParticipantService:
         self,
         describe: Callable[[], dict[str, Any]],
         build: Callable[[PlanWindow], Participant],
-        commit: Callable[[Participant, Answer], tuple[Any, str]] | None = None,
+        # (participant, answer) or (participant, answer, commit_id) -> its outcome
+        commit: Callable[..., Any] | None = None,
         token: str | None = None,
         ttl_s: float = 3600.0,
         max_sessions: int = 4,
@@ -984,12 +1065,18 @@ class ParticipantService:
                     409, "Conflict", "plan_kw is not the plan that query was answered with"
                 )
             if self._commit is None:
-                record, _ = self.log.begin(cid, [float(x) for x in plan], window.to_dict())
+                try:
+                    record, _ = self.log.begin(cid, [float(x) for x in plan], window.to_dict())
+                except CommitNotRecorded as exc:
+                    return _problem(409, "Conflict", f"the commit could not start ({exc})")
                 self.log.end(cid, "refused", "this participant does not run plans")
                 return 200, commit_view(self.log.get(cid) or record)
             # Recorded before the slot is taken: from here on it is asked about
             # as running, never as unknown (404) while it may yet run.
-            record, new = self.log.begin(cid, [float(x) for x in plan], window.to_dict())
+            try:
+                record, new = self.log.begin(cid, [float(x) for x in plan], window.to_dict())
+            except CommitNotRecorded as exc:  # never run: it would be lost to a restart
+                return _problem(409, "Conflict", f"the commit could not start ({exc})")
             if not new:  # the same commit, sent twice at once: the first runs it
                 return (202 if record["state"] == "running" else 200), commit_view(record)
             try:

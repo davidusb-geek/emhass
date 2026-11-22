@@ -229,6 +229,7 @@ async def publish_commit(
     logger: logging.Logger,
     get_data_from_file: bool = False,
     on_recorded=None,
+    on_snapshot=None,
 ) -> tuple[str, str]:
     """Run a committed plan as a run would: `res`, its own result for the
     answer chosen, published to Home Assistant under
@@ -259,6 +260,8 @@ async def publish_commit(
         # The latest plan, whole, only once it is published.
         csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
         await utils.replace_file(csv, res.to_csv(index_label="timestamp"))
+        if on_snapshot is not None:
+            on_snapshot()
         _record_optim_snapshot(idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger)
         if on_recorded is not None:
             on_recorded(
@@ -390,6 +393,7 @@ class PlanStepper:
         self.superseded = False  # this EMHASS saved a plan of its own since
         self.resumed: bytes | None = None  # the params it last resumed with
         self._warned = -1  # the plan whose missing prefix was logged
+        self._threads: list[threading.Thread] = []  # its loops, to wait for
 
     def follow(
         self,
@@ -465,16 +469,62 @@ class PlanStepper:
                 if not attempt(at + step):
                     return
 
-        threading.Thread(target=loop, name="participant-plan-steps", daemon=True).start()
+        thread = threading.Thread(target=loop, name="participant-plan-steps", daemon=True)
+        with self._lock:  # started under the lock: join never sees one unstarted
+            thread.start()
+            self._threads = [t for t in self._threads if t.is_alive()] + [thread]
 
     def generation(self) -> int:
         with self._lock:
             return self._gen
 
+    def view(self) -> tuple[int, str | None, str | None, bool]:
+        """(generation, following, stamp, superseded), read together."""
+        with self._lock:
+            return self._gen, self.following, self.stamp, self.superseded
+
+    def mark(
+        self,
+        commit_id: str,
+        stamp: str | None,
+        superseded: bool,
+        expect_gen: int | None = None,
+    ) -> None:
+        """Record, under its lock, that `commit_id`'s plan (made over `stamp`)
+        is the one it stands for, without stepping it (a resume that found it
+        superseded): a newer generation, so a reader's earlier view of
+        another plan never marks this one. `expect_gen`: only if no other
+        commit was followed since (a resume yields to a commit)."""
+        with self._lock:
+            if expect_gen is not None and self._gen != expect_gen:
+                return
+            self._gen += 1
+            self._wake.set()
+            self.following, self.stamp, self.superseded = commit_id, stamp, superseded
+
+    def supersede(self, gen: int, stamp: str | None) -> bool:
+        """Mark the plan it follows superseded, if it is still the one seen
+        (`gen`, `stamp`): a commit followed since is not. Whether it was."""
+        with self._lock:
+            if self._gen != gen or self.stamp != stamp:
+                return False
+            self.superseded = True
+            return True
+
     def stop(self) -> None:
         with self._lock:
             self._gen += 1
             self._wake.set()
+
+    def join(self, timeout: float | None = None) -> bool:
+        """Wait for its loops to end (after stop: a slot being published
+        finishes first). Whether they all did within `timeout` seconds."""
+        with self._lock:
+            threads = list(self._threads)
+        end = None if timeout is None else time.monotonic() + timeout
+        for t in threads:
+            t.join(None if end is None else max(end - time.monotonic(), 0.0))
+        return not any(t.is_alive() for t in threads)
 
     def _end(self, gen: int) -> None:
         """Its plan no longer runs (a plan of this EMHASS's own replaced it):
@@ -554,6 +604,31 @@ class PlanStepper:
 
 
 _UNREADABLE = object()
+_STARTED = time.time()  # when this process started (near enough: this import)
+
+
+SNAPSHOT_S = 10.0  # a commit's own snapshot is saved within this of noting it
+
+
+def _saved_between(stamp, since, stop) -> bool:
+    """Whether a save stamp (generated_at) is a commit's own snapshot: from
+    `since` (when it noted it was saving one, a time.time()) to SNAPSHOT_S
+    after, and before `stop` and this process's start."""
+    if not isinstance(stamp, str) or isinstance(since, bool):
+        return False
+    try:
+        lo = float(since) - 1.0  # the stamp's own rounding
+        hi = min(float(since) + SNAPSHOT_S, _STARTED)
+        if stop is not None and not isinstance(stop, bool):
+            hi = min(hi, float(stop))
+    except (TypeError, ValueError):
+        return False
+    try:
+        t = pd.Timestamp(stamp)
+        t = t if t.tzinfo else t.tz_localize("UTC")
+        return bool(lo <= t.timestamp() < hi)
+    except (ValueError, TypeError):
+        return False
 
 
 def _saved_stamp(emhass_conf: dict):
@@ -675,7 +750,8 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         # Cut off before its plan was kept - before anything was published,
         # which comes after: nothing of it ran. The commit before it runs.
         log.end(last["commit_id"], "refused", "EMHASS stopped before it published this plan")
-    if stepper.following == last["commit_id"] and not stepper.superseded:
+    _, following, _, superseded = stepper.view()
+    if following == last["commit_id"] and not superseded:
         return  # stepping it already
     # published under the prefix it was committed with, if switched off since
     params = _with_participant_conf(
@@ -685,8 +761,7 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         return  # a plan of its own replaced it: it never runs again
     if params["retrieve_hass_conf"].get("continual_publish"):
         # its loop publishes this EMHASS's own plan: this one ends, for good
-        stepper.stop()
-        stepper.following, stepper.superseded = last["commit_id"], True
+        stepper.mark(last["commit_id"], last.get("plan_stamp"), True)
         log.annotate(last["commit_id"], {"superseded": True})
         return
     try:
@@ -694,8 +769,9 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
             committed_plan_path(emhass_conf, last["commit_id"]), index_col="timestamp"
         )
         res.index = _utc_index(res)
-    except Exception as exc:  # noqa: BLE001 - nothing to resume
+    except Exception as exc:  # noqa: BLE001 - not now: tried again next time
         logger.warning(f"participant_api: the committed plan cannot be read back ({exc})")
+        stepper.resumed = None
         return
     saved = _saved_stamp(emhass_conf)
     if saved is _UNREADABLE:
@@ -708,8 +784,22 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         log.annotate(last["commit_id"], {"plan_stamp": saved})
         last = {**last, "plan_stamp": saved}
     stamp = last["plan_stamp"]
+    if last.get("interrupted"):
+        # Stopped while publishing: settled once, at the first resume that
+        # can read the plan store. The plan saved is its own snapshot only if
+        # saved when it noted it was saving one (`snapshot_at`, while it held
+        # the live-optimization slot), and before the stop: then the stop came
+        # before its stamp could be noted. Any other is this EMHASS's own,
+        # whichever process saved it.
+        if saved != stamp and _saved_between(
+            saved,
+            last.get("snapshot_at"),
+            last.get("interrupted_at", _STARTED),
+        ):
+            stamp = saved
+        log.annotate(last["commit_id"], {"plan_stamp": stamp, "interrupted": False})
     if saved != stamp:
-        stepper.following, stepper.stamp, stepper.superseded = last["commit_id"], stamp, True
+        stepper.mark(last["commit_id"], stamp, True, expect_gen=gen)  # a commit since wins
         log.annotate(last["commit_id"], {"superseded": True})
         return  # its own plan runs now
     stepper.follow(
@@ -738,14 +828,19 @@ def _active_commit(log, stepper: PlanStepper, data_path=None):
     latest = log.latest(running=True)
     if latest is not None and latest["state"] == "running":
         return latest
-    if stepper.following is None or stepper.superseded:
+    gen, following, stamp, superseded = stepper.view()
+    if following is None or superseded:
         return None
     if data_path is not None:
         saved = _saved_stamp({"data_path": data_path})
-        if saved is not _UNREADABLE and saved != stepper.stamp:
-            stepper.superseded = True
-            return None
-    record = log.get(stepper.following)
+        if saved is not _UNREADABLE and saved != stamp:
+            if stepper.supersede(gen, stamp):
+                return None  # a plan of its own replaced the one it follows
+            # a commit followed meanwhile, over what was saved then: that one
+            _, following, _, superseded = stepper.view()
+            if following is None or superseded:
+                return None
+    record = log.get(following)
     if record is None or record.get("superseded"):
         return None
     return record if record["state"] in ("accepted", "partial") else None
@@ -821,9 +916,19 @@ def make_service(
         def recorded(stamp):  # the plan saved as its own: its stamp at once
             log.annotate(commit_id, {"plan_stamp": stamp})
 
+        def snapshotting():  # about to save it as its own: a stop now is told apart
+            log.annotate(commit_id, {"snapshot_at": time.time()})
+
         try:
             state, why = asyncio.run(
-                publish_commit(emhass_conf, params, res, logger, on_recorded=recorded)
+                publish_commit(
+                    emhass_conf,
+                    params,
+                    res,
+                    logger,
+                    on_recorded=recorded,
+                    on_snapshot=snapshotting,
+                )
             )
         except Exception as exc:  # noqa: BLE001 - it may have published part of it
             logger.warning(f"participant_api: publishing the committed plan failed ({exc})")
