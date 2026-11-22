@@ -4462,7 +4462,12 @@ def test_a_site_that_is_not_a_list_holds_what_was_committed(tmp_path, site):
         assert backend.note_running(opt, data_opt)[0] == {}
 
 
-def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(data_path, request):
+# 2 s: its last slot is tried until it ends; 0.5 s: the plan has ended by its
+# first try (a slow runner, a try past its slot), which ends the loop at once
+@pytest.mark.parametrize("step_s", [2.0, 0.5])
+def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(
+    data_path, request, step_s
+):
     """The final slot's publish failed: Home Assistant keeps the slot before.
     The commit records that slot, and a coordinator carries its value after
     the plan's end, not the plan's last."""
@@ -4497,7 +4502,7 @@ def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(
         return "partial", "Home Assistant refused it"
 
     # its commit published slot 0 (accepted); slot 1, the last, never publishes
-    with mock.patch.object(pa, "_step", lambda p: pd.Timedelta(seconds=2)):
+    with mock.patch.object(pa, "_step", lambda p: pd.Timedelta(seconds=step_s)):
         stepper.follow("c", stamp, ec, params, res, logger, publish=refuses)
         # its last slot retried until the slot ends, then the plan ends: a
         # few seconds, longer on a slow runner
