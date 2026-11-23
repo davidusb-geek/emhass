@@ -8166,12 +8166,15 @@ async def build_params(
         value = os.getenv(env_token, "").strip()
         if value:
             reserved.add(value)
+    # Compared without surrounding whitespace: a padded copy is still the same token to
+    # whoever receives it
+    reserved = {str(r).strip() for r in reserved if str(r).strip()}
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
         if not site_token_secret_usable(name) or params_secrets.get(name) is None:
             continue
-        if str(params_secrets[name]) in reserved:
+        if str(params_secrets[name]).strip() in reserved:
             # the same value as one of EMHASS's own secrets (Home Assistant's
             # token, say): never sent to a remote - it is reached without one
             # (the element named, never anything of the secret)

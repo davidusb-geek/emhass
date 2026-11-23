@@ -4688,6 +4688,81 @@ def test_a_remote_token_with_an_environment_home_assistant_token_is_never_sent(e
     assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
 
 
+_SV = "sv-token-0123456789abcdef"
+_KEY = "ha-key-fedcba9876543210"
+_LLT = "llt-token-0123456789abcdef"
+
+
+@pytest.mark.parametrize(
+    "env, secrets, garage_token, expected",
+    [
+        # a padded copy of an environment Home Assistant token: never sent
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"{_SV} "', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'" {_SV}"', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"\\t{_SV}"', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"{_SV}"', None),
+        ({"EMHASS_KEY": _KEY}, "", f'"{_KEY} "', None),
+        ({"EMHASS_KEY": _KEY}, "", f'" {_KEY}"', None),
+        ({"EMHASS_KEY": _KEY}, "", f'"\\t{_KEY}"', None),
+        # EMHASS's own token padded in the secrets file, the remote's copy exact
+        ({}, f'long_lived_token: "{_LLT} "\n', f'"{_LLT}"', None),
+        ({}, f'long_lived_token: "\\t{_LLT}"\n', f'"{_LLT}"', None),
+        # the remote's own token: sent, exactly as it was given
+        ({"SUPERVISOR_TOKEN": _SV}, "", '"remote-token-0123456789"', "remote-token-0123456789"),
+        ({"SUPERVISOR_TOKEN": _SV}, "", '"remote-token-0123456789 "', "remote-token-0123456789 "),
+    ],
+)
+def test_a_padded_home_assistant_token_is_never_a_remotes_token(
+    env, secrets, garage_token, expected, tmp_path, monkeypatch
+):
+    """Through build_secrets and build_params, as EMHASS runs them: a remote's
+    token_secret holding the Supervisor token, exact or padded, a padded copy
+    of EMHASS_KEY, or an exact copy of a padded long_lived_token, is not among
+    the remotes' tokens; a token of the remote's own still is, unchanged."""
+    import re
+
+    from tests.aioresponses_compat import aioresponses
+
+    for name in ("SUPERVISOR_TOKEN", "EMHASS_KEY", "EMHASS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    secrets_file = tmp_path / "secrets_emhass.yaml"
+    secrets_file.write_text(
+        f'hass_url: "http://other-ha.test:8123"\n{secrets}garage_token: {garage_token}\n',
+        encoding="utf-8",
+    )
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "https://elsewhere.test/participant", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build():
+        # Without an options file build_secrets asks Home Assistant nothing; the mock
+        # keeps it from reaching any host if that ever changes
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r".*"), status=401, repeat=True)
+            _, built = await utils.build_secrets(
+                EMHASS_CONF, logger, options_path="", secrets_path=str(secrets_file)
+            )
+            asked = dict(mocked.requests)
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return asked, await build_params(EMHASS_CONF, built, config, logger)
+
+    asked, out = asyncio.run(build())
+    assert asked == {}
+    tokens = out["retrieve_hass_conf"].get("remote_tokens")
+    if expected is None:
+        assert tokens is None
+    else:
+        assert tokens == {"garage_token": expected}
+
+
 def test_each_remote_token_map_has_its_own_cached_optimizer():
     """The optimizer cache keys a salted digest of the remotes' tokens: a
     request with other tokens never shares the optimizer (nor its tokens)
