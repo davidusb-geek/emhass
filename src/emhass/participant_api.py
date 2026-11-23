@@ -267,9 +267,7 @@ async def publish_commit(
             idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger, origin=origin
         )
         if saved and on_recorded is not None:  # its stamp only: never the plan before's
-            on_recorded(
-                (plan_store.read(pathlib.Path(emhass_conf["data_path"])) or {}).get("generated_at")
-            )
+            on_recorded(plan_store.stamp(plan_store.read(pathlib.Path(emhass_conf["data_path"]))))
 
     return await _publish(emhass_conf, params, res, logger, get_data_from_file, record)
 
@@ -679,8 +677,9 @@ def _is_own_plan(emhass_conf: dict, commit_id: str | None) -> bool:
 
 
 def _saved_stamp(emhass_conf: dict):
-    """The save stamp of the latest plan saved (None: none saved), or
-    _UNREADABLE when its file is there but cannot be read now."""
+    """The save stamp of the latest plan saved - its identity, plan_store.stamp
+    (None: none saved) - or _UNREADABLE when its file is there but cannot be
+    read now."""
     data = pathlib.Path(emhass_conf["data_path"])
     latest = plan_store.read(data)
     try:
@@ -688,7 +687,7 @@ def _saved_stamp(emhass_conf: dict):
             return _UNREADABLE
     except OSError:  # not even its presence can be told
         return _UNREADABLE
-    return (latest or {}).get("generated_at")
+    return plan_store.stamp(latest)
 
 
 def _with_participant_conf(params: dict, committed: dict) -> dict:
@@ -738,6 +737,20 @@ def committed_plan_path(emhass_conf: dict, commit_id: str) -> pathlib.Path:
     coordinator's, so never used as a path itself)."""
     name = hashlib.sha256(str(commit_id).encode()).hexdigest()[:32]
     return pathlib.Path(emhass_conf["data_path"]) / COMMITTED_PLANS / f"{name}.csv"
+
+
+def _not_kept(path: pathlib.Path, why: str) -> None:
+    """Remove a refused commit's kept plan. One that cannot be removed may be
+    stepped by a restart (its record may still read running on disk): then
+    it is no refusal but a commit that may run - raised, so it is recorded
+    so, which a coordinator keeps counting."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise OSError(
+            f"{why}, and its kept plan could not be removed: nothing was published, but a "
+            "restart may run it"
+        ) from exc
 
 
 def _keep_plans_of(emhass_conf: dict, commit_ids: set[str]) -> None:
@@ -960,16 +973,7 @@ def make_service(
             # A restart would not know what it was made over: never published.
             # Nor kept: its record may still read running on disk, and a
             # restart then finds no plan of it, so knows nothing of it ran.
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                # Kept, its record maybe running on disk: a restart may step
-                # it. So not a refusal - one that may run, which a
-                # coordinator keeps counting.
-                raise OSError(
-                    "its record could not be saved, nor its plan removed: nothing was "
-                    "published, but a restart may run it"
-                ) from exc
+            _not_kept(path, "its record could not be saved")
             return "refused", "its record could not be saved; nothing was published"
 
         confirmed: dict = {}
@@ -993,7 +997,11 @@ def make_service(
             logger.warning(f"participant_api: publishing the committed plan failed ({exc})")
             state, why = "partial", f"publishing failed ({type(exc).__name__}); published part way"
         if state not in ("accepted", "partial"):
-            return state, why  # refused: nothing published, the plan before it runs on
+            # refused: nothing published, the plan before it runs on - and its
+            # own plan not kept, so a restart (its final record not saved,
+            # say) never steps it
+            _not_kept(path, f"it was refused ({why})")
+            return state, why
         # It runs this plan from now on - published part way too: Home Assistant
         # holds part of it, and stepping it brings the rest - so its next slots
         # are published as they come. What it was made over: the plan saved now
