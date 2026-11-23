@@ -112,6 +112,21 @@ class TestIsPlaceholderHassUrl(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertTrue(is_placeholder_hass_url(url))
 
+    def test_matches_a_spelling_only_the_idna_package_maps_to_the_host(self):
+        # aiohttp encodes host names with the idna package (UTS 46), which knows newer
+        # letters than Python's NFKC. U+A7F1 maps to "s" in the idna releases that know it.
+        idna = connection_manager.idna  # the encoder the check itself uses
+        if idna is None:
+            self.skipTest("the idna package is not installed")
+        host = "myha\ua7f1s.duckdns.org"
+        try:
+            mapped = idna.encode(host, uts46=True).decode("ascii")
+        except idna.IDNAError:
+            self.skipTest("this idna release does not map U+A7F1")
+        if mapped != "myhass.duckdns.org":
+            self.skipTest("this idna release does not map U+A7F1 to s")
+        self.assertTrue(is_placeholder_hass_url(f"https://{host}/"))
+
     def test_other_urls_do_not_match(self):
         for url in (
             None,
