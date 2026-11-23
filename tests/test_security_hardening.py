@@ -1159,5 +1159,408 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
+    """The Supervisor token goes to the Supervisor proxy only: no WebSocket, no config call."""
+
+    OTHER = "https://other-ha.test:8123/api"
+
+    def setUp(self):
+        import asyncio
+
+        import emhass.connection_manager as cm
+
+        cm._global_client = None
+        cm._lock = asyncio.Lock()
+        # A developer's own EMHASS_KEY (docs/develop.md) would skip the Supervisor path.
+        env = self.enterContext(patch.dict(os.environ))
+        env.pop("EMHASS_KEY", None)
+
+    async def asyncTearDown(self):
+        from emhass.connection_manager import close_global_connection
+
+        await close_global_connection()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_refuses_the_supervisor_token_for_another_host(self, client_class):
+        from emhass.connection_manager import get_websocket_client
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        for token in ("sv-token", " sv-token\t"):
+            with self.subTest(token=token), self.assertLogs(logger, level="ERROR"):
+                with self.assertRaises(WsConnectionError):
+                    await get_websocket_client(self.OTHER, token, logger)
+        client_class.assert_not_called()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_still_connects_where_it_should(self, client_class):
+        import emhass.connection_manager as cm
+        from emhass.connection_manager import get_websocket_client
+
+        client_class.return_value = AsyncMock(connected=True)
+        for url, token in (
+            ("http://supervisor/core/api", "sv-token"),
+            ("https://supervisor/core/api/", "sv-token"),
+            (self.OTHER, "own-llat"),
+        ):
+            with self.subTest(url=url, token=token):
+                cm._global_client = None
+                await get_websocket_client(url, token, logger)
+                client_class.assert_called_with(hass_url=url, long_lived_token=token, logger=logger)
+
+    def _options(self, tmp, options):
+        path = pathlib.Path(tmp) / "options.json"
+        path.write_bytes(orjson.dumps(options))
+        conf = dict(emhass_conf)
+        conf["data_path"] = pathlib.Path(tmp)
+        return conf, str(path)
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_build_secrets_does_not_send_the_supervisor_token_to_the_options_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf, options_path = self._options(
+                tmp, {"hass_url": self.OTHER, "long_lived_token": "own-llat"}
+            )
+            with aioresponses() as mocked:
+                # Another Home Assistant answers the Supervisor token with 401
+                mocked.get(re.compile(r".*"), status=401, repeat=True)
+                _, secrets = await utils.build_secrets(
+                    conf, logger, options_path=options_path, secrets_path=""
+                )
+                sent = [
+                    c.kwargs["headers"]["Authorization"]
+                    for cs in mocked.requests.values()
+                    for c in cs
+                ]
+                self.assertEqual(sent, [])
+        self.assertEqual(secrets["hass_url"], self.OTHER)
+        self.assertEqual(secrets["long_lived_token"], "own-llat")
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_build_secrets_still_asks_the_supervisor(self):
+        payload = {
+            "time_zone": "Europe/Paris",
+            "latitude": 1.5,
+            "longitude": 2.5,
+            "elevation": 3,
+        }
+        for options_url in ("", "http://supervisor/core/api"):
+            with self.subTest(options_url=options_url), tempfile.TemporaryDirectory() as tmp:
+                conf, options_path = self._options(
+                    tmp, {"hass_url": options_url, "long_lived_token": "own-llat"}
+                )
+                with aioresponses() as mocked:
+                    mocked.get(
+                        "http://supervisor/core/api/config",
+                        status=200,
+                        payload=payload,
+                        repeat=True,
+                    )
+                    _, secrets = await utils.build_secrets(
+                        conf, logger, options_path=options_path, secrets_path=""
+                    )
+                    calls = [c for (_, url), cs in mocked.requests.items() for c in cs]
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0].kwargs["headers"]["Authorization"], "Bearer sv-token")
+                self.assertEqual(secrets["hass_url"], "http://supervisor/core/api")
+                self.assertEqual(secrets["time_zone"], "Europe/Paris")
+
+    def _sent_tokens(self, mocked):
+        return [
+            c.kwargs.get("headers", {}).get("Authorization")
+            for cs in mocked.requests.values()
+            for c in cs
+        ]
+
+    async def test_build_secrets_never_returns_the_supervisor_token_with_another_url(self):
+        """Every way of ending up with another URL and no token of its own drops the token."""
+        with tempfile.TemporaryDirectory() as tmp:
+            secrets_file = pathlib.Path(tmp) / "secrets.yaml"
+            secrets_file.write_text(f"hass_url: {self.OTHER}\n", encoding="utf-8")
+            other_only = {"hass_url": self.OTHER}
+            cases = [
+                ("options token empty", {**other_only, "long_lived_token": ""}, {}, {}),
+                ("options token 'empty'", {**other_only, "long_lived_token": "empty"}, {}, {}),
+                ("options token absent", other_only, {}, {}),
+                ("EMHASS_URL, no options", None, {"EMHASS_URL": self.OTHER}, {}),
+                (
+                    "EMHASS_KEY is the Supervisor token",
+                    None,
+                    {"EMHASS_URL": self.OTHER, "EMHASS_KEY": "sv-token"},
+                    {},
+                ),
+                ("no URL or token set", None, {}, {}),
+                ("secrets file URL only", None, {}, {"secrets_path": str(secrets_file)}),
+                ("argument URL only", None, {}, {"argument": {"url": self.OTHER}}),
+                # no_response skips the options, so the URL comes from EMHASS_URL here.
+                ("no_response", other_only, {"EMHASS_URL": self.OTHER}, {"no_response": True}),
+            ]
+            for name, options, env, kwargs in cases:
+                with (
+                    self.subTest(name),
+                    patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token", **env}),
+                ):
+                    if options is None:
+                        conf, options_path = dict(emhass_conf), ""
+                    else:
+                        conf, options_path = self._options(tmp, options)
+                    kwargs = {"secrets_path": "", **kwargs}
+                    with aioresponses() as mocked, self.assertLogs(logger, level="ERROR") as logs:
+                        mocked.get(re.compile(r".*"), status=401, repeat=True)
+                        _, secrets = await utils.build_secrets(
+                            conf, logger, options_path=options_path, **kwargs
+                        )
+                        self.assertEqual(self._sent_tokens(mocked), [])
+                    self.assertNotEqual(secrets["hass_url"], "http://supervisor/core/api")
+                    self.assertEqual(secrets["long_lived_token"], "")
+                    self.assertTrue(any("not be sent" in line for line in logs.output))
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_build_secrets_keeps_the_supervisor_token_when_the_supervisor_fails(self):
+        """A Supervisor error falls back to the options and keeps the Supervisor URL and token."""
+        for options_url in ("", "empty", " HTTP://Supervisor/CORE/API/ "):
+            with self.subTest(options_url=options_url), tempfile.TemporaryDirectory() as tmp:
+                conf, options_path = self._options(
+                    tmp, {"hass_url": options_url, "long_lived_token": "", "time_zone": "UTC"}
+                )
+                with aioresponses() as mocked:
+                    mocked.get("http://supervisor/core/api/config", status=500, repeat=True)
+                    _, secrets = await utils.build_secrets(
+                        conf, logger, options_path=options_path, secrets_path=""
+                    )
+                    self.assertEqual(self._sent_tokens(mocked), ["Bearer sv-token"])
+                self.assertEqual(secrets["hass_url"], "http://supervisor/core/api")
+                self.assertEqual(secrets["long_lived_token"], "sv-token")
+                self.assertEqual(secrets["time_zone"], "UTC")
+
+    def test_supervisor_url_forms(self):
+        from emhass.connection_manager import canonical_supervisor_url, is_supervisor_url
+
+        for url in (
+            "http://supervisor/core/api",
+            "https://supervisor/core/api/",
+            " HTTP://Supervisor/CORE/API\t",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(is_supervisor_url(url))
+                self.assertIn(
+                    canonical_supervisor_url(url),
+                    ("http://supervisor/core/api", "https://supervisor/core/api"),
+                )
+        for url in (None, "", "empty"):
+            with self.subTest(url=url):
+                self.assertTrue(is_supervisor_url(url))
+                self.assertEqual(canonical_supervisor_url(url), url)
+        for url in (
+            self.OTHER,
+            "http://supervisor.other-ha.test/core/api",
+            "http://other-ha.test/supervisor/core/api",
+            "http://user@supervisor/core/api",
+            "http://supervisor@other-ha.test/core/api",
+            "http://supervisor:8123/core/api",
+            "http://supervisor/core/api?x=1",
+            "http://supervisor/core/api#x",
+            "http://supervisor/core/apix",
+            "http://supervisor/core/api/states",
+            "ws://supervisor/core/api",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(is_supervisor_url(url))
+                self.assertEqual(canonical_supervisor_url(url), url)
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_refusal_caches_nothing_and_the_cache_is_not_redirected(
+        self, client_class
+    ):
+        import emhass.connection_manager as cm
+        from emhass.connection_manager import get_websocket_client
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        with self.assertLogs(logger, level="ERROR"), self.assertRaises(WsConnectionError):
+            await get_websocket_client(self.OTHER, "sv-token", logger)
+        self.assertIsNone(cm._global_client)
+
+        client_class.return_value = AsyncMock(connected=True)
+        first = await get_websocket_client("http://supervisor/core/api", "sv-token", logger)
+        # A later call with another URL reuses the checked client and dials nothing new.
+        again = await get_websocket_client(self.OTHER, "sv-token", logger)
+        self.assertIs(again, first)
+        client_class.assert_called_once_with(
+            hass_url="http://supervisor/core/api", long_lived_token="sv-token", logger=logger
+        )
+
+        # A reconnect re-dials the same checked client, never a new one for another URL.
+        first.connected = False
+        with patch("emhass.connection_manager._reconnect_client", AsyncMock()) as reconnect:
+            await get_websocket_client(self.OTHER, "sv-token", logger)
+        reconnect.assert_awaited_once()
+        self.assertIs(reconnect.await_args.args[0], first)
+        self.assertEqual(client_class.call_count, 1)
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_websocket_is_not_opened_without_a_token(self, client_class):
+        import emhass.connection_manager as cm
+        from emhass.connection_manager import get_websocket_client
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        for url in (self.OTHER, "http://supervisor/core/api"):
+            for token in ("", " ", "empty", None):
+                with (
+                    self.subTest(url=url, token=token),
+                    self.assertLogs(logger, level="ERROR"),
+                    self.assertRaises(WsConnectionError),
+                ):
+                    await get_websocket_client(url, token, logger)
+        client_class.assert_not_called()
+        self.assertIsNone(cm._global_client)
+
+    async def test_websocket_connect_ignores_environment_proxies(self):
+        import inspect
+
+        import websockets
+
+        from emhass.websocket_client import AsyncWebSocketClient
+
+        # Decided by the library, not by the module under test: emptying the module's
+        # own proxy setting must fail here, not skip.
+        if "proxy" not in inspect.signature(websockets.connect).parameters:
+            self.skipTest("this websockets version never uses an environment proxy")
+        client = AsyncWebSocketClient("http://supervisor/core/api", "sv-token", logger)
+        connect = AsyncMock(side_effect=OSError("stop here"))
+        with (
+            patch.dict(os.environ, {"HTTP_PROXY": "http://proxy.other-ha.test:3128"}),
+            patch("emhass.websocket_client._ws_connect", connect),
+            self.assertRaises(OSError),
+        ):
+            await client._connect()
+        self.assertIsNone(connect.call_args.kwargs["proxy"])
+
+    async def _redirecting_host(self, target_port, status):
+        """A host that answers the WebSocket upgrade with a redirect to the target."""
+        import asyncio
+
+        asked = []
+
+        async def answer(reader, writer):
+            try:
+                asked.append(await reader.readuntil(b"\r\n\r\n"))
+                writer.write(
+                    f"HTTP/1.1 {status} Redirect\r\n"
+                    f"Location: ws://127.0.0.1:{target_port}/api/websocket\r\n"
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
+                )
+                await writer.drain()
+            except (asyncio.IncompleteReadError, OSError):
+                pass
+            finally:
+                writer.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        return server, asked
+
+    async def _home_assistant_websocket(self):
+        """A stand-in for Home Assistant's WebSocket API: records every token it is sent."""
+        from websockets.asyncio.server import serve
+
+        tokens = []
+
+        async def handler(ws):
+            await ws.send(orjson.dumps({"type": "auth_required"}).decode())
+            async for message in ws:
+                data = orjson.loads(message)
+                if data.get("type") == "auth":
+                    tokens.append(data.get("access_token"))
+                    await ws.send(orjson.dumps({"type": "auth_ok"}).decode())
+
+        server = await serve(handler, "127.0.0.1", 0)
+        return server, tokens
+
+    async def test_websocket_never_follows_a_redirect(self):
+        """A redirect answer to the upgrade is not followed, on the first connect (300, 301,
+        302, 303, 307, 308) and on a reconnect (302): the host the redirect names is sent no
+        token. A client with the same token reaching that host directly does send it, so the
+        stand-in would have recorded one."""
+        from websockets.exceptions import InvalidStatus
+
+        from emhass.websocket_client import REDIRECT_NOT_FOLLOWED, AsyncWebSocketClient
+
+        target, tokens = await self._home_assistant_websocket()
+        target_port = target.sockets[0].getsockname()[1]
+        try:
+            for status in (300, 301, 302, 303, 307, 308):
+                redirect, asked = await self._redirecting_host(target_port, status)
+                port = redirect.sockets[0].getsockname()[1]
+                client = AsyncWebSocketClient(f"http://127.0.0.1:{port}", "dummy-ha-token", logger)
+                try:
+                    with self.subTest(status=status, path="startup"):
+                        with self.assertLogs(logger, level="ERROR") as logs:
+                            with self.assertRaises(InvalidStatus):
+                                await client.startup()
+                        self.assertIn(REDIRECT_NOT_FOLLOWED, logs.output[0])
+                    if status == 302:
+                        with self.subTest(status=status, path="reconnect"):
+                            with self.assertLogs(logger, level="ERROR"):
+                                with self.assertRaises(InvalidStatus):
+                                    await client.reconnect()
+                        with self.subTest(status=status, path="send"):
+                            with self.assertLogs(logger, level="ERROR"):
+                                with self.assertRaises(InvalidStatus):
+                                    await client.send("get_config")
+                finally:
+                    await client.shutdown()
+                    redirect.close()
+                    await redirect.wait_closed()
+                self.assertEqual(len(asked), 3 if status == 302 else 1)
+                self.assertEqual(tokens, [])
+            client = AsyncWebSocketClient(
+                f"http://127.0.0.1:{target_port}", "dummy-ha-token", logger
+            )
+            await client.startup()
+            await client.shutdown()
+            self.assertEqual(tokens, ["dummy-ha-token"])
+        finally:
+            target.close()
+            await target.wait_closed()
+
+    def test_a_websockets_client_that_cannot_refuse_a_redirect_is_not_used(self):
+        import warnings
+
+        import websockets
+
+        from emhass import websocket_client
+
+        class FollowsRedirects:  # as websockets' legacy client: it never asks
+            pass
+
+        self.assertIsNone(websocket_client._without_redirects(FollowsRedirects))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                from websockets.legacy.client import connect as legacy_connect
+            except ImportError:
+                legacy_connect = None
+        if legacy_connect is not None:
+            self.assertIsNone(websocket_client._without_redirects(legacy_connect))
+        refusing = websocket_client._without_redirects(websockets.connect)
+        self.assertTrue(issubclass(refusing, websockets.connect))
+        self.assertIs(websocket_client._ws_connect.__bases__[0], websockets.connect)
+
+    async def test_websocket_is_not_opened_when_redirects_cannot_be_refused(self):
+        from emhass.websocket_client import REDIRECTS_NOT_REFUSABLE, AsyncWebSocketClient
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        client = AsyncWebSocketClient("http://supervisor/core/api", "sv-token", logger)
+        with (
+            patch("emhass.websocket_client._ws_connect", None),
+            self.assertLogs(logger, level="ERROR") as logs,
+            self.assertRaises(WsConnectionError),
+        ):
+            await client._connect()
+        self.assertIn(REDIRECTS_NOT_REFUSABLE, logs.output[0])
+
+
 if __name__ == "__main__":
     unittest.main()

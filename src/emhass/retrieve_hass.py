@@ -19,7 +19,12 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass.connection_manager import get_websocket_client
+from emhass.connection_manager import (
+    SUPERVISOR_TOKEN_REFUSED,
+    get_websocket_client,
+    is_supervisor_token_for_another_host,
+)
+from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
 from emhass.utils import (
     data_file_path,
     is_valid_db_host,
@@ -48,8 +53,6 @@ _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 _STATISTICS_PERIOD = pd.Timedelta(minutes=5)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
-# The forms of the Supervisor proxy URL the code accepts (compared without a trailing slash).
-_SUPERVISOR_URLS = frozenset({hass_url, "https://supervisor/core/api"})
 
 
 def _influx_string(value) -> str:
@@ -89,13 +92,6 @@ def _upstream_error(exc: BaseException) -> str:
     message = str(exc).lower()
     reason = next((known for known in _KNOWN_DB_ERRORS if known in message), None)
     return text + (f": {reason}" if reason else "")
-
-
-def _is_supervisor_url(url: str | None) -> bool:
-    """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
-    if url is None or not str(url).strip() or str(url).strip() == "empty":
-        return True
-    return str(url).strip().rstrip("/").lower() in _SUPERVISOR_URLS
 
 
 # When a var_list entry is an arithmetic expression, every entity it references is
@@ -184,16 +180,8 @@ class RetrieveHass:
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
         # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
-        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
-        if (
-            supervisor_token
-            and long_lived_token == supervisor_token
-            and not _is_supervisor_url(hass_url)
-        ):
-            logger.error(
-                "The Supervisor token is set as the token for a Home Assistant URL that is not "
-                "the Supervisor. It will not be sent. Set a long-lived access token for that URL."
-            )
+        if is_supervisor_token_for_another_host(hass_url, long_lived_token):
+            logger.error(SUPERVISOR_TOKEN_REFUSED)
             self.long_lived_token = ""
         if isinstance(freq, int | float | str):
             self.freq = pd.Timedelta(minutes=int(freq))
@@ -932,7 +920,9 @@ class RetrieveHass:
                 )
             else:
                 self.logger.error(
-                    "No valid authentication token found. Set a long_lived_token or run as a HA addon."
+                    "No valid authentication token found. Set a long-lived access token for "
+                    "this Home Assistant URL (add-on option long_lived_token, the secrets file "
+                    "or --key). The add-on's Supervisor token is only used with the Supervisor URL."
                 )
                 return False
         headers = {

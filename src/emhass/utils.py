@@ -33,6 +33,12 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+from emhass.connection_manager import (
+    SUPERVISOR_TOKEN_REFUSED,
+    canonical_supervisor_url,
+    is_supervisor_token_for_another_host,
+    is_supervisor_url,
+)
 from emhass.coordinator.site import (
     compile_site,
     reserved_secret_values,
@@ -7534,79 +7540,83 @@ async def build_secrets(
                 else:
                     # For addons, use supervisor API for both REST and WebSocket access
                     params_secrets["hass_url"] = "http://supervisor/core/api"
-                headers = {
-                    "Authorization": "Bearer " + params_secrets["long_lived_token"],
-                    "content-type": "application/json",
-                }
-                # Obtain secrets from Home Assistant via API
-                logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        params_secrets["hass_url"] + "/config", headers=headers
-                    ) as response:
-                        if response.status < 400:
-                            config_hass = await response.json()
-                            params_secrets.update(
-                                {
-                                    "hass_url": params_secrets["hass_url"],
-                                    "long_lived_token": params_secrets["long_lived_token"],
-                                    "time_zone": config_hass["time_zone"],
-                                    "Latitude": config_hass["latitude"],
-                                    "Longitude": config_hass["longitude"],
-                                    "Altitude": config_hass["elevation"],
-                                    # If defined in HA config, use them, otherwise keep defaults
-                                    "solcast_api_key": config_hass.get(
-                                        "solcast_api_key", params_secrets["solcast_api_key"]
-                                    ),
-                                    "solcast_rooftop_id": config_hass.get(
-                                        "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
-                                    ),
-                                    "solar_forecast_kwp": config_hass.get(
-                                        "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
-                                    ),
-                                    "influxdb_username": config_hass.get(
-                                        "influxdb_username", params_secrets.get("influxdb_username")
-                                    ),
-                                    "influxdb_password": config_hass.get(
-                                        "influxdb_password", params_secrets.get("influxdb_password")
-                                    ),
-                                    "victoriametrics_username": config_hass.get(
-                                        "victoriametrics_username",
-                                        params_secrets.get("victoriametrics_username"),
-                                    ),
-                                    "victoriametrics_password": config_hass.get(
-                                        "victoriametrics_password",
-                                        params_secrets.get("victoriametrics_password"),
-                                    ),
-                                }
-                            )
-                        else:
-                            # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                            logger.warning(
-                                "Error obtaining secrets from Home Assistant Supervisor API"
-                            )
-                            logger.debug("Obtaining url and key secrets from options.json")
-                            if url_from_options != "empty" and url_from_options != "":
-                                params_secrets["hass_url"] = url_from_options
-                            if key_from_options != "empty" and key_from_options != "":
-                                params_secrets["long_lived_token"] = key_from_options
-                            if (
-                                options.get("time_zone", "empty") != "empty"
-                                and options["time_zone"] != ""
-                            ):
-                                params_secrets["time_zone"] = options["time_zone"]
-                            if options.get("Latitude", None) is not None and bool(
-                                options["Latitude"]
-                            ):
-                                params_secrets["Latitude"] = options["Latitude"]
-                            if options.get("Longitude", None) is not None and bool(
-                                options["Longitude"]
-                            ):
-                                params_secrets["Longitude"] = options["Longitude"]
-                            if options.get("Altitude", None) is not None and bool(
-                                options["Altitude"]
-                            ):
-                                params_secrets["Altitude"] = options["Altitude"]
+                params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
+                config_hass = None
+                if is_supervisor_url(params_secrets["hass_url"]):
+                    headers = {
+                        "Authorization": "Bearer " + params_secrets["long_lived_token"],
+                        "content-type": "application/json",
+                    }
+                    # Obtain secrets from Home Assistant via API
+                    logger.debug("Obtaining secrets from Home Assistant Supervisor API")
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            params_secrets["hass_url"] + "/config", headers=headers
+                        ) as response:
+                            if response.status < 400:
+                                config_hass = await response.json()
+                            else:
+                                logger.warning(
+                                    "Error obtaining secrets from Home Assistant Supervisor API"
+                                )
+                else:
+                    # The Supervisor token is only for the Supervisor proxy, so it is never sent
+                    # to the Home Assistant URL set in the options. Use the options instead.
+                    logger.info(
+                        "hass_url in the add-on options is not the Supervisor, so the "
+                        "Supervisor API is not called. Time zone and location come from the "
+                        "options, the environment or the defaults."
+                    )
+                if config_hass is not None:
+                    params_secrets.update(
+                        {
+                            "hass_url": params_secrets["hass_url"],
+                            "long_lived_token": params_secrets["long_lived_token"],
+                            "time_zone": config_hass["time_zone"],
+                            "Latitude": config_hass["latitude"],
+                            "Longitude": config_hass["longitude"],
+                            "Altitude": config_hass["elevation"],
+                            # If defined in HA config, use them, otherwise keep defaults
+                            "solcast_api_key": config_hass.get(
+                                "solcast_api_key", params_secrets["solcast_api_key"]
+                            ),
+                            "solcast_rooftop_id": config_hass.get(
+                                "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
+                            ),
+                            "solar_forecast_kwp": config_hass.get(
+                                "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
+                            ),
+                            "influxdb_username": config_hass.get(
+                                "influxdb_username", params_secrets.get("influxdb_username")
+                            ),
+                            "influxdb_password": config_hass.get(
+                                "influxdb_password", params_secrets.get("influxdb_password")
+                            ),
+                            "victoriametrics_username": config_hass.get(
+                                "victoriametrics_username",
+                                params_secrets.get("victoriametrics_username"),
+                            ),
+                            "victoriametrics_password": config_hass.get(
+                                "victoriametrics_password",
+                                params_secrets.get("victoriametrics_password"),
+                            ),
+                        }
+                    )
+                else:
+                    # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                    logger.debug("Obtaining url and key secrets from options.json")
+                    if url_from_options != "empty" and url_from_options != "":
+                        params_secrets["hass_url"] = url_from_options
+                    if key_from_options != "empty" and key_from_options != "":
+                        params_secrets["long_lived_token"] = key_from_options
+                    if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
+                        params_secrets["time_zone"] = options["time_zone"]
+                    if options.get("Latitude", None) is not None and bool(options["Latitude"]):
+                        params_secrets["Latitude"] = options["Latitude"]
+                    if options.get("Longitude", None) is not None and bool(options["Longitude"]):
+                        params_secrets["Longitude"] = options["Longitude"]
+                    if options.get("Altitude", None) is not None and bool(options["Altitude"]):
+                        params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
             # This logic runs regardless of whether HA API call above succeeded or failed,
@@ -7689,6 +7699,14 @@ async def build_secrets(
     if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
         logger.debug("Obtaining long_lived_token from passed argument")
+
+    # Whichever source set them, never hand on the Supervisor token with another URL.
+    params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
+    if is_supervisor_token_for_another_host(
+        params_secrets["hass_url"], params_secrets["long_lived_token"]
+    ):
+        logger.error(SUPERVISOR_TOKEN_REFUSED)
+        params_secrets["long_lived_token"] = ""
 
     return emhass_conf, params_secrets
 
@@ -8142,12 +8160,21 @@ async def build_params(
     if own_api_token:
         reserved.add(str(own_api_token))
     reserved |= _own_api_tokens  # as build_secrets read it (secrets file, options.json)
+    # Home Assistant's tokens from the environment, whatever long_lived_token holds now
+    # (build_secrets drops the Supervisor token for another host): never a remote's token
+    for env_token in ("SUPERVISOR_TOKEN", "EMHASS_KEY"):
+        value = os.getenv(env_token, "").strip()
+        if value:
+            reserved.add(value)
+    # Compared without surrounding whitespace: a padded copy is still the same token to
+    # whoever receives it
+    reserved = {str(r).strip() for r in reserved if str(r).strip()}
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
         if not site_token_secret_usable(name) or params_secrets.get(name) is None:
             continue
-        if str(params_secrets[name]) in reserved:
+        if str(params_secrets[name]).strip() in reserved:
             # the same value as one of EMHASS's own secrets (Home Assistant's
             # token, say): never sent to a remote - it is reached without one
             # (the element named, never anything of the secret)

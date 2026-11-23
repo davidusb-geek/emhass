@@ -1,16 +1,76 @@
 import asyncio
 import logging
+import os
 
 from emhass.websocket_client import AsyncWebSocketClient, ConnectionError
 
 _global_client: AsyncWebSocketClient | None = None
 _lock = asyncio.Lock()
 
+# The forms of the Supervisor proxy URL that may receive the Supervisor token (compared
+# without a trailing slash).
+SUPERVISOR_URLS = frozenset({"http://supervisor/core/api", "https://supervisor/core/api"})
+
+SUPERVISOR_TOKEN_REFUSED = (
+    "The Supervisor token is only sent to the Supervisor, and the Home Assistant URL is "
+    "another host, so the token will not be sent. Give a long-lived access token for that "
+    "URL in the add-on options (long_lived_token), the secrets file or --key, not in "
+    "SUPERVISOR_TOKEN."
+)
+
+NO_WEBSOCKET_TOKEN = (
+    "No Home Assistant token is set for this URL, so the WebSocket connection is not opened."
+)
+
+
+def is_supervisor_url(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
+    if url is None or not str(url).strip() or str(url).strip() == "empty":
+        return True
+    return str(url).strip().rstrip("/").lower() in SUPERVISOR_URLS
+
+
+def canonical_supervisor_url(url: str | None) -> str | None:
+    """The Supervisor proxy URL in the exact form the request code builds on.
+
+    A Supervisor form written with other case, spaces or a trailing slash is returned as
+    ``http://supervisor/core/api`` or ``https://supervisor/core/api``. Anything else,
+    including an unset or ``"empty"`` URL, is returned unchanged.
+    """
+    if url is None:
+        return None
+    normalised = str(url).strip().rstrip("/").lower()
+    return normalised if normalised in SUPERVISOR_URLS else url
+
+
+def is_supervisor_token_for_another_host(hass_url: str | None, token: str | None) -> bool:
+    """True when ``token`` is the Supervisor token and ``hass_url`` is not the Supervisor proxy.
+
+    The Supervisor token is only for the Supervisor proxy and must never be sent to another host.
+    """
+    supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+    if not supervisor_token or str(token or "").strip() != supervisor_token:
+        return False
+    return not is_supervisor_url(hass_url)
+
 
 async def _create_and_start_client(
     hass_url: str, token: str, logger: logging.Logger | None
 ) -> AsyncWebSocketClient:
     """Helper to create and start a new WebSocket client."""
+    # Every WebSocket client is created here, so this check covers them all. Reconnects
+    # reuse the URL and token checked here, which nothing changes afterwards, and the
+    # client never follows a redirect (websocket_client._ws_connect), so the token is only
+    # sent to the host of this URL.
+    if is_supervisor_token_for_another_host(hass_url, token):
+        if logger:
+            logger.error(SUPERVISOR_TOKEN_REFUSED)
+        raise ConnectionError(SUPERVISOR_TOKEN_REFUSED)
+    # An empty token can never authenticate, so don't open a connection just to send it.
+    if not str(token or "").strip() or str(token).strip() == "empty":
+        if logger:
+            logger.error(NO_WEBSOCKET_TOKEN)
+        raise ConnectionError(NO_WEBSOCKET_TOKEN)
     if logger:
         logger.debug(f"Creating new WebSocket client for {hass_url}")
     client = AsyncWebSocketClient(hass_url=hass_url, long_lived_token=token, logger=logger)
