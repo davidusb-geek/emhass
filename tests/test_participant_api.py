@@ -5028,3 +5028,72 @@ def test_the_web_servers_api_token_is_never_a_remotes_token_secret():
         },
     ]
     assert "not one of EMHASS's secrets" in utils.site_problem(site)
+
+
+def test_a_remote_token_with_the_api_tokens_value_is_never_sent(monkeypatch):
+    """The web server's API token is kept out of the secrets (api_auth holds
+    it): a remote token holding its value is still never sent."""
+    from emhass import api_auth
+
+    monkeypatch.setattr(api_auth, "current_token", lambda: "the-api-token-0123456789")
+    site = [
+        {"id": "grid"},
+        {
+            "id": "garage",
+            "parent": "grid",
+            "solver": {"url": "https://garage.lan/participant", "token_secret": "garage_api_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build({"garage_api_token": "the-api-token-0123456789"}))
+    assert "remote_tokens" not in out["retrieve_hass_conf"]
+    out = asyncio.run(build({"garage_api_token": "another-0123456789"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_api_token": "another-0123456789"}
+
+
+def test_a_remote_token_with_the_api_tokens_value_is_never_sent_from_the_command_line(
+    tmp_path, monkeypatch
+):
+    """The command line does not load api_auth: the API token build_secrets
+    read from the secrets file (and kept out of the secrets) is still never
+    sent as a remote's token."""
+    from emhass import api_auth
+
+    monkeypatch.setattr(utils, "_own_api_tokens", set())
+    monkeypatch.setattr(api_auth, "current_token", lambda: None)
+    secrets_file = tmp_path / "secrets_emhass.yaml"
+    secrets_file.write_text(
+        "emhass_api_token: the-api-token-0123456789\n"
+        "garage_api_token: the-api-token-0123456789\n"
+        "shed_api_key: shed-token-0123456789\n"
+    )
+    site = [
+        {"id": "grid"},
+        {
+            "id": "garage",
+            "parent": "grid",
+            "solver": {"url": "https://garage.lan/participant", "token_secret": "garage_api_token"},
+        },
+        {
+            "id": "shed",
+            "parent": "grid",
+            "solver": {"url": "https://shed.lan/participant", "token_secret": "shed_api_key"},
+        },
+    ]
+
+    async def build():
+        _, secrets = await utils.build_secrets(
+            EMHASS_CONF, logger, secrets_path=str(secrets_file), no_response=True
+        )
+        assert "emhass_api_token" not in secrets
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build())
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"shed_api_key": "shed-token-0123456789"}
