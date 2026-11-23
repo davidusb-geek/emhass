@@ -1,6 +1,4 @@
-import _pickle as cPickle
 import asyncio
-import bz2
 import copy
 import datetime
 import inspect
@@ -213,14 +211,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     # Test with html mock response
     async def test_get_data_mock(self):
         with aioresponses() as mocked:
-            test_data_path = emhass_conf["data_path"] / "test_response_get_data_get_method.pbz2"
+            test_data_path = emhass_conf["data_path"] / "test_response_get_data_get_method.json"
 
             async with aiofiles.open(test_data_path, "rb") as f:
-                compressed = await f.read()
-
-            data = bz2.decompress(compressed)
-            data = cPickle.loads(data)
-            data = orjson.loads(data.content)
+                data = orjson.loads(await f.read())
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
             # with aioresponses() as mocked:
