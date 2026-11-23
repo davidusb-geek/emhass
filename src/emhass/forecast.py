@@ -713,8 +713,7 @@ class Forecast:
                 data = None
             if data is None:
                 self.logger.info(
-                    "Open-Meteo weather cache unavailable or outdated; "
-                    "fetching fresh forecast."
+                    "Open-Meteo weather cache unavailable or outdated; fetching fresh forecast."
                 )
                 return await self._get_weather_open_meteo(
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True

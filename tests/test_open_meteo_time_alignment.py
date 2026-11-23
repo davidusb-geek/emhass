@@ -276,9 +276,7 @@ class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
                 path.write_bytes(replacement_bytes)
                 return stale
 
-            fcst.get_cached_forecast_data = AsyncMock(
-                side_effect=read_stale_then_replace
-            )
+            fcst.get_cached_forecast_data = AsyncMock(side_effect=read_stale_then_replace)
             with self.assertRaisesRegex(ValueError, "no cache is available"):
                 await fcst._get_weather_open_meteo(str(path), use_legacy_pvlib=False)
             self.assertEqual(path.read_bytes(), replacement_bytes)
