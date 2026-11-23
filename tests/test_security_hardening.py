@@ -1432,7 +1432,8 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
                     {"EMHASS_URL": self.OTHER, "EMHASS_KEY": "sv-token"},
                     {},
                 ),
-                ("no URL or token set", None, {}, {}),
+                # No URL leaves the example URL, which counts as unset, so the Supervisor
+                # is used: tests/test_placeholder_hass_url.py.
                 ("secrets file URL only", None, {}, {"secrets_path": str(secrets_file)}),
                 ("argument URL only", None, {}, {"argument": {"url": self.OTHER}}),
                 # no_response skips the options, so the URL comes from EMHASS_URL here.

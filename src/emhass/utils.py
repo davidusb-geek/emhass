@@ -35,10 +35,13 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from emhass.connection_manager import (
     MIN_CONTAINED_TOKEN,
+    PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     canonical_supervisor_url,
+    is_placeholder_hass_url,
     is_supervisor_token_for_another_host,
     is_supervisor_url,
+    is_token_for_placeholder,
 )
 from emhass.coordinator.site import (
     compile_site,
@@ -7443,6 +7446,13 @@ async def build_secrets(
             url_from_options = options.get("hass_url", "empty")
             key_from_options = options.get("long_lived_token", "empty")
             _remember_ha_token(key_from_options)
+            # The example URL counts as unset here too, before anything is sent to it.
+            if is_placeholder_hass_url(url_from_options):
+                logger.warning(
+                    "The add-on option hass_url is the example https://myhass.duckdns.org/, "
+                    "so it is treated as unset."
+                )
+                url_from_options = "empty"
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
             data_path_value = options.get("data_path", None)
@@ -7717,6 +7727,25 @@ async def build_secrets(
         params_secrets["long_lived_token"] = argument["key"]
         _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
+
+    # The default hass_url is only an example, so it counts as unset: the add-on falls back
+    # to the Supervisor, and anywhere else a token set for it is dropped, not sent. This runs
+    # before the Supervisor-token check below, which then sees the Supervisor URL.
+    if is_placeholder_hass_url(params_secrets["hass_url"]):
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+        if supervisor_token:
+            logger.warning(
+                "hass_url is still the example https://myhass.duckdns.org/, so the Supervisor "
+                "URL and the Supervisor token are used instead. To use a long-lived access "
+                "token, set hass_url as well."
+            )
+            params_secrets["hass_url"] = "http://supervisor/core/api"
+            params_secrets["long_lived_token"] = supervisor_token
+        elif is_token_for_placeholder(
+            params_secrets["hass_url"], params_secrets["long_lived_token"]
+        ):
+            logger.error(PLACEHOLDER_URL_REFUSED)
+            params_secrets["long_lived_token"] = ""
 
     # Whichever source set them, never hand on the Supervisor token with another URL.
     params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])

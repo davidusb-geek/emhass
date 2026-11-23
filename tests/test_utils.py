@@ -1679,6 +1679,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_secrets_emhass_key_beats_supervisor(self):
         environ = self.enterContext(patch.dict(os.environ))
+        # With no URL at all the example URL counts as unset and the Supervisor is used
+        # (tests/test_placeholder_hass_url.py), so give EMHASS_KEY a URL here.
+        environ["EMHASS_URL"] = "http://homeassistant.local:8123/"
         environ["EMHASS_KEY"] = "env.key"
         environ["SUPERVISOR_TOKEN"] = "supervisor.token"
         with patch("aiohttp.ClientSession") as session:

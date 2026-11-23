@@ -20,11 +20,14 @@ import orjson
 import pandas as pd
 
 from emhass.connection_manager import (
+    PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     get_websocket_client,
     holds_supervisor_token,
+    is_refused_placeholder,
     is_supervisor_request_url,
     is_supervisor_token_for_another_host,
+    is_token_for_placeholder,
 )
 from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
 from emhass.utils import (
@@ -184,6 +187,10 @@ class RetrieveHass:
         # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
         if is_supervisor_token_for_another_host(hass_url, long_lived_token):
             logger.error(SUPERVISOR_TOKEN_REFUSED)
+            self.long_lived_token = ""
+        # The example hass_url is not anyone's Home Assistant. Never send it a token.
+        if is_token_for_placeholder(hass_url, self.long_lived_token):
+            logger.error(PLACEHOLDER_URL_REFUSED)
             self.long_lived_token = ""
         if isinstance(freq, int | float | str):
             self.freq = pd.Timedelta(minutes=int(freq))
@@ -2621,6 +2628,11 @@ class RetrieveHass:
             )
             response_ok = True
             response_status_code = 200
+        elif is_refused_placeholder(self.hass_url, self.long_lived_token):
+            # A token was set without a URL (and dropped), so nothing is posted there either.
+            self.logger.error(PLACEHOLDER_URL_REFUSED)
+            response_ok = False
+            response_status_code = 0
         else:
             # Always use REST API for posting data, regardless of use_websocket setting
             # Use persistent session for connection reuse (avoids TLS handshake per request)
@@ -2790,6 +2802,9 @@ class RetrieveHass:
         if self.get_data_from_file:
             self.logger.debug(f"Skipping scalar POST for {entity_id} (get_data_from_file)")
             return True
+        if is_refused_placeholder(self.hass_url, self.long_lived_token):
+            self.logger.error(PLACEHOLDER_URL_REFUSED)
+            return False
         try:
             session = await self._get_session()
             async with session.post(
