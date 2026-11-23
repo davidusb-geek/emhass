@@ -514,6 +514,7 @@ class _RecorderRetrieveHass:
     gap_back = None
     traveller = None  # time_machine coordinates of the running test
     advance_to = None  # clock moved to once the history has been read
+    get_data_kwargs = None  # keyword arguments of the latest get_data call
 
     def __init__(self, hass_url, long_lived_token, freq, time_zone, params, emhass_conf, logger):
         self.freq = freq
@@ -775,10 +776,18 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._tmp.cleanup)
         self.conf = dict(emhass_conf)
         self.conf["data_path"] = pathlib.Path(self._tmp.name)
-        _RecorderRetrieveHass.drop_last = 0
-        _RecorderRetrieveHass.gap_back = None
-        _RecorderRetrieveHass.days = 6
-        _RecorderRetrieveHass.advance_to = None
+        self._recorder(
+            drop_last=0,
+            gap_back=None,
+            days=6,
+            advance_to=None,
+            traveller=None,
+            get_data_kwargs=None,
+        )
+
+    def _recorder(self, **attributes):
+        """Set recorder stub attributes for this test; the previous values return afterwards."""
+        self.enterContext(patch.multiple(_RecorderRetrieveHass, **attributes))
 
     async def _save_model(
         self, *, num_lags=72, tuned_lags=None, weather=False, freq_min=60, time_zone=TZ_NAME
@@ -839,12 +848,12 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
 
         with (
             time_machine.travel(now, tick=False) as traveller,
+            patch.object(_RecorderRetrieveHass, "traveller", traveller),
             patch.object(forecast_module, "RetrieveHass", recorder or RetrieveHass),
             patch.object(RetrieveHass, "get_ha_config", no_ha_config),
             patch.object(RetrieveHass, "_fetch_history_data", _ha_history(rest_rows or [])),
             patch.object(RetrieveHass, "_fetch_live_state", _ha_live_state(live)),
         ):
-            _RecorderRetrieveHass.traveller = traveller
             return await set_input_data_dict(
                 self.conf,
                 "profit",
@@ -904,28 +913,28 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
 
     async def test_recorder_without_partial_bucket_is_accepted(self):
         await self._save_model()
-        _RecorderRetrieveHass.drop_last = 1  # only the still-running bucket is absent
+        self._recorder(drop_last=1)  # only the still-running bucket is absent
         self.assertTrue(await self._setup(self.CASES[0][1]))
 
     async def test_stale_history_fails_closed(self):
         await self._save_model()
         for drop in (2, 3):  # last completed bucket(s) missing
             with self.subTest(dropped_buckets=drop):
-                _RecorderRetrieveHass.drop_last = drop
+                self._recorder(drop_last=drop)
                 with self.assertLogs(logger, "ERROR") as logs:
                     self.assertFalse(await self._setup(self.CASES[0][1]))
                 self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
     async def test_missing_interval_in_last_window_fails_closed(self):
         await self._save_model()
-        _RecorderRetrieveHass.gap_back = 10
+        self._recorder(gap_back=10)
         with self.assertLogs(logger, "ERROR") as logs:
             self.assertFalse(await self._setup(self.CASES[0][1]))
         self.assertIn("missing, stale or irregular", "\n".join(logs.output))
 
     async def test_insufficient_history_fails_closed(self):
         await self._save_model()
-        _RecorderRetrieveHass.days = 2
+        self._recorder(days=2)
         with self.assertLogs(logger, "ERROR") as logs:
             self.assertFalse(await self._setup(self.CASES[0][1]))
         self.assertIn("Not enough load history", "\n".join(logs.output))
@@ -1079,7 +1088,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             idd["df_input_data_dayahead"]["p_load_forecast"], _utc_sine(grid), atol=self._atol(60)
         )
         # A recorder that lost its last completed steps is still refused in this zone.
-        _RecorderRetrieveHass.drop_last = 3
+        self._recorder(drop_last=3)
         with self.assertLogs(logger, "ERROR") as logs:
             self.assertFalse(await self._setup(now, "first", time_zone=zone))
         self.assertIn("missing, stale or irregular", "\n".join(logs.output))
@@ -1100,9 +1109,7 @@ class TestDayaheadOptimMlForecasterPath(unittest.IsolatedAsyncioTestCase):
             for name, now in cases:
                 with self.subTest(freq_min=freq_min, case=name):
                     boundary = pd.Timestamp(now).ceil(f"{freq_min}min")
-                    _RecorderRetrieveHass.advance_to = (
-                        boundary + pd.Timedelta(seconds=5)
-                    ).to_pydatetime()
+                    self._recorder(advance_to=(boundary + pd.Timedelta(seconds=5)).to_pydatetime())
                     idd = await self._setup(now, freq_min=freq_min)
                     self.assertTrue(idd)
                     grid = idd["fcst"].forecast_dates
