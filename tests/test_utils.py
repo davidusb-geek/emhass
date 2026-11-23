@@ -1665,11 +1665,12 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         environ["EMHASS_KEY"] = ""
         # An empty EMHASS_KEY falls back to the Supervisor token, but only for the
         # Supervisor URL; for another host the token is dropped, not sent.
-        with self.assertLogs(logger, level="ERROR"):
+        with self.assertLogs(logger, level="ERROR") as logs:
             _, secrets = await utils.build_secrets(
                 emhass_conf, logger, secrets_path="", no_response=True
             )
         self.assertEqual(secrets["long_lived_token"], "")
+        self.assertTrue(any("Supervisor token" in line for line in logs.output))
         environ["EMHASS_URL"] = "http://supervisor/core/api"
         _, secrets = await utils.build_secrets(
             emhass_conf, logger, secrets_path="", no_response=True

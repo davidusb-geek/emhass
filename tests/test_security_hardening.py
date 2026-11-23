@@ -1171,6 +1171,9 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
 
         cm._global_client = None
         cm._lock = asyncio.Lock()
+        # A developer's own EMHASS_KEY (docs/develop.md) would skip the Supervisor path.
+        env = self.enterContext(patch.dict(os.environ))
+        env.pop("EMHASS_KEY", None)
 
     async def asyncTearDown(self):
         from emhass.connection_manager import close_global_connection
@@ -1281,6 +1284,12 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
                 ("options token 'empty'", {**other_only, "long_lived_token": "empty"}, {}, {}),
                 ("options token absent", other_only, {}, {}),
                 ("EMHASS_URL, no options", None, {"EMHASS_URL": self.OTHER}, {}),
+                (
+                    "EMHASS_KEY is the Supervisor token",
+                    None,
+                    {"EMHASS_URL": self.OTHER, "EMHASS_KEY": "sv-token"},
+                    {},
+                ),
                 ("no URL or token set", None, {}, {}),
                 ("secrets file URL only", None, {}, {"secrets_path": str(secrets_file)}),
                 ("argument URL only", None, {}, {"argument": {"url": self.OTHER}}),
