@@ -1314,7 +1314,8 @@ async def api_v1_plan():
         }
     else:
         # what made it (a participant API commit) is this server's own bookkeeping
-        response_body = {"status": "ok", **{k: v for k, v in snap.items() if k != "origin"}}
+        served = {k: v for k, v in snap.items() if k not in ("origin", "plan_id")}
+        response_body = {"status": "ok", **served}
 
     response = await make_response(orjson.dumps(response_body))
     response.headers["Content-Type"] = "application/json"

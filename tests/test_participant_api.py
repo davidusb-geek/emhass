@@ -2708,7 +2708,7 @@ class _StepperCase:
         self.stepper = PlanStepper()
         self.gen = 1
         self.stepper._gen = 1
-        self.stamp = (plan_store.read(data_path) or {}).get("generated_at")
+        self.stamp = plan_store.stamp(plan_store.read(data_path))
 
     def tick(self, at, begin=None):
         return self.stepper.tick(
@@ -2881,7 +2881,7 @@ def test_stepping_resumes_at_once_after_a_restart(data_path, monkeypatch):
     plan_store.record(data_path, plan_store.serialize(res), "2026-10-24T22:00:01Z", "1.0")
     log = CommitLog(data_path / pa.COMMIT_LOG_FILE)
     log.begin("a", [1.0], _HORIZON)
-    log.end("a", "accepted", "", {"plan_stamp": "2026-10-24T22:00:01Z"})
+    log.end("a", "accepted", "", {"plan_stamp": plan_store.stamp(plan_store.read(data_path))})
     monkeypatch.setattr(pa, "_commit_logs", {data_path / pa.COMMIT_LOG_FILE: log})
     published = threading.Event()
     stepper = pa.PlanStepper()
@@ -2917,7 +2917,7 @@ def test_a_slot_that_is_busy_for_a_moment_is_published_when_it_is_free(data_path
         pd.Timestamp.now(tz="UTC").floor("30min"), periods=4, freq="30min"
     )
     plan_store.record(data_path, plan_store.serialize(case.res), "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     stepper.follow(
         "a",
         stamp,
@@ -3029,7 +3029,7 @@ def test_a_plan_of_its_own_ends_the_commit_it_reports_at_once(data_path):
     from emhass.participant_api import PlanStepper, _active_commit
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     log, stepper = CommitLog(), PlanStepper()
     log.begin("a", [1.0], _HORIZON)
     log.end("a", "accepted", "", {"plan_stamp": stamp})
@@ -3188,7 +3188,7 @@ def test_a_commit_cut_off_by_a_restart_keeps_the_stamp_it_was_resumed_with(data_
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    s2 = (plan_store.read(data_path) or {}).get("generated_at")
+    s2 = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
     log._records["b"]["state"] = "partial"  # as a restart reads a running one back
     params = _params(ec, **GARAGE)
@@ -3207,7 +3207,7 @@ def test_a_refused_commit_leaves_the_running_plan_to_resume(data_path, monkeypat
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path,
         monkeypatch,
@@ -3334,7 +3334,7 @@ def test_a_commit_carries_its_stamp_before_it_publishes(data_path, monkeypatch):
     ec = _conf(data_path)
     params = _params(ec, **GARAGE)
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     seen = []
 
     async def publishing(*a, **k):
@@ -3436,7 +3436,7 @@ def test_continual_publish_ends_a_plan_for_good(data_path, monkeypatch):
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("a", "accepted", {"plan_stamp": stamp})]
     )
@@ -3495,7 +3495,7 @@ def test_an_accepted_commit_names_its_own_plan_as_soon_as_it_is_saved(data_path,
 
     async def publishing(conf, params, res, logger, on_recorded=None, **k):
         plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")
-        on_recorded((plan_store.read(data_path) or {}).get("generated_at"))
+        on_recorded(plan_store.stamp(plan_store.read(data_path)))
         seen["stamp"] = log.get("c1").get("plan_stamp")
         return "accepted", ""
 
@@ -3506,7 +3506,7 @@ def test_an_accepted_commit_names_its_own_plan_as_soon_as_it_is_saved(data_path,
     log.begin("c1", [1.0], _HORIZON)
     res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
     out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
-    assert seen["stamp"] == (plan_store.read(data_path) or {}).get("generated_at")
+    assert seen["stamp"] == plan_store.stamp(plan_store.read(data_path))
     # the stamp followed is the one recorded as it was saved, not one read later
     plan_store.record(data_path, [], "2026-11-21T10:06:00Z", "1.0")
     assert out[2]["plan_stamp"] == seen["stamp"]
@@ -3547,7 +3547,7 @@ def test_a_resume_with_the_api_off_publishes_under_the_commits_prefix(data_path,
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     conf = {"publish_prefix": "garage_", "key": "garage"}
     ec, stepper, followed, log = _resume_case(
         data_path,
@@ -3584,7 +3584,7 @@ def test_a_commit_cut_off_before_its_plan_was_kept_leaves_the_one_that_ran(data_
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("a", "accepted", {"plan_stamp": stamp})]
     )
@@ -3599,7 +3599,7 @@ def test_a_resume_yields_to_a_commit_followed_meanwhile(data_path, monkeypatch):
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("a", "accepted", {"plan_stamp": stamp})]
     )
@@ -3655,7 +3655,7 @@ def test_an_end_seen_while_the_api_is_off_is_recorded(data_path, monkeypatch):
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("a", "accepted", {"plan_stamp": stamp})]
     )
@@ -3772,7 +3772,7 @@ def test_a_plan_store_it_cannot_read_never_ends_a_plan_elsewhere(data_path, monk
     from emhass.coordinator.interface import Answer
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("a", "accepted", {"plan_stamp": stamp})]
     )
@@ -4119,7 +4119,7 @@ def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_m
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
+    before = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(
         data_path, monkeypatch, [("b", "accepted", {"plan_stamp": before})]
     )
@@ -4293,12 +4293,12 @@ def test_a_commits_own_plan_is_known_by_its_origin_after_a_stop(data_path, monke
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
+    before = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
     log.annotate("b", {"plan_stamp": before})
     log._records["b"].update(state="partial", interrupted=annotated is False)
     plan_store.record(data_path, [], "2026-11-21T11:30:00Z", "1.0", origin="commit:b")
-    own = (plan_store.read(data_path) or {}).get("generated_at")
+    own = plan_store.stamp(plan_store.read(data_path))
     params = _params(ec, **GARAGE)
     pa._resume(ec, params, logger, stepper, None)
     assert followed == [("b", own)] and log.get("b")["plan_stamp"] == own
@@ -4317,7 +4317,7 @@ def test_a_plan_without_the_commits_origin_supersedes_it(data_path, monkeypatch,
     import emhass.participant_api as pa
 
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    before = (plan_store.read(data_path) or {}).get("generated_at")
+    before = plan_store.stamp(plan_store.read(data_path))
     ec, stepper, followed, log = _resume_case(data_path, monkeypatch, [("b", "running", {})])
     log.annotate("b", {"plan_stamp": before})
     log._records["b"].update(state="partial", interrupted=True)
@@ -4354,7 +4354,7 @@ def test_a_commit_names_its_plan_and_follows_its_stamp_even_if_its_record_fails(
     async def publishing(conf, params, res, logger, on_recorded=None, origin=None):
         seen["origin"] = origin
         plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0", origin=origin)
-        on_recorded((plan_store.read(data_path) or {}).get("generated_at"))
+        on_recorded(plan_store.stamp(plan_store.read(data_path)))
         return "accepted", ""
 
     monkeypatch.setattr(pa, "publish_commit", publishing)
@@ -4373,7 +4373,7 @@ def test_a_commit_names_its_plan_and_follows_its_stamp_even_if_its_record_fails(
     )
     res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
     out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
-    saved = (plan_store.read(data_path) or {}).get("generated_at")
+    saved = plan_store.stamp(plan_store.read(data_path))
     assert seen["origin"] == "commit:c1" and out[0] == "accepted"
     assert followed == [("c1", saved)] and out[2] == {"plan_stamp": saved}
 
@@ -4496,7 +4496,7 @@ def test_a_stepped_plan_whose_last_slots_were_not_published_is_held_at_what_was(
     )
     stepper.RETRY_S = 0.05
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
 
     def refuses(*a):
         return "partial", "Home Assistant refused it"
@@ -4685,7 +4685,7 @@ def test_an_ended_plan_published_again_clears_what_it_held(data_path):
     log.end("c", "accepted", "", {"held_slot": 0})
     assert commit_view(log.get("c"))["held_slot"] == 0
     plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
-    stamp = (plan_store.read(data_path) or {}).get("generated_at")
+    stamp = plan_store.stamp(plan_store.read(data_path))
     res = pd.DataFrame(
         {"P_deferrable0": [7000.0, 0.0]},
         index=pd.date_range("2026-11-21T09:00:00Z", periods=2, freq="30min"),  # ended
@@ -4754,3 +4754,59 @@ def test_a_remote_token_that_is_this_emhass_participant_token_is_sent():
 
     out = asyncio.run(build({"participant_token": "shared", "garage_token": "shared"}))
     assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "shared"}
+
+
+def test_two_plans_saved_in_one_second_are_told_apart(data_path, monkeypatch):
+    """A commit's plan and a plan of this EMHASS's own saved within the same
+    second share a generated_at: each save has its own plan_id, so the later
+    one supersedes the commit - on resume and while stepping - and a plan
+    saved before plan ids is still known by its generated_at."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0", origin="commit:b")
+    own = plan_store.stamp(plan_store.read(data_path))
+    assert own != "2026-11-21T10:00:00Z"
+    ec, stepper, followed, log = _resume_case(
+        data_path, monkeypatch, [("b", "accepted", {"plan_stamp": own})]
+    )
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")  # the same second
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and stepper.view()[3]
+    case = _StepperCase(data_path)
+    case.stepper.following = "c"
+    case.stamp = plan_store.stamp(plan_store.read(data_path))
+    plan_store.record(data_path, [], plan_store.read(data_path)["generated_at"], "1.0")
+    assert case.tick("2026-11-21T10:30:01Z") == "stop" and case.stepper.superseded
+    assert plan_store.stamp({"generated_at": "2026-11-21T10:00:00Z"}) == "2026-11-21T10:00:00Z"
+
+
+def test_a_commit_refused_while_publishing_keeps_no_plan_to_resume(data_path, monkeypatch):
+    """publish_commit refuses it (its inputs cannot be built): its kept plan
+    is removed, so a restart - its final record not saved, read back as
+    running - finds nothing of it to step, with a fresh log and stepper."""
+    import emhass.participant_api as pa
+    from emhass.coordinator.interface import Answer
+    from emhass.coordinator.remote import CommitLog
+
+    ec = _conf(data_path)
+
+    async def refusing(*a, **k):
+        return "refused", "EMHASS could not build its inputs to publish"
+
+    monkeypatch.setattr(pa, "publish_commit", refusing)
+    resume = pa._resume
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    service = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    service.log.begin("c1", [1.0], _HORIZON)  # on disk: running
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    out = service._commit(None, Answer(np.zeros(2), 0.0, np.zeros(3), detail=res), "c1")
+    assert out[0] == "refused" and not pa.committed_plan_path(ec, "c1").exists()
+    # the final record never saved: a restart reads it back as running
+    again = CommitLog(data_path / pa.COMMIT_LOG_FILE)
+    assert again.get("c1")["state"] == "partial"
+    monkeypatch.setattr(pa, "_commit_logs", {data_path / pa.COMMIT_LOG_FILE: again})
+    stepper = pa.PlanStepper()
+    followed = []
+    monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
+    resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and again.get("c1")["state"] == "refused"

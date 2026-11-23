@@ -10,6 +10,7 @@ last_run.record stamps) so the two endpoints agree.
 import json
 import logging
 import threading
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -63,6 +64,9 @@ def record(
     }
     if origin is not None:
         snap["origin"] = origin
+    # this save's own identity: generated_at has whole seconds, and two plans
+    # can be saved within one (a commit's, then one of this EMHASS's own)
+    snap["plan_id"] = uuid.uuid4().hex
     with _lock:
         _cache = snap
         try:
@@ -74,6 +78,14 @@ def record(
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
             return False
     return True
+
+
+def stamp(snap: dict | None) -> str | None:
+    """A saved plan's identity: its plan_id, or for a plan saved before plan
+    ids its generated_at. None for no plan."""
+    if not isinstance(snap, dict):
+        return None
+    return snap.get("plan_id") or snap.get("generated_at")
 
 
 def read(data_path: Path) -> dict | None:
