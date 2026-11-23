@@ -4659,6 +4659,35 @@ def test_a_remote_token_with_the_value_of_one_of_emhass_own_secrets_is_never_sen
     assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
 
 
+@pytest.mark.parametrize("env", ["SUPERVISOR_TOKEN", "EMHASS_KEY"])
+def test_a_remote_token_with_an_environment_home_assistant_token_is_never_sent(env, monkeypatch):
+    """The Supervisor token or EMHASS_KEY held by a remote's token_secret:
+    never among the remotes' tokens, even when long_lived_token holds another
+    value (the Supervisor token is dropped for a URL that is not the
+    Supervisor's)."""
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("EMHASS_KEY", raising=False)
+    monkeypatch.setenv(env, "env-ha-token-0123456789")
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "http://elsewhere.example/x", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build({"long_lived_token": "", "garage_token": "env-ha-token-0123456789"}))
+    assert "remote_tokens" not in out["retrieve_hass_conf"]
+    out = asyncio.run(build({"long_lived_token": "", "garage_token": "G"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
+
+
 def test_each_remote_token_map_has_its_own_cached_optimizer():
     """The optimizer cache keys a salted digest of the remotes' tokens: a
     request with other tokens never shares the optimizer (nor its tokens)

@@ -8160,6 +8160,12 @@ async def build_params(
     if own_api_token:
         reserved.add(str(own_api_token))
     reserved |= _own_api_tokens  # as build_secrets read it (secrets file, options.json)
+    # Home Assistant's tokens from the environment, whatever long_lived_token holds now
+    # (build_secrets drops the Supervisor token for another host): never a remote's token
+    for env_token in ("SUPERVISOR_TOKEN", "EMHASS_KEY"):
+        value = os.getenv(env_token, "").strip()
+        if value:
+            reserved.add(value)
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
