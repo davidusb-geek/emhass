@@ -133,6 +133,9 @@ forecast_transport_errors = (TimeoutError, asyncio.TimeoutError, aiohttp.ClientE
 # ``DataFrame.attrs`` key under which ``_get_weather_open_meteo`` keeps the native 15-minute
 # weather beside the step-grid weather frame (see ``Forecast._build_pv_native_weather``).
 PV_NATIVE_WEATHER_ATTR = "pv_native_weather"
+# Marks a cached Open-Meteo weather frame interpolated by elapsed time (#1353). A frame cached by an
+# earlier version lacks it and may hold values from the positional interpolation, so it is refetched.
+OPEN_METEO_TIME_ALIGNED_ATTR = "open_meteo_time_aligned"
 
 # Per-plant PV power (#1150). Solcast and solar.forecast store one extra column per plant
 # next to the summed ``yhat`` of the cached frame (``yhat_plant0``, ``yhat_plant1``, ...), so
@@ -640,8 +643,9 @@ class Forecast:
     ) -> pd.DataFrame:
         """Helper to retrieve weather data from Open-Meteo or cache.
 
-        ``skip_cache`` fetches without reading the cache: it was found stale, and
-        deleted, except on a dry run, which leaves it for the next live run.
+        ``skip_cache`` fetches without reading the weather cache. An unmarked
+        cache remains on disk until a successful refresh replaces it atomically,
+        so a concurrent request cannot lose a newer, valid cache.
         """
         if skip_cache or not os.path.isfile(w_forecast_cache_path):
             data_raw = await self.get_cached_open_meteo_forecast_json(
@@ -675,13 +679,13 @@ class Forecast:
                 data_15min.to_csv(
                     self.emhass_conf["data_path"] / "debug-weather-forecast-open-meteo.csv"
                 )
-            data = data_15min.reindex(self.forecast_dates)
-            data.interpolate(
-                method="linear",
-                axis=0,
-                limit=None,
-                limit_direction="both",
-                inplace=True,
+            # Preserve native samples until interpolation is complete; direct reindexing
+            # onto the optimisation grid would silently discard off-grid observations.
+            combined_index = data_15min.index.union(self.forecast_dates)
+            data = (
+                data_15min.reindex(combined_index)
+                .interpolate(method="time", axis=0, limit_direction="both")
+                .reindex(self.forecast_dates)
             )
             # The index is already self.forecast_dates (aligned by construction);
             # re-rounding it in UTC would collapse grids that are not UTC-aligned.
@@ -694,14 +698,22 @@ class Forecast:
             native = self._build_pv_native_weather(data_15min)
             if native is not None:
                 data.attrs[PV_NATIVE_WEATHER_ATTR] = native
+            data.attrs[OPEN_METEO_TIME_ALIGNED_ATTR] = True
             if self.params["passed_data"].get("weather_forecast_cache", False):
                 data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         else:
             data = await self.get_cached_forecast_data(w_forecast_cache_path)
+            if data is not None and not data.attrs.get(OPEN_METEO_TIME_ALIGNED_ATTR):
+                self.logger.warning(
+                    "Open-Meteo weather cache was written before time-based interpolation; "
+                    "rebuilding it from the Open-Meteo forecast."
+                )
+                # Preserve the file until a successful atomic replacement. Another request
+                # could have installed a valid cache since this request read the old one.
+                data = None
             if data is None:
-                # Stale Open-Meteo cache was deleted — fetch fresh data from API.
                 self.logger.info(
-                    "Stale Open-Meteo cache removed; fetching fresh forecast from API."
+                    "Open-Meteo weather cache unavailable or outdated; fetching fresh forecast."
                 )
                 return await self._get_weather_open_meteo(
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
@@ -2187,7 +2199,7 @@ class Forecast:
         # do not coincide exactly with the 15-min Open-Meteo grid.
         combined_index = weather.index.union(index)
         aligned = weather.reindex(combined_index)
-        aligned = aligned.interpolate(method="linear", axis=0, limit_direction="both")
+        aligned = aligned.interpolate(method="time", axis=0, limit_direction="both")
         aligned = aligned.reindex(index).ffill().bfill()
         # Rows more than an hour from any real value (outside the retrieved span, or in a gap or
         # null stretch of it) are interpolated or repeat the nearest value: a model fitted on them
