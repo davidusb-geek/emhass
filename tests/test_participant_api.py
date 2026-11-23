@@ -4987,3 +4987,44 @@ def test_a_resume_takes_the_stamp_and_origin_from_one_read(data_path, monkeypatc
     pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     assert log.get("b")["plan_stamp"] != local  # never the local plan's stamp
     assert followed == [] and stepper.view()[3]  # what it read: a plan of its own
+
+
+def test_a_remote_token_may_be_named_like_an_api_token():
+    """A remote's token_secret called "garage_api_token" is that remote's
+    token, not one of EMHASS's: it is sent. A token with the value of one of
+    EMHASS's own secrets still is not."""
+    site = [
+        {"id": "grid"},
+        {
+            "id": "garage",
+            "parent": "grid",
+            "solver": {"url": "https://garage.lan/participant", "token_secret": "garage_api_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build({"long_lived_token": "HA", "garage_api_token": "G"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_api_token": "G"}
+    out = asyncio.run(build({"long_lived_token": "HA", "garage_api_token": "HA"}))
+    assert "remote_tokens" not in out["retrieve_hass_conf"]
+
+
+def test_the_web_servers_api_token_is_never_a_remotes_token_secret():
+    """emhass_api_token is the web server's own token (and never among the
+    secrets a site resolves): a site may not name it."""
+    from emhass.coordinator.site import site_token_secret_usable
+
+    assert not site_token_secret_usable("emhass_api_token")
+    site = [
+        {"id": "grid"},
+        {
+            "id": "garage",
+            "parent": "grid",
+            "solver": {"url": "https://garage.lan/participant", "token_secret": "emhass_api_token"},
+        },
+    ]
+    assert "not one of EMHASS's secrets" in utils.site_problem(site)

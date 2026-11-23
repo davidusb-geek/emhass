@@ -7895,7 +7895,14 @@ async def build_params(
     # The tokens site's remote solvers are reached with: only the secrets a
     # remote names (its token_secret), for the coordinator
     configured_site = params["optim_conf"].get("site")
-    reserved = reserved_secret_values(params_secrets)
+    site_secrets = {
+        e["solver"]["token_secret"]
+        for e in (configured_site if isinstance(configured_site, list) else [])
+        if isinstance(e, dict)
+        and isinstance(e.get("solver"), dict)
+        and site_token_secret_usable(e["solver"].get("token_secret"))
+    }
+    reserved = reserved_secret_values(params_secrets, remote=site_secrets)
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None

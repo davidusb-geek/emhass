@@ -45,16 +45,19 @@ _SITE_RESERVED_SECRETS = frozenset(
         "influxdb_password",
         "victoriametrics_username",
         "victoriametrics_password",
+        "emhass_api_token",  # the web server's: popped from the secrets, so never resolved
     }
 )
 
 
-def reserved_secret_values(params_secrets: Any) -> set[str]:
+def reserved_secret_values(params_secrets: Any, remote: Any = frozenset()) -> set[str]:
     """The values of EMHASS's own secrets in `params_secrets` (its own: the
     names a token_secret may not take, and any API token or key): a remote's
     token with one of these values would send that secret to the remote. Not
     participant_token: a remote expecting that value already holds it (two
-    EMHASS coordinating each other with one token)."""
+    EMHASS coordinating each other with one token). Nor the secrets `remote`
+    names - the site's own token_secrets, whatever they are called (a
+    "garage_api_token" is a remote's token, not one of EMHASS's)."""
     if not isinstance(params_secrets, dict):
         return set()
     return {
@@ -62,6 +65,7 @@ def reserved_secret_values(params_secrets: Any) -> set[str]:
         for k, v in params_secrets.items()
         if isinstance(k, str)
         and k.lower() != "participant_token"
+        and k not in remote
         and (
             k.lower() in _SITE_RESERVED_SECRETS
             or "api_token" in k.lower()
