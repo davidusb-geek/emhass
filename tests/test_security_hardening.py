@@ -1418,10 +1418,15 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(cm._global_client)
 
     async def test_websocket_connect_ignores_environment_proxies(self):
-        from emhass import websocket_client
+        import inspect
+
+        import websockets
+
         from emhass.websocket_client import AsyncWebSocketClient
 
-        if not websocket_client._NO_PROXY:
+        # Decided by the library, not by the module under test: emptying the module's
+        # own proxy setting must fail here, not skip.
+        if "proxy" not in inspect.signature(websockets.connect).parameters:
             self.skipTest("this websockets version never uses an environment proxy")
         client = AsyncWebSocketClient("http://supervisor/core/api", "sv-token", logger)
         connect = AsyncMock(side_effect=OSError("stop here"))
