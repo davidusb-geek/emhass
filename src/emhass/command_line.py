@@ -316,6 +316,45 @@ class OptimizationCache:
                 return None
             return val.total_seconds() if hasattr(val, "total_seconds") else float(val)
 
+        def groups_key(groups) -> tuple:
+            """deferrable_load_groups as the problem bakes them in (#1366).
+
+            Each group is keyed on its names, mutual exclusion flag, weights and
+            max_power. A scalar or a one-entry list is keyed by value, as before. A
+            list of 2 or more entries is keyed by its length only, since its values
+            go into a Parameter refreshed on every run. Unknown group keys are left
+            out. Never raises: a shape the validation would refuse is keyed by repr.
+            """
+            try:
+                key = []
+                for group in groups or []:
+                    max_power = group.get("max_power")
+                    if isinstance(max_power, list):
+                        max_power = (
+                            ("per_step", len(max_power))
+                            if len(max_power) >= 2
+                            else tuple(max_power)
+                        )
+                    weights = group.get("weights")
+                    if isinstance(weights, dict):
+                        weights = tuple(
+                            sorted(
+                                (name, tuple(sorted(w.items())) if isinstance(w, dict) else w)
+                                for name, w in weights.items()
+                            )
+                        )
+                    key.append(
+                        (
+                            tuple(group.get("names", [])),
+                            max_power,
+                            group.get("mutual_exclusion", False),
+                            weights,
+                        )
+                    )
+                return tuple(key)
+            except (AttributeError, TypeError):
+                return (repr(groups),)
+
         def to_tuple(val) -> tuple:
             """Convert lists/arrays to tuples for hashability."""
             if val is None:
@@ -392,6 +431,10 @@ class OptimizationCache:
             "cost_forecast_per_deferrable_load",
             # shared_thermal_tanks has its own structural hash field above
             "shared_thermal_tanks",
+            # deferrable_load_groups has its own explicit field below, which keys a
+            # per-step max_power list on its length only: the values go into a
+            # cp.Parameter refreshed on every run (#1366)
+            "deferrable_load_groups",
             # heat_topology is compiled down to the structural fields which ARE
             # part of the cache key (def_load_config_structure,
             # deferrable_load_groups, shared_thermal_tanks). The raw
@@ -494,10 +537,7 @@ class OptimizationCache:
                 optim_conf.get("nominal_power_of_deferrable_loads", [])
             ),
             def_load_config_structure=tuple(def_structure),
-            deferrable_load_groups=tuple(
-                (tuple(g.get("names", [])), g.get("max_power"), g.get("mutual_exclusion", False))
-                for g in optim_conf.get("deferrable_load_groups", [])
-            ),
+            deferrable_load_groups=groups_key(optim_conf.get("deferrable_load_groups")),
             # shared_thermal_tanks change problem structure (new tank state
             # variable + dynamics constraints), so include a structure hash.
             shared_thermal_tanks=tuple(

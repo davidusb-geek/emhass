@@ -1054,6 +1054,64 @@ def test_the_dry_run_url_returns_the_plan_and_writes_nothing(action):
     start.assert_not_called()
 
 
+def test_a_group_budget_list_of_the_wrong_length_is_a_400():
+    """A per-step deferrable_load_groups max_power list is checked against the
+    run's horizon when the optimization starts (#1366). A wrong length is a 400
+    with the reason on the dry-run URL and on /action, not a 500."""
+    with _data_copy() as data_path:
+        _write_params(data_path)
+        body = {
+            **FORECASTS,
+            "prediction_horizon": 48,
+            "deferrable_load_groups": [
+                {"names": ["deferrable0", "deferrable1"], "max_power": [3000.0, 2000.0, 1000.0]}
+            ],
+        }
+        with _web(data_path) as client, _from_file():
+
+            async def post():
+                response = await client.post("/api/v1/dry-run/naive-mpc-optim", json=body)
+                return response.status_code, await response.get_json()
+
+            status, answer = asyncio.run(post())
+    assert status == 400, answer["errors"]
+    _conforms(answer)
+    assert answer["status"] == "not-run"
+    assert "has 3 entries, but this run has 48 timesteps" in answer["errors"][-1]
+    assert sum("has 3 entries" in error for error in answer["errors"]) == 1
+
+    # An earlier recoverable error (a refused runtime site) does not hide the reason.
+    with _data_copy() as data_path:
+        _write_params(data_path)
+        with _web(data_path) as client, _from_file():
+
+            async def post_with_bad_site():
+                response = await client.post(
+                    "/api/v1/dry-run/naive-mpc-optim", json={**body, "site": "bogus"}
+                )
+                return response.status_code, await response.get_json()
+
+            status, answer = asyncio.run(post_with_bad_site())
+    assert status == 400, answer["errors"]
+    _conforms(answer)
+    assert answer["status"] == "not-run"
+    assert any(error.startswith("site ") for error in answer["errors"]), answer["errors"]
+    assert "has 3 entries, but this run has 48 timesteps" in answer["errors"][-1]
+
+    # The same request as a live run: /action answers 400 with the reason too.
+    with _data_copy() as data_path:
+        _write_params(data_path)
+        with _web(data_path) as client, _from_file():
+
+            async def post_live():
+                response = await client.post("/action/naive-mpc-optim", json=body)
+                return response.status_code, await response.get_data(as_text=True)
+
+            status, text = asyncio.run(post_live())
+    assert status == 400, text
+    assert "has 3 entries, but this run has 48 timesteps" in text
+
+
 def test_the_plan_and_last_run_endpoints_do_not_see_a_dry_run():
     """After a live run, GET /api/v1/plan and /api/v1/last-run serve it. A dry
     run at other prices, through the dry-run URL, changes neither response,

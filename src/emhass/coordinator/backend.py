@@ -276,6 +276,14 @@ def _hold_q_input(k: int, params: dict[str, Any], hc: dict[str, Any]) -> None:
 
 
 # ------------------------------------------------------------------ participants
+def _own_load_name(nm: str, loads: list[int]) -> str:
+    """A deferrable_load_groups member `deferrableN`, renumbered to its place
+    in a participant's own `loads` (#1366), read by EMHASS's own parser."""
+    from emhass.utils import parse_deferrable_group_member
+
+    return f"deferrable{loads.index(parse_deferrable_group_member(nm)[1])}"
+
+
 class EmhassParticipant:
     """One participant answered by EMHASS's own model, restricted to its devices.
 
@@ -327,13 +335,17 @@ class EmhassParticipant:
             if isinstance(oc.get(name), list):
                 oc[name] = [oc[name][k] for k in loads if k < len(oc[name])]
         # deferrable_load_groups whose loads are all this participant's,
-        # renumbered to its own loads (`_limits`); the others the coordinator holds
+        # renumbered to its own loads (`_limits`); the others the coordinator holds.
+        # Weights (#1366) are keyed by name, so they are renumbered with the names.
         oc["deferrable_load_groups"] = [
             {
                 **g,
-                "names": [
-                    f"deferrable{loads.index(int(nm[len('deferrable') :]))}" for nm in g["names"]
-                ],
+                "names": [_own_load_name(nm, loads) for nm in g["names"]],
+                **(
+                    {"weights": {_own_load_name(nm, loads): w for nm, w in g["weights"].items()}}
+                    if isinstance(g.get("weights"), dict)
+                    else {}
+                ),
             }
             for g in (load_groups or [])
         ]
@@ -667,6 +679,21 @@ class Layout(NamedTuple):
     notes: tuple[str, ...]
 
 
+def _battery_members(names: list[Any]) -> list[str]:
+    """The `batteryK` entries of a deferrable_load_groups `names` list (#1366),
+    read by EMHASS's own parser; an entry it cannot read is left to the rest."""
+    from emhass.utils import parse_deferrable_group_member
+
+    found = []
+    for nm in names:
+        try:
+            if isinstance(nm, str) and parse_deferrable_group_member(nm)[0] == "battery":
+                found.append(nm)
+        except ValueError:
+            pass  # not a battery; the group validator reports a name it cannot read
+    return found
+
+
 def _site(
     optim_conf: dict[str, Any], plant_conf: dict[str, Any], devices: list[str]
 ) -> tuple[Layout, str | None]:
@@ -691,7 +718,9 @@ def _site(
     still describe a hybrid inverter. Either way, EMHASS's
     deferrable_load_groups: a group whose loads are all in one EMHASS group
     stays in that group's own model (mutual exclusion included); otherwise
-    its max_power is a set limit.
+    its max_power is a set limit. The default solver plans a group with a
+    battery member, and one across groups with weights or a per-step
+    max_power list (#1366); a one-entry list is its number.
 
     The coordinator sees an EMHASS group only as its total, so a group's
     devices share one parent, and a limit holds all of them or none.
@@ -826,20 +855,45 @@ def _site(
                 max_export_kw=kw(e.get("max_export")),
             )
         )
+    group_limits: set[str] = set()
+    repeated: list[str] | None = None
     for dg in optim_conf.get("deferrable_load_groups") or []:
         names = list(dg.get("names") or [])
+        label = f"deferrable_load_groups {names}"
+        # #1366 group features this backend does not plan yet: the default
+        # solver plans them, so decline by name rather than plan without them
+        batteries = _battery_members(names)
+        if batteries:
+            return empty, f"{label}: a battery member {batteries}"
         inside = [k for k, devs in whole.items() if names and set(names) <= devs]
         if inside:
-            own.setdefault(inside[0], []).append(dg)
+            own.setdefault(inside[0], []).append(dg)  # its own EMHASS model holds all of it
             continue
         if dg.get("mutual_exclusion"):
             return empty, "deferrable_load_groups: mutual exclusion across participants"
-        if dg.get("max_power") is None:
+        max_power = dg.get("max_power")
+        if max_power is None:
             continue
-        keys, reason = keys_of(names, f"deferrable_load_groups {names}")
+        if isinstance(max_power, list) and len(max_power) == 1:
+            max_power = max_power[0]  # one entry is the same limit as a number
+        if isinstance(max_power, list):
+            return empty, f"{label}: a per-step max_power list across participants"
+        if dg.get("weights"):
+            return empty, f"{label}: weights across participants"
+        keys, reason = keys_of(names, label)
         if reason:
             return empty, reason
-        sets.append(SetLimit("+".join(names), keys, max_import_kw=float(dg["max_power"]) / 1000.0))
+        limit_name = "+".join(names)
+        if limit_name in group_limits and repeated is None:
+            repeated = names  # the default solver holds both rows; here they share a name
+        group_limits.add(limit_name)
+        sets.append(SetLimit(limit_name, keys, max_import_kw=float(max_power) / 1000.0))
+    if repeated is not None:
+        return (
+            empty,
+            f"deferrable_load_groups {repeated}: two overlapping groups on the same "
+            "loads across participants",
+        )
     if len({s.name for s in sets}) < len(sets):
         return empty, "two limits have the same name"
 
