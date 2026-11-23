@@ -34,14 +34,16 @@ from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from emhass.connection_manager import (
+    HASS_URL_UNSET_REFUSED,
     MIN_CONTAINED_TOKEN,
     PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     canonical_supervisor_url,
     is_placeholder_hass_url,
+    is_real_token,
     is_supervisor_token_for_another_host,
     is_supervisor_url,
-    is_token_for_placeholder,
+    is_unset_hass_url,
 )
 from emhass.coordinator.site import (
     compile_site,
@@ -7730,25 +7732,30 @@ async def build_secrets(
         _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
 
-    # The default hass_url is only an example, so it counts as unset: the add-on (the
-    # Supervisor token plus its options file) falls back to the Supervisor, and anywhere else
-    # a token set for it is dropped, not sent. A SUPERVISOR_TOKEN set by hand outside the
-    # add-on is not a reason to send anything to http://supervisor. This runs before the
-    # Supervisor-token check below, which then sees the Supervisor URL.
-    if is_placeholder_hass_url(params_secrets["hass_url"]):
+    # The default hass_url is only an example, so it counts as unset, like a blank or "empty"
+    # one: the add-on (the Supervisor token plus its options file) falls back to the
+    # Supervisor, and anywhere else a token set without a URL is dropped, not sent. A
+    # SUPERVISOR_TOKEN set by hand outside the add-on is not a reason to send anything to
+    # http://supervisor, and neither is a blank URL, which the request code would otherwise
+    # read as the Supervisor. This runs before the Supervisor-token check below, which then
+    # sees the Supervisor URL.
+    url_is_example = is_placeholder_hass_url(params_secrets["hass_url"])
+    if url_is_example or is_unset_hass_url(params_secrets["hass_url"]):
         supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
         if supervisor_token and options_read:
             logger.warning(
-                "hass_url is still the example https://myhass.duckdns.org/, so the Supervisor "
-                "URL and the Supervisor token are used instead. To use a long-lived access "
-                "token, set hass_url as well."
+                (
+                    "hass_url is still the example https://myhass.duckdns.org/"
+                    if url_is_example
+                    else "hass_url is not set"
+                )
+                + ", so the Supervisor URL and the Supervisor token are used instead. To use "
+                "a long-lived access token, set hass_url as well."
             )
             params_secrets["hass_url"] = "http://supervisor/core/api"
             params_secrets["long_lived_token"] = supervisor_token
-        elif is_token_for_placeholder(
-            params_secrets["hass_url"], params_secrets["long_lived_token"]
-        ):
-            logger.error(PLACEHOLDER_URL_REFUSED)
+        elif is_real_token(params_secrets["long_lived_token"]):
+            logger.error(PLACEHOLDER_URL_REFUSED if url_is_example else HASS_URL_UNSET_REFUSED)
             params_secrets["long_lived_token"] = ""
 
     # Whichever source set them, never hand on the Supervisor token with another URL.

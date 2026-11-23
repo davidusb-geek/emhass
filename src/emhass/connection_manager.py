@@ -106,6 +106,12 @@ PLACEHOLDER_URL_REFUSED = (
     "the add-on option hass_url, the secrets file or --url)."
 )
 
+HASS_URL_UNSET_REFUSED = (
+    "hass_url is not set, so the Home Assistant token is not sent anywhere. Set hass_url to "
+    "your own Home Assistant URL (EMHASS_URL, the add-on option hass_url, the secrets file "
+    "or --url)."
+)
+
 
 # Full stops that IDNA (UTS 46) maps to "." in a host name.
 _FULL_STOPS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
@@ -182,10 +188,19 @@ def is_refused_placeholder(hass_url: str | None, token: str | None) -> bool:
     return is_placeholder_hass_url(hass_url) and str(token or "").strip() != PLACEHOLDER_TOKEN
 
 
+def is_real_token(token: str | None) -> bool:
+    """True for a token someone set: not empty, not "empty" and not the example token."""
+    return str(token or "").strip() not in ("", "empty", PLACEHOLDER_TOKEN)
+
+
+def is_unset_hass_url(url: str | None) -> bool:
+    """True when ``url`` is not set: None, blank or "empty"."""
+    return url is None or str(url).strip() in ("", "empty")
+
+
 def is_token_for_placeholder(hass_url: str | None, token: str | None) -> bool:
     """True when a real token (not empty and not the example one) would go to the example host."""
-    value = str(token or "").strip()
-    return value not in ("", "empty") and is_refused_placeholder(hass_url, value)
+    return is_real_token(token) and is_placeholder_hass_url(hass_url)
 
 
 async def _create_and_start_client(

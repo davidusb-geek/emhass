@@ -20,14 +20,18 @@ import orjson
 import pandas as pd
 
 from emhass.connection_manager import (
+    HASS_URL_UNSET_REFUSED,
     PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
+    SUPERVISOR_URLS,
     get_websocket_client,
     holds_supervisor_token,
+    is_real_token,
     is_refused_placeholder,
     is_supervisor_request_url,
     is_supervisor_token_for_another_host,
     is_token_for_placeholder,
+    is_unset_hass_url,
 )
 from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
 from emhass.utils import (
@@ -97,6 +101,15 @@ def _upstream_error(exc: BaseException) -> str:
     message = str(exc).lower()
     reason = next((known for known in _KNOWN_DB_ERRORS if known in message), None)
     return text + (f": {reason}" if reason else "")
+
+
+def _names_the_supervisor(url: str | None) -> bool:
+    """True only when ``url`` is the Supervisor proxy URL itself, not when it is unset.
+
+    build_secrets writes that URL out for the add-on, so an unset URL here is not the
+    add-on, and outside it "supervisor" is whatever the local DNS answers.
+    """
+    return str(url or "").strip().rstrip("/").lower() in SUPERVISOR_URLS
 
 
 # When a var_list entry is an arithmetic expression, every entity it references is
@@ -373,8 +386,10 @@ class RetrieveHass:
         # Resolve the token: if empty, fall back to SUPERVISOR_TOKEN env var (injected by HA addon supervisor)
         token = self.long_lived_token
         if not token or token == "empty":
-            # Only the Supervisor proxy may receive the Supervisor token.
-            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
+            # Only the Supervisor proxy, named as such, may receive the Supervisor token.
+            token = (
+                os.getenv("SUPERVISOR_TOKEN", "") if _names_the_supervisor(self.hass_url) else ""
+            )
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for HA config retrieval."
@@ -382,8 +397,18 @@ class RetrieveHass:
 
         # Resolve the URL: if empty, use the default supervisor URL
         url_to_use = self.hass_url
-        if not url_to_use or url_to_use == "empty":
+        if is_unset_hass_url(url_to_use):
             url_to_use = hass_url  # default: http://supervisor/core/api
+            # No URL means the Supervisor, which only takes the Supervisor token. Any other
+            # token is not sent there (outside the add-on, "supervisor" is whatever answers).
+            if token and str(token).strip() != os.getenv("SUPERVISOR_TOKEN", "").strip():
+                if is_real_token(token):
+                    self.logger.error(HASS_URL_UNSET_REFUSED)
+                else:
+                    self.logger.info(
+                        "No Home Assistant URL set. Using only local configuration file."
+                    )
+                return True
 
         # If we still have no token after checking env, skip HA config retrieval
         if not token:
@@ -929,8 +954,9 @@ class RetrieveHass:
             self.logger.error(SUPERVISOR_TOKEN_REFUSED)
             return False
         if not token or token == "empty":
-            # Only the Supervisor proxy may receive the Supervisor token.
-            token = os.getenv("SUPERVISOR_TOKEN", "") if to_supervisor else ""
+            # Only the Supervisor proxy, named as such, may receive the Supervisor token.
+            use_supervisor_token = to_supervisor and _names_the_supervisor(self.hass_url)
+            token = os.getenv("SUPERVISOR_TOKEN", "") if use_supervisor_token else ""
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for REST API authentication."

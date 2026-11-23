@@ -161,7 +161,9 @@ class TestIsPlaceholderHassUrl(unittest.TestCase):
         self.assertFalse(is_refused_placeholder(REAL_URL, ""))
 
 
-class TestBuildSecretsPlaceholder(unittest.IsolatedAsyncioTestCase):
+class _SecretsTestCase(unittest.IsolatedAsyncioTestCase):
+    """Helpers for the build_secrets tests; no tests of its own."""
+
     def setUp(self):
         self.environ = self.enterContext(patch.dict(os.environ))
         for name in ("EMHASS_URL", "EMHASS_KEY", "SUPERVISOR_TOKEN", "TIME_ZONE"):
@@ -193,6 +195,8 @@ class TestBuildSecretsPlaceholder(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(is_placeholder_hass_url(url) for url in sent), sent)
         return secrets
 
+
+class TestBuildSecretsPlaceholder(_SecretsTestCase):
     async def assert_token_dropped(self, **kwargs):
         with self.assertLogs(logger, level="ERROR") as logs:
             secrets = await self.build(**kwargs)
@@ -393,6 +397,128 @@ class TestParticipantSocNow(unittest.TestCase):
                             participant_api.soc_now({**conf, "long_lived_token": token}, logger)
                         )
                 opened.assert_not_called()
+
+
+class TestBlankHassUrl(_SecretsTestCase):
+    """A blank or "empty" hass_url with a token: same handling as the example URL."""
+
+    async def assert_unset_url_token_dropped(self, **kwargs):
+        with self.assertLogs(logger, level="ERROR") as logs:
+            secrets = await self.build(**kwargs)
+        self.assertEqual(secrets["long_lived_token"], "")
+        self.assertTrue(any("hass_url is not set" in line for line in logs.output))
+
+    async def test_blank_url_with_a_token_drops_the_token(self):
+        for blank in ("", "empty"):
+            with self.subTest(source="EMHASS_URL", blank=blank):
+                self.environ["EMHASS_URL"] = blank
+                self.environ["EMHASS_KEY"] = "env.key"
+                await self.assert_unset_url_token_dropped(no_response=True)
+            self.environ.pop("EMHASS_URL", None)
+            self.environ.pop("EMHASS_KEY", None)
+            with self.subTest(source="secrets file", blank=blank):
+                path = self.write(
+                    "secrets.yaml", f'hass_url: "{blank}"\nlong_lived_token: secrets.token\n'
+                )
+                await self.assert_unset_url_token_dropped(secrets_path=path)
+            with self.subTest(source="arguments", blank=blank):
+                await self.assert_unset_url_token_dropped(
+                    argument={"url": blank, "key": "arg.key"}, no_response=True
+                )
+
+    async def test_addon_with_a_blank_url_uses_the_supervisor(self):
+        self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        self.environ["EMHASS_KEY"] = "env.key"
+        self.environ["EMHASS_URL"] = ""
+        path = self.write_options({})
+        with self.assertLogs(logger, level="WARNING") as logs:
+            secrets = await self.build(options_path=path, no_response=False)
+        self.assertEqual(secrets["hass_url"], SUPERVISOR_URL)
+        self.assertEqual(secrets["long_lived_token"], "supervisor.token")
+        self.assertTrue(any("hass_url is not set" in line for line in logs.output))
+
+    async def test_retrieve_hass_sends_only_the_supervisor_token_without_a_url(self):
+        self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        for blank in ("", "empty"):
+            with self.subTest(blank=blank):
+                rh = RetrieveHass(
+                    blank, "a-real-token", pd.Timedelta(minutes=30), "UTC", {}, emhass_conf, logger
+                )
+                with aioresponses() as mocked:
+                    with self.assertLogs(logger, level="ERROR") as logs:
+                        self.assertTrue(await rh.get_ha_config())
+                    self.assertEqual(dict(mocked.requests), {})
+                self.assertTrue(any("hass_url is not set" in line for line in logs.output))
+                await rh.close()
+                rh = RetrieveHass(
+                    blank,
+                    "supervisor.token",
+                    pd.Timedelta(minutes=30),
+                    "UTC",
+                    {},
+                    emhass_conf,
+                    logger,
+                )
+                with aioresponses() as mocked:
+                    mocked.get(SUPERVISOR_URL + "/config", status=200, payload={"time_zone": "UTC"})
+                    self.assertTrue(await rh.get_ha_config())
+                    sent = [
+                        call.kwargs["headers"]["Authorization"]
+                        for calls in mocked.requests.values()
+                        for call in calls
+                    ]
+                self.assertEqual(sent, ["Bearer supervisor.token"])
+                await rh.close()
+
+    def make_rh(self, url, token):
+        return RetrieveHass(url, token, pd.Timedelta(minutes=30), "UTC", {}, emhass_conf, logger)
+
+    async def test_supervisor_token_set_by_hand_is_not_sent_without_a_url(self):
+        # What build_secrets hands on outside the add-on: no URL and no token. The
+        # SUPERVISOR_TOKEN in the environment is only used with the Supervisor URL itself.
+        self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        for blank in ("", "empty", "  "):
+            with self.subTest(blank=blank):
+                rh = self.make_rh(blank, "")
+                with aioresponses() as mocked:
+                    mocked.get(re.compile(r".*"), status=200, payload={}, repeat=True)
+                    self.assertTrue(await rh.get_ha_config())
+                    with self.assertLogs(logger, level="ERROR"):
+                        self.assertFalse(await rh._get_data_rest_api(days_list, ["sensor.test"]))
+                    self.assertEqual(dict(mocked.requests), {})
+                await rh.close()
+
+    async def test_supervisor_token_is_not_sent_to_a_test_url_without_a_url(self):
+        # A test_url on the Supervisor proxy doesn't make up for a missing hass_url: the
+        # fallback token still needs hass_url to name the Supervisor.
+        self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        on_supervisor = "http://supervisor/core/api/history/period/2024-01-01T00:00:00Z"
+        for blank in ("", "empty", "  "):
+            with self.subTest(blank=blank):
+                rh = self.make_rh(blank, "")
+                with aioresponses() as mocked:
+                    mocked.get(re.compile(r".*"), status=200, payload={}, repeat=True)
+                    with self.assertLogs(logger, level="ERROR"):
+                        self.assertFalse(
+                            await rh._get_data_rest_api(
+                                days_list, ["sensor.test"], test_url=on_supervisor
+                            )
+                        )
+                    self.assertEqual(dict(mocked.requests), {})
+                await rh.close()
+
+    async def test_blank_url_with_the_example_token_sends_nothing_quietly(self):
+        for blank in ("", "empty", "  "):
+            with self.subTest(blank=blank):
+                rh = self.make_rh(blank, PLACEHOLDER_TOKEN)
+                with aioresponses() as mocked:
+                    mocked.get(re.compile(r".*"), status=200, payload={}, repeat=True)
+                    with self.assertNoLogs(logger, level="ERROR"):
+                        self.assertTrue(await rh.get_ha_config())
+                    self.assertEqual(dict(mocked.requests), {})
+                await rh.close()
 
 
 if __name__ == "__main__":
