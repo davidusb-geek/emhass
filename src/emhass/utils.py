@@ -34,6 +34,7 @@ from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from emhass.connection_manager import (
+    MIN_CONTAINED_TOKEN,
     SUPERVISOR_TOKEN_REFUSED,
     canonical_supervisor_url,
     is_supervisor_token_for_another_host,
@@ -7360,6 +7361,19 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
 # secrets): never sent to a remote solver, whichever path planned.
 _own_api_tokens: set[str] = set()
 
+# Every Home Assistant token build_secrets has read, from any source, including one a later
+# source replaced: never sent to a remote solver either.
+_own_ha_tokens: set[str] = set()
+
+
+def _remember_ha_token(value) -> None:
+    """Keep a Home Assistant token value build_secrets read (not a placeholder)."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return
+    text = str(value).strip()
+    if text and text != "empty":
+        _own_ha_tokens.add(text)
+
 
 async def build_secrets(
     emhass_conf: dict[str, pathlib.Path],
@@ -7428,6 +7442,7 @@ async def build_secrets(
             # Obtain secrets from Home Assistant?
             url_from_options = options.get("hass_url", "empty")
             key_from_options = options.get("long_lived_token", "empty")
+            _remember_ha_token(key_from_options)
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
             data_path_value = options.get("data_path", None)
@@ -7683,6 +7698,8 @@ async def build_secrets(
             ) from None
         except Exception as e:
             raise ValueError(f"Could not read the secrets file ({type(e).__name__})") from None
+        if isinstance(loaded, dict):
+            _remember_ha_token(loaded.get("long_lived_token"))
         params_secrets.update(loaded)
     # The web server's API token is read by api_auth on its own. Keep it out of the
     # secrets that go on into params, logs and the configuration routes - but
@@ -7698,6 +7715,7 @@ async def build_secrets(
         logger.debug("Obtaining url from passed argument")
     if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
+        _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
 
     # Whichever source set them, never hand on the Supervisor token with another URL.
@@ -8166,15 +8184,33 @@ async def build_params(
         value = os.getenv(env_token, "").strip()
         if value:
             reserved.add(value)
+    # Every Home Assistant token build_secrets read, one a later source replaced included
+    reserved |= _own_ha_tokens
     # Compared without surrounding whitespace: a padded copy is still the same token to
     # whoever receives it
     reserved = {str(r).strip() for r in reserved if str(r).strip()}
+    # The token values among them: a remote's token that holds one with something around it
+    # ("Bearer <token>", a stray character) is withheld too. Long ones only, so a short
+    # value cannot match by accident.
+    own_tokens = {
+        str(t).strip()
+        for t in (
+            params_secrets.get("long_lived_token"),
+            own_api_token,
+            os.getenv("SUPERVISOR_TOKEN"),
+            os.getenv("EMHASS_KEY"),
+            *_own_api_tokens,
+            *_own_ha_tokens,
+        )
+        if t is not None and len(str(t).strip()) >= MIN_CONTAINED_TOKEN
+    }
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
         if not site_token_secret_usable(name) or params_secrets.get(name) is None:
             continue
-        if str(params_secrets[name]).strip() in reserved:
+        candidate = str(params_secrets[name])
+        if candidate.strip() in reserved or any(t in candidate for t in own_tokens):
             # the same value as one of EMHASS's own secrets (Home Assistant's
             # token, say): never sent to a remote - it is reached without one
             # (the element named, never anything of the secret)

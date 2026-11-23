@@ -43,15 +43,45 @@ def canonical_supervisor_url(url: str | None) -> str | None:
     return normalised if normalised in SUPERVISOR_URLS else url
 
 
+# A Supervisor token at least this long is also found inside a longer value ("Bearer <token>",
+# the token with a stray character around it). A shorter one is only compared whole, so a short
+# stand-in token cannot match a value by accident.
+MIN_CONTAINED_TOKEN = 16
+
+
+def holds_supervisor_token(token: str | None) -> bool:
+    """True when ``token`` is the Supervisor token, or holds it with something around it.
+
+    A copy changed inside (a character inserted, other case, cut short) is not found.
+    Writing one takes the token itself, so it gives nothing away.
+    """
+    supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+    if not supervisor_token:
+        return False
+    value = str(token or "")
+    if value.strip() == supervisor_token:
+        return True
+    return len(supervisor_token) >= MIN_CONTAINED_TOKEN and supervisor_token in value
+
+
+def is_supervisor_request_url(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy's base URL or a path under it.
+
+    For a full request URL, where ``is_supervisor_url`` compares base URLs. Unset is not the
+    Supervisor here: a request URL is always given in full.
+    """
+    if url is None:
+        return False
+    value = str(url).strip().lower()
+    return any(value == base or value.startswith(base + "/") for base in SUPERVISOR_URLS)
+
+
 def is_supervisor_token_for_another_host(hass_url: str | None, token: str | None) -> bool:
-    """True when ``token`` is the Supervisor token and ``hass_url`` is not the Supervisor proxy.
+    """True when ``token`` holds the Supervisor token and ``hass_url`` is not the Supervisor proxy.
 
     The Supervisor token is only for the Supervisor proxy and must never be sent to another host.
     """
-    supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
-    if not supervisor_token or str(token or "").strip() != supervisor_token:
-        return False
-    return not is_supervisor_url(hass_url)
+    return holds_supervisor_token(token) and not is_supervisor_url(hass_url)
 
 
 async def _create_and_start_client(

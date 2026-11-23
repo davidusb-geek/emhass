@@ -47,6 +47,7 @@ from emhass.connection_manager import (
     canonical_supervisor_url,
     is_supervisor_token_for_another_host,
 )
+from emhass.retrieve_hass import _upstream_error
 
 PARAMS_FILE = "params.pkl"
 # The longest horizon a coordinator may ask about: a week, at any step.
@@ -111,8 +112,19 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     try:
         with opener.open(req, timeout=5) as r:  # Home Assistant's own URL
             state = json.load(r)
-        value = float(state["state"])
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in
+        # Its type and HTTP status, and for a connection that failed the type of the
+        # reason (refused, not found, TLS). Never its text: a header error quotes the
+        # header, token included.
+        why = _upstream_error(exc)
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, BaseException):
+            why += f", {type(reason).__name__}"
+        logger.warning("participant_api: could not read %s (%s)", sensor, why)
+        return None
+    try:
+        value = float(state["state"])
+    except Exception as exc:  # noqa: BLE001 - not a number: the configured target stands in
         logger.warning("participant_api: could not read %s (%s)", sensor, exc)
         return None
     unit = str((state.get("attributes") or {}).get("unit_of_measurement") or "").strip()

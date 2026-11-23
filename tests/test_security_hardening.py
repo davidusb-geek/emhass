@@ -837,6 +837,148 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
         await rh.close()
 
+    LONG_SV = "sv-token-0123456789abcdefghij"
+
+    def test_a_supervisor_token_inside_a_longer_value_is_found(self):
+        from emhass.connection_manager import (
+            holds_supervisor_token,
+            is_supervisor_token_for_another_host,
+        )
+
+        with patch.dict(os.environ, {"SUPERVISOR_TOKEN": self.LONG_SV}):
+            for value in (
+                self.LONG_SV,
+                f" {self.LONG_SV}\t",
+                f"Bearer {self.LONG_SV}",
+                f"{self.LONG_SV}\x00",
+                f"{self.LONG_SV}\u200b",
+                f"x{self.LONG_SV}x",
+            ):
+                with self.subTest(value=value):
+                    self.assertTrue(holds_supervisor_token(value))
+                    self.assertTrue(
+                        is_supervisor_token_for_another_host("http://other-ha.test:8123/", value)
+                    )
+                    self.assertFalse(is_supervisor_token_for_another_host(self.SUPERVISOR, value))
+            for value in ("own-llat", self.LONG_SV[:-1], "", None):
+                with self.subTest(value=value):
+                    self.assertFalse(holds_supervisor_token(value))
+        # A short Supervisor token is only compared whole, so it cannot match by accident
+        with patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"}):
+            self.assertTrue(holds_supervisor_token(" sv-token "))
+            self.assertFalse(holds_supervisor_token("Bearer sv-token"))
+        # The line is at 16 characters
+        for token, found in (("x" * 15, False), ("x" * 16, True)):
+            with (
+                self.subTest(length=len(token)),
+                patch.dict(os.environ, {"SUPERVISOR_TOKEN": token}),
+            ):
+                self.assertTrue(holds_supervisor_token(token))
+                self.assertEqual(holds_supervisor_token(f"Bearer {token}"), found)
+
+    def test_a_decorated_supervisor_token_is_not_kept_for_another_host(self):
+        with patch.dict(os.environ, {"SUPERVISOR_TOKEN": self.LONG_SV}):
+            with self.assertLogs(logger, level="ERROR"):
+                rh = self._rh("http://other-ha.test:8123/", f"Bearer {self.LONG_SV}")
+            self.assertEqual(rh.long_lived_token, "")
+            self.assertEqual(
+                self._rh(self.SUPERVISOR, f"Bearer {self.LONG_SV}").long_lived_token,
+                f"Bearer {self.LONG_SV}",
+            )
+
+    def test_request_urls_on_the_supervisor(self):
+        from emhass.connection_manager import is_supervisor_request_url
+
+        for url in (
+            "http://supervisor/core/api",
+            "http://supervisor/core/api/history/period/2024-01-01T00:00:00Z",
+            " HTTPS://Supervisor/core/api/states/sensor.x",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(is_supervisor_request_url(url))
+        for url in (
+            None,
+            "",
+            "empty",
+            "http://supervisor/core/apix",
+            "http://supervisor/core/api@other-ha.test/x",
+            "http://other-ha.test/supervisor/core/api/x",
+            "http://supervisor.other-ha.test/core/api/x",
+            "http://supervisor:8123/core/api/x",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(is_supervisor_request_url(url))
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_history_requests_are_judged_by_the_test_url(self):
+        """A test_url replaces the URL the history is asked of: the Supervisor token only
+        goes there when it is on the Supervisor proxy, its own or as the fallback."""
+        days = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        other = "http://other-ha.test:8123/api/history/period/2024-01-01T00:00:00Z"
+        on_supervisor = "http://supervisor/core/api/history/period/2024-01-01T00:00:00Z"
+        for token in ("sv-token", "empty"):
+            with self.subTest(token=token):
+                rh = self._rh(self.SUPERVISOR, token)
+                with aioresponses() as mocked, self.assertLogs(logger, level="ERROR"):
+                    mocked.get(re.compile(r".*"), status=500, repeat=True)
+                    self.assertFalse(
+                        await rh._get_data_rest_api(days, ["sensor.x"], test_url=other)
+                    )
+                    self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+                await rh.close()
+        for token in ("sv-token", "empty"):
+            with self.subTest(token=token, url="on the Supervisor"):
+                rh = self._rh(self.SUPERVISOR, token)
+                with aioresponses() as mocked, self.assertLogs(logger, level="ERROR"):
+                    mocked.get(re.compile(r".*"), status=500, repeat=True)
+                    await rh._get_data_rest_api(days, ["sensor.x"], test_url=on_supervisor)
+                    sent = [
+                        c.kwargs["headers"]["Authorization"]
+                        for calls in mocked.requests.values()
+                        for c in calls
+                    ]
+                await rh.close()
+                self.assertEqual(set(sent), {"Bearer sv-token"})
+
+    async def test_history_with_a_decorated_supervisor_token_is_refused_for_a_test_url(self):
+        days = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        other = "http://other-ha.test:8123/api/history/period/2024-01-01T00:00:00Z"
+        with patch.dict(os.environ, {"SUPERVISOR_TOKEN": self.LONG_SV}):
+            rh = self._rh(self.SUPERVISOR, f"Bearer {self.LONG_SV}")
+            with aioresponses() as mocked, self.assertLogs(logger, level="ERROR"):
+                mocked.get(re.compile(r".*"), status=500, repeat=True)
+                self.assertFalse(await rh._get_data_rest_api(days, ["sensor.x"], test_url=other))
+                self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+            await rh.close()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    async def test_history_on_the_supervisor_with_another_hass_url_sends_nothing(self):
+        """The live-state check goes to hass_url, not test_url: with hass_url on another
+        host the Supervisor token is not used, even for a test_url on the Supervisor."""
+        days = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        on_supervisor = "http://supervisor/core/api/history/period/2024-01-01T00:00:00Z"
+        for token in ("empty", "sv-token"):
+            with self.subTest(token=token):
+                with self.assertLogs(logger, level="ERROR"):
+                    rh = self._rh("http://other-ha.test:8123/", token)
+                    with aioresponses() as mocked:
+                        mocked.get(
+                            re.compile(r".*"),
+                            status=200,
+                            payload=[[{"state": "1"}]],
+                            repeat=True,
+                        )
+                        self.assertFalse(
+                            await rh._get_data_rest_api(
+                                days,
+                                ["sensor.x"],
+                                test_url=on_supervisor,
+                                hold_unchanged_tail=True,
+                            )
+                        )
+                        self.assertEqual(sum(len(calls) for calls in mocked.requests.values()), 0)
+                await rh.close()
+
     async def test_post_data_refuses_a_non_entity_id(self):
         # Whatever the source (runtime, config, a saved file), it is not sent or saved
         rh = self._rh("http://ha.test:8123/", "my-own-llat")
