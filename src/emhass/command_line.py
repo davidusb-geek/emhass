@@ -71,11 +71,12 @@ def _record_optim_snapshot(
     t0_monotonic: float,
     logger: logging.Logger,
     origin: str | None = None,
-) -> bool:
+) -> str | None:
     """Persist a last_run snapshot after an optim wrapper completes.
 
     ``origin``: what made the plan, when not this EMHASS's own run (see
-    plan_store.record). Returns whether the structured plan was saved.
+    plan_store.record). Returns the saved plan's stamp (plan_store.stamp),
+    or None when the structured plan was not saved.
 
     A dry run stores nothing: the snapshot it would have stored goes in
     ``input_data_dict["run_record"]``, for the dry-run response.
@@ -99,7 +100,7 @@ def _record_optim_snapshot(
         }
         if is_dry_run(input_data_dict):
             input_data_dict["run_record"] = last_run.snapshot(**run)
-            return False
+            return None
         ts = last_run.record(input_data_dict["emhass_conf"]["data_path"], **run)
         # Publish the structured plan ONLY for a successful run (OK_OPTIM_STATUSES), reusing
         # the SAME timestamp last_run stamped so /api/v1/plan's generated_at matches
@@ -119,7 +120,7 @@ def _record_optim_snapshot(
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
-    return False
+    return None
 
 
 def _write_results(input_data_dict: dict, opt_res: pd.DataFrame, filename: str) -> None:

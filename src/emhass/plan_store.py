@@ -46,15 +46,15 @@ def record(
     generated_at: str,
     schema_version: str,
     origin: str | None = None,
-) -> bool:
+) -> str | None:
     """Persist the latest plan snapshot to cache + <data_path>/plan_latest.json.
 
     ``origin`` names what made the plan when it was not this EMHASS's own run
     (``commit:<id>``, a participant API commit): kept with it, never served.
 
     Best-effort file write: an OSError is logged-and-swallowed so a disk error
-    never breaks the optimization wrapper's return path. Returns whether the
-    file was written.
+    never breaks the optimization wrapper's return path. Returns this
+    snapshot's stamp (see stamp) once the file is written, else None.
     """
     global _cache, _unpersisted, _persisted
     snap = {
@@ -76,8 +76,8 @@ def record(
         except OSError as exc:
             _unpersisted = True
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
-            return False
-    return True
+            return None
+    return stamp(snap)
 
 
 def stamp(snap: dict | None) -> str | None:

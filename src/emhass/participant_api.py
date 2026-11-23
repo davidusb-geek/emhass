@@ -263,11 +263,14 @@ async def publish_commit(
         # The latest plan, whole, only once it is published.
         csv = pathlib.Path(emhass_conf["data_path"]) / default_csv_filename
         await utils.replace_file(csv, res.to_csv(index_label="timestamp"))
-        saved = _record_optim_snapshot(
+        stamp = _record_optim_snapshot(
             idd, last_run.ACTION_NAIVE_MPC_OPTIM, res, t0, logger, origin=origin
         )
-        if saved and on_recorded is not None:  # its stamp only: never the plan before's
-            on_recorded(plan_store.stamp(plan_store.read(pathlib.Path(emhass_conf["data_path"]))))
+        # its own snapshot's stamp, as saved - never read back: a plan saved
+        # since (a command-line run, which the live-optimization lock does not
+        # hold back) would be taken for it
+        if stamp is not None and on_recorded is not None:
+            on_recorded(stamp)
 
     return await _publish(emhass_conf, params, res, logger, get_data_from_file, record)
 
