@@ -3367,6 +3367,10 @@ async def naive_mpc_optim(
         "battery_discharge_energy_max", None
     )
     def_availability = input_data_dict["params"]["passed_data"].get("def_availability", None)
+    battery_discharge_availability = input_data_dict["params"]["passed_data"].get(
+        "battery_discharge_availability", None
+    )
+    soc_floor = input_data_dict["params"]["passed_data"].get("soc_floor", None)
     current_period_peak = input_data_dict["params"]["passed_data"].get("current_period_peak", None)
     capacity_charge_window = input_data_dict["params"]["passed_data"].get(
         "capacity_charge_window", None
@@ -3418,6 +3422,8 @@ async def naive_mpc_optim(
                     stage_times=input_data_dict["stage_times"],
                     p_pv_plants=input_data_dict.get("p_pv_plants"),
                     pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
+                    battery_discharge_availability=battery_discharge_availability,
+                    soc_floor=soc_floor,
                 )
         else:
             opt_res_naive_mpc = opt.perform_naive_mpc_optim(
@@ -3443,6 +3449,8 @@ async def naive_mpc_optim(
                 stage_times=input_data_dict["stage_times"],
                 p_pv_plants=input_data_dict.get("p_pv_plants"),
                 pv_plant_inverters=input_data_dict.get("pv_plant_inverters"),
+                battery_discharge_availability=battery_discharge_availability,
+                soc_floor=soc_floor,
             )
     # Save CSV file for publish_data
     if save_data_to_file:
