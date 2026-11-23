@@ -7334,6 +7334,39 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
 _own_api_tokens: set[str] = set()
 
 
+def _participant_secrets_from_options(
+    options: dict, params_secrets: dict, logger: logging.Logger
+) -> None:
+    """The participant API's secrets from options.json (the Home Assistant
+    add-on's Configuration page): `participant_token`, the token this EMHASS
+    expects from a coordinator, and `remote_solver_tokens`, a list of
+    {name, token} - the tokens of the remote solvers its site names, each
+    stored under its name, which a remote's `token_secret` names. A name must
+    be one a token_secret may take (lower case, digits, _; not one of EMHASS's
+    own secrets); an entry that is not is skipped, and the log says which
+    (by position: nothing of the secret is logged)."""
+    token = options.get("participant_token")
+    if isinstance(token, str) and token not in ("", "empty"):
+        params_secrets["participant_token"] = token
+    entries = options.get("remote_solver_tokens")
+    if entries is None:
+        return
+    if not isinstance(entries, list):
+        logger.warning("remote_solver_tokens in options.json is not a list; ignored")
+        return
+    for position, entry in enumerate(entries):
+        name = entry.get("name") if isinstance(entry, dict) else None
+        value = entry.get("token") if isinstance(entry, dict) else None
+        if site_token_secret_usable(name) and isinstance(value, str) and value:
+            params_secrets[name] = value
+        else:
+            logger.warning(
+                "remote_solver_tokens entry %d in options.json is ignored: it needs a name "
+                "(lower case letters, digits and _, not one of EMHASS's own secrets) and a token",
+                position + 1,
+            )
+
+
 async def build_secrets(
     emhass_conf: dict[str, pathlib.Path],
     logger: logging.Logger,
@@ -7632,6 +7665,8 @@ async def build_secrets(
                 for key in vm_secrets:
                     if options.get(key, "empty") != "empty" and options[key] != "":
                         params_secrets[key] = options[key]
+
+            _participant_secrets_from_options(options, params_secrets, logger)
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
