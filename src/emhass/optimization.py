@@ -219,11 +219,25 @@ def _coordinated_plan(opt, *args, **kwargs):
         None; or None and why not, when the coordinator cannot plan this
         configuration, so the caller runs the default cvxpy solver.
     """
+    # Set by the coordinator: what its remote solvers run, for the default
+    # solver to plan around if it does not plan (reset first: EMHASS may hand
+    # the same object back next run)
+    opt.fed_running, opt.fed_remote_status, opt.fed_site_remotes = {}, {}, []
     reason = _coordinated_config_problem(opt.optim_conf) or _coordinated_plant_problem(
         opt.plant_conf
     )
     if reason:
         opt.logger.warning(f"optimization_backend: {reason}; using the default solver")
+        # the remotes it last committed still run their plans: the default
+        # solver plans around them
+        try:
+            from emhass.coordinator.backend import note_running
+
+            data_opt = kwargs.get("data_opt", args[0] if args else None)
+            if data_opt is not None:
+                note_running(opt, data_opt)
+        except Exception as exc:  # noqa: BLE001 - the fallback runs regardless
+            opt.logger.warning(f"optimization_backend: the remotes' plans are not known ({exc})")
         return None, reason
     from emhass.coordinator.backend import optimize
 
@@ -242,6 +256,25 @@ def _coordinated_plan(opt, *args, **kwargs):
         reason = getattr(opt, "fed_fallback_reason", None)
         return None, str(reason) if reason else "the coordinator cannot plan this configuration"
     return res, None
+
+
+def _remotes_running_w(opt):
+    """What the coordinator's remote solvers run (W per slot), for the default
+    solver to plan around; None without any."""
+    if not getattr(opt, "fed_running", None):
+        return None
+    from emhass.coordinator.backend import fallback_load_w
+
+    return fallback_load_w(opt)
+
+
+def _remote_columns(opt) -> dict:
+    """The coordinator's remotes' statuses and powers for a fallback's results."""
+    if not (getattr(opt, "fed_running", None) or getattr(opt, "fed_site_remotes", None)):
+        return {}
+    from emhass.coordinator.backend import fallback_columns
+
+    return fallback_columns(opt)
 
 
 def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
@@ -271,6 +304,30 @@ def _soc_endpoints_as_the_default_solver(opt, kwargs: dict) -> dict:
     return {**kwargs, "soc_init": init, "soc_final": final}
 
 
+def _net_of_remotes(
+    p_load: pd.Series | np.ndarray, committed_w: np.ndarray
+) -> tuple[pd.Series | np.ndarray, np.ndarray]:
+    """The house's load with what the remote solvers run (W, + = drawn) added,
+    kept >= 0 W (a physical power, as the default solver takes it); and what
+    they supply beyond that load (W per slot, >= 0). `p_load`'s type (a
+    Series or an array) is kept."""
+    load = np.asarray(p_load, dtype=float)
+    net = load + np.asarray(committed_w, dtype=float)
+    surplus = np.maximum(-net, 0.0)
+    out = np.maximum(net, 0.0)
+    if isinstance(p_load, pd.Series):
+        return pd.Series(out, index=p_load.index, name=p_load.name), surplus
+    return out, surplus
+
+
+def _plus(values: pd.Series | np.ndarray, extra_w: np.ndarray) -> pd.Series | np.ndarray:
+    """`values` + `extra_w`, keeping a Series' index and name."""
+    out = np.asarray(values, dtype=float) + np.asarray(extra_w, dtype=float)
+    if isinstance(values, pd.Series):
+        return pd.Series(out, index=values.index, name=values.name)
+    return out
+
+
 def _warn_unheld_limits(opt) -> None:
     """On a fallback, say what of `site` the default solver does not hold:
     its nodes and limits, beyond the main meter and a hybrid inverter EMHASS's
@@ -289,13 +346,16 @@ def _warn_unheld_limits(opt) -> None:
         )
 
 
-def _with_backend(res, requested: str, fallback_reason: str | None):
+def _with_backend(res, requested: str, fallback_reason: str | None, extra=None):
     """Mark which backend made the plan in `res`: the one requested, or cvxpy
     and why. Only with a coordinator backend requested, so a default
-    configuration's results keep exactly their columns."""
+    configuration's results keep exactly their columns. `extra`: columns the
+    coordinator left for a fallback (its remotes' statuses and powers)."""
     res["backend_requested"] = requested
     res["backend_used"] = "cvxpy" if fallback_reason else requested
     res["backend_fallback_reason"] = fallback_reason or ""
+    for name, value in (extra or {}).items():
+        res[name] = value
     return res
 
 
@@ -8763,6 +8823,19 @@ class Optimization:
                 pv_plant_inverters=pv_plant_inverters,
             )
 
+    def _surplus_is_generation(self, p_pv) -> bool:
+        """Whether power supplied behind the meter can be planned as PV exactly:
+        one inverter, not hybrid (PV not routed through it), no curtailment
+        (the solver could not curtail it), PV not all sold (it would be
+        priced as this house's production), one PV series."""
+        return (
+            self.n_inv == 1
+            and not self.plant_conf.get("inverter_is_hybrid")
+            and not self.plant_conf.get("compute_curtailment")
+            and not self.optim_conf.get("set_total_pv_sell")
+            and np.ndim(p_pv) == 1
+        )
+
     def _perform_optimization_locked(
         self,
         data_opt: pd.DataFrame,
@@ -8797,16 +8870,72 @@ class Optimization:
         # participants. None means it cannot plan this configuration, so cvxpy runs below.
         backend = self.optim_conf.get("optimization_backend", "cvxpy")
         fallback_reason = None
+        # The house's own load, for what heats it (thermal internal gains):
+        # what remote solvers draw or supply is not heat in this house
+        p_load_gains = p_load
+        p_pv_results = None  # the house's own PV, when the plan's PV counts more
         if backend not in (None, "cvxpy"):
             inputs = {
                 k: v
                 for k, v in locals().items()
-                if k not in ("self", "_build_start_perf", "backend", "fallback_reason")
+                if k
+                not in (
+                    "self",
+                    "_build_start_perf",
+                    "backend",
+                    "fallback_reason",
+                    "p_load_gains",
+                    "p_pv_results",
+                )
             }
             res, fallback_reason = _coordinated_plan(self, **inputs)
             if res is not None:
                 return _with_backend(res, backend, None)
             _warn_unheld_limits(self)
+            committed = _remotes_running_w(self)
+            if committed is not None:
+                # Remotes run their parts already: what they draw is load here,
+                # and what they supply meets the house's load. Load stays a
+                # physical power, >= 0 W: what they supply beyond the house's
+                # load flows to the grid unplanned, which the log says.
+                p_load, surplus_w = _net_of_remotes(p_load, committed)
+                self.logger.warning(
+                    "optimization_backend: the default solver plans around the power of the "
+                    "remote solvers already running their plans (counted in the load)"
+                )
+                if np.any(surplus_w > 0.0) and self._surplus_is_generation(p_pv):
+                    # What they supply beyond the house's load meets its other
+                    # loads, or goes to the grid, as PV does here: counted as
+                    # generation, exactly so with one inverter that is not
+                    # hybrid, no curtailment and PV not all sold - up to what
+                    # the grid can take beside the house's own PV, since the
+                    # export limit is hard and none of it can be curtailed
+                    # the same per-slot limit the export constraint holds
+                    to_grid = self._prepare_power_limit_array(
+                        self.plant_conf.get("maximum_power_to_grid", 9000),
+                        "maximum_power_to_grid",
+                        len(surplus_w),
+                    )
+                    own_export = np.maximum(
+                        np.asarray(p_pv, dtype=float) - np.asarray(p_load, dtype=float), 0.0
+                    )
+                    planned = np.minimum(surplus_w, np.maximum(to_grid - own_export, 0.0))
+                    p_pv_results = p_pv
+                    p_pv = _plus(p_pv, planned)
+                    surplus_w = surplus_w - planned
+                    self.logger.info(
+                        "optimization_backend: the remote solvers' supply beyond the house's "
+                        "load is planned as generation"
+                    )
+                if np.any(surplus_w > 1e-6):
+                    self.logger.warning(
+                        "optimization_backend: the remote solvers supply more than the house "
+                        f"draws in {int(np.sum(surplus_w > 1e-6))} slots; that surplus "
+                        f"({float(np.max(surplus_w)):.0f} W at most) goes to the grid, beyond "
+                        "what the default solver plans (it is planned as generation only with one "
+                        "inverter that is not hybrid, no curtailment and set_total_pv_sell off, "
+                        "and within the export limit)"
+                    )
         # Shared thermal tanks bake forecast-dependent physics into constraints as constants.
         # Rebuild problem when forecast inputs change to ensure fresh forecasts are applied.
         if self.optim_conf.get("shared_thermal_tanks"):
@@ -8815,8 +8944,9 @@ class Optimization:
                 fp_parts.append(data_opt["outdoor_temperature_forecast"].to_numpy().tobytes())
             if "ghi" in data_opt.columns:
                 fp_parts.append(data_opt["ghi"].to_numpy().tobytes())
-            if p_load is not None:
-                fp_parts.append(np.asarray(p_load).tobytes())
+            # the load the tanks' internal gains bake in: the house's own
+            if p_load_gains is not None:
+                fp_parts.append(np.asarray(p_load_gains).tobytes())
             current_fp = hash(tuple(fp_parts))
             if getattr(self, "_shared_tank_fp", None) != current_fp:
                 if getattr(self, "_shared_tank_fp", None) is not None:
@@ -9409,7 +9539,7 @@ class Optimization:
         # On first call, these will be set during constraint building
         # On subsequent calls (cache hit), this ensures parameters reflect new forecasts
         if self.prob is not None and self.param_thermal:
-            self.update_thermal_params(self.optim_conf, data_opt, p_load)
+            self.update_thermal_params(self.optim_conf, data_opt, p_load_gains)
             # Refresh heating_demands for result building (stale numpy refs from first call)
             for k, params in self.param_thermal.items():
                 if params["type"] == "thermal_battery":
@@ -10006,7 +10136,7 @@ class Optimization:
                     def_end_timestep,
                     def_init_temp,
                     min_power_of_deferrable_loads,
-                    p_load,
+                    p_load_gains,
                 )
             )
 
@@ -10279,7 +10409,7 @@ class Optimization:
                         def_end_timestep,
                         def_init_temp,
                         min_power_of_deferrable_loads,
-                        p_load,
+                        p_load_gains,
                     )
                 )
 
@@ -10383,7 +10513,7 @@ class Optimization:
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
             if fallback_reason:
-                _with_backend(opt_tp, backend, fallback_reason)
+                _with_backend(opt_tp, backend, fallback_reason, _remote_columns(self))
 
             if stage_times is not None:
                 stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
@@ -10407,7 +10537,7 @@ class Optimization:
             unit_load_cost,
             unit_prod_price,
             p_load,
-            p_pv,
+            p_pv if p_pv_results is None else p_pv_results,
             soc_init_for_results,
             predicted_temps,
             heating_demands,
@@ -10417,7 +10547,7 @@ class Optimization:
             p_pv_plants=p_pv_plants,
         )
         if fallback_reason:
-            _with_backend(results_df, backend, fallback_reason)
+            _with_backend(results_df, backend, fallback_reason, _remote_columns(self))
         if stage_times is not None:
             stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
         return results_df

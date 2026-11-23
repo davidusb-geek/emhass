@@ -10,6 +10,7 @@ last_run.record stamps) so the two endpoints agree.
 import json
 import logging
 import threading
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -39,11 +40,21 @@ def serialize(opt_res: pd.DataFrame) -> list[dict]:
     return json.loads(df.reset_index().to_json(orient="records", date_format="iso"))
 
 
-def record(data_path: Path, plan: list[dict], generated_at: str, schema_version: str) -> None:
+def record(
+    data_path: Path,
+    plan: list[dict],
+    generated_at: str,
+    schema_version: str,
+    origin: str | None = None,
+) -> str | None:
     """Persist the latest plan snapshot to cache + <data_path>/plan_latest.json.
 
+    ``origin`` names what made the plan when it was not this EMHASS's own run
+    (``commit:<id>``, a participant API commit): kept with it, never served.
+
     Best-effort file write: an OSError is logged-and-swallowed so a disk error
-    never breaks the optimization wrapper's return path.
+    never breaks the optimization wrapper's return path. Returns this
+    snapshot's stamp (see stamp) once the file is written, else None.
     """
     global _cache, _unpersisted, _persisted
     snap = {
@@ -51,6 +62,11 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
         "generated_at": generated_at,
         "plan": plan,
     }
+    if origin is not None:
+        snap["origin"] = origin
+    # this save's own identity: generated_at has whole seconds, and two plans
+    # can be saved within one (a commit's, then one of this EMHASS's own)
+    snap["plan_id"] = uuid.uuid4().hex
     with _lock:
         _cache = snap
         try:
@@ -60,6 +76,16 @@ def record(data_path: Path, plan: list[dict], generated_at: str, schema_version:
         except OSError as exc:
             _unpersisted = True
             _logger.warning("plan_store: failed to write snapshot file", exc_info=exc)
+            return None
+    return stamp(snap)
+
+
+def stamp(snap: dict | None) -> str | None:
+    """A saved plan's identity: its plan_id, or for a plan saved before plan
+    ids its generated_at. None for no plan."""
+    if not isinstance(snap, dict):
+        return None
+    return snap.get("plan_id") or snap.get("generated_at")
 
 
 def read(data_path: Path) -> dict | None:

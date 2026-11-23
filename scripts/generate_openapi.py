@@ -35,7 +35,13 @@ CURATED = {
     "/api/v1/plan": {"GET"},
     "/api/v1/dry-run/{action_name}": {"POST"},
     "/healthz": {"GET"},
+    "/participant/v1/{op}": {"GET", "POST"},
+    # served by the same route as /participant/v1/{op} (its path takes a slash)
+    "/participant/v1/commit/{commit_id}": {"GET"},
 }
+
+# documented paths served by another path's route: kept while that one is live
+SERVED_BY = {"/participant/v1/commit/{commit_id}": "/participant/v1/{op}"}
 
 _ATOMIC = {
     "string": {"type": "string"},
@@ -166,6 +172,10 @@ _DRY_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "dry-run.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
+_PARTICIPANT_API = (
+    "https://github.com/davidusb-geek/emhass/blob/master/"
+    "src/emhass/static/participant-api/participant-api.v1.json"
+)
 _PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
@@ -188,6 +198,9 @@ def _schema_version() -> str:
     from emhass.command_line import EMHASS_SCHEMA_VERSION
 
     return EMHASS_SCHEMA_VERSION
+
+
+_HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
 
 def build_spec(routes: set | None = None) -> dict:
@@ -313,6 +326,120 @@ def build_spec(routes: set | None = None) -> dict:
                 },
             }
         },
+        "/participant/v1/{op}": {
+            "get": {
+                "parameters": [
+                    {
+                        "name": "op",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string", "enum": ["describe"]},
+                    }
+                ],
+                "summary": "describe: this EMHASS's devices, served to a coordinator (opt-in)",
+                "description": (
+                    "The participant API (draft), off unless participant_api is set; every call "
+                    "presents the participant_token secret as a bearer token."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "responses": {
+                    "200": {"description": "Its description (describe)"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
+                    },
+                },
+            },
+            "post": {
+                "parameters": [
+                    {
+                        "name": "op",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string", "enum": ["baseline", "query", "commit"]},
+                    }
+                ],
+                "summary": "baseline, query or commit (participant API, opt-in)",
+                "description": (
+                    "Queries have no effect; a commit publishes the chosen plan, saves it as the "
+                    "latest results and records it for /api/v1/plan."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "requestBody": {
+                    "required": True,
+                    "description": (
+                        "baseline and query: a horizon and prices; commit: the chosen "
+                        "answer. Bodies are participant-api.v1.json (externalDocs)."
+                    ),
+                    **json_ct({"type": "object", "additionalProperties": True}),
+                },
+                "responses": {
+                    "200": {"description": "An answer, or a commit's record (one sent again)"},
+                    "202": {
+                        "description": "A commit taken: it runs now; its outcome is at "
+                        "GET /participant/v1/commit/{id}"
+                    },
+                    "400": {"description": "Not a query or commit of this API"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {"description": "participant_api is not set"},
+                    "408": {"description": "The body did not arrive within 30 s"},
+                    "409": {
+                        "description": "A horizon it cannot plan, a plan it did not give, or a "
+                        "commit that could not start (the live-optimization lock unavailable, its "
+                        "record not saved): nothing ran"
+                    },
+                    "413": {"description": "A body over 1 MiB"},
+                    "429": {
+                        "description": "A commit while a live optimization runs; retry after "
+                        "the delay in Retry-After",
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable, or more "
+                        "than one web worker (WEB_CONCURRENCY); retry after Retry-After",
+                        "headers": _RETRY_AFTER_HEADER,
+                    },
+                },
+            },
+        },
+        "/participant/v1/commit/{commit_id}": {
+            "parameters": [
+                {
+                    "name": "commit_id",
+                    "in": "path",
+                    "required": True,
+                    "description": "The commit's id: the query_id its POST named",
+                    "schema": {"type": "string"},
+                }
+            ],
+            "get": {
+                "summary": "A commit's outcome (participant API, opt-in)",
+                "description": (
+                    "The record of a commit (CommitResult in participant-api.v1.json): running, "
+                    "accepted, refused or partial. Asked for after a commit's answer, or after "
+                    "none came, to learn whether it ran."
+                ),
+                "externalDocs": {"url": _PARTICIPANT_API, "description": "participant-api.v1.json"},
+                "security": [{"participantToken": []}],
+                "responses": {
+                    "200": {"description": "Its record: it ended (accepted, refused or partial)"},
+                    "202": {"description": "Its record: still running"},
+                    "401": {"description": "No or a wrong token"},
+                    "404": {
+                        "description": "No commit of that id (never received, or forgotten), "
+                        "or participant_api is not set"
+                    },
+                    "503": {
+                        "description": "No participant_token, params.pkl unreadable,"
+                        " or more than one web worker (WEB_CONCURRENCY)"
+                    },
+                },
+            },
+        },
         "/api/v1/dry-run/{action_name}": {
             "post": {
                 "summary": "Solve an optimization and return the plan, writing nothing",
@@ -382,11 +509,13 @@ def build_spec(routes: set | None = None) -> dict:
 
     # filter CURATED paths down to what actually exists in url_map (e.g. /healthz pre-AC-4)
     live = {p for p, _ in routes}
-    paths = {p: v for p, v in paths.items() if p in live}
+    paths = {p: v for p, v in paths.items() if p in live or SERVED_BY.get(p) in live}
 
     # Access control (emhass.api_auth): every operation but the health check needs the token.
     for path, item in paths.items():
-        for op in item.values():
+        for method, op in item.items():
+            if method not in _HTTP_METHODS:  # a path's own keys (its parameters)
+                continue
             if path == "/healthz":
                 op["security"] = []
                 continue
@@ -410,6 +539,9 @@ def build_spec(routes: set | None = None) -> dict:
                 "secrets file), or the token EMHASS generated into `<data folder>/emhass_api_token` "
                 "when none is configured. With no usable token the server answers 503. Home Assistant "
                 "add-on users reach the web UI through ingress, which needs no token. "
+                "The participant API (`/participant/v1/...`, opt-in) is the exception: it takes "
+                "the `participant_token` secret as its bearer token instead (participantToken), "
+                "never the API token, and is not served through ingress. "
                 "See docs/api_authentication.md."
             ),
         },
@@ -422,7 +554,12 @@ def build_spec(routes: set | None = None) -> dict:
                     "type": "http",
                     "scheme": "bearer",
                     "description": "The EMHASS API token, sent as `Authorization: Bearer <token>`.",
-                }
+                },
+                "participantToken": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "The participant_token secret (participant API only)",
+                },
             },
             "responses": {
                 "Unauthorized": {

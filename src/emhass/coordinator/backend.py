@@ -18,7 +18,11 @@ discharging, the interface's plans are + when drawn from the meter.
 from __future__ import annotations
 
 import copy
+import json
 import logging
+import os
+import pathlib
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -39,6 +43,13 @@ from emhass.coordinator.model import (
     SiteConfig,
     SubMeter,
     hybrid_inverter,
+)
+from emhass.coordinator.remote import (
+    MAX_POWER_KW,
+    PlainHttpRefused,
+    PlanWindow,
+    RemoteError,
+    RemoteParticipant,
 )
 from emhass.coordinator.settlement import ledger
 from emhass.coordinator.site import _SITE_DEVICE, site_kind
@@ -95,6 +106,10 @@ OK_STATUSES = ("Optimal", "Optimal_Inaccurate", "Optimal (Relaxed)", "Optimal (I
 # EMHASS's OK statuses), but not a certified optimum - the coordinator stopped
 # on a stall, its iteration cap, or no new proposals with the bound still open.
 GAP_TOL = 1e-3
+# Seconds a remote solver has for each call before its last plan stands in
+REMOTE_TIMEOUT_S = 30.0
+# How long a remote's commit outcome is asked for before it counts as not known
+REMOTE_COMMIT_WAIT_S = 30.0
 
 
 def plan_status(upper: float, lower: float) -> str:
@@ -560,6 +575,72 @@ class EmhassParticipant:
         return self.respond(Query("price_response", self.buy, self.buy))
 
 
+def emhass_participant(
+    opt: EmhassOptimization,
+    data_opt: pd.DataFrame,
+    soc_init: float | None,
+    soc_final: float | None,
+    key: str = "emhass",
+) -> EmhassParticipant:
+    """All of an EMHASS's own devices as one participant: what an EMHASS
+    serving the participant API answers for (remote.ParticipantService). Its
+    battery (with set_use_battery) and every deferrable load, planned
+    together by its own model, its deferrable_load_groups held there.
+
+    `opt`: that EMHASS's Optimization. `data_opt`: its input DataFrame for
+    the horizon asked about (its index, the tariff its baseline plans at,
+    thermal forecasts). `soc_init`, `soc_final`: its battery's start and
+    end-of-day state of charge (fractions).
+
+    Its own grid limits (maximum_power_from_grid / maximum_power_to_grid) are
+    kept: they are its connection's - a panel's rating, no backfeed - which
+    its model holds in every plan it offers, however big its own devices are.
+    The coordinator holds only what it shares with the rest of the house.
+    """
+    oc = opt.optim_conf
+    loads = list(range(int(oc.get("number_of_deferrable_loads", 0) or 0)))
+    runtime = {
+        "def_total_hours": oc.get("operating_hours_of_each_deferrable_load"),
+        "def_total_timestep": oc.get("operating_timesteps_of_each_deferrable_load"),
+        "def_start_timestep": oc.get("start_timesteps_of_each_deferrable_load"),
+        "def_end_timestep": oc.get("end_timesteps_of_each_deferrable_load"),
+    }
+    n = len(data_opt)
+    buy = (
+        np.asarray(data_opt[opt.var_load_cost].values, dtype=float)
+        if opt.var_load_cost in data_opt
+        else np.full(n, 0.2)
+    )
+    return EmhassParticipant(
+        opt,
+        key,
+        bool(oc.get("set_use_battery")),
+        loads,
+        data_opt,
+        soc_init,
+        soc_final,
+        runtime,
+        buy,
+        reach_w=None,
+        load_groups=list(oc.get("deferrable_load_groups") or []),
+    )
+
+
+def emhass_description(p: EmhassParticipant) -> dict[str, Any]:
+    """The participant API's Description of `p` (remote.ParticipantService):
+    it answers price responses only, so no household load is sent to it."""
+    devices = (["battery"] if p.battery else []) + [f"deferrable{k}" for k in p.loads]
+    return {
+        "key": p.key,
+        "devices": devices,
+        "max_power_kw": float(p.max_power_kw),
+        "modulating": False,
+        "onoff": bool(p.onoff),
+        "kinds": ["price_response"],
+        "solver": "emhass",
+    }
+
+
 # ------------------------------------------------------------------ the call
 OLD_KEYS = ("participants", "electrical_topology", "group_limits")
 SITE_DEVICE = _SITE_DEVICE  # one vocabulary with the site check (emhass.coordinator.site)
@@ -676,11 +757,31 @@ def _site(
             )
         else:
             g["devices"].append(dev)
-    if kinds["remote"]:
-        return (
-            empty,
-            f"site: {kinds['remote'][0].get('id')!r} is a remote solver, which this version does not plan",
-        )
+    for e in kinds["remote"]:
+        # a solver on the network: one participant, its devices its own business
+        rid = str(e["id"])
+        parent = str(e.get("parent", MAIN))
+        if parent != MAIN and parent not in nodes:
+            return empty, f"site: the parent of {rid!r}, {parent!r}, is no node"
+        if rid in groups or rid in parent_of:
+            return empty, f"site: {rid!r} names two elements"
+        solver = e["solver"]
+        groups[rid] = {
+            "key": rid,
+            "devices": [rid],
+            "solver": "remote",
+            "parent": parent,
+            "config": {
+                "url": str(solver.get("url", "")),
+                "token_secret": solver.get("token_secret"),
+                "trusted_network": solver.get("trusted_network") is True,
+            },
+        }
+        parent_of[rid] = parent
+        for lim in e.get("limits") or []:
+            if lim not in limit_ids:
+                return empty, f"site: {rid!r} is tagged with {lim!r}, which is no limit"
+            tags.setdefault(lim, []).append(rid)
     for key, g in groups.items():
         if key not in g["devices"] and (
             key in nodes or key in limit_ids or key == MAIN or SITE_DEVICE.match(key)
@@ -883,6 +984,380 @@ def _linear_battery(
     )
 
 
+# The plans this coordinator last committed each remote to, in its data folder:
+# a remote it cannot reach still runs what it took, until that plan ends.
+REMOTE_COMMITS_FILE = "coordinator_remote_commits.json"
+
+
+def _remote_commits_path(opt: Any) -> pathlib.Path | None:
+    data = (getattr(opt, "emhass_conf", None) or {}).get("data_path")
+    return None if data is None else pathlib.Path(data) / REMOTE_COMMITS_FILE
+
+
+def _read_remote_commits(opt: Any) -> dict[str, Any]:
+    path = _remote_commits_path(opt)
+    try:
+        out = json.loads(path.read_text(encoding="utf-8")) if path is not None else {}
+    except (OSError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
+_remote_commits_lock = threading.Lock()  # this process's runs; the file lock: others'
+_warned_no_file_lock = False
+
+
+def _note_no_file_lock(opt: Any) -> None:
+    global _warned_no_file_lock
+    _warned_no_file_lock = True
+    opt.logger.warning(
+        "site: no file lock on this platform; the remotes' commits are kept safe from this "
+        "process's other runs only"
+    )
+
+
+def _write_remote_commits(
+    opt: Any, changes: dict[str, Any], expect: dict[str, Any] | None = None
+) -> None:
+    """Record what this run committed each remote to (`changes`: id -> its
+    record, or None to forget it), leaving every other remote's record as the
+    file has it now: read and written under an exclusive lock, which every run
+    sharing the data folder (the web server's, the command line's) takes.
+    `expect`: for a change that only reconciles what a remote reported, the
+    record this run read before asking it (None: none) - the change is made
+    only while the file still has that one, so a newer commitment another
+    run saved meanwhile is never overwritten nor forgotten."""
+    path = _remote_commits_path(opt)
+    if path is None or not changes:
+        return
+    from emhass import forecast
+
+    # No file-locking primitive on this platform: this process's lock alone
+    # (said once), rather than record nothing - a lost record leaves a remote
+    # that runs a plan not held
+    file_lock = hasattr(forecast, "_fcntl") or hasattr(forecast, "_msvcrt")
+    lock_path = path.with_name(path.name + ".lock")
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with _remote_commits_lock, open(lock_path, "a+b") as lock:
+            if file_lock:
+                forecast._flock_acquire(lock)
+            elif not _warned_no_file_lock:
+                _note_no_file_lock(opt)
+            try:
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                except (OSError, ValueError) as exc:
+                    # there but not readable now: rewriting it would lose
+                    # every other remote's record
+                    opt.logger.warning(
+                        f"site: the remotes' commits cannot be read ({exc}); not recorded now"
+                    )
+                    return
+                records = current if isinstance(current, dict) else {}
+                for key, record in changes.items():
+                    if expect is not None and key in expect and records.get(key) != expect[key]:
+                        continue  # another run's newer record: kept
+                    if record is None:
+                        records.pop(key, None)
+                    else:
+                        records[key] = record
+                tmp.write_text(json.dumps(records), encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                if file_lock:
+                    forecast._flock_release(lock)
+    except OSError as exc:
+        opt.logger.warning(f"site: could not record the remotes' commits ({exc})")
+
+
+def _carried(
+    record: Any, window: PlanWindow, steps: bool, max_power_kw: float = MAX_POWER_KW
+) -> np.ndarray | None:
+    """What a remote still runs of its last committed plan over `window`
+    (kW per slot, + = drawn), or None. `record`: a commit's (state, horizon,
+    plan_kw), accepted or possibly running. Home Assistant keeps what it was
+    given until something publishes again. `steps`: the remote publishes its
+    plan slot by slot ("plan_steps"), so it runs what is left of the plan,
+    then its last value; otherwise it runs the value its commit published (the
+    plan's first slot), with no end. A plan past `max_power_kw`, or a record
+    that cannot be read, is None."""
+    import pandas as pd
+
+    if not isinstance(record, dict) or record.get("state") not in (
+        "accepted",
+        "partial",
+        "running",
+        "committed",
+        "uncertain",
+    ):
+        return None
+    try:
+        horizon = PlanWindow.from_dict(record.get("horizon"))
+        if horizon.start is None or window.start is None:
+            return None
+        plan = np.asarray(record.get("plan_kw"), dtype=float)
+        if plan.ndim != 1 or not len(plan) or not np.all(np.isfinite(plan)):
+            return None
+        # within what it can draw or supply: an absurd value is clipped, not dropped
+        plan = np.clip(plan, -max_power_kw, max_power_kw)
+        start, now = pd.Timestamp(horizon.start), pd.Timestamp(window.start)
+        if pd.isna(start) or pd.isna(now):
+            return None  # a start that is no time ("NaT"): nothing to place
+        start = start if start.tzinfo else start.tz_localize("UTC")
+        now = now if now.tzinfo else now.tz_localize("UTC")
+        # Each of this window's slots runs, on average, what the plan runs
+        # over that slot's time (whatever either's slot length): nothing
+        # before the plan begins.
+        edges = (now - start).total_seconds() + 60.0 * window.step_minutes * np.arange(
+            window.slots + 1
+        )
+        if edges[-1] <= 1e-6:
+            return None  # the window ends before the plan begins
+        if not steps:
+            # the value its commit published, from then on, with no end
+            within = np.clip(edges[1:], 0.0, None) - np.clip(edges[:-1], 0.0, None)
+            return plan[0] * within / np.diff(edges)
+        # After its end, the value Home Assistant keeps: its last, or the
+        # slot it says it last published (`held_slot`, its final slots not
+        # published). The energy, as the integral of the plan's power, at the
+        # plan's own boundaries - never one sample per plan slot within a
+        # window slot.
+        held = record.get("held_slot")
+        final = (
+            plan[held]
+            if isinstance(held, int) and not isinstance(held, bool) and 0 <= held < len(plan)
+            else plan[-1]
+        )
+        h = 60.0 * horizon.step_minutes
+        knots = h * np.arange(len(plan) + 1)
+        energy = np.concatenate([[0.0], np.cumsum(plan) * h])
+        t = np.maximum(edges, 0.0)
+        within = np.interp(np.minimum(t, knots[-1]), knots, energy)
+        e = within + final * np.maximum(t - knots[-1], 0.0)
+        return np.diff(e) / np.diff(edges)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _held_plan(
+    rp: RemoteParticipant | None,
+    key: str,
+    url: str,
+    window: PlanWindow,
+    saved: Mapping[str, Any],
+) -> np.ndarray | None:
+    """What remote `key` still runs of its last plan (_carried): as it says
+    itself when it answered (its active_commit - None: it runs no committed
+    plan), else as this coordinator last committed it to, at that url."""
+    if rp is not None:
+        return _carried(rp.active_commit, window, "plan_steps" in rp.features, rp.max_power_kw)
+    record = saved.get(key)
+    if not isinstance(record, dict) or record.get("url") != url:
+        return None
+    try:
+        bound = min(float(record.get("max_power_kw", MAX_POWER_KW)), MAX_POWER_KW)
+    except (TypeError, ValueError):
+        bound = MAX_POWER_KW
+    return _carried(record, window, record.get("steps") is True, bound)
+
+
+def note_running(
+    opt: Any, data_opt: Any
+) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, Any]]:
+    """Start the record of what each remote solver runs (opt.fed_running,
+    read by any fallback to EMHASS's default solver): what this coordinator
+    last committed each remote `site` names to - or, with a site it cannot
+    read, every remote it committed. Returns (running, statuses, the saved
+    records)."""
+    running: dict[str, np.ndarray] = {}
+    status: dict[str, str] = {}
+    opt.fed_running, opt.fed_remote_status, opt.fed_site_remotes = running, status, []
+    saved = _read_remote_commits(opt)
+    try:
+        # no site at all: no remote is coordinated, none held
+        remotes = _site_remotes(opt.optim_conf, data_opt, opt)
+    except Exception:  # noqa: BLE001 - a site it cannot read: what it committed
+        window = _window_of(data_opt, opt)
+        remotes = [(k, str(r.get("url")), window) for k, r in saved.items() if isinstance(r, dict)]
+    opt.fed_site_remotes = [key for key, _, _ in remotes]
+    for key, url, window in remotes:
+        _set_running(running, key, _held_plan(None, key, url, window, saved))
+    return running, status, saved
+
+
+def _window_of(data_opt: Any, opt: Any) -> PlanWindow:
+    first = getattr(data_opt, "index", [None])[0] if len(data_opt) else None
+    return PlanWindow(
+        float(opt.time_step) * 60.0,
+        max(len(data_opt), 1),
+        first.isoformat() if hasattr(first, "isoformat") else None,
+    )
+
+
+def _heard(
+    opt: Any,
+    running: dict[str, np.ndarray],
+    saved: dict[str, Any],
+    rp: RemoteParticipant,
+    window: PlanWindow,
+) -> None:
+    """A remote that steps its plans said what it runs: held to that, and
+    this coordinator's saved record of it made to agree (it is used the next
+    time the remote cannot be reached)."""
+    _set_running(running, rp.key, _held_plan(rp, rp.key, rp.url, window, saved))
+    active = rp.active_commit
+    record = (
+        None
+        if active is None
+        else {
+            "state": active.get("state"),
+            "url": rp.url,
+            "steps": True,
+            "max_power_kw": rp.max_power_kw,
+            "horizon": active.get("horizon"),
+            "plan_kw": active.get("plan_kw"),
+            **(
+                {"held_slot": active["held_slot"]}
+                if isinstance(active.get("held_slot"), int)
+                else {}
+            ),
+        }
+    )
+    if saved.get(rp.key) != record:
+        observed = saved.get(rp.key)  # as this run read it, before asking
+        if record is None:
+            saved.pop(rp.key, None)
+        else:
+            saved[rp.key] = record
+        if not getattr(opt, "fed_dry_run", False):  # a dry run writes nothing
+            _write_remote_commits(opt, {rp.key: record}, expect={rp.key: observed})
+
+
+def _set_running(running: dict[str, np.ndarray], key: str, plan: np.ndarray | None) -> None:
+    if plan is None:
+        running.pop(key, None)
+    else:
+        running[key] = np.asarray(plan, dtype=float)
+
+
+def _site_remotes(
+    oc: Mapping[str, Any], data_opt: Any, opt: Any
+) -> list[tuple[str, str, PlanWindow]]:
+    """The remote solvers `site` names: (id, url, the horizon planned). No
+    site, or an empty one: none. A site that is not a list cannot be read
+    (ValueError): what was committed is then held."""
+    window = _window_of(data_opt, opt)
+    site = oc.get("site")
+    if site is None or (isinstance(site, list) and not site):
+        return []
+    if not isinstance(site, list):
+        raise ValueError("site is not a list")
+    out = []
+    for e in site:
+        solver = e.get("solver") if isinstance(e, dict) else None
+        if isinstance(solver, dict) and isinstance(solver.get("url"), str):
+            out.append((str(e.get("id")), solver["url"].rstrip("/"), window))
+    return out
+
+
+def fallback_load_w(opt: Any) -> np.ndarray | None:
+    """What the remote solvers run (W per slot, + = drawn), for EMHASS's
+    default solver to plan around when the coordinator does not plan: load it
+    cannot move. None when no remote runs a plan."""
+    running = getattr(opt, "fed_running", None) or {}
+    if not running:
+        return None
+    return sum(np.asarray(v, dtype=float) for v in running.values()) * 1000.0
+
+
+def fallback_columns(opt: Any) -> dict[str, Any]:
+    """The remotes' statuses and powers for a plan EMHASS's default solver
+    made: what became of each, and what it runs (W)."""
+    running = getattr(opt, "fed_running", None) or {}
+    status = dict(getattr(opt, "fed_remote_status", None) or {})
+    for key in getattr(opt, "fed_site_remotes", None) or []:
+        status.setdefault(key, "declined: not asked; the default solver planned the house")
+        held = "(its last plan is held)" in status[key]
+        this_run = status[key] == "committed" or status[key].startswith("uncertain")
+        if key in running and not held and not this_run:
+            status[key] = f"{status[key]} (its last plan is held)"[:200]
+    return {
+        **{f"fed_remote_status_{k}": v for k, v in status.items()},
+        **{
+            f"fed_remote_power_{k}": np.asarray(v, dtype=float) * 1000.0 for k, v in running.items()
+        },
+    }
+
+
+def _last_commit_text(last: dict[str, Any]) -> str:
+    reason = last.get("reason")
+    return (f"{last['state']}: {reason}" if reason else str(last["state"]))[:200]
+
+
+class _Committed:
+    """A remote that has taken its plan: planning the house again holds it
+    to that plan (interface.Participant, answering it to every query)."""
+
+    modulating = False
+    onoff = True
+
+    def __init__(self, rp: RemoteParticipant, plan: Column) -> None:
+        self.key, self.max_power_kw = rp.key, rp.max_power_kw
+        self.solves, self.solve_s = 0, 0.0
+        self._answer = Answer(
+            np.asarray(plan.power, dtype=float),
+            float(plan.cost),
+            np.asarray(plan.trajectory, dtype=float),
+            detail=plan.detail,
+        )
+
+    @property
+    def plan_kw(self) -> np.ndarray:
+        """The plan it took (kW per slot, + = drawn)."""
+        return self._answer.plan_kw
+
+    def respond(self, query: Query) -> Answer:  # noqa: ARG002 - the plan it runs
+        return self._answer
+
+    def baseline(self) -> Answer:
+        return self._answer
+
+
+class _Held(_Committed):
+    """A remote not committed to this run's plan that still runs what of an
+    earlier one is left (`plan_kw`): held to it, as load the house cannot move."""
+
+    def __init__(self, key: str, plan_kw: np.ndarray) -> None:
+        plan = np.asarray(plan_kw, dtype=float)
+        self.key = key
+        self.max_power_kw = float(np.max(np.abs(plan), initial=0.0)) + 1e-6
+        self.solves, self.solve_s = 0, 0.0
+        self._answer = Answer(plan, 0.0, np.zeros(len(plan) + 1))
+
+
+def _starts_now(opt: Any, data_opt: Any) -> bool:
+    """Whether the plan starts at the current slot, as EMHASS rounds its clock:
+    only such a plan is run, so only it commits remotes (a backtest, a plan of
+    another day, is planned with them but asks none to run it)."""
+    import pandas as pd
+
+    from emhass import utils
+
+    rh = getattr(opt, "retrieve_hass_conf", None) or {}
+    first = getattr(data_opt, "index", [None])[0]
+    if not isinstance(first, pd.Timestamp) or "time_zone" not in rh:
+        return True  # nothing to tell from: as before
+    step = rh.get("optimization_time_step")
+    step = step if isinstance(step, pd.Timedelta) else pd.Timedelta(hours=float(opt.time_step))
+    near = utils.forecast_starts_near(
+        pd.Timestamp.now(tz="UTC"), step, rh["time_zone"], rh.get("method_ts_round", "nearest")
+    )
+    tz = next(iter(near)).tz
+    first = first if first.tzinfo else first.tz_localize(tz)
+    return first in near
+
+
 def optimize(
     opt: EmhassOptimization,
     data_opt: pd.DataFrame,
@@ -918,6 +1393,15 @@ def optimize(
     oc, pc = opt.optim_conf, opt.plant_conf
     backend = oc.get("optimization_backend", "cvxpy")
     opt.fed_fallback_reason = None  # EMHASS may hand the same object back next run
+    # What each remote solver runs right now, for whatever plans the house
+    # from here - this coordinator, or EMHASS's default solver on any
+    # fallback (fallback_load_w): first what this coordinator last committed
+    # it to; then, when it answers, what it says it runs; then this run's plan.
+    running, remote_status, saved_commits = note_running(opt, data_opt)
+    # Only a plan that starts now is run: decided before any remote is asked,
+    # so one that is not (a backtest, another day) plans them as held to what
+    # they run, never as running a plan no one asked them to run
+    live = _starts_now(opt, data_opt)  # a dry run of now asks them (and commits none)
     reason = unsupported(oc, pc, opt.costfun, runtime)
     if backend != "dantzig_wolfe":
         reason = reason or f"backend {backend!r} (this version runs dantzig_wolfe)"
@@ -952,7 +1436,8 @@ def optimize(
     reach_w = (
         2.0 * (float(np.max(np.abs(load_w))) + float(np.max(np.abs(pv_w))) + device_w) + 1000.0
     )
-    participants: list[EmhassParticipant] = []
+    participants: list[EmhassParticipant | RemoteParticipant | _Committed] = []
+    remotes: list[RemoteParticipant] = []
     targets: dict[str, float] = {}
     battery_cfg: BatteryConfig | None = None
     layout, reason = _site(oc, pc, devices)
@@ -1008,118 +1493,284 @@ def optimize(
                     load_groups=own_groups.get(key),
                 )
             )
+        elif g["solver"] == "remote":
+            # a solver on the network: asked to describe itself and plan with no
+            # price now, so one that cannot is left out of this plan, said so
+            key = g["key"]
+            tokens = (getattr(opt, "retrieve_hass_conf", None) or {}).get("remote_tokens") or {}
+            secret = g["config"].get("token_secret")
+            first = getattr(data_opt, "index", [None])[0]
+            window = PlanWindow(
+                dt * 60.0, n, first.isoformat() if hasattr(first, "isoformat") else None
+            )
+            rp = None
+            if not live:
+                remote_status[key] = "planned without (not live: the plan does not start now)"
+                if key in running:
+                    participants.append(_Held(key, running[key]))
+                    remote_status[key] += " (its last plan is held)"
+                continue
+            try:
+                rp = RemoteParticipant(
+                    key,
+                    g["config"]["url"],
+                    window,
+                    token=tokens.get(secret) if secret else None,
+                    timeout=REMOTE_TIMEOUT_S,
+                    commit_wait_s=REMOTE_COMMIT_WAIT_S,
+                    trusted_network=bool(g["config"].get("trusted_network", False)),
+                )
+                rp.baseline()
+            except (RemoteError, ValueError) as exc:
+                log.warning(
+                    f"site: the remote solver {key!r} did not answer ({exc}); planned without it"
+                )
+                status = getattr(exc, "status", 0)
+                if isinstance(exc, PlainHttpRefused):
+                    remote_status[key] = f"declined: {exc}"[:200]
+                elif status in (401, 403):
+                    remote_status[key] = "unauthorized"
+                elif status == 409:  # it answered: it cannot plan this horizon
+                    remote_status[key] = f"declined: {exc}"[:200]
+                else:
+                    remote_status[key] = "unreachable"
+                # It still runs what it last took: as it says, if it described
+                # itself and steps its plans, else as last committed
+                if rp is not None and "plan_steps" in rp.features:
+                    _heard(opt, running, saved_commits, rp, window)
+                if key in running:
+                    participants.append(_Held(key, running[key]))
+                    remote_status[key] = f"{remote_status[key]} (its last plan is held)"[:200]
+                continue
+            if "plan_steps" in rp.features:  # what it says it runs (or nothing)
+                _heard(opt, running, saved_commits, rp, window)
+            participants.append(rp)
+            remotes.append(rp)
         else:
             _decline(opt, f"unknown solver {g['solver']!r}")
             return None
 
-    submeters, set_limits = layout.submeters, layout.set_limits
-    horizon = Horizon(dt=dt, hours=n * dt)
-
-    def col(name: str, default: float) -> np.ndarray:
-        return (
-            np.asarray(data_opt[name].values, dtype=float)
-            if name in data_opt
-            else np.full(n, default)
+    def plan_house(
+        participants: Sequence[EmhassParticipant | RemoteParticipant | _Committed],
+    ) -> tuple[pd.DataFrame, DWResult] | None:
+        """The coordinator's plan for `participants` (None, declined, when it
+        cannot make one), with the results EMHASS publishes."""
+        gone = set(remote_status) - {p.key for p in participants}  # planned without
+        submeters = tuple(
+            replace(sm, members=tuple(m for m in sm.members if m not in gone))
+            for sm in layout.submeters
         )
+        set_limits = tuple(
+            sl
+            for sl in (
+                replace(sl, members=tuple(m for m in sl.members if m not in gone))
+                for sl in layout.set_limits
+            )
+            if sl.members
+        )
+        horizon = Horizon(dt=dt, hours=n * dt)
 
-    fc = Forecasts(buy=buy, sell=sell, load=load_w / 1000.0, solar=pv_w / 1000.0)
-    imp_w, exp_w = layout.grid_w or (None, None)  # the main meter's, from site, else EMHASS's keys
-    grid = GridLimits(
-        max_import_kw=float(pc.get("maximum_power_from_grid", 9000) if imp_w is None else imp_w)
-        / 1000.0,
-        max_export_kw=float(pc.get("maximum_power_to_grid", 9000) if exp_w is None else exp_w)
-        / 1000.0,
-        allow_curtailment=bool(pc.get("compute_curtailment", False)),
-    )
-    if (
-        layout.inverter == "inverter"
-        and not any(_kind(e) == "node" for e in oc.get("site") or [])
-        and any(isinstance(p, EmhassParticipant) and p.battery for p in participants)
-    ):
-        _decline(opt, "a hybrid inverter with the battery in an EMHASS participant group")
-        return None
-    site = SiteConfig(
-        horizon=horizon, battery=battery_cfg, grid=grid, submeters=submeters, set_limits=set_limits
-    )
-    try:
-        site.validate()
-    except ValueError as exc:  # a loop, a device twice, a bad rating
-        _decline(opt, f"site: {exc}")
-        return None
-    ceiling = np.maximum(pv_w - load_w, 0.0) / 1000.0 if oc.get("set_nodischarge_to_grid") else None
-    run_kw: RunOptions = (
-        RUN_DEFAULTS if participants else {}
-    )  # the battery alone: the coordinator's own defaults
-    co = DWCoordinator(
-        site, fc, participants=participants, export_ceiling=ceiling, soe_targets=targets
-    )
-    # EMHASS's own solver time limit, for each coordinator run (the plan, then
-    # the one for the saving split): past it, the best plan so far is kept
-    budget = float(oc.get("lp_solver_timeout", 45) or 45)
-    run_kw = {**run_kw, "max_seconds": budget}
-    try:
-        r = co.run(**run_kw)
-    except Exception as exc:  # a plan is always published
-        _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
-        return None
-    if not np.isfinite(float(r.upper)):
-        # no plan it found can run: past the export ceiling with nothing to curtail
-        _decline(opt, "the coordinator found no plan within the export ceiling")
-        return None
-    held = r.plan.get("battery") if battery_cfg is not None else None
-    if held is not None:
-        # The master's battery has a charge and a discharge per slot and no
-        # binary: both at once (to burn surplus it cannot export or curtail)
-        # is a plan one battery cannot run. Its net power must step its state.
-        p = np.asarray(held.power, dtype=float)
-        step = np.where(p > 0, p * battery_cfg.eta_c, p / battery_cfg.eta_d) * dt
-        if np.max(np.abs(np.diff(held.trajectory) - step), initial=0.0) > 1e-3:
-            _decline(opt, "the coordinator's battery plan charges and discharges in one slot")
+        def col(name: str, default: float) -> np.ndarray:
+            return (
+                np.asarray(data_opt[name].values, dtype=float)
+                if name in data_opt
+                else np.full(n, default)
+            )
+
+        fc = Forecasts(buy=buy, sell=sell, load=load_w / 1000.0, solar=pv_w / 1000.0)
+        imp_w, exp_w = layout.grid_w or (
+            None,
+            None,
+        )  # the main meter's, from site, else EMHASS's keys
+        grid = GridLimits(
+            max_import_kw=float(pc.get("maximum_power_from_grid", 9000) if imp_w is None else imp_w)
+            / 1000.0,
+            max_export_kw=float(pc.get("maximum_power_to_grid", 9000) if exp_w is None else exp_w)
+            / 1000.0,
+            allow_curtailment=bool(pc.get("compute_curtailment", False)),
+        )
+        if (
+            layout.inverter == "inverter"
+            and not any(_kind(e) == "node" for e in oc.get("site") or [])
+            and any(isinstance(p, EmhassParticipant) and p.battery for p in participants)
+        ):
+            _decline(opt, "a hybrid inverter with the battery in an EMHASS participant group")
             return None
-    breach = float(co.parts(r.plan)["breach_kwh"])
-    if breach > 1e-3:
-        # A grid, node or limit rating is hard in EMHASS: the default solver
-        # meets it (relaxing an on/off load if it must); the coordinator only
-        # priced it, and its on/off plans could not fit
-        _decline(opt, f"the coordinator's plan exceeds a limit by {breach:.3f} kWh")
-        return None
-
-    res = _results(
-        opt,
-        co,
-        r,
-        data_opt,
-        pv_w,
-        load_w,
-        buy,
-        sell_in,
-        soc_init,
-        devices,
-        participants,
-        site,
-        layout.inverter,
-    )
-    try:
-        # The saving split needs one more plan, the same devices with no PV
-        # (the export ceiling, PV surplus, is then zero).
-        dark = replace(fc, solar=np.zeros(n))
-        co_dark = DWCoordinator(
-            site,
-            dark,
-            participants=participants,
-            export_ceiling=None if ceiling is None else np.zeros(n),
-            soe_targets=targets,
+        site = SiteConfig(
+            horizon=horizon,
+            battery=battery_cfg,
+            grid=grid,
+            submeters=submeters,
+            set_limits=set_limits,
         )
-        for player, share in shares(co, r.plan, co_dark, co_dark.run(**run_kw).plan).items():
-            res[f"fed_share_{player}"] = share
-    except Exception as exc:  # the plan stands without its split
-        log.warning(f"optimization_backend: could not split the saving ({exc})")
-    opt.optim_status = str(res["optim_status"].iloc[0])
-    solves = sum(p.solves for p in participants)
-    log.info(
-        f"optimization_backend=dantzig_wolfe: {r.iterations} iterations, gap {r.upper - r.lower:.4f}, "
-        f"{solves} participant solves, {time.perf_counter() - t0:.2f} s"
-    )
+        try:
+            site.validate()
+        except ValueError as exc:  # a loop, a device twice, a bad rating
+            _decline(opt, f"site: {exc}")
+            return None
+        ceiling = (
+            np.maximum(pv_w - load_w, 0.0) / 1000.0 if oc.get("set_nodischarge_to_grid") else None
+        )
+        run_kw: RunOptions = (
+            RUN_DEFAULTS if participants else {}
+        )  # the battery alone: the coordinator's own defaults
+        co = DWCoordinator(
+            site, fc, participants=participants, export_ceiling=ceiling, soe_targets=targets
+        )
+        # EMHASS's own solver time limit, for each coordinator run (the plan, then
+        # the one for the saving split): past it, the best plan so far is kept
+        budget = float(oc.get("lp_solver_timeout", 45) or 45)
+        run_kw = {**run_kw, "max_seconds": budget}
+        try:
+            r = co.run(**run_kw)
+        except Exception as exc:  # a plan is always published
+            _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
+            return None
+        if not np.isfinite(float(r.upper)):
+            # no plan it found can run: past the export ceiling with nothing to curtail
+            _decline(opt, "the coordinator found no plan within the export ceiling")
+            return None
+        held = r.plan.get("battery") if battery_cfg is not None else None
+        if held is not None:
+            # The master's battery has a charge and a discharge per slot and no
+            # binary: both at once (to burn surplus it cannot export or curtail)
+            # is a plan one battery cannot run. Its net power must step its state.
+            p = np.asarray(held.power, dtype=float)
+            step = np.where(p > 0, p * battery_cfg.eta_c, p / battery_cfg.eta_d) * dt
+            if np.max(np.abs(np.diff(held.trajectory) - step), initial=0.0) > 1e-3:
+                _decline(opt, "the coordinator's battery plan charges and discharges in one slot")
+                return None
+        breach = float(co.parts(r.plan)["breach_kwh"])
+        if breach > 1e-3:
+            # A grid, node or limit rating is hard in EMHASS: the default solver
+            # meets it (relaxing an on/off load if it must); the coordinator only
+            # priced it, and its on/off plans could not fit
+            _decline(opt, f"the coordinator's plan exceeds a limit by {breach:.3f} kWh")
+            return None
+
+        res = _results(
+            opt,
+            co,
+            r,
+            data_opt,
+            pv_w,
+            load_w,
+            buy,
+            sell_in,
+            soc_init,
+            devices,
+            participants,
+            site,
+            layout.inverter,
+        )
+        try:
+            # The saving split needs one more plan, the same devices with no PV
+            # (the export ceiling, PV surplus, is then zero).
+            dark = replace(fc, solar=np.zeros(n))
+            co_dark = DWCoordinator(
+                site,
+                dark,
+                participants=participants,
+                export_ceiling=None if ceiling is None else np.zeros(n),
+                soe_targets=targets,
+            )
+            for player, share in shares(co, r.plan, co_dark, co_dark.run(**run_kw).plan).items():
+                res[f"fed_share_{player}"] = share
+        except Exception as exc:  # the plan stands without its split
+            log.warning(f"optimization_backend: could not split the saving ({exc})")
+        opt.optim_status = str(res["optim_status"].iloc[0])
+        solves = sum(p.solves for p in participants)
+        log.info(
+            f"optimization_backend=dantzig_wolfe: {r.iterations} iterations, gap {r.upper - r.lower:.4f}, "
+            f"{solves} participant solves, {time.perf_counter() - t0:.2f} s"
+        )
+        return res, r
+
+    planned = plan_house(participants)
+    if planned is None:
+        return None
+    res, r = planned
+    # Each remote runs its part of a live plan, last: once one has committed,
+    # nothing here may fail and send EMHASS to its default solver, which would
+    # plan the house again around a remote already running this plan.
+    # A remote that refuses is planned without, as one that did not answer:
+    # the house is planned again, the remotes that committed held to the plans
+    # they took, and the remotes still to ask are asked for their part of
+    # the new plan. A dry run asks nothing of anyone.
+    pending = list(remotes)
+    while pending:
+        rp = pending.pop(0)
+        if getattr(opt, "fed_dry_run", False):
+            remote_status[rp.key] = "planned (dry run)"
+            continue
+        chosen = r.plan[rp.key]
+        try:
+            ok, why = rp.commit(chosen.detail, chosen.power)
+        except Exception as exc:  # noqa: BLE001 - it may have been sent: not known
+            ok, why = None, f"{type(exc).__name__}: {exc}"
+        if ok or ok is None:
+            saved_commits[rp.key] = {
+                "state": "committed" if ok else "uncertain",
+                "url": rp.url,
+                "steps": "plan_steps" in rp.features,
+                "max_power_kw": rp.max_power_kw,
+                "horizon": rp.window.to_dict(),
+                "plan_kw": [float(x) for x in np.asarray(chosen.power, dtype=float)],
+            }
+            # at once: a crash keeps it
+            _write_remote_commits(opt, {rp.key: saved_commits[rp.key]})
+        if ok or ok is None:
+            # None: its outcome is not known (no answer in time, or published
+            # part way) and it may be running - its part stays in the plan
+            # rather than be planned around as absent
+            remote_status[rp.key] = "committed" if ok else f"uncertain: {why}"[:200]
+            if ok is None:
+                log.warning(
+                    f"site: the outcome of the remote solver {rp.key!r}'s commit is not known "
+                    f"({why}); its part is kept in the plan"
+                )
+            participants[participants.index(rp)] = _Committed(rp, chosen)
+            plan = np.asarray(chosen.power, dtype=float)
+            # this run's plan: stepped, or (without plan_steps) its first slot held
+            running[rp.key] = plan if "plan_steps" in rp.features else np.full(len(plan), plan[0])
+            continue
+        log.warning(f"site: the remote solver {rp.key!r} did not take its plan ({why})")
+        remote_status[rp.key] = f"refused: {why}"[:200]
+        # it still runs what it took before
+        if rp.key in running:
+            participants[participants.index(rp)] = _Held(rp.key, running[rp.key])
+            remote_status[rp.key] = f"{remote_status[rp.key]} (its last plan is held)"[:200]
+        else:
+            participants.remove(rp)
+        try:
+            again = plan_house(participants)
+        except Exception as exc:  # whatever fails here, a plan not made again
+            _decline(opt, f"the coordinator failed ({type(exc).__name__}: {exc})")
+            again = None
+        if again is not None:
+            res, r = again
+            continue
+        # The plan made with the refused remote cannot be published (it counts
+        # that remote's power), and others run their parts already: EMHASS's
+        # default solver plans the house instead, around what every remote
+        # runs (fallback_load_w); the remotes not yet asked are not asked.
+        for rest in pending:
+            note = "declined: not asked; the house was planned without it"
+            held = " (its last plan is held)" if rest.key in running else ""
+            remote_status[rest.key] = (note + held)[:200]
+        pending.clear()
+        _decline(
+            opt,
+            f"the house could not be planned again without {rp.key!r}; the default solver "
+            "plans it around the remotes running a plan",
+        )
+        return None
+    for key, status in remote_status.items():
+        res[f"fed_remote_status_{key}"] = status
+    for rp in remotes:
+        # the commit whose plan it ran when this run began, as it reported it
+        if rp.active_commit is not None:
+            res[f"fed_remote_last_commit_{rp.key}"] = _last_commit_text(rp.active_commit)
     return res
 
 
@@ -1152,7 +1803,7 @@ def _results(
     sell_in: np.ndarray,
     soc_init: float | None,
     devices: list[str],
-    participants: Sequence[EmhassParticipant],
+    participants: Sequence[EmhassParticipant | RemoteParticipant | _Committed],
     site: SiteConfig,
     inverter: str | None = None,
 ) -> pd.DataFrame:
@@ -1192,6 +1843,10 @@ def _results(
 
     by_load, batt_detail, extra = {}, None, {}
     for p in participants:
+        if isinstance(p, (RemoteParticipant, _Committed)):
+            # its devices are its own business: their total, W (+ = drawn)
+            out[f"fed_remote_power_{p.key}"] = plan[p.key].power * 1000.0
+            continue
         res = plan[p.key].detail
         for local, k in enumerate(p.loads):
             by_load[k] = res[f"P_deferrable{local}"].values

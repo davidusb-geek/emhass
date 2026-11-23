@@ -107,6 +107,32 @@ class TestIngressTrust(AuthSupportBase):
                 )
                 self.assertEqual(response.status_code, 401)
 
+    async def test_the_participant_api_is_refused_on_the_ingress_port(self):
+        """The participant API has its own token, so the API token is not asked
+        of it; the ingress port still refuses it, whoever sends it, since only
+        Home Assistant's Supervisor talks to that port."""
+        token = "participant-token-0123456789"
+        web_server.params_secrets["participant_token"] = token
+        try:
+            for peer in (SUPERVISOR, OUTSIDER):
+                with self.subTest(peer=peer):
+                    response = await self.send(
+                        "GET",
+                        "/participant/v1/describe",
+                        port=8099,
+                        peer=peer,
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    self.assertEqual(response.status_code, 403)
+            # on the API port the hook lets it through to its route, which
+            # checks participant_token itself (here: the API is off, 404)
+            response = await self.send(
+                "GET", "/participant/v1/describe", headers={"Authorization": f"Bearer {token}"}
+            )
+            self.assertNotIn(response.status_code, (401, 403))
+        finally:
+            web_server.params_secrets.pop("participant_token", None)
+
     async def test_the_health_check_stays_open_on_both_ports(self):
         for port, peer in ((5000, OUTSIDER), (8099, OUTSIDER), (8099, SUPERVISOR)):
             response = await self.send("GET", "/healthz", port=port, peer=peer)
@@ -243,7 +269,8 @@ class TestProxyHeadersCannotForgeTheSupervisor(AuthSupportBase):
 
 
 class TestEveryRouteIsGated(AuthSupportBase):
-    """No route may be reachable without credentials unless it is one of the three open endpoints."""
+    """No route may be reachable without credentials unless it is one of the three open endpoints.
+    The participant API refuses in its own route instead (its own token, participant_token)."""
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -268,9 +295,11 @@ class TestEveryRouteIsGated(AuthSupportBase):
             if endpoint in api_auth.OPEN_ENDPOINTS:
                 continue
             seen += 1
+            # its own route refuses: 401, or 503 while no participant_token is set
+            refused = (401, 503) if endpoint in api_auth.OWN_TOKEN_ENDPOINTS else (401, 303)
             with self.subTest(route=f"{method} {path}"):
                 response = await self.send(method, path, json={} if method == "POST" else None)
-                self.assertIn(response.status_code, (401, 303), f"{method} {path} is not gated")
+                self.assertIn(response.status_code, refused, f"{method} {path} is not gated")
         self.assertGreater(seen, 12)  # the enumeration really ran
         self.mock_action.assert_not_awaited()
 
