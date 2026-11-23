@@ -7437,10 +7437,12 @@ async def build_secrets(
     # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
     # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
+    options_read = False
     if options_path and pathlib.Path(options_path).is_file():
         async with aiofiles.open(options_path) as data:
             content = await data.read()
             options = orjson.loads(content)
+            options_read = True
 
             # Obtain secrets from Home Assistant?
             url_from_options = options.get("hass_url", "empty")
@@ -7728,12 +7730,14 @@ async def build_secrets(
         _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
 
-    # The default hass_url is only an example, so it counts as unset: the add-on falls back
-    # to the Supervisor, and anywhere else a token set for it is dropped, not sent. This runs
-    # before the Supervisor-token check below, which then sees the Supervisor URL.
+    # The default hass_url is only an example, so it counts as unset: the add-on (the
+    # Supervisor token plus its options file) falls back to the Supervisor, and anywhere else
+    # a token set for it is dropped, not sent. A SUPERVISOR_TOKEN set by hand outside the
+    # add-on is not a reason to send anything to http://supervisor. This runs before the
+    # Supervisor-token check below, which then sees the Supervisor URL.
     if is_placeholder_hass_url(params_secrets["hass_url"]):
         supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
-        if supervisor_token:
+        if supervisor_token and options_read:
             logger.warning(
                 "hass_url is still the example https://myhass.duckdns.org/, so the Supervisor "
                 "URL and the Supervisor token are used instead. To use a long-lived access "

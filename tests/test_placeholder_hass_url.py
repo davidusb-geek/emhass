@@ -259,11 +259,28 @@ class TestBuildSecretsPlaceholder(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(secrets["time_zone"], "Asia/Tokyo")
                 self.assertTrue(any("treated as unset" in line for line in logs.output))
 
-    async def test_supervisor_token_without_options_or_url_uses_the_supervisor(self):
+    async def test_supervisor_token_set_by_hand_without_options_is_dropped(self):
+        # Outside the add-on (no options file) a SUPERVISOR_TOKEN set by hand is not sent
+        # to http://supervisor, with or without EMHASS_KEY: the token is dropped instead.
         self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
-        secrets = await self.build(no_response=True)
+        for key in (None, "env.key"):
+            with self.subTest(emhass_key=key):
+                if key is None:
+                    self.environ.pop("EMHASS_KEY", None)
+                else:
+                    self.environ["EMHASS_KEY"] = key
+                await self.assert_token_dropped(no_response=True)
+
+    async def test_addon_with_no_response_still_uses_the_supervisor(self):
+        # no_response skips the options branch, so only the options file being there tells
+        # the end of build_secrets that this is the add-on.
+        self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
+        path = self.write_options({})
+        with self.assertLogs(logger, level="WARNING") as logs:
+            secrets = await self.build(options_path=path, no_response=True)
         self.assertEqual(secrets["hass_url"], SUPERVISOR_URL)
         self.assertEqual(secrets["long_lived_token"], "supervisor.token")
+        self.assertTrue(any("Supervisor URL" in line for line in logs.output))
 
     async def test_nothing_set_keeps_the_example_values(self):
         with self.assertNoLogs(logger, level="ERROR"):
