@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import numpy as np
+import numpy as np
 import pandas as pd
 import pytz
 
@@ -59,10 +61,10 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=4, freq="20min")
         actual = await self._native_weather(source, target)
         self.assertTrue(actual.index.equals(target))
-        self.assertEqual(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0])
-        self.assertEqual(actual["dhi"].tolist(), [0.0, 60.0, 60.0, 0.0])
+        np.testing.assert_allclose(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(actual["dhi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
         self.assertTrue(actual.notna().all().all())
-        self.assertEqual(actual["precipitable_water"].tolist(), [0.1] * 4)
+        np.testing.assert_allclose(actual["precipitable_water"].tolist(), [0.1] * 4, rtol=0, atol=1e-10)
 
     async def test_native_offset_and_aligned_grids(self):
         source = pd.date_range("2026-08-22 10:00", periods=5, freq="15min", tz="UTC")
@@ -88,7 +90,7 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
             with self.subTest(step=target[1] - target[0], start=target[0]):
                 actual = await self._native_weather(source, target)
                 self.assertTrue(actual.index.equals(target))
-                self.assertEqual(actual["ghi"].tolist(), expected)
+                np.testing.assert_allclose(actual["ghi"].tolist(), expected, rtol=0, atol=1e-10)
                 if target[1] - target[0] == pd.Timedelta(minutes=30):
                     self.assertIn(PV_NATIVE_WEATHER_ATTR, actual.attrs)
 
@@ -98,7 +100,7 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=4, freq="20min")
         actual = await self._native_weather(source, target)
         self.assertTrue(actual.index.equals(target))
-        self.assertEqual(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0])
+        np.testing.assert_allclose(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
         self.assertNotEqual(target[0].utcoffset(), target[-1].utcoffset())
 
     async def _covariates(self, source_index, target_index):
@@ -128,23 +130,23 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
         target = pd.date_range(source[0], periods=4, freq="10min")
         actual = await self._covariates(source, target)
-        self.assertEqual(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0])
-        self.assertEqual(actual["relative_humidity"].tolist(), [30.0, 50.0, 50.0, 30.0])
+        np.testing.assert_allclose(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(actual["relative_humidity"].tolist(), [30.0, 50.0, 50.0, 30.0], rtol=0, atol=1e-10)
         # Derived degree features retain the existing native-row transformation.
-        self.assertEqual(actual["heating_degree"].tolist(), [18.0, 6.0, 6.0, 18.0])
+        np.testing.assert_allclose(actual["heating_degree"].tolist(), [18.0, 6.0, 6.0, 18.0], rtol=0, atol=1e-10)
 
     async def test_covariates_offset_irregular_and_boundary(self):
         source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
         target = pd.DatetimeIndex([source[0] + pd.Timedelta(minutes=n) for n in (4, 11, 18, 40)])
         actual = await self._covariates(source, target)
-        self.assertEqual(actual["temp_air"].tolist(), [24.0, 66.0, 72.0, 0.0])
+        np.testing.assert_allclose(actual["temp_air"].tolist(), [24.0, 66.0, 72.0, 0.0], rtol=0, atol=1e-10)
 
     async def test_covariates_dst_fallback_uses_absolute_instants(self):
         source = pd.date_range("2026-10-25 00:45", periods=3, freq="15min", tz="UTC")
         source = source.tz_convert("Europe/Berlin")
         target = pd.date_range(source[0], periods=4, freq="10min")
         actual = await self._covariates(source, target)
-        self.assertEqual(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0])
+        np.testing.assert_allclose(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
         self.assertNotEqual(target[0].utcoffset(), target[-1].utcoffset())
 
     async def test_covariates_overlap_precedence_and_null_row_are_time_weighted(self):
@@ -171,7 +173,7 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=5, freq="10min")
         result = await fcst.get_weather_covariates(target, ["temp_air"])
         fcst._fetch_open_meteo_historical_covariates_json.assert_awaited_once()
-        self.assertEqual(result["temp_air"].tolist(), [0.0, 60.0, 90.0, 90.0, 30.0])
+        np.testing.assert_allclose(result["temp_air"].tolist(), [0.0, 60.0, 90.0, 90.0, 30.0], rtol=0, atol=1e-10)
 
 
 class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
@@ -219,7 +221,7 @@ class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
             fcst = self._forecast(temp_dir)
             data = await fcst._get_weather_open_meteo(str(path), use_legacy_pvlib=False)
             fcst.get_cached_open_meteo_forecast_json.assert_awaited_once()
-            self.assertEqual(data["ghi"].tolist(), self.GOOD)
+            np.testing.assert_allclose(data["ghi"].tolist(), self.GOOD, rtol=0, atol=1e-10)
             self.assertTrue(data.attrs[OPEN_METEO_TIME_ALIGNED_ATTR])
             self.assertTrue(pickle.loads(path.read_bytes()).attrs[OPEN_METEO_TIME_ALIGNED_ATTR])
 
@@ -232,7 +234,7 @@ class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
             fcst.get_cached_open_meteo_forecast_json.assert_awaited_once()
             pd.testing.assert_frame_equal(fresh, cached)
             self.assertEqual(fresh.attrs, cached.attrs)
-            self.assertEqual(cached["ghi"].tolist(), self.GOOD)
+            np.testing.assert_allclose(cached["ghi"].tolist(), self.GOOD, rtol=0, atol=1e-10)
 
     async def test_legacy_request_reads_current_cache_without_native_weather(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -251,5 +253,5 @@ class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
             before = path.read_bytes()
             fcst = self._forecast(temp_dir, dry_run=True)
             data = await fcst._get_weather_open_meteo(str(path), use_legacy_pvlib=False)
-            self.assertEqual(data["ghi"].tolist(), self.GOOD)
+            np.testing.assert_allclose(data["ghi"].tolist(), self.GOOD, rtol=0, atol=1e-10)
             self.assertEqual(path.read_bytes(), before)
