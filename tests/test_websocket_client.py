@@ -27,6 +27,16 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.token, self.token)
         self.assertEqual(self.client.websocket_url, "ws://localhost:8123/api/websocket")
 
+    def test_websocket_url_for_the_supervisor(self):
+        for url, expected in (
+            ("http://supervisor/core/api", "ws://supervisor/core/websocket"),
+            ("http://supervisor/core/api/", "ws://supervisor/core/websocket"),
+            # The Supervisor proxy is HTTP only (#1403), so this is any other host
+            ("https://supervisor/core/api", "wss://supervisor/api/websocket"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(AsyncWebSocketClient(url, self.token).websocket_url, expected)
+
     def _setup_mock_ws(self, mock_connect):
         """Helper to setup the websocket mock with a Queue-based recv."""
         mock_ws = MagicMock()

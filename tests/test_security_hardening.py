@@ -803,15 +803,16 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
 
     @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
     def test_supervisor_token_is_kept_for_the_supervisor(self):
-        for url in (
-            self.SUPERVISOR,
-            self.SUPERVISOR + "/",
-            "https://supervisor/core/api/",
-            "empty",
-            "",
-        ):
+        for url in (self.SUPERVISOR, self.SUPERVISOR + "/", "empty", ""):
             with self.subTest(url=url):
                 self.assertEqual(self._rh(url, "sv-token").long_lived_token, "sv-token")
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
+    def test_the_https_form_is_not_the_supervisor(self):
+        # The Supervisor proxy is HTTP only (#1403)
+        for url in ("https://supervisor/core/api", "https://supervisor/core/api/"):
+            with self.subTest(url=url), self.assertLogs(logger, level="ERROR"):
+                self.assertEqual(self._rh(url, "sv-token").long_lived_token, "")
 
     @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "sv-token"})
     def test_own_long_lived_token_for_a_custom_url_is_kept(self):
@@ -892,7 +893,7 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
         for url in (
             "http://supervisor/core/api",
             "http://supervisor/core/api/history/period/2024-01-01T00:00:00Z",
-            " HTTPS://Supervisor/core/api/states/sensor.x",
+            " HTTP://Supervisor/core/api/states/sensor.x",
         ):
             with self.subTest(url=url):
                 self.assertTrue(is_supervisor_request_url(url))
@@ -900,6 +901,8 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
             None,
             "",
             "empty",
+            # The Supervisor proxy is HTTP only (#1403)
+            "https://supervisor/core/api/states/sensor.x",
             "http://supervisor/core/apix",
             "http://supervisor/core/api@other-ha.test/x",
             "http://other-ha.test/supervisor/core/api/x",
@@ -1081,6 +1084,7 @@ class TestSupervisorTokenGuard(unittest.IsolatedAsyncioTestCase):
             "http://supervisor:80/core/api",
             "http://supervisor/core/api/../../evil",
             "http://supervisor/core/apix",
+            "https://supervisor/core/api",
             "https://example.org/",
         ):
             with self.subTest(url=url):
@@ -1343,7 +1347,7 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
         client_class.return_value = AsyncMock(connected=True)
         for url, token in (
             ("http://supervisor/core/api", "sv-token"),
-            ("https://supervisor/core/api/", "sv-token"),
+            ("http://supervisor/core/api/", "sv-token"),
             (self.OTHER, "own-llat"),
         ):
             with self.subTest(url=url, token=token):
@@ -1482,15 +1486,12 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
 
         for url in (
             "http://supervisor/core/api",
-            "https://supervisor/core/api/",
+            "http://supervisor/core/api/",
             " HTTP://Supervisor/CORE/API\t",
         ):
             with self.subTest(url=url):
                 self.assertTrue(is_supervisor_url(url))
-                self.assertIn(
-                    canonical_supervisor_url(url),
-                    ("http://supervisor/core/api", "https://supervisor/core/api"),
-                )
+                self.assertEqual(canonical_supervisor_url(url), "http://supervisor/core/api")
         for url in (None, "", "empty"):
             with self.subTest(url=url):
                 self.assertTrue(is_supervisor_url(url))
@@ -1507,6 +1508,9 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
             "http://supervisor/core/apix",
             "http://supervisor/core/api/states",
             "ws://supervisor/core/api",
+            # The Supervisor proxy is HTTP only (#1403)
+            "https://supervisor/core/api",
+            "https://supervisor/core/api/",
         ):
             with self.subTest(url=url):
                 self.assertFalse(is_supervisor_url(url))

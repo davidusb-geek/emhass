@@ -3474,6 +3474,99 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("No valid authentication token found" in log for log in cm.output))
 
 
+class TestSupervisorUrlForms(unittest.IsolatedAsyncioTestCase):
+    """#1403: every REST path uses the Supervisor's own paths for any way of writing its
+    URL, and https://supervisor/core/api is not the Supervisor (its proxy is HTTP only)."""
+
+    SUPERVISOR_FORMS = (
+        "http://supervisor/core/api",
+        "http://supervisor/core/api/",
+        " HTTP://Supervisor/core/api/ ",
+    )
+    SUPERVISOR_API = "http://supervisor/core/api"
+    # Handled like any other Home Assistant URL
+    HTTPS_FORM = "https://supervisor/core/api/"
+
+    @staticmethod
+    def _rh(url):
+        return RetrieveHass(
+            url,
+            "llat",
+            pd.Timedelta(minutes=30),
+            datetime.UTC,
+            {},
+            emhass_conf,
+            logger,
+        )
+
+    @staticmethod
+    def _sent(mocked):
+        return [str(url) for (_, url), calls in mocked.requests.items() for _ in calls]
+
+    def _cases(self, path):
+        """(hass_url, expected URL) for a REST path written without its leading ``api/``."""
+        cases = [(url, f"{self.SUPERVISOR_API}/{path}") for url in self.SUPERVISOR_FORMS]
+        return [*cases, (self.HTTPS_FORM, f"{self.HTTPS_FORM}api/{path}")]
+
+    def test_only_the_http_form_uses_the_supervisor_api(self):
+        from emhass.retrieve_hass import _uses_supervisor_api
+
+        for url in self.SUPERVISOR_FORMS:
+            with self.subTest(url=url):
+                self.assertTrue(_uses_supervisor_api(url))
+        # An unset URL is defaulted by the caller first, never turned into "empty/states/..."
+        for url in (None, "", "empty", "https://supervisor/core/api", self.HTTPS_FORM):
+            with self.subTest(url=url):
+                self.assertFalse(_uses_supervisor_api(url))
+
+    async def test_get_ha_config(self):
+        for url, expected in self._cases("config"):
+            with self.subTest(url=url), aioresponses() as mocked:
+                rh = self._rh(url)
+                self.addAsyncCleanup(rh.close)
+                mocked.get(re.compile(r".*"), status=200, payload={}, repeat=True)
+                self.assertTrue(await rh.get_ha_config())
+                self.assertEqual(self._sent(mocked), [expected])
+
+    def test_history_url(self):
+        day = pd.Timestamp("2026-11-01", tz="UTC")
+        for url, expected in self._cases("history/period/2026-11-01T00:00:00Z"):
+            with self.subTest(url=url):
+                built = self._rh(url)._build_history_url(day, "sensor.x", "empty", False, False)
+                self.assertEqual(built, expected + "?filter_entity_id=sensor.x")
+
+    async def test_live_state(self):
+        for url, expected in self._cases("states/sensor.x"):
+            with self.subTest(url=url), aioresponses() as mocked:
+                rh = self._rh(url)
+                self.addAsyncCleanup(rh.close)
+                session = await rh._get_session()
+                mocked.get(re.compile(r".*"), status=200, payload={"state": "1"}, repeat=True)
+                live = await rh._fetch_live_state(session, "sensor.x", {})
+                self.assertEqual(live, {"state": "1"})
+                self.assertEqual(self._sent(mocked), [expected])
+
+    async def test_post_data(self):
+        data = pd.Series([1.0, 2.0], index=pd.date_range("2026-11-01", periods=2, freq="30min"))
+        data.name = "x"
+        for url, expected in self._cases("states/sensor.x"):
+            with self.subTest(url=url), aioresponses() as mocked:
+                rh = self._rh(url)
+                self.addAsyncCleanup(rh.close)
+                mocked.post(re.compile(r".*"), status=200, repeat=True)
+                await rh.post_data(data, 0, "sensor.x", "power", "W", "X", "power")
+                self.assertEqual(self._sent(mocked), [expected])
+
+    async def test_post_scalar_sensor(self):
+        for url, expected in self._cases("states/sensor.x"):
+            with self.subTest(url=url), aioresponses() as mocked:
+                rh = self._rh(url)
+                self.addAsyncCleanup(rh.close)
+                mocked.post(re.compile(r".*"), status=200, repeat=True)
+                self.assertTrue(await rh.post_scalar_sensor("sensor.x", 1, {}))
+                self.assertEqual(self._sent(mocked), [expected])
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
