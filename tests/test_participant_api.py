@@ -4386,7 +4386,7 @@ def test_a_plan_not_saved_never_names_a_stamp(data_path, monkeypatch):
     ec = _conf(data_path)
     params = _params(ec, **GARAGE)
     res = _a_plan(ec, params)
-    monkeypatch.setattr(command_line.plan_store, "record", lambda *a, **k: False)
+    monkeypatch.setattr(command_line.plan_store, "record", lambda *a, **k: None)
     stamps = []
     (state, why), _ = _commit(ec, params, res, [], on_recorded=stamps.append)
     assert state == "accepted", why
@@ -4810,3 +4810,95 @@ def test_a_commit_refused_while_publishing_keeps_no_plan_to_resume(data_path, mo
     monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
     resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     assert followed == [] and again.get("c1")["state"] == "refused"
+
+
+def test_a_commits_stamp_is_its_own_snapshots_not_one_saved_after_it(data_path, monkeypatch):
+    """A command-line run (which the live-optimization lock does not hold
+    back) saves a plan right after the commit's: the commit is stamped with
+    its own snapshot's id, as saved, never with the plan read back after."""
+    import emhass.participant_api as pa
+
+    ec = _conf(data_path)
+    params = _params(ec, **GARAGE)
+    res = _a_plan(ec, params)
+    snapshot = pa._record_optim_snapshot
+
+    def then_a_local_run(*a, **k):
+        stamp = snapshot(*a, **k)
+        plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")  # the CLI's
+        return stamp
+
+    monkeypatch.setattr(pa, "_record_optim_snapshot", then_a_local_run)
+    stamps = []
+    (state, why), _ = _commit(ec, params, res, [], on_recorded=stamps.append, origin="commit:c1")
+    assert state == "accepted", why
+    latest = plan_store.read(data_path)
+    assert stamps and stamps[0] != plan_store.stamp(latest)  # not the local plan's
+    assert latest.get("origin") is None
+
+
+class _Kept:
+    """A participant whose one answer carries a plan to publish (detail)."""
+
+    key, max_power_kw, modulating, onoff = "fixed", 1.0, False, True
+
+    def __init__(self, res):
+        self._answer = Answer(np.array([1.0, 0.0]), 0.0, np.zeros(3), detail=res)
+
+    def baseline(self):
+        return self._answer
+
+    def respond(self, query):
+        return self._answer
+
+
+def test_a_refusal_whose_final_record_is_not_saved_is_never_resumed(data_path, monkeypatch):
+    """Through the service's own commit flow: publish_commit refuses it, and
+    the final record cannot be saved (the disk still says running). A
+    restart, with a fresh log and stepper, finds no plan of it to step and
+    ends it as refused."""
+    import emhass.participant_api as pa
+    from emhass.coordinator import remote
+    from emhass.coordinator.remote import CommitLog
+
+    ec = _conf(data_path)
+    disk_full = {"on": False}
+    replace = remote.os.replace
+
+    def replacing(*a, **k):
+        if disk_full["on"]:
+            raise OSError("disk full")
+        return replace(*a, **k)
+
+    async def refusing(*a, **k):
+        disk_full["on"] = True  # from here on, no record is saved
+        return "refused", "EMHASS could not build its inputs to publish"
+
+    monkeypatch.setattr(remote.os, "replace", replacing)
+    monkeypatch.setattr(pa, "publish_commit", refusing)
+    resume = pa._resume
+    monkeypatch.setattr(pa, "_resume", lambda *a, **k: None)
+    built = pa.make_service(ec, _params(ec, **GARAGE), TOKEN, logger)
+    res = pd.DataFrame({"P_deferrable0": 1.0}, index=pd.date_range(_now(), periods=2, freq="30min"))
+    service = ParticipantService(
+        lambda: {"key": "fixed", "max_power_kw": 1.0},
+        lambda window: _Kept(res),
+        built._commit,
+        log=built.log,
+    )
+    body = json.dumps(_HORIZON).encode()
+    assert service.handle("POST", "/v1/baseline", {"Query-Id": "q1"}, body)[0] == 200
+    assert service.handle("POST", "/v1/commit", {}, _commit_body())[0] == 202
+    status, record = _until_final(service)
+    assert record["state"] == "refused"  # as the coordinator is told
+    disk_full["on"] = False
+    stored = json.loads((data_path / pa.COMMIT_LOG_FILE).read_text())
+    assert [r["state"] for r in stored if r["commit_id"] == "q1"] == ["running"]
+    # the restart
+    again = CommitLog(data_path / pa.COMMIT_LOG_FILE)
+    monkeypatch.setattr(pa, "_commit_logs", {data_path / pa.COMMIT_LOG_FILE: again})
+    stepper = pa.PlanStepper()
+    followed = []
+    monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
+    resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert followed == [] and again.get("q1")["state"] == "refused"
