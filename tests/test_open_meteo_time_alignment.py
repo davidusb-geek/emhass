@@ -133,6 +133,23 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.index.equals(target_index))
         return result
 
+    async def test_covariates_aligned_5_15_30_minute_grids(self):
+        source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
+        cases = (
+            (
+                pd.date_range(source[0], periods=7, freq="5min"),
+                [0, 30, 60, 90, 60, 30, 0],
+            ),
+            (pd.date_range(source[0], periods=3, freq="15min"), [0, 90, 0]),
+            (pd.date_range(source[0], periods=2, freq="30min"), [0, 0]),
+        )
+        for target, expected in cases:
+            with self.subTest(step=target[1] - target[0]):
+                actual = await self._covariates(source, target)
+                np.testing.assert_allclose(
+                    actual["temp_air"].tolist(), expected, rtol=0, atol=1e-10
+                )
+
     async def test_covariates_nonlinear_15_to_10_minute_grid(self):
         source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
         target = pd.date_range(source[0], periods=4, freq="10min")
@@ -243,6 +260,30 @@ class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
             np.testing.assert_allclose(data["ghi"].tolist(), self.GOOD, rtol=0, atol=1e-10)
             self.assertTrue(data.attrs[OPEN_METEO_TIME_ALIGNED_ATTR])
             self.assertTrue(pickle.loads(path.read_bytes()).attrs[OPEN_METEO_TIME_ALIGNED_ATTR])
+
+    async def test_failed_rebuild_preserves_concurrently_replaced_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "weather.pkl"
+            stale = self._write_old_cache(path)
+            replacement = stale.copy()
+            replacement.attrs[OPEN_METEO_TIME_ALIGNED_ATTR] = True
+            replacement_bytes = pickle.dumps(replacement)
+            fcst = self._forecast(temp_dir)
+            fcst.get_cached_open_meteo_forecast_json = AsyncMock(return_value=None)
+
+            async def read_stale_then_replace(_cache_path):
+                # Another request completes an atomic replacement after the stale read.
+                path.write_bytes(replacement_bytes)
+                return stale
+
+            fcst.get_cached_forecast_data = AsyncMock(
+                side_effect=read_stale_then_replace
+            )
+            with self.assertRaisesRegex(ValueError, "no cache is available"):
+                await fcst._get_weather_open_meteo(str(path), use_legacy_pvlib=False)
+            self.assertEqual(path.read_bytes(), replacement_bytes)
+            fcst.get_cached_forecast_data.assert_awaited_once()
+            fcst.get_cached_open_meteo_forecast_json.assert_awaited_once()
 
     async def test_current_cache_is_reused_and_matches_fresh_frame(self):
         with tempfile.TemporaryDirectory() as temp_dir:

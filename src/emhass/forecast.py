@@ -643,8 +643,9 @@ class Forecast:
     ) -> pd.DataFrame:
         """Helper to retrieve weather data from Open-Meteo or cache.
 
-        ``skip_cache`` fetches without reading the cache: it was found stale, and
-        deleted, except on a dry run, which leaves it for the next live run.
+        ``skip_cache`` fetches without reading the weather cache. An unmarked
+        cache remains on disk until a successful refresh replaces it atomically,
+        so a concurrent request cannot lose a newer, valid cache.
         """
         if skip_cache or not os.path.isfile(w_forecast_cache_path):
             data_raw = await self.get_cached_open_meteo_forecast_json(
@@ -705,14 +706,15 @@ class Forecast:
             if data is not None and not data.attrs.get(OPEN_METEO_TIME_ALIGNED_ATTR):
                 self.logger.warning(
                     "Open-Meteo weather cache was written before time-based interpolation; "
-                    "discarding it and rebuilding from the Open-Meteo forecast."
+                    "rebuilding it from the Open-Meteo forecast."
                 )
-                self._drop_cache(w_forecast_cache_path)
+                # Preserve the file until a successful atomic replacement. Another request
+                # could have installed a valid cache since this request read the old one.
                 data = None
             if data is None:
-                # Stale Open-Meteo cache was deleted — fetch fresh data from API.
                 self.logger.info(
-                    "Stale Open-Meteo cache removed; fetching fresh forecast from API."
+                    "Open-Meteo weather cache unavailable or outdated; "
+                    "fetching fresh forecast."
                 )
                 return await self._get_weather_open_meteo(
                     w_forecast_cache_path, use_legacy_pvlib, skip_cache=True
