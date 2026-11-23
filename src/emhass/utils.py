@@ -7329,6 +7329,11 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
     return return_config
 
 
+# The web server's API token values build_secrets has read (and kept out of the
+# secrets): never sent to a remote solver, whichever path planned.
+_own_api_tokens: set[str] = set()
+
+
 async def build_secrets(
     emhass_conf: dict[str, pathlib.Path],
     logger: logging.Logger,
@@ -7649,8 +7654,12 @@ async def build_secrets(
             raise ValueError(f"Could not read the secrets file ({type(e).__name__})") from None
         params_secrets.update(loaded)
     # The web server's API token is read by api_auth on its own. Keep it out of the
-    # secrets that go on into params, logs and the configuration routes.
-    params_secrets.pop("emhass_api_token", None)
+    # secrets that go on into params, logs and the configuration routes - but
+    # remembered, so build_params never sends its value to a remote (the
+    # command line does not load api_auth).
+    popped = params_secrets.pop("emhass_api_token", None)
+    if isinstance(popped, str) and popped.strip():
+        _own_api_tokens.add(popped.strip())
 
     # Receive key and url from ARG/arguments?
     if argument.get("url") is not None:
@@ -7903,6 +7912,13 @@ async def build_params(
         and site_token_secret_usable(e["solver"].get("token_secret"))
     }
     reserved = reserved_secret_values(params_secrets, remote=site_secrets)
+    # the web server's API token is kept out of params_secrets (api_auth holds it)
+    from emhass import api_auth
+
+    own_api_token = api_auth.current_token()
+    if own_api_token:
+        reserved.add(str(own_api_token))
+    reserved |= _own_api_tokens  # as build_secrets read it (secrets file, options.json)
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
