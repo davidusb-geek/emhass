@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import numpy as np
-import numpy as np
 import pandas as pd
 import pytz
 
@@ -61,10 +60,16 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=4, freq="20min")
         actual = await self._native_weather(source, target)
         self.assertTrue(actual.index.equals(target))
-        np.testing.assert_allclose(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
-        np.testing.assert_allclose(actual["dhi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            actual["dhi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10
+        )
         self.assertTrue(actual.notna().all().all())
-        np.testing.assert_allclose(actual["precipitable_water"].tolist(), [0.1] * 4, rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["precipitable_water"].tolist(), [0.1] * 4, rtol=0, atol=1e-10
+        )
 
     async def test_native_offset_and_aligned_grids(self):
         source = pd.date_range("2026-08-22 10:00", periods=5, freq="15min", tz="UTC")
@@ -100,7 +105,9 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=4, freq="20min")
         actual = await self._native_weather(source, target)
         self.assertTrue(actual.index.equals(target))
-        np.testing.assert_allclose(actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["ghi"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10
+        )
         self.assertNotEqual(target[0].utcoffset(), target[-1].utcoffset())
 
     async def _covariates(self, source_index, target_index):
@@ -130,23 +137,33 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
         target = pd.date_range(source[0], periods=4, freq="10min")
         actual = await self._covariates(source, target)
-        np.testing.assert_allclose(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
-        np.testing.assert_allclose(actual["relative_humidity"].tolist(), [30.0, 50.0, 50.0, 30.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            actual["relative_humidity"].tolist(), [30.0, 50.0, 50.0, 30.0], rtol=0, atol=1e-10
+        )
         # Derived degree features retain the existing native-row transformation.
-        np.testing.assert_allclose(actual["heating_degree"].tolist(), [18.0, 6.0, 6.0, 18.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["heating_degree"].tolist(), [18.0, 6.0, 6.0, 18.0], rtol=0, atol=1e-10
+        )
 
     async def test_covariates_offset_irregular_and_boundary(self):
         source = pd.date_range("2026-08-22 10:00", periods=3, freq="15min", tz="UTC")
         target = pd.DatetimeIndex([source[0] + pd.Timedelta(minutes=n) for n in (4, 11, 18, 40)])
         actual = await self._covariates(source, target)
-        np.testing.assert_allclose(actual["temp_air"].tolist(), [24.0, 66.0, 72.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["temp_air"].tolist(), [24.0, 66.0, 72.0, 0.0], rtol=0, atol=1e-10
+        )
 
     async def test_covariates_dst_fallback_uses_absolute_instants(self):
         source = pd.date_range("2026-10-25 00:45", periods=3, freq="15min", tz="UTC")
         source = source.tz_convert("Europe/Berlin")
         target = pd.date_range(source[0], periods=4, freq="10min")
         actual = await self._covariates(source, target)
-        np.testing.assert_allclose(actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            actual["temp_air"].tolist(), [0.0, 60.0, 60.0, 0.0], rtol=0, atol=1e-10
+        )
         self.assertNotEqual(target[0].utcoffset(), target[-1].utcoffset())
 
     async def test_covariates_overlap_precedence_and_null_row_are_time_weighted(self):
@@ -173,7 +190,9 @@ class TestOpenMeteoTimeAlignment(unittest.IsolatedAsyncioTestCase):
         target = pd.date_range(source[0], periods=5, freq="10min")
         result = await fcst.get_weather_covariates(target, ["temp_air"])
         fcst._fetch_open_meteo_historical_covariates_json.assert_awaited_once()
-        np.testing.assert_allclose(result["temp_air"].tolist(), [0.0, 60.0, 90.0, 90.0, 30.0], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(
+            result["temp_air"].tolist(), [0.0, 60.0, 90.0, 90.0, 30.0], rtol=0, atol=1e-10
+        )
 
 
 class TestOpenMeteoWeatherCache(unittest.IsolatedAsyncioTestCase):
