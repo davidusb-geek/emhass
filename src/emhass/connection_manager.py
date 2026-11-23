@@ -59,7 +59,9 @@ async def _create_and_start_client(
 ) -> AsyncWebSocketClient:
     """Helper to create and start a new WebSocket client."""
     # Every WebSocket client is created here, so this check covers them all. Reconnects
-    # reuse the URL and token checked here, which nothing changes afterwards.
+    # reuse the URL and token checked here, which nothing changes afterwards, and the
+    # client never follows a redirect (websocket_client._ws_connect), so the token is only
+    # sent to the host of this URL.
     if is_supervisor_token_for_another_host(hass_url, token):
         if logger:
             logger.error(SUPERVISOR_TOKEN_REFUSED)

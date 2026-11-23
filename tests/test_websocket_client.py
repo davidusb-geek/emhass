@@ -38,7 +38,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         mock_connect.return_value = mock_ws
         return mock_ws
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_startup_success(self, mock_connect):
         mock_ws = self._setup_mock_ws(mock_connect)
         # Queue the auth handshake messages
@@ -55,7 +55,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         mock_ws.send.assert_called_with(expected_auth)
         await self.client.shutdown()
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_startup_auth_fail(self, mock_connect):
         self._setup_mock_ws(mock_connect)
         # Queue the fail sequence
@@ -67,7 +67,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
             await self.client.startup()
         self.assertFalse(self.client.connected)
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_send_and_receive(self, mock_connect):
         mock_ws = self._setup_mock_ws(mock_connect)
         # Auth Handshake
@@ -118,7 +118,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         mock_ws.send.assert_awaited_once()
         await self.client.shutdown()
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_convenience_methods(self, mock_connect):
         self._setup_mock_ws(mock_connect)
         # Auth Phase
@@ -160,7 +160,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         await self.client.call_service("switch", "turn_on")
         await self.client.shutdown()
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_send_propagates_error_result(self, mock_connect):
         """Queued response with success: False should surface as error from send()."""
         self._setup_mock_ws(mock_connect)
@@ -183,7 +183,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
             await self.client.send("test_command")
         await self.client.shutdown()
 
-    @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
+    @patch("emhass.websocket_client._ws_connect", new_callable=AsyncMock)
     async def test_send_skips_non_matching_messages(self, mock_connect):
         """Listener should ignore unrelated messages until matching response arrives."""
         self._setup_mock_ws(mock_connect)

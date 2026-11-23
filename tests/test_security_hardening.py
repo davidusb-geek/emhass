@@ -1427,11 +1427,134 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
         connect = AsyncMock(side_effect=OSError("stop here"))
         with (
             patch.dict(os.environ, {"HTTP_PROXY": "http://proxy.other-ha.test:3128"}),
-            patch("emhass.websocket_client.websockets.connect", connect),
+            patch("emhass.websocket_client._ws_connect", connect),
             self.assertRaises(OSError),
         ):
             await client._connect()
         self.assertIsNone(connect.call_args.kwargs["proxy"])
+
+    async def _redirecting_host(self, target_port, status):
+        """A host that answers the WebSocket upgrade with a redirect to the target."""
+        import asyncio
+
+        asked = []
+
+        async def answer(reader, writer):
+            try:
+                asked.append(await reader.readuntil(b"\r\n\r\n"))
+                writer.write(
+                    f"HTTP/1.1 {status} Redirect\r\n"
+                    f"Location: ws://127.0.0.1:{target_port}/api/websocket\r\n"
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
+                )
+                await writer.drain()
+            except (asyncio.IncompleteReadError, OSError):
+                pass
+            finally:
+                writer.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        return server, asked
+
+    async def _home_assistant_websocket(self):
+        """A stand-in for Home Assistant's WebSocket API: records every token it is sent."""
+        from websockets.asyncio.server import serve
+
+        tokens = []
+
+        async def handler(ws):
+            await ws.send(orjson.dumps({"type": "auth_required"}).decode())
+            async for message in ws:
+                data = orjson.loads(message)
+                if data.get("type") == "auth":
+                    tokens.append(data.get("access_token"))
+                    await ws.send(orjson.dumps({"type": "auth_ok"}).decode())
+
+        server = await serve(handler, "127.0.0.1", 0)
+        return server, tokens
+
+    async def test_websocket_never_follows_a_redirect(self):
+        """A redirect answer to the upgrade is not followed, on the first connect (300, 301,
+        302, 303, 307, 308) and on a reconnect (302): the host the redirect names is sent no
+        token. A client with the same token reaching that host directly does send it, so the
+        stand-in would have recorded one."""
+        from websockets.exceptions import InvalidStatus
+
+        from emhass.websocket_client import REDIRECT_NOT_FOLLOWED, AsyncWebSocketClient
+
+        target, tokens = await self._home_assistant_websocket()
+        target_port = target.sockets[0].getsockname()[1]
+        try:
+            for status in (300, 301, 302, 303, 307, 308):
+                redirect, asked = await self._redirecting_host(target_port, status)
+                port = redirect.sockets[0].getsockname()[1]
+                client = AsyncWebSocketClient(f"http://127.0.0.1:{port}", "dummy-ha-token", logger)
+                try:
+                    with self.subTest(status=status, path="startup"):
+                        with self.assertLogs(logger, level="ERROR") as logs:
+                            with self.assertRaises(InvalidStatus):
+                                await client.startup()
+                        self.assertIn(REDIRECT_NOT_FOLLOWED, logs.output[0])
+                    if status == 302:
+                        with self.subTest(status=status, path="reconnect"):
+                            with self.assertLogs(logger, level="ERROR"):
+                                with self.assertRaises(InvalidStatus):
+                                    await client.reconnect()
+                        with self.subTest(status=status, path="send"):
+                            with self.assertLogs(logger, level="ERROR"):
+                                with self.assertRaises(InvalidStatus):
+                                    await client.send("get_config")
+                finally:
+                    await client.shutdown()
+                    redirect.close()
+                    await redirect.wait_closed()
+                self.assertEqual(len(asked), 3 if status == 302 else 1)
+                self.assertEqual(tokens, [])
+            client = AsyncWebSocketClient(
+                f"http://127.0.0.1:{target_port}", "dummy-ha-token", logger
+            )
+            await client.startup()
+            await client.shutdown()
+            self.assertEqual(tokens, ["dummy-ha-token"])
+        finally:
+            target.close()
+            await target.wait_closed()
+
+    def test_a_websockets_client_that_cannot_refuse_a_redirect_is_not_used(self):
+        import warnings
+
+        import websockets
+
+        from emhass import websocket_client
+
+        class FollowsRedirects:  # as websockets' legacy client: it never asks
+            pass
+
+        self.assertIsNone(websocket_client._without_redirects(FollowsRedirects))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                from websockets.legacy.client import connect as legacy_connect
+            except ImportError:
+                legacy_connect = None
+        if legacy_connect is not None:
+            self.assertIsNone(websocket_client._without_redirects(legacy_connect))
+        refusing = websocket_client._without_redirects(websockets.connect)
+        self.assertTrue(issubclass(refusing, websockets.connect))
+        self.assertIs(websocket_client._ws_connect.__bases__[0], websockets.connect)
+
+    async def test_websocket_is_not_opened_when_redirects_cannot_be_refused(self):
+        from emhass.websocket_client import REDIRECTS_NOT_REFUSABLE, AsyncWebSocketClient
+        from emhass.websocket_client import ConnectionError as WsConnectionError
+
+        client = AsyncWebSocketClient("http://supervisor/core/api", "sv-token", logger)
+        with (
+            patch("emhass.websocket_client._ws_connect", None),
+            self.assertLogs(logger, level="ERROR") as logs,
+            self.assertRaises(WsConnectionError),
+        ):
+            await client._connect()
+        self.assertIn(REDIRECTS_NOT_REFUSABLE, logs.output[0])
 
 
 if __name__ == "__main__":
