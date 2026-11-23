@@ -1016,11 +1016,17 @@ def _note_no_file_lock(opt: Any) -> None:
     )
 
 
-def _write_remote_commits(opt: Any, changes: dict[str, Any]) -> None:
+def _write_remote_commits(
+    opt: Any, changes: dict[str, Any], expect: dict[str, Any] | None = None
+) -> None:
     """Record what this run committed each remote to (`changes`: id -> its
     record, or None to forget it), leaving every other remote's record as the
     file has it now: read and written under an exclusive lock, which every run
-    sharing the data folder (the web server's, the command line's) takes."""
+    sharing the data folder (the web server's, the command line's) takes.
+    `expect`: for a change that only reconciles what a remote reported, the
+    record this run read before asking it (None: none) - the change is made
+    only while the file still has that one, so a newer commitment another
+    run saved meanwhile is never overwritten nor forgotten."""
     path = _remote_commits_path(opt)
     if path is None or not changes:
         return
@@ -1050,6 +1056,8 @@ def _write_remote_commits(opt: Any, changes: dict[str, Any]) -> None:
                     return
                 records = current if isinstance(current, dict) else {}
                 for key, record in changes.items():
+                    if expect is not None and key in expect and records.get(key) != expect[key]:
+                        continue  # another run's newer record: kept
                     if record is None:
                         records.pop(key, None)
                     else:
@@ -1217,12 +1225,13 @@ def _heard(
         }
     )
     if saved.get(rp.key) != record:
+        observed = saved.get(rp.key)  # as this run read it, before asking
         if record is None:
             saved.pop(rp.key, None)
         else:
             saved[rp.key] = record
         if not getattr(opt, "fed_dry_run", False):  # a dry run writes nothing
-            _write_remote_commits(opt, {rp.key: record})
+            _write_remote_commits(opt, {rp.key: record}, expect={rp.key: observed})
 
 
 def _set_running(running: dict[str, np.ndarray], key: str, plan: np.ndarray | None) -> None:

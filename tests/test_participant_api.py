@@ -124,10 +124,14 @@ def serve(service: ParticipantService) -> _Server:
     the API's base. Usable as a context manager; whatever a test leaves
     running is shut down and closed after it (_servers_closed)."""
     server = _Server(("127.0.0.1", 0), _Handler)
-    _servers.append(server)
     server.service = service
     server.url = f"http://127.0.0.1:{server.server_address[1]}"
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    except BaseException:
+        server.server_close()  # never served: shutdown() would wait for ever
+        raise
+    _servers.append(server)
     return server
 
 
@@ -4022,13 +4026,13 @@ def test_the_active_commit_is_never_superseded_by_a_stamp_read_before_it(monkeyp
         with stepper._lock:
             stepper._gen += 1
             stepper.following, stepper.stamp, stepper.superseded = "b", "s2", False
-        return "s1"
+        return "s1", None
 
-    monkeypatch.setattr(pa, "_saved_stamp", read_then_followed)
+    monkeypatch.setattr(pa, "_latest_saved", read_then_followed)
     assert pa._active_commit(log, stepper, "/nowhere")["commit_id"] in ("a", "b")
     assert not stepper.superseded
     # a plan of its own replacing the one followed is still seen
-    monkeypatch.setattr(pa, "_saved_stamp", lambda conf: "s3")
+    monkeypatch.setattr(pa, "_latest_saved", lambda conf: ("s3", None))
     assert pa._active_commit(log, stepper, "/nowhere") is None and stepper.superseded
 
 
@@ -4124,7 +4128,7 @@ def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_m
         data_path, monkeypatch, [("b", "accepted", {"plan_stamp": before})]
     )
     plan_store.record(data_path, [], "2026-11-21T11:00:00Z", "1.0")  # its own since
-    read = pa._saved_stamp
+    read = pa._latest_saved
 
     def commit_followed_meanwhile(conf):
         with stepper._lock:  # as follow("c") does
@@ -4132,7 +4136,7 @@ def test_a_resume_that_finds_its_commit_superseded_yields_to_a_commit_followed_m
             stepper.following, stepper.stamp, stepper.superseded = "c", "sc", False
         return read(conf)
 
-    monkeypatch.setattr(pa, "_saved_stamp", commit_followed_meanwhile)
+    monkeypatch.setattr(pa, "_latest_saved", commit_followed_meanwhile)
     pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     _, following, stamp, superseded = stepper.view()
     assert (following, stamp, superseded) == ("c", "sc", False)
@@ -4823,8 +4827,11 @@ def test_a_commits_stamp_is_its_own_snapshots_not_one_saved_after_it(data_path, 
     res = _a_plan(ec, params)
     snapshot = pa._record_optim_snapshot
 
+    own = []
+
     def then_a_local_run(*a, **k):
         stamp = snapshot(*a, **k)
+        own.append(stamp)
         plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")  # the CLI's
         return stamp
 
@@ -4833,7 +4840,8 @@ def test_a_commits_stamp_is_its_own_snapshots_not_one_saved_after_it(data_path, 
     (state, why), _ = _commit(ec, params, res, [], on_recorded=stamps.append, origin="commit:c1")
     assert state == "accepted", why
     latest = plan_store.read(data_path)
-    assert stamps and stamps[0] != plan_store.stamp(latest)  # not the local plan's
+    assert stamps == own and own[0] is not None  # its own snapshot's, exactly, once
+    assert stamps[0] != plan_store.stamp(latest)  # the latest is the local plan
     assert latest.get("origin") is None
 
 
@@ -4902,3 +4910,80 @@ def test_a_refusal_whose_final_record_is_not_saved_is_never_resumed(data_path, m
     monkeypatch.setattr(stepper, "follow", lambda *a, **k: followed.append(a[:2]))
     resume(ec, _params(ec, **GARAGE), logger, stepper, None)
     assert followed == [] and again.get("q1")["state"] == "refused"
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit's review of 855e4e04
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reported", [None, "older"])
+def test_what_a_remote_reports_never_overwrites_a_newer_commit(tmp_path, reported):
+    """Run A reads the garage's record, asks the garage; run B commits it
+    meanwhile. A's reconciliation - forgetting the record (the garage reports
+    none) or replacing it with what it reported - leaves B's newer commit."""
+    from emhass.coordinator import backend
+
+    opt = mock.MagicMock(fed_dry_run=False)
+    path = tmp_path / "coordinator_remote_commits.json"
+    first = {**_record([7.0]), "url": "http://g", "steps": True, "max_power_kw": 8.0}
+    path.write_text(json.dumps({"garage": first}))
+    saved = backend._read_remote_commits(opt)  # what run A read
+    newer = {**_record([0.0]), "state": "committed", "url": "http://g"}
+    backend._write_remote_commits(opt, {"garage": newer})  # run B's commit
+    # what it reports differs from what A read (A would write it)
+    active = None if reported is None else _record([5.0])
+    rp = mock.MagicMock(key="garage", url="http://g", active_commit=active, max_power_kw=8.0)
+    rp.features = frozenset({"plan_steps"})
+    backend._heard(opt, {}, saved, rp, _at("2026-11-21T10:00:00+00:00"))
+    assert json.loads(path.read_text()) == {"garage": newer}
+    # with nothing newer, the reconciliation is made
+    saved = backend._read_remote_commits(opt)
+    rp.active_commit = None
+    backend._heard(opt, {}, saved, rp, _at("2026-11-21T10:00:00+00:00"))
+    assert json.loads(path.read_text()) == {}
+
+
+def test_a_naive_horizon_start_is_utc_for_the_participant(data_path):
+    """A naive horizon start is UTC, as everywhere in EMHASS (and in
+    _same_horizon), never this EMHASS's local time."""
+    import time_machine as travel
+
+    params = _params(_conf(data_path), **GARAGE)
+    params["retrieve_hass_conf"]["time_zone"] = "Europe/Paris"
+    check = participant_api.current_slot_check(params)
+    with travel.travel(pd.Timestamp("2026-11-21T10:07:00Z").to_pydatetime(), tick=False):
+        utc = _now()
+        check(PlanWindow(30, 48, utc.tz_convert("UTC").tz_localize(None).isoformat()))
+        with pytest.raises(WindowRefused):
+            # the same wall-clock time read as Paris: an hour off
+            check(PlanWindow(30, 48, utc.tz_convert("Europe/Paris").tz_localize(None).isoformat()))
+
+
+def test_a_resume_takes_the_stamp_and_origin_from_one_read(data_path, monkeypatch):
+    """A commit saving its own plan while a resume reads the plan store: the
+    resume takes the stamp and the origin from one snapshot, so the commit is
+    never recorded under another plan's stamp."""
+    import emhass.participant_api as pa
+
+    plan_store.record(data_path, [], "2026-11-21T10:00:00Z", "1.0")
+    before = plan_store.stamp(plan_store.read(data_path))
+    ec, stepper, followed, log = _resume_case(
+        data_path, monkeypatch, [("b", "accepted", {"plan_stamp": before})]
+    )
+    plan_store.record(data_path, [], "2026-11-21T10:05:00Z", "1.0")  # of its own
+    local = plan_store.stamp(plan_store.read(data_path))
+    read = plan_store.read
+    reads = []
+
+    def then_the_commit_saves(path):
+        out = read(path)
+        reads.append(1)
+        if len(reads) == 1:  # right after the resume's read: b saves its own
+            plan_store.record(data_path, [], "2026-11-21T10:06:00Z", "1.0", origin="commit:b")
+        return out
+
+    monkeypatch.setattr(pa.plan_store, "read", then_the_commit_saves)
+    pa._resume(ec, _params(ec, **GARAGE), logger, stepper, None)
+    assert log.get("b")["plan_stamp"] != local  # never the local plan's stamp
+    assert followed == [] and stepper.view()[3]  # what it read: a plan of its own
