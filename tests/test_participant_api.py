@@ -1342,6 +1342,50 @@ def test_the_battery_charge_is_asked_where_home_assistant_answers(base, no_verif
     assert len(contexts) == 1 and (contexts[0].verify_mode == ssl.CERT_NONE) == no_verify
 
 
+@pytest.mark.parametrize(
+    "base", ["http://ha:8123", "https://ha.example", "http://supervisor.evil/core/api"]
+)
+def test_the_battery_charge_never_sends_the_supervisor_token_to_another_host(base, monkeypatch):
+    """The add-on's Supervisor token as the token for a URL that is not the
+    Supervisor: nothing is asked (the token would go to that host), and the
+    target stands in."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "the-supervisor-token")
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": base,
+        "long_lived_token": " the-supervisor-token ",
+    }
+    with mock.patch("urllib.request.OpenerDirector.open") as opened:
+        assert participant_api.soc_now(conf, logger) is None
+    opened.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "base, expected",
+    [
+        ("http://supervisor/core/api", "http://supervisor/core/api/states/sensor.soc"),
+        ("HTTP://Supervisor/core/api/", "http://supervisor/core/api/states/sensor.soc"),
+        ("https://supervisor/core/api", "https://supervisor/core/api/states/sensor.soc"),
+    ],
+)
+def test_the_battery_charge_asks_the_supervisor_with_its_token(base, expected, monkeypatch):
+    """The Supervisor token still reaches the Supervisor, in any form of its
+    URL, on the Supervisor's own path."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "the-supervisor-token")
+    response = mock.MagicMock()
+    response.__enter__.return_value = io.BytesIO(b'{"state": "55", "attributes": {}}')
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": base,
+        "long_lived_token": "the-supervisor-token",
+    }
+    with mock.patch("urllib.request.OpenerDirector.open", return_value=response) as opened:
+        assert participant_api.soc_now(conf, logger) == pytest.approx(0.55)
+    request = opened.call_args.args[0]
+    assert request.full_url == expected
+    assert request.get_header("Authorization") == "Bearer the-supervisor-token"
+
+
 def test_the_battery_charge_is_not_asked_of_a_redirect():
     """Home Assistant's URL redirecting elsewhere: the redirect is not
     followed (it would carry the token there), and the target stands in."""
