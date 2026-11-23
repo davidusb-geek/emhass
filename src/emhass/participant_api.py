@@ -201,9 +201,8 @@ async def build_session(
         df = df.iloc[:n].copy()
         if window.start is not None:
             start = pd.Timestamp(window.start)
-            start = (
-                start.tz_convert(df.index.tz) if start.tzinfo else start.tz_localize(df.index.tz)
-            )
+            # a naive start is UTC, as everywhere in EMHASS
+            start = (start if start.tzinfo else start.tz_localize("UTC")).tz_convert(df.index.tz)
             offset = (start - df.index[0]) / pd.Timedelta(minutes=step)
             if abs(offset) > 1e-6:
                 # Relabelling the rows would plan the coordinator's slots with
@@ -360,7 +359,7 @@ def current_slot_check(params: dict):
         )
         tz = next(iter(near)).tz
         start = pd.Timestamp(window.start)
-        start = start.tz_convert(tz) if start.tzinfo else start.tz_localize(tz)
+        start = (start if start.tzinfo else start.tz_localize("UTC")).tz_convert(tz)  # naive: UTC
         if start not in near:
             raise WindowRefused(
                 f"the horizon starts at {start}, not at this EMHASS's current slot "
@@ -559,12 +558,12 @@ class PlanStepper:
             t.join(None if end is None else max(end - time.monotonic(), 0.0))
         return not any(t.is_alive() for t in threads)
 
-    def _own(self, emhass_conf: dict, gen: int) -> bool:
-        """Whether the latest plan saved is the one this stepper follows (its
-        commit saved it), whatever stamp it was given."""
+    def _own(self, origin: str | None, gen: int) -> bool:
+        """Whether a plan saved with `origin` is the one this stepper follows
+        (its commit saved it), whatever stamp it was given."""
         with self._lock:
             following = self.following if gen == self._gen else None
-        return _is_own_plan(emhass_conf, following)
+        return following is not None and origin == _origin(following)
 
     def _end(self, gen: int) -> None:
         """Its plan no longer runs (a plan of this EMHASS's own replaced it):
@@ -601,10 +600,10 @@ class PlanStepper:
         if params["retrieve_hass_conf"].get("continual_publish"):
             self._end(gen)
             return "stop"
-        saved = _saved_stamp(emhass_conf)
+        saved, origin = _latest_saved(emhass_conf)  # one read: stamp and origin agree
         if saved is _UNREADABLE:
             return "busy"  # the plan store cannot be read now: tried again
-        if saved != stamp and not self._own(emhass_conf, gen):
+        if saved != stamp and not self._own(origin, gen):
             self._end(gen)  # this EMHASS saved a plan of its own: it runs that
             return "stop"
         if not isinstance(params["optim_conf"].get("participant_api"), dict):
@@ -626,10 +625,10 @@ class PlanStepper:
                     return "stop"
             # again, under the slot: a live optimization it waited for may have
             # saved a plan of this EMHASS's own meanwhile
-            saved = _saved_stamp(emhass_conf)
+            saved, origin = _latest_saved(emhass_conf)
             if saved is _UNREADABLE:
                 return "busy"
-            if saved != stamp and not self._own(emhass_conf, gen):
+            if saved != stamp and not self._own(origin, gen):
                 self._end(gen)
                 return "stop"
             state, why = (publish or _publish_now)(emhass_conf, params, res, logger)
@@ -671,26 +670,23 @@ def _origin(commit_id: str) -> str:
     return f"commit:{commit_id}"
 
 
-def _is_own_plan(emhass_conf: dict, commit_id: str | None) -> bool:
-    """Whether the latest plan saved is commit `commit_id`'s own (its origin)."""
-    if commit_id is None:
-        return False
-    latest = plan_store.read(pathlib.Path(emhass_conf["data_path"]))
-    return isinstance(latest, dict) and latest.get("origin") == _origin(commit_id)
-
-
-def _saved_stamp(emhass_conf: dict):
-    """The save stamp of the latest plan saved - its identity, plan_store.stamp
-    (None: none saved) - or _UNREADABLE when its file is there but cannot be
-    read now."""
+def _latest_saved(emhass_conf: dict):
+    """(stamp, origin) of the latest plan saved, from one read of it: its
+    identity (plan_store.stamp; None: none saved) and what made it - or
+    (_UNREADABLE, None) when its file is there but cannot be read now."""
     data = pathlib.Path(emhass_conf["data_path"])
     latest = plan_store.read(data)
     try:
         if latest is None and plan_store._path(data).exists():
-            return _UNREADABLE
+            return _UNREADABLE, None
     except OSError:  # not even its presence can be told
-        return _UNREADABLE
-    return plan_store.stamp(latest)
+        return _UNREADABLE, None
+    return plan_store.stamp(latest), (latest or {}).get("origin")
+
+
+def _saved_stamp(emhass_conf: dict):
+    """The save stamp of the latest plan saved (see _latest_saved)."""
+    return _latest_saved(emhass_conf)[0]
 
 
 def _with_participant_conf(params: dict, committed: dict) -> dict:
@@ -836,7 +832,9 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         logger.warning(f"participant_api: the committed plan cannot be read back ({exc})")
         stepper.resumed = None
         return
-    saved = _saved_stamp(emhass_conf)
+    # the stamp and what made it, from the same read: a commit saving its own
+    # plan between two reads would be taken for that one under another's stamp
+    saved, origin = _latest_saved(emhass_conf)
     if saved is _UNREADABLE:
         stepper.resumed = None  # the plan store cannot be read now: next time
         return
@@ -847,7 +845,7 @@ def _resume(emhass_conf: dict, params: dict, logger, stepper: PlanStepper, begin
         log.annotate(last["commit_id"], {"plan_stamp": saved})
         last = {**last, "plan_stamp": saved}
     stamp = last["plan_stamp"]
-    if saved != stamp and _is_own_plan(emhass_conf, last["commit_id"]):
+    if saved != stamp and origin == _origin(last["commit_id"]):
         # The plan saved is this commit's own (it says so): saved before its
         # stamp could be noted (a stop, a record that could not be saved)
         log.annotate(last["commit_id"], {"plan_stamp": saved})
@@ -888,12 +886,8 @@ def _active_commit(log, stepper: PlanStepper, data_path=None):
     if following is None or superseded:
         return None
     if data_path is not None:
-        saved = _saved_stamp({"data_path": data_path})
-        if (
-            saved is not _UNREADABLE
-            and saved != stamp
-            and not _is_own_plan({"data_path": data_path}, following)
-        ):
+        saved, origin = _latest_saved({"data_path": data_path})  # one read
+        if saved is not _UNREADABLE and saved != stamp and origin != _origin(following):
             if stepper.supersede(gen, stamp):
                 return None  # a plan of its own replaced the one it follows
             # a commit followed meanwhile, over what was saved then: that one
