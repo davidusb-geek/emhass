@@ -63,7 +63,7 @@ lat: 45.83
 lon: 6.86
 alt: 4807.8
 EOT
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 
 ### Docker, things to note 
