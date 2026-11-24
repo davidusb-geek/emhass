@@ -2453,7 +2453,7 @@ class RetrieveHass:
         if _uses_supervisor_api(self.hass_url):  # If we are using the supervisor API
             url = hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
-            url = self.hass_url + "api/states/" + entity_id
+            url = self.hass_url.rstrip("/") + "/api/states/" + entity_id
         headers = {
             "Authorization": header_auth + " " + self.long_lived_token,
             "content-type": header_accept,
@@ -2829,7 +2829,7 @@ class RetrieveHass:
         if _uses_supervisor_api(self.hass_url):  # supervisor API
             url = hass_url + "/states/" + entity_id
         else:  # Home Assistant Core API
-            url = self.hass_url + "api/states/" + entity_id
+            url = self.hass_url.rstrip("/") + "/api/states/" + entity_id
         headers = {
             "Authorization": header_auth + " " + self.long_lived_token,
             "content-type": header_accept,
