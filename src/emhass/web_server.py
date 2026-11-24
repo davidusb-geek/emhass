@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiofiles
 import jinja2
@@ -85,6 +86,91 @@ from emhass.utils import (
 app = Quart(__name__)
 # API access control: a before_request hook plus /login, /logout and /api-token.
 api_auth.install(app)
+
+
+def _malformed_request(scope: dict) -> str | None:
+    """Why Quart could not take this request in, or None.
+
+    These requests fail inside Quart before its error handling and the API's
+    access control are reached, and each one logged a full traceback with a
+    500: an empty path (a request line such as "GET ?x"), a target that is not
+    a path and that urlparse refuses (such as "http://["), and a Host whose name
+    has no IDNA form (an empty or over-long label, as in "a..b"). The checks
+    are the ones Quart and werkzeug make: Quart parses a target that does not
+    start with "/" with urlparse, and werkzeug encodes the host name when it
+    binds the URL map."""
+    path = scope.get("path")
+    if not path:
+        return "the request has no path"
+    if path[0] != "/":
+        try:
+            urlparse(path)
+        except ValueError:
+            return "the request target is not a valid URL"
+    for name, value in scope.get("headers") or ():
+        if name.lower() == b"host":
+            host = value.decode("latin-1").lower().partition(":")[0]
+            if not host.isascii():
+                # werkzeug takes a host it cannot match as empty and never encodes it;
+                # encoding a long one here would cost far more than the request
+                continue
+            try:
+                host.encode("idna")
+            except UnicodeError:
+                return "the Host header is not a valid host name"
+    return None
+
+
+# Refused malformed requests are logged at most once a minute, with a count, on
+# the server's own log (uvicorn.error, which gunicorn's error log receives) and
+# never on app.logger: its handler writes the action log, which a caller
+# without credentials must not be able to fill.
+MALFORMED_LOG_INTERVAL_S = 60.0
+_malformed_log = {"count": 0, "last": float("-inf")}
+
+
+def _note_malformed_request(problem: str) -> None:
+    _malformed_log["count"] += 1
+    now = time.monotonic()
+    if now - _malformed_log["last"] < MALFORMED_LOG_INTERVAL_S:
+        return
+    logging.getLogger("uvicorn.error").warning(
+        "EMHASS refused %d malformed request(s) since the last such message, the latest because %s",
+        _malformed_log["count"],
+        problem,
+    )
+    _malformed_log["count"] = 0
+    _malformed_log["last"] = now
+
+
+def _refusing_malformed_requests(asgi_app):
+    async def refusing(scope, receive, send):
+        problem = _malformed_request(scope) if scope["type"] in ("http", "websocket") else None
+        if problem is None:
+            return await asgi_app(scope, receive, send)
+        _note_malformed_request(problem)
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return None
+        body = f"EMHASS >> Bad request: {problem}.\n".encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 400,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"x-content-type-options", b"nosniff"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+        return None
+
+    return refusing
+
+
+app.asgi_app = _refusing_malformed_requests(app.asgi_app)
 
 
 def _api_token_sources() -> tuple[str, str]:

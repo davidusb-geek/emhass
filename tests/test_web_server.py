@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import pathlib
@@ -5,6 +6,7 @@ import pickle
 import runpy
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1750,6 +1752,140 @@ class TestActionLogCutsAreKnown(unittest.IsolatedAsyncioTestCase):
         lines = self.path.read_text().splitlines()
         self.assertEqual(lines.count("INFO - emhass.web_server - after the error 0399"), 1)
         self.assertTrue(await web_server.check_file_log(" >> "))
+
+
+def _scope(path="/healthz", host=b"emhass.local:5000", kind="http"):
+    scope = {
+        "type": kind,
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http" if kind == "http" else "ws",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"x",
+        "root_path": "",
+        "headers": [] if host is None else [(b"host", host)],
+        "client": ("192.0.2.10", 40000),
+        "server": ("192.0.2.1", 5000),
+    }
+    return scope
+
+
+class TestMalformedRequestsAreRefused(unittest.IsolatedAsyncioTestCase):
+    """Requests Quart cannot take in get a 400 before they reach it."""
+
+    async def asyncSetUp(self):
+        self.enterContext(
+            patch.dict(web_server._malformed_log, {"count": 0, "last": float("-inf")})
+        )
+
+    async def call(self, app, scope):
+        sent = []
+        messages = [{"type": "http.request", "body": b"", "more_body": False}]
+
+        async def receive():
+            if messages:
+                return messages.pop()
+            await asyncio.sleep(0)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        await asyncio.wait_for(app(scope, receive, send), 10)
+        return sent
+
+    async def test_what_quart_fails_on_is_named(self):
+        for scope, problem in [
+            (_scope(path=""), "the request has no path"),
+            (_scope(path="http://["), "the request target is not a valid URL"),
+            (_scope(path="x://["), "the request target is not a valid URL"),
+            (_scope(path="http://[::1"), "the request target is not a valid URL"),
+            (_scope(path="x://\uff20"), "the request target is not a valid URL"),
+            (_scope(path="x://a\uff0fb"), "the request target is not a valid URL"),
+            (_scope(host=b"a..b"), "the Host header is not a valid host name"),
+            (_scope(host=b"a..b:5000"), "the Host header is not a valid host name"),
+            (_scope(host=b"x" * 64 + b".example"), "the Host header is not a valid host name"),
+        ]:
+            with self.subTest(path=scope["path"], host=scope["headers"]):
+                self.assertEqual(web_server._malformed_request(scope), problem)
+
+    async def test_a_long_non_ascii_host_is_left_to_werkzeug_and_costs_nothing(self):
+        # werkzeug takes it as an empty host; IDNA on it would take a quarter second
+        scope = _scope(host=b"\xe9" * 200_000)
+        started = time.perf_counter()
+        self.assertIsNone(web_server._malformed_request(scope))
+        self.assertLess(time.perf_counter() - started, 0.05)
+
+    async def test_ordinary_targets_pass(self):
+        for path in ("/healthz", "/", "http://emhass.local/healthz", "*", "x:"):
+            with self.subTest(path=path):
+                self.assertIsNone(web_server._malformed_request(_scope(path=path)))
+
+    async def test_refusals_stay_out_of_the_action_log_and_are_counted(self):
+        wrapped = web_server._refusing_malformed_requests(AsyncMock())
+        with self.assertNoLogs(web_server.app.logger):
+            with self.assertLogs("uvicorn.error", "WARNING") as first:
+                await self.call(wrapped, _scope(path=""))
+            with self.assertNoLogs("uvicorn.error"):  # within the minute: counted only
+                for _ in range(5):
+                    await self.call(wrapped, _scope(host=b"a..b"))
+            web_server._malformed_log["last"] -= web_server.MALFORMED_LOG_INTERVAL_S
+            with self.assertLogs("uvicorn.error", "WARNING") as later:
+                await self.call(wrapped, _scope(path="http://["))
+        self.assertIn("refused 1 malformed", first.output[0])
+        self.assertIn("refused 6 malformed", later.output[0])
+        self.assertIn("not a valid URL", later.output[0])
+
+    async def test_ordinary_requests_pass(self):
+        for host in (
+            b"emhass.local:5000",
+            b"192.0.2.1",
+            b"[2001:db8::1]:5000",
+            b"homeassistant",
+            b"x" * 63 + b".example",
+            b"",
+            None,
+        ):
+            with self.subTest(host=host):
+                self.assertIsNone(web_server._malformed_request(_scope(host=host)))
+
+    async def test_a_malformed_request_never_reaches_the_app(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        sent = await self.call(wrapped, _scope(path=""))
+        inner.assert_not_awaited()
+        self.assertEqual(sent[0]["type"], "http.response.start")
+        self.assertEqual(sent[0]["status"], 400)
+        self.assertEqual(sent[1]["body"], b"EMHASS >> Bad request: the request has no path.\n")
+        headers = dict(sent[0]["headers"])
+        self.assertEqual(int(headers[b"content-length"]), len(sent[1]["body"]))
+        self.assertEqual(headers[b"x-content-type-options"], b"nosniff")
+
+    async def test_a_malformed_websocket_is_closed(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        sent = await self.call(wrapped, _scope(host=b"a..b", kind="websocket"))
+        inner.assert_not_awaited()
+        self.assertEqual(sent, [{"type": "websocket.close", "code": 1008}])
+
+    async def test_everything_else_goes_through_unchanged(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        scope = _scope()
+        await self.call(wrapped, scope)
+        inner.assert_awaited_once()
+        self.assertIs(inner.await_args.args[0], scope)
+        lifespan = {"type": "lifespan"}
+        await self.call(wrapped, lifespan)
+        self.assertIs(inner.await_args.args[0], lifespan)
+
+    async def test_the_app_is_served_through_it(self):
+        for scope in (_scope(host=b"a..b"), _scope(path="http://[")):
+            with self.subTest(path=scope["path"]):
+                sent = await self.call(web_server.app, scope)
+                self.assertEqual(sent[0]["status"], 400)
 
 
 class TestActionLogHandlerIsUsed(unittest.IsolatedAsyncioTestCase):
