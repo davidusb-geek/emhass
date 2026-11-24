@@ -25,7 +25,12 @@ workers = int(os.getenv("WEB_CONCURRENCY", 1))
 worker_connections = int(os.getenv("WORKER_CONNECTIONS", 1000))
 
 # Process management
-max_requests = int(os.getenv("MAX_REQUESTS", 1000))
+# No restart after a number of requests unless MAX_REQUESTS asks for one (0 means none).
+# The count takes every request, the ones refused for lack of credentials and /healthz
+# included, so with a limit anyone who can reach the port decides when the worker restarts,
+# and a restart drops what the worker holds: the continual publish loop, the published
+# entity files, the action log.
+max_requests = int(os.getenv("MAX_REQUESTS", 0))
 max_requests_jitter = int(os.getenv("MAX_REQUESTS_JITTER", 100))
 preload_app = True
 

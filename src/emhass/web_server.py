@@ -116,6 +116,10 @@ templates = jinja2.Environment(
 )
 
 action_log_str = "action_logs.txt"
+# The action log is cut back to its last ACTION_LOG_KEEP_BYTES once it passes
+# ACTION_LOG_MAX_BYTES (_ActionLogHandler).
+ACTION_LOG_MAX_BYTES = 4 * 1024 * 1024
+ACTION_LOG_KEEP_BYTES = 1024 * 1024
 injection_dict_file = "injection_dict.pkl"
 params_file = "params.pkl"
 # What orjson cannot write back, for the 400 a request body that hits it gets.
@@ -477,12 +481,16 @@ async def check_file_log(ref_string: str | None = None) -> bool:
     log_array: list[str] = []
 
     if ref_string is not None:
+        if _cut_from_the_action_log("lost_error", ref_string):
+            return True  # this action logged an error, and the log has been cut past it since
         log_array = await grab_log(
             ref_string
         )  # grab reduced log array (everything after string match)
     else:
         if (emhass_conf["data_path"] / action_log_str).exists():
-            async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
+            async with aiofiles.open(
+                str(emhass_conf["data_path"] / action_log_str), errors="replace"
+            ) as fp:
                 content = await fp.read()
                 log_array = content.splitlines()
         else:
@@ -508,7 +516,9 @@ async def grab_log(ref_string: str | None = None) -> list[str]:
     is_found = []
     output = []
     if (emhass_conf["data_path"] / action_log_str).exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
+        async with aiofiles.open(
+            str(emhass_conf["data_path"] / action_log_str), errors="replace"
+        ) as fp:
             content = await fp.read()
             log_array = content.splitlines()
         # Find all string matches, log key (line Number) in is_found
@@ -519,7 +529,23 @@ async def grab_log(ref_string: str | None = None) -> list[str]:
             # Use last item in is_found to extract action logs
             for x in range(is_found[-1], len(log_array)):
                 output.append(log_array[x])
+        elif ref_string is not None and _cut_from_the_action_log("lost_action_line", ref_string):
+            # The newest action's line, the one asked for, was written and has been
+            # cut away since, so every line still in the file is newer than it.
+            output = log_array
     return output
+
+
+def _cut_from_the_action_log(what: str, ref_string: str) -> bool:
+    """Whether an action log handler on app.logger has cut away the newest action's
+    " >> " line ("lost_action_line"), or an ERROR logged after it ("lost_error"),
+    and that line is one ref_string matches. Each handler knows only its own cuts,
+    so this holds for one handler per file in one process."""
+    return any(
+        getattr(handler, what, False) is True
+        and re.search(ref_string, getattr(handler, "action_line", "")) is not None
+        for handler in app.logger.handlers
+    )
 
 
 # Clear the log file
@@ -2042,13 +2068,136 @@ async def _build_and_save_params(
     return params
 
 
+class _ActionLogHandler(logging.FileHandler):
+    """The action log's file handler. It appends as logging.FileHandler does, and
+    once the file has grown past ACTION_LOG_MAX_BYTES it keeps only the last
+    ACTION_LOG_KEEP_BYTES of it, from the first whole line on. It never cuts into
+    the newest record it wrote, whatever its length or number of lines: one longer
+    than ACTION_LOG_KEEP_BYTES is kept whole, with up to ACTION_LOG_KEEP_BYTES of
+    whole lines before it. Older records are cut, and with them, at times, the
+    newest action's " >> " line or an ERROR logged after it. The handler remembers
+    when that happens (lost_action_line, lost_error), so that grab_log still
+    returns the action's lines that are left in the file and check_file_log still
+    reports its error. It knows only of its own cuts, which is why
+    _configure_logging keeps one handler per file in a process.
+
+    The log is read whole after every action (grab_log, check_file_log), and
+    only a start of the server empties it, so without this it grows for as long
+    as the server runs. The cut is made in emit(), which logging calls with the
+    handler's lock held, so no record of this process is written meanwhile. With
+    more than one process writing the file (more than one web worker), a record
+    another one writes during the cut can be lost, and on Windows, where an
+    append is a seek then a write, it can leave NUL bytes where it would have
+    been, and each process knows only of its own cuts, so a cut by another can
+    take an action's error unnoticed. A reader that overlaps the cut can see old
+    and new bytes spliced, so the readers decode with errors="replace"."""
+
+    # Where in the file the newest action's " >> " line is, and the first ERROR
+    # logged after it: None while there is none, -1 once it has been cut away.
+    # The handler takes for an action's line a message that starts with " >> "
+    # (every action_str does); one that only contains it may be a request's own
+    # text echoed back. (grab_log's own search still matches it anywhere.)
+    _action_line_at: int | None = None
+    _error_at: int | None = None
+    action_line = ""  # the newest action's line itself, which a reader's ref must match
+
+    @property
+    def lost_action_line(self) -> bool:
+        return self._action_line_at == -1
+
+    @property
+    def lost_error(self) -> bool:
+        return self._error_at == -1
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # open it now, as FileHandler.emit would, so that this record is measured too
+        if self.stream is None and (self.mode != "w" or not getattr(self, "_closed", False)):
+            try:
+                self.stream = self._open()
+            except OSError:
+                pass  # FileHandler.emit tries again, as it always has
+        try:
+            # where this record will start; asked of the file itself, since the
+            # stream's own position goes stale after a cut
+            before = os.fstat(self.stream.fileno()).st_size if self.stream else None
+        except (OSError, ValueError):
+            before = None
+        super().emit(record)
+        if before is not None:
+            message = getattr(record, "message", "")
+            if message.startswith(" >> "):
+                self._action_line_at, self._error_at = before, None
+                self.action_line = message
+            if (
+                record.levelname == "ERROR"
+                and self._action_line_at is not None
+                and self._error_at is None
+            ):
+                self._error_at = before
+        try:
+            cut = self._keep_the_end(before)
+        except (OSError, ValueError):
+            return  # the file stays as it is; the next record tries again
+        if cut:
+            self._action_line_at = self._moved_by(cut, self._action_line_at)
+            self._error_at = self._moved_by(cut, self._error_at)
+
+    @staticmethod
+    def _moved_by(cut: int, at: int | None) -> int | None:
+        return at if at is None or at < 0 else max(-1, at - cut)
+
+    def _keep_the_end(self, newest: int | None = None) -> int:
+        """Cut the file if it is past the limit; newest is where the newest record
+        starts. Returns how many bytes were cut from the start."""
+        if self.stream is None:
+            return 0
+        size = os.fstat(self.stream.fileno()).st_size
+        if size <= ACTION_LOG_MAX_BYTES:
+            return 0
+        with open(self.baseFilename, "rb+") as fp:
+            if newest is None or not 0 <= newest < size:
+                # not measured: take the last line for the newest record
+                newest = fp.read().rfind(b"\n", 0, size - 1) + 1
+            # Keep from the first whole line in the last ACTION_LOG_KEEP_BYTES, and
+            # never from inside the newest record, which may be more than one line.
+            want = size - ACTION_LOG_KEEP_BYTES
+            if want >= newest:
+                # the newest record alone is longer than what is kept: keep all of it,
+                # and up to ACTION_LOG_KEEP_BYTES of whole lines before it, where its
+                # action's own " >> " line is
+                want = newest - ACTION_LOG_KEEP_BYTES
+            if want <= 0:
+                return 0
+            fp.seek(want - 1)
+            line_end = fp.read(newest - want + 1).find(b"\n")
+            start = newest if line_end < 0 else want + line_end
+            fp.seek(start)
+            end = fp.read()
+            fp.seek(0)
+            fp.write(end)
+            fp.truncate()
+        return start
+
+
 async def _configure_logging(logging_level: str) -> None:
     """Helper to configure logging handlers and levels."""
     # Define loggers
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     log.default_handler.setFormatter(formatter)
-    # Action file logger
-    file_logger = logging.FileHandler(str(emhass_conf["data_path"] / action_log_str))
+    # Action file logger. A second start in one process (python -m emhass.web_server
+    # runs initialize() from main() and again before serving) replaces the handler
+    # of the same file rather than adding one: two would write every line twice and
+    # each miss the other's cuts of the file.
+    action_log_path = str(emhass_conf["data_path"] / action_log_str)
+    for old in [
+        handler
+        for handler in app.logger.handlers
+        if isinstance(handler, logging.FileHandler)
+        and handler.baseFilename == os.path.abspath(action_log_path)
+    ]:
+        app.logger.removeHandler(old)
+        old.close()
+    file_logger = _ActionLogHandler(action_log_path)
     formatter = logging.Formatter("%(levelname)s - %(name)s - %(message)s")
     file_logger.setFormatter(formatter)  # add format to Handler
     file_logger.addFilter(_not_from_a_dry_run)
