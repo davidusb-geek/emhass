@@ -60,7 +60,7 @@ The **secrets** parameters are:
 
 - `hass_url`: The URL to your Home Assistant instance. For example: https://homeassistant.invalid:8123/ (a placeholder, replace it with your own)
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
-- `emhass_api_token`: The token the EMHASS web API requires (at least 16 characters; optional: if it is not set EMHASS generates one). See [API authentication](api_authentication.md).
+- `emhass_api_token`: The token the EMHASS web API requires (at least 16 characters, and not a placeholder value from the example file or the docs; optional: if it is not set EMHASS generates one). See [API authentication](api_authentication.md).
 - `time_zone`: The time zone of your system. For example: Europe/Paris.
 - `Latitude`: The latitude. For example: 45.0.
 - `Longitude`: The longitude. For example: 6.0

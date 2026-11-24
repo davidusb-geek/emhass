@@ -394,7 +394,9 @@ async def _participant_service_for_params():
         params is None
         or not isinstance(params["optim_conf"].get("participant_api"), dict)
         or not token
+        or not api_auth.is_text(token)
         or len(token) < api_auth.MIN_LENGTH
+        or api_auth.is_example_token(token)
         or _web_workers() > 1
     ):
         return None
@@ -1445,11 +1447,16 @@ async def participant_v1(op: str):
     token = params_secrets.get("participant_token")
     if not token:
         return await _problem(*refused, "set participant_token in the secrets")
+    if not api_auth.is_text(token):
+        return await _problem(*refused, "participant_token must be valid text")
     if len(token) < api_auth.MIN_LENGTH:
         # as the API token: a short token is guessable, so it is not served
         return await _problem(
             *refused, f"participant_token must be at least {api_auth.MIN_LENGTH} characters"
         )
+    if api_auth.is_example_token(token):
+        # as the API token: a value published in the docs is known to everyone
+        return await _problem(*refused, "participant_token is a published placeholder value")
     presented = request.headers.get("Authorization", "").encode()
     if not hmac.compare_digest(presented, f"Bearer {token}".encode()):
         # Before any file or body is read: a caller without the token learns

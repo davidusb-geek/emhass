@@ -66,8 +66,12 @@ disable generation: EMHASS then answers `503` until you configure a token (Home 
 
 **Rules.** At least 16 characters (use a long random value, for example `openssl rand -base64 32`; URL-safe characters
 are safest). A source that exists but cannot be used (unreadable, broken YAML or JSON, a number instead of text, the key
-twice) makes every request except `/healthz` answer `503`; it never falls back to running open. Changing the token needs
-a restart, and signs out all browser sessions.
+twice) makes every request except `/healthz` answer `503`; it never falls back to running open. So does a token in force
+(the source that wins) that is a copy of a placeholder value published in the example file or this documentation, such
+as `replace-with-a-long-random-value`, since everyone who reads the example knows it. A copy is a token that contains
+one, ignoring case, quotes, spaces and separators, and fewer than 16 other ASCII letters and digits once the words
+`Authorization` and `Bearer` are left out. Both rules apply even with `EMHASS_API_AUTH_DISABLED=true`: fix the token,
+or remove it, and restart. Changing the token needs a restart, and signs out all browser sessions.
 
 ```{warning}
 With Docker, keep the data folder: `-v /emhass/data:/data`. Without it, a container started with `--rm` forgets
@@ -151,7 +155,7 @@ user's browser, another add-on or container on the same host, a local process on
 | Area | Control | Residual risk |
 |---|---|---|
 | Routes | one `before_request` hook, default closed; only `/healthz`, `/login`, `/logout` are open; tests enumerate every route in the URL map, unauthenticated on the API port and as a stranger on the ingress port, and pin the open list | a future route is protected automatically; on the ingress port the three open endpoints still answer anyone |
-| Token | 16+ characters; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a Home Assistant administrator through ingress, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
+| Token | 16+ characters, no published placeholder value; constant-time comparison; never logged, placed in runtime parameters or sent in an error or a response, except `/api-token` (a Home Assistant administrator through ingress, opened as a page, never to a script); every log record masks it | a token given under a wrong key name, or cut by code that edits a value before logging, can escape the mask (the known cases are fixed) |
 | No token | generated and persisted (written to a temporary file, flushed and hard-linked into place, so it appears complete or not at all; on a file system without hard links an exclusive create is used and a crash can leave an empty file, which is replaced when EMHASS next starts at least 10 seconds after the crash; a restart inside those 10 seconds answers `503` until it is restarted again), else `503`; never open | whoever can read the data folder can read the token. On POSIX the file is mode `0600`; **on Windows it is not restricted to its owner** (a warning is logged when it is generated): set `EMHASS_API_TOKEN` there |
 | Bearer vs cookie | bearer works everywhere; cookie is for browsers | a copied cookie works until it expires or EMHASS restarts |
 | CSRF | `SameSite=Strict`; cookie and ingress requests that change something must be JSON; the existing `Sec-Fetch-Site: cross-site` refusal | none known; `SameSite` ignores ports, which is why JSON is also required |
