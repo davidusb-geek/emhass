@@ -1673,7 +1673,12 @@ def optimize(
         )
         # EMHASS's own solver time limit, for each coordinator run (the plan, then
         # the one for the saving split): past it, the best plan so far is kept
-        budget = float(oc.get("lp_solver_timeout", 45) or 45)
+        # (within utils.PARAM_BOUNDS: a value saved before the bounds is clamped to them)
+        from emhass import utils
+
+        budget = utils.bounded_solver_option(
+            "lp_solver_timeout", oc.get("lp_solver_timeout", 45) or 45, 45, opt.logger
+        )
         run_kw = {**run_kw, "max_seconds": budget}
         try:
             r = co.run(**run_kw)

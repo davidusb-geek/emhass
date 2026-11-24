@@ -319,16 +319,20 @@
   "System": {
     "optimization_time_step": {
       "friendly_name": "Optimization steps per minute (timesteps)",
-      "Description": "The time step to resample retrieved data from hass. This parameter is given in minutes. It should not be defined too low or you will run into memory problems when defining the Linear Programming optimization. Defaults to 30",
+      "Description": "The time step to resample retrieved data from hass. This parameter is given in minutes. It should not be defined too low or you will run into memory problems when defining the Linear Programming optimization. Defaults to 30. A whole number from 1 to 1440. With the default typical load forecast (load_forecast_method typical) a run needs a step at which the 30-minute typical profile, resampled to the step, has a value at every forecast time; at any other step the run gets a 400. 20, 30 and 60 minutes run; 7, 45, 61, 90, 120 and 1440 minutes, for example, do not. Send load_power_forecast as a list at run time for those. A load_cost_forecast or prod_price_forecast given as a list (or read from a file) needs at least two time steps (delta_forecast_daily x 1440 / optimization_time_step), or the run gets a 400: a step of 1440 minutes with delta_forecast_daily 1 has one, and runs only with the other forecasts.",
       "input": "int",
       "default_value": 30,
+      "minimum": 1,
+      "maximum": 1440,
       "unit": "min"
     },
     "historic_days_to_retrieve": {
       "friendly_name": "Historic days to retrieve",
-      "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2",
+      "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2. A whole number from 0 to 730.",
       "input": "int",
       "default_value": 2,
+      "minimum": 0,
+      "maximum": 730,
       "unit": "days"
     },
     "load_negative": {
@@ -355,9 +359,11 @@
     },
     "delta_forecast_daily": {
       "friendly_name": "Number of forecasted days",
-      "Description": "The number of local calendar days covered by forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. This is not a fixed 24-hour duration: the timestep count follows the configured timezone (normally 24 hours, 23 across spring-forward and 25 across fall-back). If a nominal calendar-day endpoint falls in a skipped or repeated wall-clock interval, EMHASS resolves it deterministically using the timezone transition. For naive-mpc, the forecast window is extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs.",
+      "Description": "The number of local calendar days covered by forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. This is not a fixed 24-hour duration: the timestep count follows the configured timezone (normally 24 hours, 23 across spring-forward and 25 across fall-back). If a nominal calendar-day endpoint falls in a skipped or repeated wall-clock interval, EMHASS resolves it deterministically using the timezone transition. For naive-mpc, the forecast window is extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs. A whole number from 1 to 5760; with optimization_time_step it may give at most 5760 time steps in all (days x 1440 / optimization_time_step), on a request and on a save.",
       "input": "int",
       "default_value": 1,
+      "minimum": 1,
+      "maximum": 5760,
       "unit": "days"
     },
     "load_forecast_method": {
@@ -377,16 +383,18 @@
     },
     "num_threads": {
       "friendly_name": "Number of threads to use for the LP solver",
-      "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
+      "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0, which passes no thread count: HiGHS then uses its own default, about half the logical cores. A whole number from 0 to the number of cores of the machine EMHASS runs on, and at most 64. HiGHS sizes one thread pool per process at its first solve, so a later solve that sets a different count fails; 0 always runs. The memory a problem with binary variables takes grows with the threads; on a small machine, set it to 1 or 2.",
       "input": "int",
       "default_value": 0,
+      "minimum": 0,
       "unit": "count"
     },
     "lp_solver_timeout": {
       "friendly_name": "Linear programming solver timeout",
-      "Description": "Set the maximum time (in seconds) for the LP solver. Defaults to 45.",
+      "Description": "Set the maximum time (in seconds) for the LP solver. Defaults to 45. A number above 0 and at most 300.",
       "input": "int",
       "default_value": 45,
+      "maximum": 300,
       "unit": "s"
     },
     "lp_solver_mip_rel_gap": {
@@ -394,6 +402,8 @@
       "Description": "For mixed-integer problems (with binary variables), the solver stops when the solution is within this percentage of optimal. Valid range: 0 to 1 (0% to 100%). Higher values (e.g., 0.05 = 5%) solve faster with minimal quality loss. Defaults to 0.01 (within 1% of optimal), which keeps deep-horizon problems from timing out without a published plan. Set to 0 for exact optimal.",
       "input": "float",
       "default_value": 0.01,
+      "minimum": 0,
+      "maximum": 1,
       "unit": "fraction"
     },
     "maximum_power_from_grid": {
@@ -747,9 +757,11 @@
   "Deferrable Loads": {
     "number_of_deferrable_loads": {
       "friendly_name": "Number of deferrable loads",
-      "Description": "Define the number of deferrable loads (appliances to shift) to consider. Defaults to 2.",
+      "Description": "Define the number of deferrable loads (appliances to shift) to consider. Defaults to 2. At most 100. Each load and each battery in use counts against a budget of 100000 in all: (deferrable loads + batteries in use) x the time steps of one solve (prediction_horizon for naive-mpc-optim, else delta_forecast_daily x 1440 / optimization_time_step), on a request and on a save. A request that gives no more than the saved configuration gives over its own forecast grid is judged as the saved configuration is (warned, and refused over four times the budget); a naive-mpc-optim horizon is measured against that grid too. Per-load numbers (powers, hours, time steps, startup penalty, max cost, startups) must be finite and at most 1e15 in size, the powers not negative, the time steps and startups whole; each entry of the per-load flags true or false, or 1 or 0 (a request may also give the text true or false); a per-load number may not be true or false. A save that breaks one gets a 400 naming the key; a value saved before and sent back unchanged is kept.",
       "input": "int",
       "default_value": 2,
+      "minimum": 0,
+      "maximum": 100,
       "unit": "count"
     },
     "nominal_power_of_deferrable_loads": {
@@ -828,16 +840,20 @@
     },
     "def_minimum_on_time": {
       "friendly_name": "Minimum ON-time for deferrable loads",
-      "Description": "Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (min-up-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum run). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, pumps) where the ON/OFF binary is tightly coupled to the full nominal power. For plain/continuous-power loads the constraint holds the binary state ON but the power level may be fractional. Composes cleanly with set_deferrable_max_startups (independent constraints). Note: when the minimum ON window cannot fit within the load's operating-window end, the solver simply does not start the load for that horizon rather than forcing infeasibility.",
+      "Description": "Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (min-up-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum run). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, pumps) where the ON/OFF binary is tightly coupled to the full nominal power. For plain/continuous-power loads the constraint holds the binary state ON but the power level may be fractional. Composes cleanly with set_deferrable_max_startups (independent constraints). Note: when the minimum ON window cannot fit within the load's operating-window end, the solver simply does not start the load for that horizon rather than forcing infeasibility. Each entry is at most 5760. With def_minimum_off_time, at most 5000000 terms in all, on a request and on a save: for each load, the time steps of one solve x the smaller of its minimum time and those time steps (the constraints grow with both). The count is on the safe side: it takes in every load but a sequence one, also those the optimizer adds no minimum time constraints for (a load that is not semi-continuous and has no minimum power or startup penalty, and a single-constant load, which the relaxed retry after a failed solve builds them for), and it counts each step's window as a whole minimum time where the optimizer cuts the windows at the horizon end, so it can be up to twice the terms the solve has. A request that gives no more terms than the saved configuration gives over its own forecast grid is judged as the saved configuration is (warned, and refused over four times the bound); a naive-mpc-optim horizon is measured against that grid too.",
       "input": "array.int",
       "default_value": 0,
+      "minimum": 0,
+      "maximum": 5760,
       "unit": "timesteps"
     },
     "def_minimum_off_time": {
       "friendly_name": "Minimum OFF-time for deferrable loads",
-      "Description": "Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (min-down-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum off-time). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, compressors) where rapid ON-OFF-ON cycling causes wear or violates manufacturer limits. Composes cleanly with def_minimum_on_time and set_deferrable_max_startups (independent constraints). Note: when the minimum OFF window cannot fit within the remaining horizon, the solver simply defers the next start; the problem stays Optimal. Excludes single-constant and sequence loads (same gating as def_minimum_on_time).",
+      "Description": "Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (min-down-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum off-time). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, compressors) where rapid ON-OFF-ON cycling causes wear or violates manufacturer limits. Composes cleanly with def_minimum_on_time and set_deferrable_max_startups (independent constraints). Note: when the minimum OFF window cannot fit within the remaining horizon, the solver simply defers the next start; the problem stays Optimal. Excludes single-constant and sequence loads (same gating as def_minimum_on_time). Each entry is at most 5760. With def_minimum_on_time, at most 5000000 terms in all, on a request and on a save: for each load, the time steps of one solve x the smaller of its minimum time and those time steps (the constraints grow with both). The count is on the safe side: it takes in every load but a sequence one, also those the optimizer adds no minimum time constraints for (a load that is not semi-continuous and has no minimum power or startup penalty, and a single-constant load, which the relaxed retry after a failed solve builds them for), and it counts each step's window as a whole minimum time where the optimizer cuts the windows at the horizon end, so it can be up to twice the terms the solve has. A request that gives no more terms than the saved configuration gives over its own forecast grid is judged as the saved configuration is (warned, and refused over four times the bound); a naive-mpc-optim horizon is measured against that grid too.",
       "input": "array.int",
       "default_value": 0,
+      "minimum": 0,
+      "maximum": 5760,
       "unit": "timesteps"
     },
     "start_timesteps_of_each_deferrable_load": {
@@ -872,7 +888,7 @@
     },
     "number_of_batteries": {
       "friendly_name": "Number of batteries",
-      "Description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. At most 100.",
+      "Description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. At most 100. With set_use_battery, each load and each battery in use counts against a budget of 100000 in all: (deferrable loads + batteries in use) x the time steps of one solve (prediction_horizon for naive-mpc-optim, else delta_forecast_daily x 1440 / optimization_time_step), on a request and on a save.",
       "input": "int",
       "default_value": 1,
       "minimum": 1,

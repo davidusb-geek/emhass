@@ -180,8 +180,11 @@ def _widen_mask(mask: np.ndarray, margin: int) -> np.ndarray:
     Curtailment ramps in and out, so the steps either side of a flagged one are
     often partly capped as well. Widening is by array *position*, not by
     timestamp, so on a history with gaps the neighbours dropped are the adjacent
-    rows rather than the adjacent moments in time.
+    rows rather than the adjacent moments in time. A margin of the mask's length or
+    more widens no further than one row short of it, so the loop is bounded by the
+    history, not by the margin.
     """
+    margin = min(margin, mask.size - 1)
     if margin <= 0:
         return mask
     widened = mask.copy()

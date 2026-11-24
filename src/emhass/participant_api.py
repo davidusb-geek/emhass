@@ -183,10 +183,11 @@ async def build_session(
     if abs(window.step_minutes - step) > 1e-9:
         raise WindowRefused(f"this EMHASS plans {step:g}-minute slots, not {window.step_minutes:g}")
     n = window.slots
-    if n < 1 or n * step > MAX_HORIZON_MINUTES:
-        raise WindowRefused(
-            f"this EMHASS plans 1 to {int(MAX_HORIZON_MINUTES // step)} slots, not {n}"
-        )
+    # At most a week, and at most the time steps any run may have (utils.MAX_TIME_STEPS):
+    # the window becomes this EMHASS's prediction_horizon
+    most = min(int(MAX_HORIZON_MINUTES // step), utils.MAX_TIME_STEPS)
+    if n < 1 or n > most:
+        raise WindowRefused(f"this EMHASS plans 1 to {most} slots, not {n}")
     runtime = {
         "prediction_horizon": n,
         "pv_power_forecast": [0.0] * n,

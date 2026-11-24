@@ -1484,7 +1484,12 @@ def test_a_dry_run_that_raises_answers_500_with_its_error():
     assert dry_status == 500
     assert live_status == 200
     _conforms(dry_body)
-    assert any("solver crashed" in e for e in dry_body["errors"])
+    # The error is named by its type and place, never its text
+    assert any(
+        e.startswith("Dry run of naive-mpc-optim failed (RuntimeError at ")
+        for e in dry_body["errors"]
+    )
+    assert not any("solver crashed" in e for e in dry_body["errors"])
 
 
 def _closed_loopback_port() -> int:
@@ -1762,6 +1767,20 @@ def test_a_known_backend_and_a_valid_site_pass():
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
     # documented as future work, not offered: it says so and the default solver plans
     assert "later release" in _coordinated_config_problem({"optimization_backend": "admm"})
+
+
+def test_an_unknown_saved_backend_is_not_copied_into_the_plan():
+    """A saved backend EMHASS does not know is not written into every row as it is:
+    the reason and backend_requested are fixed text."""
+    rows = pd.DataFrame({"x": range(96)})
+    out = optimization._with_backend(rows.copy(), "B" * 5000, "reason")
+    assert (out["backend_requested"] == "unknown").all()
+    assert (out["backend_used"] == "cvxpy").all()
+    out = optimization._with_backend(rows.copy(), "dantzig_wolfe", None)
+    assert (out["backend_requested"] == "dantzig_wolfe").all()
+    reason = _coordinated_config_problem({"optimization_backend": "B" * 5000})
+    assert reason == "unknown backend (known: cvxpy, dantzig_wolfe)"
+    assert _BACKENDS == utils.OPTIMIZATION_BACKENDS
 
 
 def test_a_remote_solver_comes_from_the_configuration_only():

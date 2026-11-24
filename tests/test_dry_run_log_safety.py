@@ -9,6 +9,7 @@ Unicode line separator would forge a log line or drive the terminal.
 import asyncio
 import json
 import logging
+import re
 import urllib.parse
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
@@ -21,6 +22,10 @@ from emhass.utils import InverterConfigError
 FORMAT_CHARS = tuple(map(chr, (0x202E, 0x200B, 0xFEFF)))
 HOSTILE = "x\r\nERROR - forged\x1b[31m\x7f\u2028\u2029\x85\t\x00" + "".join(FORMAT_CHARS)
 SPECIALS = ("\r", "\n", "\x1b", "\x7f", "\u2028", "\u2029", "\x85", "\t", "\x00", *FORMAT_CHARS)
+# The fixed line of a dry run that failed: the error's type and place, never its text
+FAILED = re.compile(
+    r"Dry run of naive-mpc-optim failed \((\w+) at web_server\.py:\d+\); see the log"
+)
 
 
 class _Capture(logging.Handler):
@@ -87,7 +92,8 @@ def test_failure_before_validation_logs_the_url_action_name_safely(logged):
         response = _post(HOSTILE + "A" * 2000)
     assert response.status_code == 500
     _assert_single_safe_line(logged)
-    assert any(m.startswith("Dry run of ") and "failed: disk" in m for m in logged)
+    assert any(m.startswith("Dry run of ") and "failed (RuntimeError at " in m for m in logged)
+    assert not any("disk" in m for m in logged)
 
 
 def test_exception_text_from_the_request_is_logged_safely(logged):
@@ -110,7 +116,9 @@ def test_ordinary_messages_keep_their_wording(logged):
         web_server, "_dry_run", AsyncMock(side_effect=RuntimeError("solver crashed: ça va"))
     ):
         _post("naive-mpc-optim")
-    assert "Dry run of naive-mpc-optim failed: solver crashed: ça va" in logged
+    failed = [m for m in logged if FAILED.fullmatch(m)]
+    assert len(failed) == 1 and FAILED.fullmatch(failed[0]).group(1) == "RuntimeError"
+    assert not any("solver crashed" in m for m in logged)
     logged.clear()
     _post("bogus-action")
     assert any(
@@ -126,7 +134,9 @@ def test_response_body_still_reports_the_failure():
         body = asyncio.run(response.get_json())
     assert response.status_code == 500
     assert body["status"] == "not-run"
-    assert any("boom" in e for e in body["errors"])
+    # The failure is reported with fixed text: its type and place, not its message
+    assert len(body["errors"]) == 1 and FAILED.fullmatch(body["errors"][0])
+    assert not any("boom" in e for e in body["errors"])
 
 
 class _Formatted(logging.Handler):
@@ -195,7 +205,10 @@ def test_formatted_traceback_drops_hostile_chained_exception_text(formatted):
 def test_ordinary_exception_keeps_type_message_and_frames(formatted):
     _failing_dry_run(KeyError("sensor_x"))
     text = formatted[0]
-    assert text.startswith("ERROR - emhass.web_server - Dry run of naive-mpc-optim failed: ")
+    first = text.splitlines()[0]
+    assert first.startswith("ERROR - emhass.web_server - Dry run of naive-mpc-optim failed ")
+    assert FAILED.fullmatch(first.removeprefix("ERROR - emhass.web_server - "))
+    # The console log keeps the error's text in the traceback
     assert "Traceback (most recent call last):" in text
     assert "web_server.py" in text and "api_v1_dry_run" in text
     assert text.splitlines()[-1] == "KeyError: 'sensor_x'"
@@ -308,21 +321,21 @@ def test_ordinary_error_response_is_unchanged():
         response = _post("naive-mpc-optim")
     body = asyncio.run(response.get_json())
     assert response.status_code == 500
-    assert body["errors"] == ["Dry run of naive-mpc-optim failed: solver crashed"]
+    assert len(body["errors"]) == 1 and FAILED.fullmatch(body["errors"][0])
+    assert "solver crashed" not in body["errors"][0]
     assert {"dry_run", "action", "status", "plan", "warnings", "errors"} <= set(body)
     assert body["status"] == "not-run" and body["plan"] is None
 
 
-def test_oversized_error_text_is_bounded_in_the_response_and_stays_intelligible():
+def test_oversized_error_text_is_left_out_of_the_response():
     boom = ValueError("first line\n" + "z" * 5000)
     with patch.object(web_server, "_dry_run", AsyncMock(side_effect=boom)):
         response = _post("naive-mpc-optim")
     body = asyncio.run(response.get_json())
     assert response.status_code == 500 and len(body["errors"]) == 1
     message = body["errors"][0]
-    assert message.startswith("Dry run of naive-mpc-optim failed: first line")
-    assert message.endswith("...[truncated]") and "\n" not in message
-    assert len(message) < 200 * 4 + 120
+    assert FAILED.fullmatch(message) and FAILED.fullmatch(message).group(1) == "ValueError"
+    assert "first line" not in message and "z" * 10 not in message
 
 
 @pytest.mark.parametrize(

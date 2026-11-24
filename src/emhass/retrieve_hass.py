@@ -3441,7 +3441,7 @@ class RetrieveHass:
                         "unit_of_measurement": unit_of_measurement,
                         "friendly_name": friendly_name,
                         "type_var": type_var,
-                        "optimization_time_step": int(self.freq.seconds / 60),
+                        "optimization_time_step": int(self.freq.total_seconds() / 60),
                     }
                     if extra_attributes:
                         metadata[entity_id]["attributes"] = extra_attributes
@@ -3449,8 +3449,8 @@ class RetrieveHass:
                     # Find lowest frequency to set for continual loop freq
                     if metadata.get("lowest_time_step") is None or metadata[
                         "lowest_time_step"
-                    ] > int(self.freq.seconds / 60):
-                        metadata["lowest_time_step"] = int(self.freq.seconds / 60)
+                    ] > int(self.freq.total_seconds() / 60):
+                        metadata["lowest_time_step"] = int(self.freq.total_seconds() / 60)
 
                     # Atomic commit: write to a per-process temp file then
                     # os.replace, so a concurrent reader always sees a complete
