@@ -7666,6 +7666,12 @@ async def build_secrets(
                     if options.get(key, "empty") != "empty" and options[key] != "":
                         params_secrets[key] = options[key]
 
+            # The web server's API token from options.json: api_auth reads it on
+            # its own, but the command line does not load api_auth - remembered,
+            # never put in the secrets, so it is never sent as a remote's token
+            api_token = options.get("emhass_api_token")
+            if isinstance(api_token, str) and api_token.strip():
+                _own_api_tokens.add(api_token.strip())
             _participant_secrets_from_options(options, params_secrets, logger)
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)

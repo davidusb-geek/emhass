@@ -1753,6 +1753,40 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             {"garage_token": "garage-token-0123456789"},
         )
 
+    async def test_an_api_token_in_options_is_never_sent_as_a_remotes_token(self):
+        """The command line does not load api_auth: an emhass_api_token set
+        only in options.json is still never sent as a remote's token, and is
+        kept out of the secrets."""
+        self.enterContext(patch.object(utils, "_own_api_tokens", set()))
+        self.enterContext(patch("emhass.api_auth.current_token", return_value=None))
+        options = {
+            "emhass_api_token": "the-api-token-0123456789",
+            "remote_solver_tokens": [{"name": "garage_token", "token": "the-api-token-0123456789"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            options_path = pathlib.Path(tmp) / "options.json"
+            options_path.write_text(json.dumps(options))
+            _, secrets = await utils.build_secrets(
+                emhass_conf,
+                logger,
+                options_path=str(options_path),
+                secrets_path="",
+                no_response=True,
+            )
+        self.assertNotIn("emhass_api_token", secrets)
+        site = [
+            {"id": "grid"},
+            {
+                "id": "garage",
+                "parent": "grid",
+                "solver": {"url": "https://garage.lan/participant", "token_secret": "garage_token"},
+            },
+        ]
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        self.assertNotIn("remote_tokens", params["retrieve_hass_conf"])
+
     async def test_build_secrets_without_participant_options_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             options_path = pathlib.Path(tmp) / "options.json"
