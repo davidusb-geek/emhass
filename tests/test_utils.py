@@ -2264,6 +2264,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         ts_list = [ts.isoformat() for ts in idx]
 
         class _FakeResp:
+            status = 200
+
             def __init__(self, payload):
                 self._payload = payload
 
@@ -2427,6 +2429,74 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         # Verify use_influxdb was forced False on the RetrieveHass fallback params
         passed_params = rh_cls.call_args[0][4]
         self.assertFalse(passed_params["retrieve_hass_conf"]["use_influxdb"])
+
+    async def test_thermal_influx_reader_refuses_a_redirect(self):
+        # Two loopback servers: the configured one redirects to the other
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        import aiohttp
+
+        reached = []
+
+        class Target(BaseHTTPRequestHandler):
+            def do_GET(self):
+                reached.append(self.headers.get("Authorization"))
+                body = b'{"results": [{}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        target = HTTPServer(("127.0.0.1", 0), Target)
+
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(307)
+                self.send_header("Location", f"http://127.0.0.1:{target.server_port}/query")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+        for server in (target, redirector):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+        idx = pd.date_range("2026-11-19 00:00", periods=4, freq="30min", tz="UTC")
+        rh_conf = {
+            "influxdb_host": "127.0.0.1",
+            "influxdb_port": redirector.server_port,
+            "influxdb_username": "user",
+            "influxdb_password": "password",  # pragma: allowlist secret
+        }
+        with (
+            patch.dict(os.environ),
+            self.assertRaises(aiohttp.ClientResponseError) as caught,
+        ):
+            os.environ.pop("INFLUXDB_USERNAME", None)
+            os.environ.pop("INFLUXDB_PASSWORD", None)
+            await utils._fetch_influx_thermal_window(
+                rh_conf,
+                "sensor.t_in",
+                "sensor.t_out",
+                "",
+                "",
+                "",
+                idx[0],
+                idx[-1],
+                30,
+                1000.0,
+                logger,
+            )
+        self.assertEqual(caught.exception.status, 307)
+        self.assertEqual(reached, [])
 
     def test_ui_charts_edge_cases_and_quantile_variants(self):
         idx = pd.date_range("2026-11-19 00:00", periods=6, freq="30min", tz="UTC")

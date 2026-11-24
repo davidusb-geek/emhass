@@ -67,6 +67,8 @@ from emhass.utils import (
     compile_heat_topology,
     compute_thermal_model_calibration,
     config_value_faults,
+    db_endpoint_changes,
+    db_flag,
     dry_run_request_problem,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
@@ -78,6 +80,7 @@ from emhass.utils import (
     param_to_config,
     read_flag,
     replace_file,
+    stored_db_logins,
     try_lock_file,
     unlock_file,
 )
@@ -738,6 +741,176 @@ async def json_convert():
     return response
 
 
+DB_SERVER_CHANGE_REFUSED = (
+    "The server of a database whose login is stored (its host or port, or turning SSL or "
+    "certificate checks off, or a different CA file) can only be changed in config.json "
+    "followed by a restart, or by an administrator in the EMHASS web UI opened from the "
+    "Home Assistant sidebar. Turning SSL or certificate checks on is allowed; turning them "
+    "off again needs one of those two. Nothing was saved"
+)
+# The settings that may hold the path of a CA bundle in a hand-written config.json
+_DB_CA_PATH_KEYS = ("influxdb_verify_ssl", "victoriametrics_verify_ssl")
+SAVED_PARAMS_UNREADABLE = (
+    "The saved settings cannot be read; restart EMHASS, which rebuilds them, then save "
+    "again. Nothing was saved"
+)
+
+
+async def _read_saved_params() -> dict | None:
+    """The params in params.pkl, or None when it is missing or cannot be read, or its
+    retrieve_hass_conf is not a dict."""
+    from emhass import participant_api
+
+    try:
+        params = await participant_api.read_params(emhass_conf)
+    except participant_api.ConfigUnreadable:
+        return None
+    if not isinstance(params, dict):
+        return None
+    if not isinstance(params.get("retrieve_hass_conf", {}), dict):
+        return None
+    return params
+
+
+def _ca_paths(conf) -> dict[str, str]:
+    """The CA paths (non-empty texts) in the ``*_verify_ssl`` settings of ``conf``."""
+    if not isinstance(conf, dict):
+        return {}
+    return {
+        key: conf[key] for key in _DB_CA_PATH_KEYS if isinstance(conf.get(key), str) and conf[key]
+    }
+
+
+async def _config_json_ca_paths() -> dict[str, str] | None:
+    """The CA paths written in config.json; None when it cannot be read, or holds no
+    JSON object, which says nothing about them."""
+    try:
+        async with aiofiles.open(str(emhass_conf["config_path"]), "rb") as fp:
+            written = orjson.loads(await fp.read())
+    except (OSError, orjson.JSONDecodeError):
+        return None
+    if not isinstance(written, dict):
+        return None
+    return _ca_paths(written)
+
+
+def _config_json_is_newer() -> bool:
+    """True when config.json was written after params.pkl: edited by hand since the last
+    start or save, which write config.json first."""
+    try:
+        written = os.stat(emhass_conf["config_path"]).st_mtime_ns
+        built = os.stat(emhass_conf["data_path"] / params_file).st_mtime_ns
+    except OSError:
+        return False
+    return written > built
+
+
+async def _saved_ca_paths(saved: dict | None) -> dict[str, str]:
+    """The CA paths a save keeps: those in params.pkl (``saved``), or in config.json when
+    params.pkl cannot be read or config.json was edited by hand after it. A config.json
+    that cannot be read or parsed says nothing about them: the params.pkl ones are kept,
+    so a typo in a hand edit does not turn a pinned CA into the default CAs."""
+    if saved is None or _config_json_is_newer():
+        written = await _config_json_ca_paths()
+        if written is not None:
+            return written
+        if saved is None:
+            return {}
+    return _ca_paths(saved.get("retrieve_hass_conf"))
+
+
+async def _take_resent_ca_paths_as_true(request_data: dict) -> None:
+    """A posted ``*_verify_ssl`` text equal to the saved CA path counts as true (unchanged).
+
+    GET /get-config returns the path, and the web UI's JSON view or an API client posts
+    it back as it is. config_value_faults would refuse that text; as true it passes, and
+    _keep_saved_ca_paths keeps the saved path. Only the path _saved_ca_paths gives, the
+    one such a save keeps, matches: a text equal to the other file's path stays refused,
+    as does any other. True turns no check off, so nothing is weakened.
+    """
+    posted = {
+        key: request_data[key] for key in _DB_CA_PATH_KEYS if isinstance(request_data.get(key), str)
+    }
+    if not posted:
+        return
+    kept = await _saved_ca_paths(await _read_saved_params())
+    for key, value in posted.items():
+        if kept.get(key) == value:
+            request_data[key] = True
+
+
+def _keep_saved_ca_paths(saved_paths: dict[str, str], config: dict, new_params: dict) -> bool:
+    """Keep a CA bundle path saved in ``*_verify_ssl`` when a save sends true for it.
+
+    The web UI shows such a setting as a ticked checkbox, since it is on, and cannot show
+    the path, so each save from it sends true. Taking that as "the default CAs" would
+    drop the path the operator wrote into config.json. A save that sends false still
+    turns the check off. ``saved_paths`` is from _saved_ca_paths. Changes ``config``
+    (config.json) and ``new_params`` (params.pkl) in place; True when it kept one.
+    """
+    new_conf = new_params.get("retrieve_hass_conf")
+    if not isinstance(new_conf, dict):
+        return False
+    kept = False
+    for key in _DB_CA_PATH_KEYS:
+        path = saved_paths.get(key)
+        if path and new_conf.get(key) is True:
+            new_conf[key] = path
+            config[key] = path
+            kept = True
+    return kept
+
+
+def _ingress_administrator_may_move_db() -> bool:
+    """True for a Home Assistant administrator on the add-on's ingress, as Home Assistant
+    vouches for it: only in a real add-on (``SUPERVISOR_TOKEN`` is set) whose ingress peer
+    is the Supervisor's default address (``EMHASS_INGRESS_PEERS`` not set). Only there is
+    the peer known to be a Supervisor that adds the user headers and removes a client's
+    copy of them."""
+    if not os.environ.get("SUPERVISOR_TOKEN", "").strip():
+        return False
+    if api_auth.INGRESS_PEERS_ENV in os.environ:
+        return False
+    return api_auth.is_trusted_ingress_request() and api_auth.ha_administrator_request()
+
+
+async def _db_server_change_refusal(new_params: dict, saved: dict | None):
+    """A 400 when a save would move a database whose login is stored, else None.
+
+    The login stays in the secrets and goes to whatever server the saved settings name,
+    so a caller who may save settings but cannot read the login could otherwise have it
+    sent to a server of their choosing. A Home Assistant administrator on ingress already
+    manages the add-on options that hold it. Compared with the saved values, since the
+    web UI sends every field on each save. Called with the save lock held, so the saved
+    values cannot change between this check and the write. ``saved`` is what
+    _read_saved_params read under that lock.
+    """
+    logins = stored_db_logins(params_secrets)
+    if not logins:
+        return None
+    if _ingress_administrator_may_move_db():
+        return None
+    if saved is None:
+        # Nothing to compare with: the defaults would let any server through
+        app.logger.warning(
+            "Rejected config save: a database login is stored and the saved "
+            "parameters cannot be read to compare its server with"
+        )
+        return await make_response([SAVED_PARAMS_UNREADABLE], 400)
+    changed = db_endpoint_changes(
+        saved.get("retrieve_hass_conf") or {},
+        new_params.get("retrieve_hass_conf") or {},
+        logins,
+    )
+    if not changed:
+        return None
+    app.logger.warning(
+        "Rejected config save: it changes the server of %s, whose login is stored",
+        " and ".join(changed),
+    )
+    return await make_response([DB_SERVER_CHANGE_REFUSED], 400)
+
+
 @app.route("/set-config", methods=["POST"])
 async def parameter_set():
     """
@@ -850,7 +1023,9 @@ async def parameter_set():
         if unwritable is None:
             raise
         inverter_faults = []
-    # Settings that become a file name or a database host, checked before they are saved
+    # Settings that become a file name or a database host, checked before they are saved.
+    # A saved CA path posted back as it is counts as unchanged first.
+    await _take_resent_ca_paths_as_true(request_data)
     inverter_faults += config_value_faults(request_data)
     if inverter_faults:
         app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
@@ -895,8 +1070,27 @@ async def parameter_set():
             response.headers["Retry-After"] = "1"
             return response
         try:
-            await _write_config_json(emhass_conf["config_path"], config_content)
-            await replace_file(emhass_conf["data_path"] / params_file, params_content)
+            # Under the lock: against the params as they are when this save writes
+            saved = await _read_saved_params()
+            if _keep_saved_ca_paths(await _saved_ca_paths(saved), config, saved_params):
+                config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
+                params_content = pickle.dumps((emhass_conf["config_path"], saved_params))
+            refused = await _db_server_change_refusal(saved_params, saved)
+            if refused is not None:
+                return refused
+            # A file that cannot be replaced (no space, no permission, a folder in its
+            # place) gets a fixed answer, not an unhandled 500. config.json is written
+            # first, so when it fails neither file has changed
+            try:
+                await _write_config_json(emhass_conf["config_path"], config_content)
+            except OSError as e:
+                app.logger.error("Config save failed: config.json: %s", type(e).__name__)
+                return await make_response(["Unable to save config file"], 500)
+            try:
+                await replace_file(emhass_conf["data_path"] / params_file, params_content)
+            except OSError as e:
+                app.logger.error("Config save failed: params.pkl: %s", type(e).__name__)
+                return await make_response(["Unable to save params file"], 500)
         finally:
             unlock_file(slot)
 
@@ -2069,6 +2263,14 @@ async def _configure_logging(logging_level: str) -> None:
         file_logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(file_logger)
+    # The cause of a database failure goes to the console only, never to the action log
+    # (see retrieve_hass.db_detail_logger)
+    db_logger = logging.getLogger("emhass.database")
+    db_logger.addHandler(log.default_handler)
+    db_logger.propagate = False
+    db_logger.setLevel(
+        logging_level if logging_level in ("DEBUG", "INFO", "WARNING", "ERROR") else "DEBUG"
+    )
     # Clear Action File logger file, ready for new instance
     await clear_file_log()
 
@@ -2089,8 +2291,8 @@ async def _initialize_connections(params: dict) -> None:
     """Helper to initialize WebSocket or InfluxDB connections."""
     # Initialize persistent WebSocket connection only if use_websocket is enabled
     use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
-    use_influxdb = params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
-    use_victoriametrics = params.get("retrieve_hass_conf", {}).get("use_victoriametrics", False)
+    use_influxdb = db_flag(params.get("retrieve_hass_conf", {}), "use_influxdb")
+    use_victoriametrics = db_flag(params.get("retrieve_hass_conf", {}), "use_victoriametrics")
     # Initialize persistent WebSocket connection if enabled
     if use_websocket:
         app.logger.info("WebSocket mode enabled - initializing connection...")
