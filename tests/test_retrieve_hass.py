@@ -3650,7 +3650,7 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
                     df[[self.LOAD, self.PV]].to_numpy(), expected.to_numpy(), rtol=1e-12
                 )
 
-    async def test_a_step_that_divides_a_day_keeps_todays_frame(self):
+    async def test_a_step_that_divides_a_day_keeps_the_same_frame(self):
         """Steps that divide a day put every UTC midnight on the epoch grid, so the frame
         is exactly what resampling each day from its own midnight gives."""
         payloads = self._minute_payloads()
@@ -3741,41 +3741,44 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(counts.get(straddle), count)
 
     async def test_unavailable_half_of_the_bucket_across_midnight_with_a_reading(self):
-        """A straddling bucket with a reading on one side is observed, not unavailable."""
-        rh = self._rh("7min")
+        """A straddling bucket with a reading on one side is observed, not unavailable,
+        whether day 1 has an unavailable row in it or its frame stops before it."""
         days = pd.date_range("2026-02-19", periods=2, freq="D", tz="UTC")
         midnight = days[1]
-        straddle = midnight.floor(rh.freq)
-        payloads = {
-            (days[0].date(), self.LOAD): self._rows(
-                [
+        for day1_in_bucket in (True, False):
+            with self.subTest(day1_in_bucket=day1_in_bucket):
+                rh = self._rh("7min")
+                straddle = midnight.floor(rh.freq)
+                day1 = [
                     (days[0].isoformat(), "500"),
                     ((straddle - pd.Timedelta("10min")).isoformat(), "unavailable"),
-                    ((straddle + pd.Timedelta("1min")).isoformat(), "unavailable"),
                 ]
-            ),
-            (days[1].date(), self.LOAD): self._rows(
-                [
-                    (midnight.isoformat(), "unavailable"),
-                    ((midnight + pd.Timedelta("1min")).isoformat(), "510"),
-                ]
-            ),
-        }
-        with (
-            time_machine.travel(
-                datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
-            ),
-            patch.object(RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value={})),
-            patch.object(RetrieveHass, "_live_state_is_fresh", return_value=True),
-        ):
-            df = await self._get(rh, payloads, days=days, hold_unchanged_tail=True)
-        self.assertEqual(df[self.LOAD].get(straddle), 510.0)
-        listed = rh.unavailable_buckets[self.LOAD]
-        self.assertIn(straddle - rh.freq, listed)
-        self.assertNotIn(straddle, listed)
+                if day1_in_bucket:
+                    day1.append(((straddle + pd.Timedelta("1min")).isoformat(), "unavailable"))
+                payloads = {
+                    (days[0].date(), self.LOAD): self._rows(day1),
+                    (days[1].date(), self.LOAD): self._rows(
+                        [
+                            (midnight.isoformat(), "unavailable"),
+                            ((midnight + pd.Timedelta("1min")).isoformat(), "510"),
+                        ]
+                    ),
+                }
+                with (
+                    time_machine.travel(
+                        datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
+                    ),
+                    patch.object(RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value={})),
+                    patch.object(RetrieveHass, "_live_state_is_fresh", return_value=True),
+                ):
+                    df = await self._get(rh, payloads, days=days, hold_unchanged_tail=True)
+                self.assertEqual(df[self.LOAD].get(straddle), 510.0)
+                listed = rh.unavailable_buckets[self.LOAD]
+                self.assertIn(straddle - rh.freq, listed)
+                self.assertNotIn(straddle, listed)
 
-    def _process(self, rows, day, is_last_day, **kwargs):
-        rh = self._rh("7min")
+    def _process(self, rows, day, is_last_day, freq="7min", **kwargs):
+        rh = self._rh(freq)
         with time_machine.travel(
             datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
         ):
@@ -3816,6 +3819,21 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(found[0][-1], pd.Timestamp("2026-02-19 23:55", tz="UTC"))
         self.assertTrue(self._on_epoch_grid(found[0], rh.freq))
+
+    def test_outage_at_the_end_of_a_past_day_at_a_step_that_divides_a_day(self):
+        """At a step that divides a day the covered buckets are the same as before, in
+        the frame's own time unit."""
+        found = []
+        _, frame = self._process(
+            [("2026-02-19T00:00:00+00:00", "500"), ("2026-02-19T22:30:00+00:00", "unavailable")],
+            "2026-02-19",
+            False,
+            freq="60min",
+            unavailable=found,
+        )
+        expected = pd.date_range("2026-02-19 22:00", "2026-02-19 23:00", freq="60min", tz="UTC")
+        self.assertEqual(list(found[0]), list(expected))
+        self.assertEqual(found[0].dtype, frame.index.dtype)
 
 
 if __name__ == "__main__":

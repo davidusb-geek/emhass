@@ -752,9 +752,7 @@ class RetrieveHass:
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
             # The bucket holding the day's last instant, which may end after midnight
-            day_end = (self._as_utc(day) + pd.Timedelta(days=1) - pd.Timedelta(1, "ns")).floor(
-                self.freq
-            )
+            day_end = (self._as_utc(day) + pd.Timedelta(days=1)).ceil(self.freq) - self.freq
             after = (
                 tail
                 if is_last_day
@@ -960,25 +958,25 @@ class RetrieveHass:
 
         With a time step that does not divide a day, the bucket across midnight is
         resampled once from each day's rows, so ``df_final`` holds it twice. Each
-        sensor's value there becomes the mean of all the bucket's numeric rows, and
-        the bucket is no longer listed as unavailable when it has a reading.
+        sensor's value there becomes the mean of all the bucket's numeric rows. A
+        bucket listed as unavailable from one day's side is dropped from the list
+        when the other day has a reading in it.
         """
         duplicated = self.df_final.index.duplicated()
-        if not duplicated.any():
-            return
-        straddling = self.df_final.index[duplicated].unique()
-        merged = self.df_final[~duplicated].copy()
-        for var, parts in bucket_rows_by_var.items():
-            sums = pd.concat([total for total, _ in parts])
-            counts = pd.concat([rows for _, rows in parts])
-            sums = sums[sums.index.isin(straddling)].groupby(level=0).sum()
-            counts = counts[counts.index.isin(straddling)].groupby(level=0).sum()
-            merged.loc[counts.index, var] = sums / counts.where(counts > 0)
-        for var, buckets in self.unavailable_buckets.items():
-            if var in merged.columns:
-                observed = merged[var].reindex(straddling).notna().to_numpy()
-                self.unavailable_buckets[var] = buckets.difference(straddling[observed])
-        self.df_final = merged
+        if duplicated.any():
+            straddling = self.df_final.index[duplicated].unique()
+            merged = self.df_final[~duplicated].copy()
+            for var, parts in bucket_rows_by_var.items():
+                sums = pd.concat([total for total, _ in parts])
+                counts = pd.concat([rows for _, rows in parts])
+                sums = sums[sums.index.isin(straddling)].groupby(level=0).sum()
+                counts = counts[counts.index.isin(straddling)].groupby(level=0).sum()
+                merged.loc[counts.index, var] = sums / counts.where(counts > 0)
+            self.df_final = merged
+        for var, buckets in list(self.unavailable_buckets.items()):
+            if var in self.df_final.columns:
+                observed = self.df_final[var].reindex(buckets).notna().to_numpy()
+                self.unavailable_buckets[var] = buckets[~observed]
 
     async def _get_data_rest_api(
         self,
@@ -1182,14 +1180,17 @@ class RetrieveHass:
         # entire range is listed here without a matching df_final column, so
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
-        # The aux series keep to the labels df_final holds.
+        # Keep the aux series to the labels df_final holds. Every day is on one
+        # grid, so this only holds the documented contract if a label ever falls
+        # outside the cleaned-up index.
         final_index = self.df_final.index
         for var, parts in staleness_by_var.items():
             last = pd.concat([last for last, _, _ in parts])
             count = pd.concat([count for _, count, _ in parts])
             if straddles:
                 # A bucket across midnight has an entry from each day: the later real
-                # state wins (NaN where that day had none) and the readings add up.
+                # state wins (a day with no real state there is skipped) and the
+                # readings add up.
                 last = last.groupby(level=0).last()
                 count = count.groupby(level=0).sum()
             on_final = last.index.isin(final_index)
