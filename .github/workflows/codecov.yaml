@@ -64,3 +64,5 @@ jobs:
             -Dsonar.tests=./tests
             -Dsonar.host.url=https://sonarcloud.io
             -Dsonar.scanner.skipJreProvisioning=true
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
