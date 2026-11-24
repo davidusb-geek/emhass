@@ -22,6 +22,8 @@ import pandas as pd
 from emhass.connection_manager import (
     SUPERVISOR_TOKEN_REFUSED,
     get_websocket_client,
+    holds_supervisor_token,
+    is_supervisor_request_url,
     is_supervisor_token_for_another_host,
 )
 from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
@@ -907,13 +909,21 @@ class RetrieveHass:
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
+        # The history requests go to test_url when one is given, and the live-state check
+        # still goes to hass_url: the Supervisor token needs both on the Supervisor proxy.
+        to_supervisor = _is_supervisor_url(self.hass_url)
+        if test_url is not None and test_url != "empty":
+            to_supervisor = to_supervisor and is_supervisor_request_url(test_url)
         # Resolve the token to use for authentication.
         # If long_lived_token is empty or not set, fall back to the SUPERVISOR_TOKEN
         # environment variable injected by Home Assistant when running as an addon.
         token = self.long_lived_token
+        if token and token != "empty" and not to_supervisor and holds_supervisor_token(token):
+            self.logger.error(SUPERVISOR_TOKEN_REFUSED)
+            return False
         if not token or token == "empty":
             # Only the Supervisor proxy may receive the Supervisor token.
-            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
+            token = os.getenv("SUPERVISOR_TOKEN", "") if to_supervisor else ""
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for REST API authentication."

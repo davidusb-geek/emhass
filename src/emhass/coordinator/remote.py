@@ -428,6 +428,7 @@ class RemoteParticipant:
         left = None if deadline is None else deadline - time.monotonic()
         if left is not None and left <= 0:
             raise RemoteError(f"{self.key}: no time left to ask")
+        unsendable = None
         try:
             if left is not None and self._bounded is not None:
                 status, raw = self._bounded(method, self.url + path, headers, data, left)
@@ -438,6 +439,13 @@ class RemoteParticipant:
             http.client.HTTPException,
         ) as exc:  # refused, unreachable, timed out, cut short
             raise RemoteError(f"{self.key}: {exc}") from exc
+        except ValueError as exc:
+            # A header that cannot be sent (a line break in the token, say): the error's
+            # text quotes the header, token included, so only the error's type is kept, and
+            # the error itself is not kept, as cause or context.
+            unsendable = type(exc).__name__
+        if unsendable is not None:
+            raise RemoteError(f"{self.key}: the request could not be sent ({unsendable})")
         try:
             out = json.loads(raw or b"{}")
         except (ValueError, RecursionError):  # not JSON, or nested past reason
