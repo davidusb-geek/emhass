@@ -36,6 +36,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from emhass.connection_manager import (
     HASS_URL_UNSET_REFUSED,
     MIN_CONTAINED_TOKEN,
+    OLD_PLACEHOLDER_HASS_URL,
+    PLACEHOLDER_HASS_URL,
     PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     canonical_supervisor_url,
@@ -7411,7 +7413,7 @@ async def build_secrets(
     if argument is None:
         argument = {}
     params_secrets = {
-        "hass_url": "https://myhass.duckdns.org/",
+        "hass_url": PLACEHOLDER_HASS_URL,
         "long_lived_token": "thatverylongtokenhere",
         "time_zone": "Europe/Paris",
         "Latitude": 45.83,
@@ -7453,8 +7455,8 @@ async def build_secrets(
             # The example URL counts as unset here too, before anything is sent to it.
             if is_placeholder_hass_url(url_from_options):
                 logger.warning(
-                    "The add-on option hass_url is the example https://myhass.duckdns.org/, "
-                    "so it is treated as unset."
+                    "The add-on option hass_url is still the example from the docs, so it is "
+                    "treated as unset."
                 )
                 url_from_options = "empty"
 
@@ -7745,7 +7747,7 @@ async def build_secrets(
         if supervisor_token and options_read:
             logger.warning(
                 (
-                    "hass_url is still the example https://myhass.duckdns.org/"
+                    "hass_url is still the example from the docs"
                     if url_is_example
                     else "hass_url is not set"
                 )
@@ -8287,7 +8289,8 @@ async def build_params(
         logger.warning("Unable to detect weather_forecast_method parameter")
     #  Check if secrets parameters still defaults values
     secret_params = [
-        "https://myhass.duckdns.org/",
+        PLACEHOLDER_HASS_URL,
+        OLD_PLACEHOLDER_HASS_URL,
         "thatverylongtokenhere",
         45.83,
         6.86,

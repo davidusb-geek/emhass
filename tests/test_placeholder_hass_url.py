@@ -1,11 +1,12 @@
-"""The example hass_url (https://myhass.duckdns.org/) never receives a Home Assistant token.
+"""The example hass_url never receives a Home Assistant token.
 
-It is the default hass_url and the example in the docs and in secrets_emhass(example).yaml,
-and anyone can register a DuckDNS name. Every test here mocks the network: aiohttp through
-aioresponses (an unmatched request fails without connecting) and the WebSocket client's
-connect step through a mock. A name lookup of the example host is refused in this module
-(socket.getaddrinfo is patched), so nothing reaches the example host even if a mock stops
-matching.
+The example is the default hass_url and the one in the docs and in
+secrets_emhass(example).yaml: https://homeassistant.invalid:8123/ now, and the DuckDNS
+name https://myhass.duckdns.org/ before, which existing installs may still have. Every
+test here mocks the network: aiohttp through aioresponses (an unmatched
+request fails without connecting) and the WebSocket client's connect step through a mock.
+A name lookup of an example host is refused in this module (socket.getaddrinfo is
+patched), so nothing reaches an example host even if a mock stops matching.
 """
 
 import json
@@ -18,9 +19,11 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
+import yaml
 
 from emhass import connection_manager, utils
 from emhass.connection_manager import (
+    OLD_PLACEHOLDER_HASS_URL,
     PLACEHOLDER_HASS_URL,
     PLACEHOLDER_TOKEN,
     is_placeholder_hass_url,
@@ -42,15 +45,25 @@ logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 REAL_URL = "http://homeassistant.local:8123/"
 SUPERVISOR_URL = "http://supervisor/core/api"
+# The current example and the older one; both must be refused the same way.
+EXAMPLE_URLS = (PLACEHOLDER_HASS_URL, OLD_PLACEHOLDER_HASS_URL)
 
 _real_getaddrinfo = socket.getaddrinfo
 _lookup_guard = None
 
 
+# Literal names, so the guard still holds if is_placeholder_hass_url itself regresses.
+_EXAMPLE_HOSTS = ("homeassistant.invalid", "myhass.duckdns.org")
+
+
 def _no_example_lookup(host, *args, **kwargs):
     name = host.decode() if isinstance(host, bytes) else host
-    if name is not None and is_placeholder_hass_url(str(name)):
-        raise OSError("test guard: the example host is never looked up")
+    if name is not None:
+        lowered = str(name).casefold().rstrip(".")
+        if any(lowered == h or lowered.endswith("." + h) for h in _EXAMPLE_HOSTS) or (
+            is_placeholder_hass_url(str(name))
+        ):
+            raise OSError("test guard: the example host is never looked up")
     return _real_getaddrinfo(host, *args, **kwargs)
 
 
@@ -69,14 +82,41 @@ class TestLookupGuard(unittest.TestCase):
         # The guard must be in place, and it is called directly, so this test can never
         # make a real lookup even if setUpModule did not run.
         self.assertIs(socket.getaddrinfo, _no_example_lookup)
-        with self.assertRaisesRegex(OSError, "test guard"):
-            _no_example_lookup("myhass.duckdns.org", 443)
+        for host in ("homeassistant.invalid", "myhass.duckdns.org"):
+            with self.subTest(host=host), self.assertRaisesRegex(OSError, "test guard"):
+                _no_example_lookup(host, 443)
 
 
 class TestIsPlaceholderHassUrl(unittest.TestCase):
-    def test_matches_the_example_host_in_any_spelling(self):
+    def test_the_example_urls(self):
+        self.assertEqual(PLACEHOLDER_HASS_URL, "https://homeassistant.invalid:8123/")
+        self.assertEqual(OLD_PLACEHOLDER_HASS_URL, "https://myhass.duckdns.org/")
+
+    def test_matches_the_current_example_host_in_any_spelling(self):
         for url in (
             PLACEHOLDER_HASS_URL,
+            "https://homeassistant.invalid/",
+            "http://homeassistant.invalid:8123/",
+            "http://homeassistant.invalid:8123/api",
+            " HTTPS://HomeAssistant.INVALID:8123/ ",
+            "https://homeassistant.invalid.:8123/",
+            "https://user@homeassistant.invalid:8123/",
+            "https://sub.homeassistant.invalid/",
+            "homeassistant.invalid:8123",
+            "//homeassistant.invalid/",
+            "https://homeassistant。invalid:8123/",
+            "https://homeassistant．invalid/",
+            "https://home​assistant.invalid/",
+            "https://homeassistant%2Einvalid/",
+            "https://x%2F:p@homeassistant.invalid/",
+            "https://[homeassistant.invalid/",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(is_placeholder_hass_url(url))
+
+    def test_matches_the_older_example_host_in_any_spelling(self):
+        for url in (
+            OLD_PLACEHOLDER_HASS_URL,
             "https://myhass.duckdns.org",
             "http://myhass.duckdns.org/",
             " HTTPS://MyHass.DuckDNS.org/ ",
@@ -139,6 +179,12 @@ class TestIsPlaceholderHassUrl(unittest.TestCase):
             "https://example.com/myhass.duckdns.org",
             "https://example.com/?next=myhass.duckdns.org",
             "https://x%40myhass.duckdns.org@example.com/",
+            # Other .invalid names are not the example (the tests use several of them).
+            "https://myhomeassistant.invalid/",
+            "https://homeassistant.invalid.example.com/",
+            "https://example.com/homeassistant.invalid",
+            "http://ha.invalid:8123/",
+            "https://example.invalid/",
             "http://127.0.0.1:8123/",
             "http://[::1]:8123/",
             "http://[::1",
@@ -147,17 +193,19 @@ class TestIsPlaceholderHassUrl(unittest.TestCase):
                 self.assertFalse(is_placeholder_hass_url(url))
 
     def test_only_a_real_token_counts(self):
-        self.assertTrue(is_token_for_placeholder(PLACEHOLDER_HASS_URL, "a-real-token"))
-        for token in (None, "", "  ", "empty", PLACEHOLDER_TOKEN):
-            with self.subTest(token=token):
-                self.assertFalse(is_token_for_placeholder(PLACEHOLDER_HASS_URL, token))
+        for example in EXAMPLE_URLS:
+            with self.subTest(url=example):
+                self.assertTrue(is_token_for_placeholder(example, "a-real-token"))
+                for token in (None, "", "  ", "empty", PLACEHOLDER_TOKEN):
+                    self.assertFalse(is_token_for_placeholder(example, token))
         self.assertFalse(is_token_for_placeholder(REAL_URL, "a-real-token"))
 
     def test_only_the_example_token_may_go_to_the_example_url(self):
-        self.assertFalse(is_refused_placeholder(PLACEHOLDER_HASS_URL, PLACEHOLDER_TOKEN))
-        for token in (None, "", "empty", "a-real-token"):
-            with self.subTest(token=token):
-                self.assertTrue(is_refused_placeholder(PLACEHOLDER_HASS_URL, token))
+        for example in EXAMPLE_URLS:
+            with self.subTest(url=example):
+                self.assertFalse(is_refused_placeholder(example, PLACEHOLDER_TOKEN))
+                for token in (None, "", "empty", "a-real-token"):
+                    self.assertTrue(is_refused_placeholder(example, token))
         self.assertFalse(is_refused_placeholder(REAL_URL, ""))
 
 
@@ -215,10 +263,31 @@ class TestBuildSecretsPlaceholder(_SecretsTestCase):
     async def test_example_secrets_file_with_only_the_token_changed(self):
         # The secrets file ranks above EMHASS_URL, so its example URL wins over it.
         self.environ["EMHASS_URL"] = REAL_URL
+        for example in EXAMPLE_URLS:
+            with self.subTest(url=example):
+                path = self.write(
+                    "secrets.yaml", f"hass_url: {example}\nlong_lived_token: secrets.token\n"
+                )
+                await self.assert_token_dropped(secrets_path=path)
+
+    async def test_the_shipped_example_file_with_only_the_token_changed(self):
+        text = (root / "secrets_emhass(example).yaml").read_text(encoding="utf-8")
+        self.assertIn(f"long_lived_token: {PLACEHOLDER_TOKEN}\n", text)
         path = self.write(
-            "secrets.yaml", f"hass_url: {PLACEHOLDER_HASS_URL}\nlong_lived_token: secrets.token\n"
+            "secrets.yaml",
+            text.replace(f"long_lived_token: {PLACEHOLDER_TOKEN}", "long_lived_token: my.token"),
         )
         await self.assert_token_dropped(secrets_path=path)
+
+    def test_the_default_is_the_example_in_the_docs(self):
+        # build_secrets, the example secrets file and the docs show the same example URL.
+        text = (root / "secrets_emhass(example).yaml").read_text(encoding="utf-8")
+        self.assertEqual(yaml.safe_load(text)["hass_url"], PLACEHOLDER_HASS_URL)
+        for doc in ("docs/config.md", "docs/installation_methods.md"):
+            with self.subTest(doc=doc):
+                docs_text = (root / doc).read_text(encoding="utf-8")
+                self.assertIn(PLACEHOLDER_HASS_URL, docs_text)
+                self.assertNotIn(OLD_PLACEHOLDER_HASS_URL, docs_text)
 
     async def test_emhass_key_without_emhass_url(self):
         self.environ["EMHASS_KEY"] = "env.key"
@@ -249,8 +318,8 @@ class TestBuildSecretsPlaceholder(_SecretsTestCase):
         self.environ["SUPERVISOR_TOKEN"] = "supervisor.token"
         ha_config = {"time_zone": "Asia/Tokyo", "latitude": 1.0, "longitude": 2.0, "elevation": 3.0}
         for options in (
-            {"hass_url": PLACEHOLDER_HASS_URL, "long_lived_token": "options.token"},
-            {"hass_url": PLACEHOLDER_HASS_URL},
+            *({"hass_url": url, "long_lived_token": "options.token"} for url in EXAMPLE_URLS),
+            *({"hass_url": url} for url in EXAMPLE_URLS),
         ):
             with self.subTest(options=options):
                 path = self.write_options(options)
@@ -313,17 +382,22 @@ class TestRequestsNeverCarryATokenToThePlaceholder(unittest.IsolatedAsyncioTestC
         return RetrieveHass(url, token, pd.Timedelta(minutes=30), "UTC", {}, emhass_conf, logger)
 
     async def test_retrieve_hass_drops_a_real_token(self):
-        with self.assertLogs(logger, level="ERROR") as logs:
-            rh = self.make_rh(PLACEHOLDER_HASS_URL, "a-real-token")
-        self.assertEqual(rh.long_lived_token, "")
-        self.assertTrue(any("hass_url is still the example" in line for line in logs.output))
-        await self.assert_nothing_sent(rh)
+        for example in EXAMPLE_URLS:
+            with self.subTest(url=example):
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    rh = self.make_rh(example, "a-real-token")
+                self.assertEqual(rh.long_lived_token, "")
+                self.assertTrue(
+                    any("hass_url is still the example" in line for line in logs.output)
+                )
+                await self.assert_nothing_sent(rh)
 
     async def test_retrieve_hass_sends_nothing_with_an_empty_token(self):
         # What build_secrets hands on after dropping a token set without a URL.
-        for token in ("", "empty"):
-            with self.subTest(token=token):
-                await self.assert_nothing_sent(self.make_rh(PLACEHOLDER_HASS_URL, token))
+        for example in EXAMPLE_URLS:
+            for token in ("", "empty"):
+                with self.subTest(url=example, token=token):
+                    await self.assert_nothing_sent(self.make_rh(example, token))
 
     async def assert_nothing_sent(self, rh):
         days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
@@ -356,14 +430,16 @@ class TestRequestsNeverCarryATokenToThePlaceholder(unittest.IsolatedAsyncioTestC
         await rh.close()
 
     async def test_websocket_is_not_opened_with_a_real_or_empty_token(self):
-        for token in ("a-real-token", "", "empty"):
-            with self.subTest(token=token):
+        for example, token in (
+            (url, token) for url in EXAMPLE_URLS for token in ("a-real-token", "", "empty")
+        ):
+            with self.subTest(url=example, token=token):
                 connect = AsyncMock(side_effect=AssertionError("no connection may be opened"))
                 with patch("emhass.websocket_client.AsyncWebSocketClient._connect", connect):
                     with self.assertLogs(logger, level="ERROR") as logs:
                         with self.assertRaises(ConnectionError):
                             await connection_manager._create_and_start_client(
-                                PLACEHOLDER_HASS_URL, token, logger
+                                example, token, logger
                             )
                 connect.assert_not_called()
                 # Refused by the example-URL check itself, not by a later one.
@@ -385,9 +461,11 @@ class TestParticipantSocNow(unittest.TestCase):
     def test_soc_now_sends_nothing_to_the_example_url(self):
         from emhass import participant_api
 
-        conf = {"sensor_battery_state_of_charge": "sensor.soc", "hass_url": PLACEHOLDER_HASS_URL}
-        for token in ("a-real-token", "empty"):
-            with self.subTest(token=token):
+        for example, token in (
+            (url, token) for url in EXAMPLE_URLS for token in ("a-real-token", "empty")
+        ):
+            conf = {"sensor_battery_state_of_charge": "sensor.soc", "hass_url": example}
+            with self.subTest(url=example, token=token):
                 with patch(
                     "urllib.request.OpenerDirector.open",
                     side_effect=AssertionError("nothing may be sent"),

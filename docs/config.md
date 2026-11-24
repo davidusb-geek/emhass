@@ -58,7 +58,7 @@ A second part of this section is given by some privacy-sensitive parameters that
 
 The **secrets** parameters are:
 
-- `hass_url`: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
+- `hass_url`: The URL to your Home Assistant instance. For example: https://homeassistant.invalid:8123/ (a placeholder, replace it with your own)
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
 - `emhass_api_token`: The token the EMHASS web API requires (at least 16 characters; optional: if it is not set EMHASS generates one). See [API authentication](api_authentication.md).
 - `time_zone`: The time zone of your system. For example: Europe/Paris.

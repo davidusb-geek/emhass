@@ -1603,7 +1603,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         for key in expected_keys:
             self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
-        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(
+            params["retrieve_hass_conf"]["hass_url"], "https://homeassistant.invalid:8123/"
+        )
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from options.json
         params = {}
@@ -1619,7 +1621,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         for key in expected_keys:
             self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
-        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(
+            params["retrieve_hass_conf"]["hass_url"], "https://homeassistant.invalid:8123/"
+        )
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from secrets_emhass(example).yaml
         params = {}
@@ -1631,7 +1635,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         for key in expected_keys:
             self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
-        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(
+            params["retrieve_hass_conf"]["hass_url"], "https://homeassistant.invalid:8123/"
+        )
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from arguments (command_line cli)
         params = {}
