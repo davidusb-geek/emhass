@@ -34,11 +34,16 @@ from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from emhass.connection_manager import (
+    HASS_URL_UNSET_REFUSED,
     MIN_CONTAINED_TOKEN,
+    PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     canonical_supervisor_url,
+    is_placeholder_hass_url,
+    is_real_token,
     is_supervisor_token_for_another_host,
     is_supervisor_url,
+    is_unset_hass_url,
 )
 from emhass.coordinator.site import (
     compile_site,
@@ -7434,15 +7439,24 @@ async def build_secrets(
     # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
     # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
+    options_read = False
     if options_path and pathlib.Path(options_path).is_file():
         async with aiofiles.open(options_path) as data:
             content = await data.read()
             options = orjson.loads(content)
+            options_read = True
 
             # Obtain secrets from Home Assistant?
             url_from_options = options.get("hass_url", "empty")
             key_from_options = options.get("long_lived_token", "empty")
             _remember_ha_token(key_from_options)
+            # The example URL counts as unset here too, before anything is sent to it.
+            if is_placeholder_hass_url(url_from_options):
+                logger.warning(
+                    "The add-on option hass_url is the example https://myhass.duckdns.org/, "
+                    "so it is treated as unset."
+                )
+                url_from_options = "empty"
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
             data_path_value = options.get("data_path", None)
@@ -7717,6 +7731,32 @@ async def build_secrets(
         params_secrets["long_lived_token"] = argument["key"]
         _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
+
+    # The default hass_url is only an example, so it counts as unset, like a blank or "empty"
+    # one: the add-on (the Supervisor token plus its options file) falls back to the
+    # Supervisor, and anywhere else a token set without a URL is dropped, not sent. A
+    # SUPERVISOR_TOKEN set by hand outside the add-on is not a reason to send anything to
+    # http://supervisor, and neither is a blank URL, which the request code would otherwise
+    # read as the Supervisor. This runs before the Supervisor-token check below, which then
+    # sees the Supervisor URL.
+    url_is_example = is_placeholder_hass_url(params_secrets["hass_url"])
+    if url_is_example or is_unset_hass_url(params_secrets["hass_url"]):
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+        if supervisor_token and options_read:
+            logger.warning(
+                (
+                    "hass_url is still the example https://myhass.duckdns.org/"
+                    if url_is_example
+                    else "hass_url is not set"
+                )
+                + ", so the Supervisor URL and the Supervisor token are used instead. To use "
+                "a long-lived access token, set hass_url as well."
+            )
+            params_secrets["hass_url"] = "http://supervisor/core/api"
+            params_secrets["long_lived_token"] = supervisor_token
+        elif is_real_token(params_secrets["long_lived_token"]):
+            logger.error(PLACEHOLDER_URL_REFUSED if url_is_example else HASS_URL_UNSET_REFUSED)
+            params_secrets["long_lived_token"] = ""
 
     # Whichever source set them, never hand on the Supervisor token with another URL.
     params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])

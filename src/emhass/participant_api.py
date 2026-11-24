@@ -42,9 +42,11 @@ from emhass.command_line import (
     set_input_data_dict,
 )
 from emhass.connection_manager import (
+    PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     SUPERVISOR_URLS,
     canonical_supervisor_url,
+    is_refused_placeholder,
     is_supervisor_token_for_another_host,
 )
 from emhass.retrieve_hass import _upstream_error
@@ -85,6 +87,10 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     if isinstance(sensor, list):
         sensor = sensor[0] if sensor else None
     if not (isinstance(sensor, str) and sensor and base and token):
+        return None
+    # The example hass_url is not anyone's Home Assistant. Never send it a token.
+    if is_refused_placeholder(base, token):
+        logger.error(PLACEHOLDER_URL_REFUSED)
         return None
     # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
     if is_supervisor_token_for_another_host(base, token):
