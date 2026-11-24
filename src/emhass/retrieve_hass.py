@@ -24,6 +24,7 @@ from emhass.connection_manager import (
     PLACEHOLDER_URL_REFUSED,
     SUPERVISOR_TOKEN_REFUSED,
     SUPERVISOR_URLS,
+    canonical_supervisor_url,
     get_websocket_client,
     holds_supervisor_token,
     is_real_token,
@@ -62,6 +63,15 @@ _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 _STATISTICS_PERIOD = pd.Timedelta(minutes=5)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
+
+
+def _uses_supervisor_api(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy URL.
+
+    Any case, surrounding spaces or a trailing slash count. An unset or ``"empty"`` URL does
+    not: callers that default it to the Supervisor do that first.
+    """
+    return canonical_supervisor_url(url) == hass_url
 
 
 def _influx_string(value) -> str:
@@ -431,8 +441,8 @@ class RetrieveHass:
 
         # Construct the URL (incorporating the PR's helpful checks)
         # The Supervisor API sometimes uses a different path structure
-        if url_to_use == hass_url:
-            url = url_to_use + "/config"
+        if _uses_supervisor_api(url_to_use):
+            url = hass_url + "/config"
         else:
             # Helpful check for users who forget the trailing slash
             if not url_to_use.endswith("/"):
@@ -610,8 +620,8 @@ class RetrieveHass:
         # Format the date with a strict 'Z' suffix instead of '+00:00'
         day_str = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         # Check if using supervisor API or Core API
-        if self.hass_url == hass_url:
-            base_url = f"{self.hass_url}/history/period/{day_str}"
+        if _uses_supervisor_api(self.hass_url):
+            base_url = f"{hass_url}/history/period/{day_str}"
         else:
             # Ensure trailing slash for Core API
             if self.hass_url[-1] != "/":
@@ -830,8 +840,8 @@ class RetrieveHass:
                 f"{entity_id} is not a plain entity id; its freshness cannot be verified."
             )
             return None
-        if self.hass_url == hass_url:  # Supervisor API
-            url = f"{self.hass_url}/states/{entity_id}"
+        if _uses_supervisor_api(self.hass_url):
+            url = f"{hass_url}/states/{entity_id}"
         else:
             url = f"{self.hass_url.rstrip('/')}/api/states/{entity_id}"
         try:
@@ -2440,8 +2450,8 @@ class RetrieveHass:
             )
             return None
         # Set the URL
-        if self.hass_url == hass_url:  # If we are using the supervisor API
-            url = self.hass_url + "/states/" + entity_id
+        if _uses_supervisor_api(self.hass_url):  # If we are using the supervisor API
+            url = hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
             url = self.hass_url + "api/states/" + entity_id
         headers = {
@@ -2816,8 +2826,8 @@ class RetrieveHass:
                 "Not publishing: %r is not an entity id like sensor.my_name", entity_id
             )
             return False
-        if self.hass_url == hass_url:  # supervisor API
-            url = self.hass_url + "/states/" + entity_id
+        if _uses_supervisor_api(self.hass_url):  # supervisor API
+            url = hass_url + "/states/" + entity_id
         else:  # Home Assistant Core API
             url = self.hass_url + "api/states/" + entity_id
         headers = {

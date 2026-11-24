@@ -1351,7 +1351,14 @@ def test_the_battery_charge_is_asked_where_home_assistant_answers(base, no_verif
 
 
 @pytest.mark.parametrize(
-    "base", ["http://ha:8123", "https://ha.example", "http://supervisor.evil/core/api"]
+    "base",
+    [
+        "http://ha:8123",
+        "https://ha.example",
+        "http://supervisor.evil/core/api",
+        # The Supervisor proxy is HTTP only (#1403)
+        "https://supervisor/core/api",
+    ],
 )
 def test_the_battery_charge_never_sends_the_supervisor_token_to_another_host(base, monkeypatch):
     """The add-on's Supervisor token as the token for a URL that is not the
@@ -1372,8 +1379,8 @@ def test_the_battery_charge_never_sends_the_supervisor_token_to_another_host(bas
     "base, expected",
     [
         ("http://supervisor/core/api", "http://supervisor/core/api/states/sensor.soc"),
+        ("http://supervisor/core/api/", "http://supervisor/core/api/states/sensor.soc"),
         ("HTTP://Supervisor/core/api/", "http://supervisor/core/api/states/sensor.soc"),
-        ("https://supervisor/core/api", "https://supervisor/core/api/states/sensor.soc"),
     ],
 )
 def test_the_battery_charge_asks_the_supervisor_with_its_token(base, expected, monkeypatch):

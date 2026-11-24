@@ -15,9 +15,9 @@ except ImportError:  # pragma: no cover
 _global_client: AsyncWebSocketClient | None = None
 _lock = asyncio.Lock()
 
-# The forms of the Supervisor proxy URL that may receive the Supervisor token (compared
-# without a trailing slash).
-SUPERVISOR_URLS = frozenset({"http://supervisor/core/api", "https://supervisor/core/api"})
+# The Supervisor proxy URL, the only URL that may receive the Supervisor token (compared
+# without a trailing slash). The proxy is HTTP only, so there is no https form.
+SUPERVISOR_URLS = frozenset({"http://supervisor/core/api"})
 
 SUPERVISOR_TOKEN_REFUSED = (
     "The Supervisor token is only sent to the Supervisor, and the Home Assistant URL is "
@@ -41,9 +41,9 @@ def is_supervisor_url(url: str | None) -> bool:
 def canonical_supervisor_url(url: str | None) -> str | None:
     """The Supervisor proxy URL in the exact form the request code builds on.
 
-    A Supervisor form written with other case, spaces or a trailing slash is returned as
-    ``http://supervisor/core/api`` or ``https://supervisor/core/api``. Anything else,
-    including an unset or ``"empty"`` URL, is returned unchanged.
+    The Supervisor URL written with other case, spaces or a trailing slash is returned as
+    ``http://supervisor/core/api``. Anything else, including an unset or ``"empty"`` URL, is
+    returned unchanged.
     """
     if url is None:
         return None

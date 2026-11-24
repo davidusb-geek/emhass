@@ -101,8 +101,6 @@ class AsyncWebSocketClient:
         # For supervisor API, use the dedicated websocket endpoint
         if self.hass_url.startswith("http://supervisor/core/api"):
             return "ws://supervisor/core/websocket"
-        elif self.hass_url.startswith("https://supervisor/core/api"):
-            return "wss://supervisor/core/websocket"
         else:
             # Standard Home Assistant instance
             parsed = urlparse.urlparse(self.hass_url)
