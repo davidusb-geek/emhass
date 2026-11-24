@@ -16,6 +16,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import time_machine
 
 from emhass import utils
 from emhass.command_line import _retrieve_from_hass
@@ -2706,11 +2707,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(counts.sum()), 6)
 
     async def test_record_staleness_keeps_aux_on_df_final_grid_for_non_divisor_step(self):
-        """Regression: with a step that does not divide a day (7 min), each day is
-        resampled from its own midnight, so day 2 sits 5 minutes off day 1's grid
-        and the final cleanup keeps the days on day 1's grid. The aux must keep to the labels
-        df_final holds; with day 2's off-grid labels in it, the fill rejected the
-        whole series, day 1's eligible silence included."""
+        """Regression: with a step that does not divide a day (7 min), the aux must
+        keep to the labels df_final holds; when day 2 sat off day 1's grid (before
+        #1381 put every day on the epoch grid), the fill rejected the whole series,
+        day 1's eligible silence included."""
         from emhass.battery_identification import apply_staleness_fill
 
         p, s, load = "sensor.batt_power", "sensor.batt_soc", "sensor.load"
@@ -2718,9 +2718,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         def rows(day, entries):
             return [(f"{day}T{hhmm}:00+00:00", v) for hhmm, v in entries]
 
-        # Day 1 on a 7-min grid from 00:00: power reads twice in buckets 0, 1, 4
-        # and 5 and is silent in buckets 2 and 3 (00:14-00:28); SoC and the load
-        # read in every bucket, so the silence is witnessed.
+        # Day 1 on the epoch 7-min grid (00:01, 00:08, ...): power reads twice in
+        # buckets 00:01, 00:08, 00:29 and 00:36 and is silent in 00:15 and 00:22;
+        # SoC and the load read in every bucket, so the silence is witnessed.
         d1_power = [("00:01", "100"), ("00:03", "110"), ("00:08", "120"), ("00:10", "130")]
         d1_power += [("00:29", "200"), ("00:31", "210"), ("00:36", "220"), ("00:38", "230")]
         d1_soc = [(f"00:{m:02d}", str(50 + m)) for m in (1, 3, 8, 10, 15, 17, 22, 24, 29, 31)]
@@ -2744,7 +2744,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(aux[var].index.isin(final.index).all(), var)
         for markers in self.rh.marker_buckets.values():
             self.assertTrue(markers.isin(final.index).all())
-        # Day 1's silence (buckets 00:14 and 00:21) is held at 130 W.
+        # Day 1's silence (buckets 00:15 and 00:22) is held at 130 W.
         out = apply_staleness_fill(
             final,
             p,
@@ -2755,7 +2755,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             row_counts=self.rh.bucket_row_count,
         )
         t0 = pd.Timestamp("2024-01-01 00:00", tz="UTC")
-        held = out.loc[[t0 + pd.Timedelta(minutes=14), t0 + pd.Timedelta(minutes=21)], p]
+        held = out.loc[[t0 + pd.Timedelta(minutes=15), t0 + pd.Timedelta(minutes=22)], p]
         self.assertEqual(list(held), [130.0, 130.0])
 
     async def test_record_staleness_does_not_change_df_final(self):
@@ -3565,6 +3565,257 @@ class TestSupervisorUrlForms(unittest.IsolatedAsyncioTestCase):
                 mocked.post(re.compile(r".*"), status=200, repeat=True)
                 self.assertTrue(await rh.post_scalar_sensor("sensor.x", 1, {}))
                 self.assertEqual(self._sent(mocked), [expected])
+
+
+class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
+    """#1381: REST history keeps one grid when the time step does not divide a day."""
+
+    DAYS = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+    LOAD, PV = "sensor.power_load", "sensor.power_pv"
+
+    @staticmethod
+    def _rh(freq):
+        rh = object.__new__(RetrieveHass)
+        rh.freq = pd.Timedelta(freq)
+        rh.long_lived_token = "token"
+        rh.hass_url = "http://ha.invalid/"
+        rh.ssl_verify = True
+        rh.use_influxdb = rh.use_victoriametrics = rh.use_websocket = False
+        rh.logger = logger
+        return rh
+
+    @staticmethod
+    def _rows(entries):
+        """HA history rows from (iso timestamp, state) pairs."""
+        return [{"state": state, "last_changed": ts} for ts, state in entries]
+
+    def _minute_payloads(self):
+        """One reading a minute for each day and sensor, on a curve that never repeats a day."""
+        payloads = {}
+        for day in self.DAYS:
+            stamps = pd.date_range(day, periods=1440, freq="min")
+            t = stamps.asi8 / 6e10
+            for var, base in ((self.LOAD, 1000.0), (self.PV, 3000.0)):
+                values = base + 500.0 * np.sin(2 * np.pi * t / 97.0) + (t % 13)
+                payloads[(day.date(), var)] = self._rows(
+                    (at.isoformat(), f"{value:.3f}") for at, value in zip(stamps, values)
+                )
+        return payloads
+
+    async def _get(self, rh, payloads, days=None, **kwargs):
+        async def fetch(_self, session, url, headers, var, day, is_first_day=False):
+            return payloads.get((pd.Timestamp(day).date(), var))
+
+        days = self.DAYS if days is None else days
+        var_list = sorted({var for _, var in payloads})
+        with patch.object(RetrieveHass, "_fetch_history_data", new=fetch):
+            ok = await rh.get_data(days, var_list, **kwargs)
+        self.assertTrue(ok)
+        return rh.df_final
+
+    @staticmethod
+    def _on_epoch_grid(index, freq):
+        return bool(((index - pd.Timestamp(0, tz="UTC")) % freq == pd.Timedelta(0)).all())
+
+    @staticmethod
+    def _series(rows):
+        index = pd.to_datetime([row["last_changed"] for row in rows], format="ISO8601")
+        return pd.Series([float(row["state"]) for row in rows], index=index).sort_index()
+
+    async def test_every_day_keeps_its_data_when_the_step_does_not_divide_a_day(self):
+        """At 7, 25 and 50 minutes every day comes back, and each bucket is the mean of
+        all the rows in it, the ones either side of midnight included."""
+        payloads = self._minute_payloads()
+        for minutes in (7, 25, 50):
+            with self.subTest(minutes=minutes):
+                rh = self._rh(f"{minutes}min")
+                df = await self._get(rh, payloads)
+                for day in self.DAYS:
+                    in_day = df[(df.index >= day) & (df.index < day + pd.Timedelta(days=1))]
+                    self.assertFalse(in_day.isna().any().any(), f"{day.date()} lost data")
+                self.assertEqual(df.index.freq, rh.freq)
+                self.assertTrue(self._on_epoch_grid(df.index, rh.freq))
+                expected = pd.DataFrame(
+                    {
+                        var: self._series(
+                            [row for (_, v), rows in payloads.items() if v == var for row in rows]
+                        )
+                        .resample(rh.freq, origin="epoch")
+                        .mean()
+                        for var in (self.LOAD, self.PV)
+                    }
+                )
+                pd.testing.assert_index_equal(df.index, expected.index, check_names=False)
+                np.testing.assert_allclose(
+                    df[[self.LOAD, self.PV]].to_numpy(), expected.to_numpy(), rtol=1e-12
+                )
+
+    async def test_a_step_that_divides_a_day_keeps_todays_frame(self):
+        """Steps that divide a day put every UTC midnight on the epoch grid, so the frame
+        is exactly what resampling each day from its own midnight gives."""
+        payloads = self._minute_payloads()
+        for minutes in (5, 15, 30, 60, 120):
+            with self.subTest(minutes=minutes):
+                rh = self._rh(f"{minutes}min")
+                df = await self._get(rh, payloads)
+                days = []
+                for day in self.DAYS:
+                    frames = []
+                    for var in sorted((self.LOAD, self.PV)):
+                        series = self._series(payloads[(day.date(), var)])
+                        series.index.name = "last_changed"
+                        frames.append(series.to_frame(var).resample(rh.freq).mean())
+                    days.append(pd.concat(frames, axis=1))
+                expected = utils.set_df_index_freq(pd.concat(days, axis=0))
+                pd.testing.assert_frame_equal(df, expected)
+
+    async def test_the_bucket_across_midnight_is_the_mean_of_all_its_rows(self):
+        """Each day's half of the straddling bucket is weighted by its rows; a sensor with
+        rows on one side only keeps that side's mean."""
+        rh = self._rh("7min")
+        days = self.DAYS[:2]
+        midnight = days[1]
+        straddle = midnight.floor(rh.freq)
+        self.assertEqual(midnight - straddle, pd.Timedelta(minutes=4))
+
+        def at(offset):
+            return (straddle + pd.Timedelta(offset)).isoformat()
+
+        payloads = {
+            (days[0].date(), self.LOAD): self._rows(
+                [
+                    (days[0].isoformat(), "50"),
+                    (at("30s"), "100"),
+                    (at("2min"), "200"),
+                    (at("210s"), "300"),
+                ]
+            ),
+            (days[1].date(), self.LOAD): self._rows(
+                [(midnight.isoformat(), "600"), (at("30min"), "700")]
+            ),
+            (days[0].date(), self.PV): self._rows(
+                [(days[0].isoformat(), "1"), ((days[0] + pd.Timedelta(hours=12)).isoformat(), "2")]
+            ),
+            (days[1].date(), self.PV): self._rows(
+                [(midnight.isoformat(), "10"), (at("5min"), "20")]
+            ),
+        }
+        df = await self._get(rh, payloads, days=days)
+        self.assertTrue(df.index.is_unique)
+        # (100 + 200 + 300 + 600) / 4, not day 1's half alone (200) or the halves' mean (400)
+        self.assertEqual(df[self.LOAD].get(straddle), 300.0)
+        self.assertEqual(df[self.PV].get(straddle), 15.0)
+
+    async def test_staleness_at_the_bucket_across_midnight(self):
+        """The later real reading is the bucket's last state and the readings add up; the
+        row HA carries in at the day start is no reading."""
+        days = self.DAYS[:2]
+        midnight = days[1]
+        for day2, last, count in (
+            ([("0s", "600"), ("90s", "650"), ("30min", "700")], 650.0, 3),
+            ([("0s", "600"), ("30min", "700")], 200.0, 2),
+        ):
+            with self.subTest(last=last):
+                rh = self._rh("7min")
+                straddle = midnight.floor(rh.freq)
+                payloads = {
+                    (days[0].date(), self.LOAD): self._rows(
+                        [
+                            (days[0].isoformat(), "50"),
+                            ((straddle + pd.Timedelta("30s")).isoformat(), "100"),
+                            ((straddle + pd.Timedelta("2min")).isoformat(), "200"),
+                        ]
+                    ),
+                    (days[1].date(), self.LOAD): self._rows(
+                        [((midnight + pd.Timedelta(o)).isoformat(), v) for o, v in day2]
+                    ),
+                }
+                await self._get(
+                    rh, payloads, days=days, keep_partial_days=True, record_staleness=True
+                )
+                states = rh.bucket_last_state[self.LOAD]
+                counts = rh.bucket_row_count[self.LOAD]
+                self.assertTrue(states.index.is_unique)
+                self.assertTrue(counts.index.is_unique)
+                self.assertEqual(states.get(straddle), last)
+                self.assertEqual(counts.get(straddle), count)
+
+    async def test_unavailable_half_of_the_bucket_across_midnight_with_a_reading(self):
+        """A straddling bucket with a reading on one side is observed, not unavailable."""
+        rh = self._rh("7min")
+        days = pd.date_range("2026-02-19", periods=2, freq="D", tz="UTC")
+        midnight = days[1]
+        straddle = midnight.floor(rh.freq)
+        payloads = {
+            (days[0].date(), self.LOAD): self._rows(
+                [
+                    (days[0].isoformat(), "500"),
+                    ((straddle - pd.Timedelta("10min")).isoformat(), "unavailable"),
+                    ((straddle + pd.Timedelta("1min")).isoformat(), "unavailable"),
+                ]
+            ),
+            (days[1].date(), self.LOAD): self._rows(
+                [
+                    (midnight.isoformat(), "unavailable"),
+                    ((midnight + pd.Timedelta("1min")).isoformat(), "510"),
+                ]
+            ),
+        }
+        with (
+            time_machine.travel(
+                datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
+            ),
+            patch.object(RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value={})),
+            patch.object(RetrieveHass, "_live_state_is_fresh", return_value=True),
+        ):
+            df = await self._get(rh, payloads, days=days, hold_unchanged_tail=True)
+        self.assertEqual(df[self.LOAD].get(straddle), 510.0)
+        listed = rh.unavailable_buckets[self.LOAD]
+        self.assertIn(straddle - rh.freq, listed)
+        self.assertNotIn(straddle, listed)
+
+    def _process(self, rows, day, is_last_day, **kwargs):
+        rh = self._rh("7min")
+        with time_machine.travel(
+            datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
+        ):
+            frame = rh._process_history_dataframe(
+                self._rows(rows),
+                self.LOAD,
+                pd.Timestamp(day, tz="UTC"),
+                False,
+                is_last_day,
+                **kwargs,
+            )
+        return rh, frame
+
+    def test_tail_hold_when_the_first_bucket_starts_before_midnight(self):
+        """The last day's only row is the state HA carries in at midnight, which sits in
+        a bucket that starts the day before; it is still held up to the running bucket."""
+        rh, frame = self._process(
+            [("2026-02-20T00:00:00+00:00", "520")],
+            "2026-02-20",
+            True,
+            hold_unchanged_tail=True,
+        )
+        running = pd.Timestamp("2026-02-20 10:20", tz="UTC").floor(rh.freq)
+        self.assertTrue(self._on_epoch_grid(frame.index, rh.freq))
+        self.assertEqual(frame.index[0], pd.Timestamp("2026-02-19 23:55", tz="UTC"))
+        self.assertEqual(frame.index[-1], running)
+        self.assertTrue((frame[self.LOAD] == 520.0).all())
+
+    def test_outage_at_the_end_of_a_past_day_covers_its_last_bucket(self):
+        """The day's last bucket is the one holding its last instant, even when that
+        bucket ends after midnight."""
+        found = []
+        rh, _ = self._process(
+            [("2026-02-19T00:00:00+00:00", "500"), ("2026-02-19T22:30:00+00:00", "unavailable")],
+            "2026-02-19",
+            False,
+            unavailable=found,
+        )
+        self.assertEqual(found[0][-1], pd.Timestamp("2026-02-19 23:55", tz="UTC"))
+        self.assertTrue(self._on_epoch_grid(found[0], rh.freq))
 
 
 if __name__ == "__main__":

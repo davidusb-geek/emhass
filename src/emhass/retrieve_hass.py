@@ -699,13 +699,15 @@ class RetrieveHass:
         hold_unchanged_tail: bool = False,
         unavailable: list | None = None,
         staleness: list | None = None,
+        bucket_rows: list | None = None,
     ) -> pd.DataFrame | None:
         """Helper to convert raw data to a resampled DataFrame.
 
         ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
         ``staleness`` collects the (last real state per bucket, real readings per
         bucket, marker buckets) triple described for ``record_staleness`` in
-        :meth:`get_data`.
+        :meth:`get_data`. ``bucket_rows`` collects the (sum, number of numeric rows)
+        pair per bucket, to merge a bucket that holds rows from two days.
         """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
@@ -738,12 +740,21 @@ class RetrieveHass:
         states = df_tp[var].sort_index()
         last_state = states.iloc[-1]
         raw_states = df_tp[var] if staleness is not None else None
-        df_tp = df_tp.resample(self.freq).mean()
+        # Every day on one grid anchored on the epoch. With a step that divides a day
+        # these are the buckets from each day's own midnight; with one that does not,
+        # the bucket across midnight gets rows from both days and is merged later.
+        resampler = df_tp.resample(self.freq, origin="epoch")
+        if bucket_rows is not None:
+            bucket_rows.append((resampler[var].sum(), resampler[var].count()))
+        df_tp = resampler.mean()
         if staleness is not None:
             staleness.append(self._staleness_buckets(raw_states, states, df_tp.index, day))
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
-            day_end = self._as_utc(day) + pd.Timedelta(days=1) - self.freq
+            # The bucket holding the day's last instant, which may end after midnight
+            day_end = (self._as_utc(day) + pd.Timedelta(days=1) - pd.Timedelta(1, "ns")).floor(
+                self.freq
+            )
             after = (
                 tail
                 if is_last_day
@@ -771,11 +782,13 @@ class RetrieveHass:
 
         Home Assistant only returns a row per recorded state change, so nothing is
         recorded after a sensor's last change. Data not belonging to the period
-        containing now has no tail.
+        containing now has no tail. The day's first bucket can start before its
+        midnight when the time step does not divide a day.
         """
         day = self._as_utc(day)
         last_bucket = pd.Timestamp.now(tz="UTC").floor(self.freq)
-        if not (is_last_day and day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
+        in_day = day < last_seen + self.freq and last_bucket < day + pd.Timedelta(days=1)
+        if not (is_last_day and in_day and last_seen < last_bucket):
             return pd.DatetimeIndex([], tz="UTC")
         return pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
 
@@ -789,7 +802,9 @@ class RetrieveHass:
         after its last row) when the last recorded state is unavailable. Buckets that
         have a numeric reading of their own are observed and not listed.
         """
-        last_unavailable = states.isna().resample(self.freq).last().astype("boolean")
+        last_unavailable = (
+            states.isna().resample(self.freq, origin="epoch").last().astype("boolean")
+        )
         carried = last_unavailable.ffill().fillna(False).to_numpy(dtype=bool)
         buckets = resampled.index[resampled.isna().to_numpy() & carried]
         return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
@@ -827,7 +842,9 @@ class RetrieveHass:
                 .reindex(buckets, fill_value=0)
                 .astype("int64")
             )
-        has_marker = states.isna().resample(self.freq).sum().reindex(buckets, fill_value=0)
+        has_marker = (
+            states.isna().resample(self.freq, origin="epoch").sum().reindex(buckets, fill_value=0)
+        )
         return last, count, buckets[has_marker.to_numpy() > 0]
 
     async def _fetch_live_state(
@@ -938,6 +955,31 @@ class RetrieveHass:
                     latest = (at, row["state"])
         return latest
 
+    def _merge_straddling_buckets(self, bucket_rows_by_var: dict[str, list]) -> None:
+        """Merge the two halves of each bucket that holds rows from two days.
+
+        With a time step that does not divide a day, the bucket across midnight is
+        resampled once from each day's rows, so ``df_final`` holds it twice. Each
+        sensor's value there becomes the mean of all the bucket's numeric rows, and
+        the bucket is no longer listed as unavailable when it has a reading.
+        """
+        duplicated = self.df_final.index.duplicated()
+        if not duplicated.any():
+            return
+        straddling = self.df_final.index[duplicated].unique()
+        merged = self.df_final[~duplicated].copy()
+        for var, parts in bucket_rows_by_var.items():
+            sums = pd.concat([total for total, _ in parts])
+            counts = pd.concat([rows for _, rows in parts])
+            sums = sums[sums.index.isin(straddling)].groupby(level=0).sum()
+            counts = counts[counts.index.isin(straddling)].groupby(level=0).sum()
+            merged.loc[counts.index, var] = sums / counts.where(counts > 0)
+        for var, buckets in self.unavailable_buckets.items():
+            if var in merged.columns:
+                observed = merged[var].reindex(straddling).notna().to_numpy()
+                self.unavailable_buckets[var] = buckets.difference(straddling[observed])
+        self.df_final = merged
+
     async def _get_data_rest_api(
         self,
         days_list: pd.date_range,
@@ -1043,9 +1085,15 @@ class RetrieveHass:
                         return False
 
             partial_days = 0
+            # With a step that does not divide a day, the bucket across each midnight
+            # holds rows from both days: keep each kept day's per-bucket sums and row
+            # counts so the two halves can be merged once every day is in.
+            straddles = pd.Timedelta(days=1) % self.freq != pd.Timedelta(0)
+            bucket_rows_by_var: dict[str, list] = {}
             for day_idx, day in enumerate(days_list):
                 day_frames = []
                 day_staleness = {}
+                day_bucket_rows = {}
                 skip_day = False
                 missing_var = False
                 for var in var_list:
@@ -1055,6 +1103,7 @@ class RetrieveHass:
                     # Outages are only tracked for the ML opt-in; other callers skip the work.
                     unavailable: list | None = [] if hold_unchanged_tail else None
                     staleness: list | None = [] if record_staleness else None
+                    bucket_rows: list | None = [] if straddles else None
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
@@ -1065,9 +1114,12 @@ class RetrieveHass:
                             hold_unchanged_tail=hold_unchanged_tail,
                             unavailable=unavailable,
                             staleness=staleness,
+                            bucket_rows=bucket_rows,
                         )
                     if staleness:
                         day_staleness[var] = staleness[0]
+                    if bucket_rows:
+                        day_bucket_rows[var] = bucket_rows[0]
                     if unavailable:
                         self.unavailable_buckets[var] = self.unavailable_buckets.get(
                             var, pd.DatetimeIndex([], tz="UTC")
@@ -1091,6 +1143,8 @@ class RetrieveHass:
                     partial_days += 1
                 for var, aux in day_staleness.items():
                     staleness_by_var.setdefault(var, []).append(aux)
+                for var, rows in day_bucket_rows.items():
+                    bucket_rows_by_var.setdefault(var, []).append(rows)
                 # Merge the day's per-variable frames on their real resampled
                 # indices; a variable missing for this day (kept mode) is just
                 # absent from the day's frame, and the cross-day concat below
@@ -1114,6 +1168,8 @@ class RetrieveHass:
             )
             return False
 
+        if straddles:
+            self._merge_straddling_buckets(bucket_rows_by_var)
         # Final Cleanup
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
@@ -1126,14 +1182,16 @@ class RetrieveHass:
         # entire range is listed here without a matching df_final column, so
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
-        # Each day is resampled from its own midnight, so with a step that does
-        # not divide a day the days sit on different grids, and the cleanup above
-        # keeps only the days on the first day's grid. Keep the aux series to the
-        # labels df_final holds, so the off-grid days do not void the days on it.
+        # The aux series keep to the labels df_final holds.
         final_index = self.df_final.index
         for var, parts in staleness_by_var.items():
             last = pd.concat([last for last, _, _ in parts])
             count = pd.concat([count for _, count, _ in parts])
+            if straddles:
+                # A bucket across midnight has an entry from each day: the later real
+                # state wins (NaN where that day had none) and the readings add up.
+                last = last.groupby(level=0).last()
+                count = count.groupby(level=0).sum()
             on_final = last.index.isin(final_index)
             if not on_final.all():
                 self.logger.debug(
