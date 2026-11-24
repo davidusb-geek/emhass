@@ -93,17 +93,23 @@ def is_supervisor_token_for_another_host(hass_url: str | None, token: str | None
 
 
 # The default hass_url, which is also the example in the docs and in
-# secrets_emhass(example).yaml. Anyone can register a DuckDNS name, so this URL is
-# treated as unset and never gets a Home Assistant token.
-PLACEHOLDER_HASS_URL = "https://myhass.duckdns.org/"
-_PLACEHOLDER_HOST = "myhass.duckdns.org"
+# secrets_emhass(example).yaml. RFC 2606 reserves .invalid for names that are sure to be
+# invalid.
+PLACEHOLDER_HASS_URL = "https://homeassistant.invalid:8123/"
+# The example the docs and the example secrets file used before, a DuckDNS name.
+# Existing installs may still have it set.
+OLD_PLACEHOLDER_HASS_URL = "https://myhass.duckdns.org/"
+# Both are treated as unset and never get a Home Assistant token. Only these two names
+# and names under them match, not every .invalid name.
+_PLACEHOLDER_HOSTS = ("homeassistant.invalid", "myhass.duckdns.org")
 # The token build_secrets uses when none is set. It is an example, not a secret.
 PLACEHOLDER_TOKEN = "thatverylongtokenhere"
 
 PLACEHOLDER_URL_REFUSED = (
-    "hass_url is still the example https://myhass.duckdns.org/, so nothing is sent there, "
-    "and no Home Assistant token. Set hass_url to your own Home Assistant URL (EMHASS_URL, "
-    "the add-on option hass_url, the secrets file or --url)."
+    f"hass_url is still the example from the docs ({PLACEHOLDER_HASS_URL} or the older "
+    f"{OLD_PLACEHOLDER_HASS_URL}), so nothing is sent there, and no Home Assistant token. "
+    "Set hass_url to your own Home Assistant URL (EMHASS_URL, the add-on option hass_url, "
+    "the secrets file or --url)."
 )
 
 HASS_URL_UNSET_REFUSED = (
@@ -150,7 +156,7 @@ def _dns_names(host: str) -> set[str]:
 
 
 def is_placeholder_hass_url(url: str | None) -> bool:
-    """True when ``url`` points at the example host or a name under it.
+    """True when ``url`` points at one of the example hosts or a name under one.
 
     The host is taken from the URL as given (so percent-encoded characters in the
     user part cannot move it), then compared in every form the HTTP, WebSocket and
@@ -169,17 +175,21 @@ def is_placeholder_hass_url(url: str | None) -> bool:
         try:
             host = urllib.parse.urlsplit(candidate).hostname or ""
         except ValueError:
-            if _PLACEHOLDER_HOST in _simplify(urllib.parse.unquote(text)).casefold():
+            decoded = _simplify(urllib.parse.unquote(text)).casefold()
+            if any(example in decoded for example in _PLACEHOLDER_HOSTS):
                 return True
             continue
-        for name in _dns_names(host):
-            if name == _PLACEHOLDER_HOST or name.endswith("." + _PLACEHOLDER_HOST):
-                return True
+        if any(
+            name == example or name.endswith("." + example)
+            for name in _dns_names(host)
+            for example in _PLACEHOLDER_HOSTS
+        ):
+            return True
     return False
 
 
 def is_refused_placeholder(hass_url: str | None, token: str | None) -> bool:
-    """True when ``hass_url`` is the example host and ``token`` is not the example token.
+    """True when ``hass_url`` is an example host and ``token`` is not the example token.
 
     The example URL with the example token is an install with nothing set, which keeps its
     old behaviour. Any other token there means one was set without a URL (and has been or
@@ -199,7 +209,7 @@ def is_unset_hass_url(url: str | None) -> bool:
 
 
 def is_token_for_placeholder(hass_url: str | None, token: str | None) -> bool:
-    """True when a real token (not empty and not the example one) would go to the example host."""
+    """True when a real token (not empty and not the example one) would go to an example host."""
     return is_real_token(token) and is_placeholder_hass_url(hass_url)
 
 

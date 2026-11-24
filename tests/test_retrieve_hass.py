@@ -177,7 +177,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
         self.assertIn("hass_url", self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
-            self.assertEqual(self.retrieve_hass_conf["hass_url"], "https://myhass.duckdns.org/")
+            self.assertEqual(
+                self.retrieve_hass_conf["hass_url"], "https://homeassistant.invalid:8123/"
+            )
             self.assertEqual(str(self.retrieve_hass_conf["time_zone"]), "Europe/Paris")
 
     # Check yaml parse worked

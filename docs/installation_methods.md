@@ -56,7 +56,7 @@ Before running the docker container, make sure you have a designated folder for 
 mkdir ~/emhass
 cd ~/emhass 
 cat <<EOT >> ~/emhass/secrets_emhass.yaml
-hass_url: https://myhass.duckdns.org/
+hass_url: https://homeassistant.invalid:8123/
 long_lived_token: thatverylongtokenhere
 time_zone: Europe/Paris
 lat: 45.83
