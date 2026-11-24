@@ -358,15 +358,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # Test output weather forecast using openmeteo with mock get request data
     @fixture_clock()
     async def test_get_weather_forecast_openmeteo_method_mock(self):
-        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
-
-        async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        data = orjson.loads(data.content)
-        data = self._openmeteo_unixtime_payload(data)
+        data = self._openmeteo_unixtime_payload(await self._load_openmeteo_mock_payload())
         lat = self.retrieve_hass_conf["Latitude"]
         lon = self.retrieve_hass_conf["Longitude"]
         # The default 3-day horizon is requested; the query mirrors the production request.
@@ -400,7 +392,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             "cached-open-meteo-forecast-b.json",
             "weather_forecast_data.pkl",
             "debug-weather-forecast-open-meteo.csv",
-            "test_response_openmeteo_get_method.pbz2",
+            "test_response_openmeteo_get_method.json",
         )
         repo_digests_before = self._sha256_files(repo_data_path, guarded)
         tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -1619,14 +1611,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
 
-        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.json")
 
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        data = orjson.loads(data.content)
+            data = orjson.loads(await f.read())
 
         get_url = "https://api.solcast.com.au/rooftop_sites/123456/forecasts?hours=24"
 
@@ -1665,13 +1653,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111,222222,333333"
         roof_ids = re.split(r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip())
-        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.json")
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        data = orjson.loads(data.content)
+            data = orjson.loads(await f.read())
         with aioresponses() as mocked:
             for roof_id in roof_ids:
                 get_url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
@@ -1724,12 +1708,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
 
-        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.json")
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        data = orjson.loads(data.content)
+            data = orjson.loads(await f.read())
 
         # Re-anchor the recorded period_end timestamps so the first 30-min
         # source period starts exactly at forecast_dates[0]. Values untouched.
@@ -2161,10 +2142,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.fcst.retrieve_hass_conf["solar_forecast_kwp"] = 0
 
         # Solcast fixture for the (mocked) fresh fetch the fix should trigger.
-        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.json")
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-        payload = orjson.loads(cPickle.loads(bz2.decompress(compressed)).content)
+            payload = orjson.loads(await f.read())
 
         with (
             patch.object(self.fcst, "_solcast_rate_limit_ok", return_value=True),
@@ -2192,13 +2172,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_get_weather_forecast_solarforecast_method_mock(self):
         self._isolate_weather_cache_dir()  # never serve or remove the shared weather cache
         test_data_path = str(
-            emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
+            emhass_conf["data_path"] / "test_response_solarforecast_get_method.json"
         )
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
+            data = orjson.loads(await f.read())
 
         with aioresponses() as mocked:
             for i in range(len(self.plant_conf["pv_module_model"])):
@@ -2554,9 +2531,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     async def test_solar_forecast_recorded_response_has_no_phantom_night_pv(self):
         """A recorded response brackets the night with off-grid 0 W sunset/sunrise readings."""
-        test_data_path = emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
+        test_data_path = emhass_conf["data_path"] / "test_response_solarforecast_get_method.json"
         async with aiofiles.open(test_data_path, "rb") as f:
-            payload = cPickle.loads(bz2.decompress(await f.read()))
+            payload = orjson.loads(await f.read())
         tz = "Europe/Paris"
         dates = pd.date_range("2022-10-24 17:00", periods=36, freq="30min", tz=tz)
         with self.assertNoLogs(self.fcst.logger, level="WARNING"):
@@ -3335,11 +3312,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Get weather forecast with list. The default Open-Meteo request is answered from the
         # recorded payload, into an empty per-test cache, so it needs neither network nor cache.
         self._isolate_weather_cache_dir(fcst)
-        async with aiofiles.open(
-            emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2", "rb"
-        ) as f:
-            recorded = cPickle.loads(bz2.decompress(await f.read()))
-        payload = self._openmeteo_unixtime_payload(orjson.loads(recorded.content))
+        payload = self._openmeteo_unixtime_payload(await self._load_openmeteo_mock_payload())
         open_meteo_url = re.compile(r"^https://api\.open-meteo\.com/v1/forecast\?")
         with aioresponses() as mocked:
             mocked.get(open_meteo_url, payload=payload)
@@ -4264,13 +4237,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_open_meteo_legacy_pvlib(self):
         """Test the use_legacy_pvlib=True path in open-meteo."""
         # Load mock data
-        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
-        async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        data = orjson.loads(data.content)
-        data = self._openmeteo_unixtime_payload(data)
+        data = self._openmeteo_unixtime_payload(await self._load_openmeteo_mock_payload())
         tmp_data_path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(
             unittest.mock.patch.object(
@@ -4329,12 +4296,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     async def _load_openmeteo_mock_payload(self):
         """Load the recorded Open-Meteo response used as a mock payload."""
-        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.json"
         async with aiofiles.open(test_data_path, "rb") as f:
-            compressed = await f.read()
-        data = bz2.decompress(compressed)
-        data = cPickle.loads(data)
-        return orjson.loads(data.content)
+            return orjson.loads(await f.read())
 
     async def test_open_meteo_5_minute_grid_is_interpolated_between_15_minute_samples(self):
         """5-minute grid points between two 15-minute Open-Meteo samples are linearly interpolated.

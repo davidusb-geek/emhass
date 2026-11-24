@@ -82,6 +82,14 @@ _servers: list[_Server] = []  # every server a test started, closed after it
 
 
 @pytest.fixture(autouse=True)
+def _own_tokens_reset(monkeypatch):
+    """The tokens build_secrets remembers are per process: each test starts
+    with none, so one test's tokens cannot decide another's result."""
+    monkeypatch.setattr(utils, "_own_ha_tokens", set())
+    monkeypatch.setattr(utils, "_own_api_tokens", set())
+
+
+@pytest.fixture(autouse=True)
 def _servers_closed():
     """Every server a test started is shut down and closed after it, however
     the test ended - one started before a later one failed to start too."""
@@ -1340,6 +1348,57 @@ def test_the_battery_charge_is_asked_where_home_assistant_answers(base, no_verif
     assert opened.call_args.args[0].full_url == expected
     # the handler's own default context verifies; ssl_no_verify's does not
     assert len(contexts) == 1 and (contexts[0].verify_mode == ssl.CERT_NONE) == no_verify
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "http://ha:8123",
+        "https://ha.example",
+        "http://supervisor.evil/core/api",
+        # The Supervisor proxy is HTTP only (#1403)
+        "https://supervisor/core/api",
+    ],
+)
+def test_the_battery_charge_never_sends_the_supervisor_token_to_another_host(base, monkeypatch):
+    """The add-on's Supervisor token as the token for a URL that is not the
+    Supervisor: nothing is asked (the token would go to that host), and the
+    target stands in."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "the-supervisor-token")
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": base,
+        "long_lived_token": " the-supervisor-token ",
+    }
+    with mock.patch("urllib.request.OpenerDirector.open") as opened:
+        assert participant_api.soc_now(conf, logger) is None
+    opened.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "base, expected",
+    [
+        ("http://supervisor/core/api", "http://supervisor/core/api/states/sensor.soc"),
+        ("http://supervisor/core/api/", "http://supervisor/core/api/states/sensor.soc"),
+        ("HTTP://Supervisor/core/api/", "http://supervisor/core/api/states/sensor.soc"),
+    ],
+)
+def test_the_battery_charge_asks_the_supervisor_with_its_token(base, expected, monkeypatch):
+    """The Supervisor token still reaches the Supervisor, in any form of its
+    URL, on the Supervisor's own path."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "the-supervisor-token")
+    response = mock.MagicMock()
+    response.__enter__.return_value = io.BytesIO(b'{"state": "55", "attributes": {}}')
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": base,
+        "long_lived_token": "the-supervisor-token",
+    }
+    with mock.patch("urllib.request.OpenerDirector.open", return_value=response) as opened:
+        assert participant_api.soc_now(conf, logger) == pytest.approx(0.55)
+    request = opened.call_args.args[0]
+    assert request.full_url == expected
+    assert request.get_header("Authorization") == "Bearer the-supervisor-token"
 
 
 def test_the_battery_charge_is_not_asked_of_a_redirect():
@@ -4613,6 +4672,274 @@ def test_a_remote_token_with_the_value_of_one_of_emhass_own_secrets_is_never_sen
         assert "remote_tokens" not in out["retrieve_hass_conf"]
     out = asyncio.run(build({"long_lived_token": "HA", "garage_token": "G"}))
     assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
+
+
+@pytest.mark.parametrize("env", ["SUPERVISOR_TOKEN", "EMHASS_KEY"])
+def test_a_remote_token_with_an_environment_home_assistant_token_is_never_sent(env, monkeypatch):
+    """The Supervisor token or EMHASS_KEY held by a remote's token_secret:
+    never among the remotes' tokens, even when long_lived_token holds another
+    value (the Supervisor token is dropped for a URL that is not the
+    Supervisor's)."""
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("EMHASS_KEY", raising=False)
+    monkeypatch.setenv(env, "env-ha-token-0123456789")
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "http://elsewhere.example/x", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build(secrets):
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return await build_params(EMHASS_CONF, secrets, config, logger)
+
+    out = asyncio.run(build({"long_lived_token": "", "garage_token": "env-ha-token-0123456789"}))
+    assert "remote_tokens" not in out["retrieve_hass_conf"]
+    out = asyncio.run(build({"long_lived_token": "", "garage_token": "G"}))
+    assert out["retrieve_hass_conf"]["remote_tokens"] == {"garage_token": "G"}
+
+
+_SV = "sv-token-0123456789abcdef"
+_KEY = "ha-key-fedcba9876543210"
+_LLT = "llt-token-0123456789abcdef"
+
+
+@pytest.mark.parametrize(
+    "env, secrets, garage_token, expected",
+    [
+        # a padded copy of an environment Home Assistant token: never sent
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"{_SV} "', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'" {_SV}"', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"\\t{_SV}"', None),
+        ({"SUPERVISOR_TOKEN": _SV}, "", f'"{_SV}"', None),
+        ({"EMHASS_KEY": _KEY}, "", f'"{_KEY} "', None),
+        ({"EMHASS_KEY": _KEY}, "", f'" {_KEY}"', None),
+        ({"EMHASS_KEY": _KEY}, "", f'"\\t{_KEY}"', None),
+        # EMHASS's own token padded in the secrets file, the remote's copy exact
+        ({}, f'long_lived_token: "{_LLT} "\n', f'"{_LLT}"', None),
+        ({}, f'long_lived_token: "\\t{_LLT}"\n', f'"{_LLT}"', None),
+        # the remote's own token: sent, exactly as it was given
+        ({"SUPERVISOR_TOKEN": _SV}, "", '"remote-token-0123456789"', "remote-token-0123456789"),
+        ({"SUPERVISOR_TOKEN": _SV}, "", '"remote-token-0123456789 "', "remote-token-0123456789 "),
+    ],
+)
+def test_a_padded_home_assistant_token_is_never_a_remotes_token(
+    env, secrets, garage_token, expected, tmp_path, monkeypatch
+):
+    """Through build_secrets and build_params, as EMHASS runs them: a remote's
+    token_secret holding the Supervisor token, exact or padded, a padded copy
+    of EMHASS_KEY, or an exact copy of a padded long_lived_token, is not among
+    the remotes' tokens; a token of the remote's own still is, unchanged."""
+    import re
+
+    from tests.aioresponses_compat import aioresponses
+
+    for name in ("SUPERVISOR_TOKEN", "EMHASS_KEY", "EMHASS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    secrets_file = tmp_path / "secrets_emhass.yaml"
+    secrets_file.write_text(
+        f'hass_url: "http://other-ha.test:8123"\n{secrets}garage_token: {garage_token}\n',
+        encoding="utf-8",
+    )
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "https://elsewhere.test/participant", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build():
+        # Without an options file build_secrets asks Home Assistant nothing; the mock
+        # keeps it from reaching any host if that ever changes
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r".*"), status=401, repeat=True)
+            _, built = await utils.build_secrets(
+                EMHASS_CONF, logger, options_path="", secrets_path=str(secrets_file)
+            )
+            asked = dict(mocked.requests)
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return asked, await build_params(EMHASS_CONF, built, config, logger)
+
+    asked, out = asyncio.run(build())
+    assert asked == {}
+    tokens = out["retrieve_hass_conf"].get("remote_tokens")
+    if expected is None:
+        assert tokens is None
+    else:
+        assert tokens == {"garage_token": expected}
+
+
+_OLD = "old-llt-0123456789abcdef"
+_NEW = "new-key-0123456789abcdef"
+_OPT = "opt-llt-0123456789abcdef"
+_LONG_SV = "sv-token-0123456789abcdefghij"
+
+
+@pytest.mark.parametrize(
+    "env, options, secrets, argument, garage_token, expected",
+    [
+        # a Home Assistant token a later source replaced: still never a remote's
+        ({}, None, f'long_lived_token: "{_OLD}"\n', {"key": _NEW}, f'"{_OLD}"', None),
+        ({}, None, 'long_lived_token: "old-llt"\n', {"key": _NEW}, '"old-llt"', None),
+        (
+            {},
+            {"hass_url": "http://other-ha.test:8123", "long_lived_token": _OPT},
+            "",
+            {"key": _NEW},
+            f'"{_OPT}"',
+            None,
+        ),
+        # one of EMHASS's own secrets that YAML reads as a number
+        ({}, None, "influxdb_password: 123456789\n", None, "123456789", None),
+        # a Home Assistant token with something around it
+        ({}, None, f'long_lived_token: "{_OLD}"\n', None, f'"Bearer {_OLD}"', None),
+        ({}, None, f'long_lived_token: "{_OLD}"\n', {"key": _NEW}, f'"Bearer {_OLD}"', None),
+        ({"SUPERVISOR_TOKEN": _LONG_SV}, None, "", None, f'"Bearer {_LONG_SV}"', None),
+        ({"EMHASS_KEY": _NEW}, None, "", None, f'"{_NEW}x"', None),
+        ({"EMHASS_KEY": _NEW}, None, "", {"key": _OPT}, f'"Bearer {_NEW}"', None),
+        # a short token is only compared whole: inside a longer value it is no match
+        ({}, None, 'long_lived_token: "old-llt"\n', {"key": _NEW}, '"xold-lltx"', "xold-lltx"),
+        # the remote's own token: sent
+        (
+            {},
+            None,
+            f'long_lived_token: "{_OLD}"\n',
+            {"key": _NEW},
+            '"remote-token-0123456789"',
+            "remote-token-0123456789",
+        ),
+    ],
+)
+def test_no_home_assistant_token_ever_read_is_a_remotes_token(
+    env, options, secrets, argument, garage_token, expected, tmp_path, monkeypatch
+):
+    """A remote's token_secret holding any Home Assistant token build_secrets read
+    (from the add-on options, the secrets file, --key or the environment), even
+    one a later source replaced, or one of them with something around it, or a
+    secret YAML read as a number, is not among the remotes' tokens."""
+    import re
+
+    from tests.aioresponses_compat import aioresponses
+
+    for name in ("SUPERVISOR_TOKEN", "EMHASS_KEY", "EMHASS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    secrets_file = tmp_path / "secrets_emhass.yaml"
+    secrets_file.write_text(
+        f'hass_url: "http://other-ha.test:8123"\n{secrets}garage_token: {garage_token}\n',
+        encoding="utf-8",
+    )
+    options_path = ""
+    if options is not None:
+        options_file = tmp_path / "options.json"
+        options_file.write_bytes(orjson.dumps(options))
+        options_path = str(options_file)
+    site = [
+        {"id": "grid"},
+        {
+            "id": "elsewhere",
+            "parent": "grid",
+            "solver": {"url": "https://elsewhere.test/participant", "token_secret": "garage_token"},
+        },
+    ]
+
+    async def build():
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r".*"), status=401, repeat=True)
+            _, built = await utils.build_secrets(
+                EMHASS_CONF,
+                logger,
+                argument=argument,
+                options_path=options_path,
+                secrets_path=str(secrets_file),
+            )
+            asked = dict(mocked.requests)
+        config = orjson.loads((root / "src/emhass/data/config_defaults.json").read_bytes())
+        config["site"] = site
+        return asked, await build_params(EMHASS_CONF, built, config, logger)
+
+    asked, out = asyncio.run(build())
+    assert asked == {}
+    tokens = out["retrieve_hass_conf"].get("remote_tokens")
+    if expected is None:
+        assert tokens is None
+    else:
+        assert tokens == {"garage_token": expected}
+
+
+def test_a_remote_token_no_header_can_carry_is_never_quoted():
+    """A remote's token with a line break in it: the request cannot be sent, and
+    the error names the remote and the error's type, never the header it quotes,
+    not even as its cause or context."""
+    from emhass.coordinator.remote import RemoteError, RemoteParticipant
+
+    with pytest.raises(RemoteError) as caught:
+        RemoteParticipant(
+            "r",
+            "http://127.0.0.1:9/participant",
+            PlanWindow(30, 48),
+            token="remote-token-0123456789\n",
+            timeout=5,
+        )
+    assert "could not be sent (ValueError)" in str(caught.value)
+    assert "0123456789" not in str(caught.value)
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+def test_the_battery_charge_logs_why_the_connection_failed():
+    """A connection that failed is logged with the type of its reason, never
+    its text."""
+    import logging
+
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger.addHandler(handler)
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": "http://127.0.0.1:9",
+        "long_lived_token": "llt-0123456789abcdef",
+    }
+    try:
+        assert participant_api.soc_now(conf, logger) is None
+    finally:
+        logger.removeHandler(handler)
+    text = "\n".join(record.getMessage() for record in records)
+    assert "could not read sensor.soc (URLError, " in text
+    assert "0123456789" not in text
+
+
+def test_the_battery_charge_never_logs_the_token():
+    """A token no HTTP header can carry (a line break in it): the error is
+    logged by its type, never with the header it quotes."""
+    import logging
+
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    logger.addHandler(handler)
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": "http://127.0.0.1:9",
+        "long_lived_token": "llt-0123456789abcdef\r\nX-Other: 1",
+    }
+    try:
+        assert participant_api.soc_now(conf, logger) is None
+    finally:
+        logger.removeHandler(handler)
+    text = "\n".join(record.getMessage() for record in records)
+    assert "could not read sensor.soc" in text
+    assert "0123456789" not in text and "X-Other" not in text
 
 
 def test_each_remote_token_map_has_its_own_cached_optimizer():

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import ssl
 import time
@@ -9,6 +10,44 @@ import orjson
 import websockets
 
 logger = logging.getLogger(__name__)
+
+# websockets 15 and later connect through a proxy taken from the environment by default.
+# The token goes in the first message, so never route it through a proxy. The REST calls
+# (aiohttp) do not use environment proxies either.
+_NO_PROXY = {"proxy": None} if "proxy" in inspect.signature(websockets.connect).parameters else {}
+
+REDIRECTS_NOT_REFUSABLE = (
+    "The installed websockets library cannot refuse a redirect, so the WebSocket connection "
+    "is not opened: a redirect would carry the token to another host. Install websockets "
+    "16.0 or later."
+)
+
+REDIRECT_NOT_FOLLOWED = (
+    "Home Assistant's URL answered the WebSocket connection with a redirect, which is not "
+    "followed: it could carry the token to another host. Set hass_url to the URL Home "
+    "Assistant answers on directly."
+)
+
+
+def _without_redirects(connect):
+    """``connect`` with every redirect refused, or None when it cannot refuse one.
+
+    The token goes in the first message after the handshake, so following a redirect could
+    hand it to another host. websockets' client asks ``process_redirect`` whether to follow
+    one; its legacy client never asks, and follows redirects to other hosts.
+    """
+    if not callable(getattr(connect, "process_redirect", None)):
+        return None
+
+    class _ConnectWithoutRedirects(connect):
+        def process_redirect(self, exc):
+            # The 30x answer is raised as it is: never followed.
+            return exc
+
+    return _ConnectWithoutRedirects
+
+
+_ws_connect = _without_redirects(websockets.connect)
 
 
 class WebSocketError(Exception):
@@ -62,8 +101,6 @@ class AsyncWebSocketClient:
         # For supervisor API, use the dedicated websocket endpoint
         if self.hass_url.startswith("http://supervisor/core/api"):
             return "ws://supervisor/core/websocket"
-        elif self.hass_url.startswith("https://supervisor/core/api"):
-            return "wss://supervisor/core/websocket"
         else:
             # Standard Home Assistant instance
             parsed = urlparse.urlparse(self.hass_url)
@@ -112,10 +149,19 @@ class AsyncWebSocketClient:
 
     async def _connect(self):
         """Internal connect/authenticate and start background tasks."""
+        if _ws_connect is None:
+            self.logger.error(REDIRECTS_NOT_REFUSABLE)
+            raise ConnectionError(REDIRECTS_NOT_REFUSABLE)
         ssl_ctx = self._get_ssl_context()
-        self._ws = await websockets.connect(
-            self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None
-        )
+        try:
+            self._ws = await _ws_connect(
+                self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None, **_NO_PROXY
+            )
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if isinstance(status, int) and 300 <= status < 400:
+                self.logger.error(REDIRECT_NOT_FOLLOWED)
+            raise
         # Authenticate
         msg = await asyncio.wait_for(self._ws.recv(), timeout=5.0)
         data = orjson.loads(msg)

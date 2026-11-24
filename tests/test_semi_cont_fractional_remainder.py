@@ -381,6 +381,47 @@ class TestFractionalRemainder(unittest.TestCase):
         for k in (0, 1):
             self.assertAlmostEqual(energy_wh(res, k), NOMINAL * 1.25, delta=1e-3)
 
+    def test_group_weight_scales_the_on_level(self):
+        """A group weight (#1366) scales a remainder member's ON level, not its step
+        average. Two 3 kW loads need 0.75 h each (one full step plus a half step) and
+        only steps 0-2 are cheap. At 0.7/0.7 the ON levels add to 4.2 kW, above the
+        3.5 kW budget, so no step is shared, though the averages in a remainder step
+        (1.05 + 1.05 kW) would fit. At 0.5/0.5 they add to 3 kW and sharing is allowed,
+        which it would not be if the weight were dropped."""
+        prices = [0.05] * 3 + [0.10] + [0.30] * (N - 4)
+        for weight, expect_shared in ((0.7, False), (0.5, True)):
+            with self.subTest(weight=weight):
+                opt = build_optimization(
+                    optim_overrides=dict(
+                        BASE,
+                        number_of_deferrable_loads=2,
+                        nominal_power_of_deferrable_loads=[3000.0, 3000.0],
+                        minimum_power_of_deferrable_loads=[0.0] * 2,
+                        treat_deferrable_load_as_semi_cont=[True, True],
+                        set_deferrable_load_single_constant=[False] * 2,
+                        set_deferrable_startup_penalty=[0.0] * 2,
+                        operating_hours_of_each_deferrable_load=[0.75, 0.75],
+                        start_timesteps_of_each_deferrable_load=[0] * 2,
+                        end_timesteps_of_each_deferrable_load=[0] * 2,
+                        deferrable_load_groups=[
+                            {
+                                "names": ["deferrable0", "deferrable1"],
+                                "max_power": 3500,
+                                "weights": {"deferrable0": weight, "deferrable1": weight},
+                            }
+                        ],
+                    )
+                )
+                res = solve(opt, [0.75, 0.75], prices=prices)
+                self.assertEqual(opt.optim_status, "Optimal")
+                p0, p1 = power(res, 0), power(res, 1)
+                both_on = (p0 > 1.0) & (p1 > 1.0)
+                self.assertEqual(bool(both_on.any()), expect_shared, [p0.tolist(), p1.tolist()])
+                on_level = weight * NOMINAL * ((p0 > 1.0).astype(float) + (p1 > 1.0))
+                self.assertLessEqual(on_level.max(), 3500 + 1e-3)
+                for k in (0, 1):
+                    self.assertAlmostEqual(energy_wh(res, k), NOMINAL * 0.75, delta=1e-3)
+
     def test_surplus_pv_cannot_be_chased_with_several_partial_steps(self):
         """1.5 kW of free PV surplus tempts a load into many half steps. Only ONE
         step may be partial: the rest must run at the nominal power."""

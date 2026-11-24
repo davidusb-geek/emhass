@@ -43,7 +43,7 @@ requirements:
     - jinja2
     - aiohttp
     - orjson
-    - websockets
+    - websockets >=16.0
     - uvicorn==0.30.6
     - influxdb >=5.3.1
 

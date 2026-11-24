@@ -49,6 +49,20 @@
       "default_value": null,
       "unit": "Wh"
     },
+    "battery_discharge_availability": {
+      "friendly_name": "Battery discharge availability",
+      "Description": "Optional, one entry per battery: null (no cap), a number, or a list with one value per timestep. Each value is a fraction in [0,1] (NOT percent) that scales only the battery's discharge power limit; 0 = the battery may not discharge in that step, while charging stays allowed. Same shape and validation as battery_availability, and multiplied with it. Defaults to no cap, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "fraction"
+    },
+    "soc_floor": {
+      "friendly_name": "Battery state of charge floor per timestep",
+      "Description": "Optional minimum battery state of charge for each timestep, as a fraction in [0,1] (NOT percent), held through each step (its start and its end). One entry per battery: null (no floor) or a list with one value per timestep; with one battery a flat list is its series. null or a value at or below battery_minimum_state_of_charge means no floor at that step; a value above battery_maximum_state_of_charge is lowered to it; a list shorter than the horizon means no floor after it. The floor is soft: it is held whenever the battery can hold it, and a plan that cannot is still made, with a warning logged. A run that starts under the floor keeps that shortfall instead of charging back up: the battery is held at soc_init (no discharge) and a later rise is built by its own increase. A floor out of reach is lowered to what the battery can reach by then (warning logged). Defaults to no floor, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "fraction"
+    },
     "def_availability": {
       "friendly_name": "Deferrable load availability",
       "Description": "Optional, one entry per deferrable load: null (always available), a number, or a list with one value per timestep. Each value is a fraction in [0,1] (NOT percent) that scales the load's nominal power ceiling for that timestep; 0 = the load must not run, whatever else would force it on (def_current_state, def_current_power, minimum on-time). A semi-continuous load runs at its ON level or not at all, so for it any value below 1 blocks the step. Same shape and validation as battery_availability. Defaults to always available, so behaviour is unchanged when omitted. Only used by naive-mpc-optim. See passing_data.md.",

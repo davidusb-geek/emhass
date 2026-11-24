@@ -131,6 +131,22 @@ SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
 # Big-M factor on grid import under costfun "self-consumption" (see
 # _build_objective_function). The terminal-SoC penalty is scaled by the same factor.
 SELF_CONSUMPTION_BIGM = 1e3
+# Soft per-step SoC floor (soc_floor, #1348). A hard floor makes the solve infeasible
+# when a run starts under it, so each step's miss below the floor goes into a
+# non-negative shortfall priced at this multiple of the largest import or export price
+# by size (per Wh, the same 0.001 and self-consumption scaling as the soc_final
+# penalty; by size, so a horizon of zero or negative prices still prices it). It
+# is charged per Wh and per step, with no time_step factor, so one step of shortfall
+# costs more than any energy trade the plan could win with it at any step length:
+# 10x over the 100x of SOC_FINAL_DEVIATION_PENALTY_FACTOR and
+# BATTERY_FIRST_IMPORT_PENALTY_FACTOR, so the floor wins against soc_final whenever it
+# can be held. A factor of 100 still lost to soc_final in testing. Battery-first is
+# the exception: dropping to soc_min + 1% opens a whole step of import at no penalty,
+# which no per-Wh price fully outweighs, so a floor within about
+# 0.1 x discharge power x time step (Wh) of that level can still lose to it. A larger
+# factor only narrows that band, and it scales the objective up whenever the floor
+# cannot be met.
+SOC_FLOOR_SHORTFALL_PENALTY_FACTOR = 1000.0
 # Default big-M (deg C) for the per-source max_supply_temperature gate on
 # shared thermal tanks. When allow_k = 0 the gate must leave the tank
 # temperature unconstrained, so M must be at least (highest feasible tank
@@ -201,6 +217,13 @@ def _cop_upper_bound(cops) -> float:
     cp.Parameter that the refinement re-values, so it is bounded by the COP clip
     rather than by today's value."""
     return HEAT_PUMP_COP_MAX if isinstance(cops, cp.Parameter) else float(np.max(cops))
+
+
+def _is_sequence(value) -> bool:
+    """True for a list, tuple or numpy array with at least one dimension."""
+    if isinstance(value, np.ndarray):
+        return value.ndim > 0
+    return isinstance(value, list | tuple)
 
 
 def _coordinated_plan(opt, *args, **kwargs):
@@ -669,6 +692,9 @@ class Optimization:
         # Optional intermediate SOC target parameters (issue #553)
         self._init_soc_target_params()
 
+        # Optional soft per-step SoC floor parameters (issue #1348)
+        self._init_soc_floor_params()
+
         # Per-battery availability windows and discharge energy budget
         # (EV / V2G battery that is not always connected)
         self._init_battery_availability_params()
@@ -720,6 +746,10 @@ class Optimization:
 
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
+        # Per-step deferrable_load_groups budgets (#1366): one Parameter per group
+        # whose runtime max_power is a list of 2 or more entries, keyed by group
+        # index and refreshed on every run (_update_deferrable_group_params).
+        self.param_group_max_power: dict[int, cp.Parameter] = {}
         # thermal_battery loads whose built problem prices a bound instead of
         # holding it hard (see _thermal_battery_bound_relief). A load enters the
         # set the first time free gains force its bound and stays in it, so a
@@ -1061,6 +1091,32 @@ class Optimization:
         for k in range(self.n_batt):
             self.param_soc_target_floor[k].value = np.zeros(self.num_timesteps)
 
+    def _init_soc_floor_params(self) -> None:
+        """Initialize CVXPY parameters for the optional soft per-step SoC floor (#1348).
+
+        ``param_soc_floor`` holds one vector per battery with the stored energy (Wh)
+        the battery should keep through each step, 0.0 where there is no floor.
+        ``param_soc_floor_penalty`` is the price (currency per Wh and step) of each Wh
+        the plan stays under it, see SOC_FLOOR_SHORTFALL_PENALTY_FACTOR. Both are
+        Parameters, so a new floor or price on a cached problem is a value update.
+
+        The floor only enters the problem for a battery that has one in the current
+        run: a non-negative shortfall Variable, one constraint and one objective term
+        are built for it, and ``_soc_floor_built`` records which batteries the cached
+        problem was built with, so the next run rebuilds the problem when that
+        changes. Without any floor the problem is the one built without this feature.
+        Vector Parameters, so this is (re)called from __init__ and on a resize.
+        """
+        self.param_soc_floor = [
+            cp.Parameter(self.num_timesteps, nonneg=True, name=f"soc_floor_{k}")
+            for k in range(self.n_batt)
+        ]
+        for k in range(self.n_batt):
+            self.param_soc_floor[k].value = np.zeros(self.num_timesteps)
+        self.param_soc_floor_penalty = cp.Parameter(nonneg=True, name="soc_floor_penalty")
+        self.param_soc_floor_penalty.value = 0.0
+        self._soc_floor_built = (False,) * self.n_batt
+
     def _init_battery_availability_params(self) -> None:
         """Initialize CVXPY parameters for per-battery availability windows.
 
@@ -1114,6 +1170,238 @@ class Optimization:
         return self._normalize_availability(
             value, n, self.n_batt, "battery_availability", "number_of_batteries"
         )
+
+    def _soc_floor_request(self, value, n: int, batt_conf: dict) -> list:
+        """Parse the ``soc_floor`` runtime input (#1348) into per-battery fractions.
+
+        ``value`` holds one entry per battery: ``None`` or a list with one SoC
+        fraction per timestep. With one battery a flat list is that battery's
+        series. A list shorter than the horizon means no floor after it; a longer
+        one is cut to the horizon. ``None``/NaN or a value at or below the
+        battery's minimum SoC means no floor at that step (NaN in the result), and
+        a value above its maximum SoC is lowered to it.
+
+        Returns a list of ``self.n_batt`` entries, each ``None`` (no floor at any
+        step) or a numpy array of length ``n``. Raises ValueError for a bare
+        number, a number in place of a battery's list, a nested or boolean entry,
+        a wrong number of entries, or a value that is not a fraction in [0, 1].
+        """
+        if not _is_sequence(value):
+            raise ValueError(
+                "soc_floor must be a list of SoC fractions per timestep (one list per "
+                f"battery), got {value!r}. For the same floor over the whole horizon use "
+                "battery_minimum_state_of_charge."
+            )
+        # Only the first steps decide flat vs per-battery, so a long flat list is
+        # not scanned past the horizon. A 0-d ndarray counts as nested here on
+        # purpose, so it reaches the per-battery length error below.
+        if self.n_batt == 1 and not any(
+            isinstance(v, list | tuple | np.ndarray) for v in value[: n + 1]
+        ):
+            entries = [value]
+        elif len(value) != self.n_batt:
+            raise ValueError(
+                f"soc_floor must have {self.n_batt} entries (number_of_batteries), got {len(value)}"
+            )
+        else:
+            entries = list(value)
+        requests = []
+        for k, entry in enumerate(entries):
+            if entry is None:
+                requests.append(None)
+                continue
+            if not _is_sequence(entry):
+                raise ValueError(
+                    f"soc_floor[{k}] must be null or a list with one SoC fraction per "
+                    f"timestep, got {entry!r}"
+                )
+            head = list(entry[:n])
+            if any(isinstance(v, bool | np.bool_) for v in head):
+                raise ValueError(
+                    f"soc_floor[{k}] must be a list of numbers in [0, 1], got a boolean"
+                )
+            try:
+                arr = np.asarray(head, dtype=float)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"soc_floor[{k}] must be a list of numbers in [0, 1], got {entry!r}"
+                ) from exc
+            if arr.ndim != 1:
+                raise ValueError(
+                    f"soc_floor[{k}] must be a flat list with one SoC fraction per "
+                    "timestep, got a nested list"
+                )
+            set_values = arr[~np.isnan(arr)]
+            if np.any(set_values < 0.0) or np.any(set_values > 1.0):
+                raise ValueError(
+                    f"soc_floor[{k}] must be a fraction in [0, 1] (NOT percent), got "
+                    f"values in [{set_values.min()}, {set_values.max()}]"
+                )
+            if arr.size < n:
+                self.logger.debug(
+                    f"soc_floor[{k}] has {arr.size} values for a {n}-step horizon; "
+                    "no floor after them."
+                )
+                arr = np.concatenate([arr, np.full(n - arr.size, np.nan)])
+            arr = np.where(arr > batt_conf["soc_min"][k], arr, np.nan)
+            if np.all(np.isnan(arr)):
+                requests.append(None)
+                continue
+            requests.append(np.minimum(arr, batt_conf["soc_max"][k]))
+        return requests
+
+    def _soc_floor_energy(
+        self, value, n: int, batt_conf: dict, soc_init_list: list, avail_list: list
+    ) -> list:
+        """Turn the ``soc_floor`` runtime input (#1348) into the per-battery floors
+        (Wh) the soft floor is built with. See ``_soc_floor_request`` for the shapes.
+
+        A value at step t holds through step t: it bounds the stored energy at the
+        end of step t and also at its start (the end of the step before). Per
+        battery, after parsing, the steps with a value are walked in order:
+
+        1. The first one sets the shortfall the run starts with: how far its value
+           is above what the battery can hold or reach by the START of that step,
+           charging at full power only in the steps before it that have no floor.
+           At step 0 that is ``soc_init`` itself, so a run that starts under its
+           reserve is held where it is instead of being charged back up.
+        2. That shortfall is carried, not made up: each later floor is its value
+           less the shortfall, so a rise in the floor is built by its own increase
+           and a lower value never lowers the floor under where the battery is held.
+           A step with no floor gives the plan a free step to charge, so after it
+           the held level grows by that step's reach.
+        3. No floor is above what full-power charging from ``soc_init`` can reach by
+           the start of its step: per step the stored energy can grow by at most
+           ``min(eff_chg * charge_power_max, charge_ceiling) * time_step`` (the
+           grid-side and availability charge bounds in the model). Where this
+           lowers a floor, the rest is added to the carried shortfall, so a reserve
+           out of reach is built as far as the time before it allows and then held,
+           not climbed at full power. A warning names the first such step.
+        4. A step where ``battery_availability`` is 0 gets no floor (the SoC is
+           frozen there): its value is ignored, as if it were null, so it does not
+           steer the walk above. Neither does a value left at or below the minimum
+           SoC get a floor: the soc_min recovery already keeps the SoC from going
+           under ``soc_init`` there.
+        5. Each floor is then also set on the step before it (walking back over
+           steps where ``battery_availability`` is 0, where the SoC cannot move),
+           keeping the larger value there. So the level a step asks for has to be
+           in place when that step starts. In MPC only step 0 of a plan is
+           applied, and the next run holds at ``soc_init`` (rule 1); a plan that
+           left the charge for the first step of a window would never deliver it.
+           Rule 3 already keeps this reachable: the floor at step t is at most
+           what can be reached by the end of step t - 1.
+
+        Returns a list of ``self.n_batt`` entries, each ``None`` (no floor for that
+        battery) or a numpy array of length ``n`` in Wh, 0.0 where there is no floor.
+        """
+        requests = self._soc_floor_request(value, n, batt_conf)
+        floors = []
+        for k, req in enumerate(requests):
+            if req is None:
+                floors.append(None)
+                continue
+            cap_k = batt_conf["cap"][k]
+            init_wh = float(soc_init_list[k]) * cap_k
+            min_wh = batt_conf["soc_min"][k] * cap_k
+            tol = 1e-6 * cap_k
+            wanted = req * cap_k
+            # Rule 4: a value at a step where the battery is unavailable is ignored.
+            frozen = ~(avail_list[k] > 0)
+            has_req = ~np.isnan(wanted) & ~frozen
+            gain = (
+                np.minimum(
+                    batt_conf["eff_chg"][k] * batt_conf["charge_power_max"][k],
+                    self.param_batt_charge_ceiling[k].value,
+                )
+                * self.time_step
+            )
+            # Stored energy reachable by the start of each step, charging in every
+            # step before it (reach) or only in the steps before it with no floor
+            # (free).
+            reach = init_wh + np.concatenate(([0.0], np.cumsum(gain)[:-1]))
+            free = init_wh + np.concatenate(([0.0], np.cumsum(np.where(has_req, 0.0, gain))[:-1]))
+            floor = np.zeros(n)
+            shortfall = None
+            lowered = None
+            prev = None
+            for t in np.flatnonzero(has_req):
+                w = wanted[t]
+                if shortfall is None:
+                    shortfall = max(w - free[t], 0.0)
+                    if t > 0 and shortfall > tol:
+                        lowered = (t, w, free[t])
+                else:
+                    # Rule 2: the steps with no floor since the last floor are
+                    # free to charge in, so they make up that much of the
+                    # shortfall, on top of the level any rise has built.
+                    shortfall = max(shortfall - (free[t] - free[prev]), 0.0)
+                prev = t
+                held = min(w, max(free[t], w - shortfall))
+                f = min(held, reach[t])
+                if held - f > tol and lowered is None:
+                    lowered = (t, w, f)
+                shortfall = max(shortfall, w - f)
+                floor[t] = f
+            if has_req[0] and wanted[0] > init_wh + tol and init_wh > min_wh:
+                self.logger.info(
+                    f"Battery {k}: soc_init={soc_init_list[k]} is under the soc_floor "
+                    f"({req[0]:.3f}) at timestep 0; the floor is held at soc_init, apart "
+                    "from any rise in the floor, which is built, so the battery stops "
+                    "discharging instead of charging back up."
+                )
+            if lowered is not None:
+                t, w, f = lowered
+                self.logger.warning(
+                    f"Battery {k}: soc_floor={w / cap_k:.3f} at timestep {t} cannot "
+                    f"be reached from soc_init={soc_init_list[k]} by the start of that "
+                    f"step; the floor is lowered to the reachable SoC (~{f / cap_k:.3f} "
+                    "there) and held at that shortfall, given battery_charge_power_max, "
+                    "battery_charge_efficiency and battery_availability."
+                )
+            has_floor = has_req & (floor > min_wh)
+            if not np.any(has_floor):
+                floors.append(None)
+                continue
+            built = np.where(has_floor, floor, 0.0)
+            # Rule 5: the level of step t is also needed by the end of the step
+            # before it (the last step before t where the SoC can move).
+            out = built.copy()
+            for t in np.flatnonzero(has_floor):
+                s = t - 1
+                while s >= 0 and frozen[s]:
+                    s -= 1
+                if s >= 0:
+                    out[s] = max(out[s], built[t])
+            floors.append(out)
+        return floors
+
+    def _warn_soc_floor_missed(self) -> None:
+        """Log a warning for each battery whose plan stays under its soc_floor (#1348).
+
+        The floor is soft, so a plan that cannot hold it is still Optimal; this is
+        where the miss shows. Only a miss above 0.1 % of the capacity counts, so
+        solver noise does not warn.
+        """
+        shortfall = self.vars.get("soc_floor_shortfall")
+        if shortfall is None:
+            return
+        caps = self._battery_conf_as_lists()["cap"]
+        for k, var in enumerate(shortfall):
+            if var is None or var.value is None:
+                continue
+            miss = np.asarray(var.value, dtype=float).ravel()
+            steps = np.flatnonzero(miss > 1e-3 * caps[k])
+            if steps.size == 0:
+                continue
+            self.logger.warning(
+                f"Battery {k}: the plan stays under the soc_floor at {steps.size} "
+                f"timestep(s) from timestep {int(steps[0])}, by up to "
+                f"{float(miss.max()) / caps[k]:.3f} of the capacity; the battery cannot "
+                "hold or reach the floor there (for example a load above PV plus "
+                "maximum_power_from_grid, or a charge limit the reach estimate does not "
+                "count), or, under set_battery_first_priority, the floor is so close to "
+                "the minimum SOC that the plan drops to it instead."
+            )
 
     def _normalize_availability(self, value, n: int, count: int, name: str, count_name: str):
         """Normalise a per-unit availability runtime input (``battery_availability``,
@@ -3892,6 +4180,16 @@ class Optimization:
                 + self.param_soc_final_reward * sum(self.vars["soc_final_over"])
             )
 
+        # Soft soc_floor shortfall (#1348), in Wh per step, priced per Wh and step by
+        # param_soc_floor_penalty (see SOC_FLOOR_SHORTFALL_PENALTY_FACTOR). Only
+        # present for the batteries that have a floor in this run.
+        soc_floor_shortfall = self.vars.get("soc_floor_shortfall")
+        if soc_floor_shortfall is not None:
+            objective_terms.append(
+                -self.param_soc_floor_penalty
+                * sum(cp.sum(s) for s in soc_floor_shortfall if s is not None)
+            )
+
         # Battery-first priority penalty (issue #834/#1002). battery_first_penalty
         # is the grid import that occurs while the battery is still above its
         # minimum SoC. Priced at BATTERY_FIRST_IMPORT_PENALTY_FACTOR times the
@@ -4780,6 +5078,15 @@ class Optimization:
             # Parameter so a future per-battery target only needs a different
             # value per entry, not a model change.
             constraints.append(current_stored_energy >= self.param_soc_target_floor[k])
+
+            # Soft per-step SoC floor (#1348): the shortfall takes up whatever the
+            # plan cannot hold and is priced in the objective, so the floor never
+            # makes the problem infeasible. Only for a battery with a floor this run.
+            soc_floor_shortfall = self.vars.get("soc_floor_shortfall")
+            if soc_floor_shortfall is not None and soc_floor_shortfall[k] is not None:
+                constraints.append(
+                    current_stored_energy + soc_floor_shortfall[k] >= self.param_soc_floor[k]
+                )
 
             # Stress Cost (per battery: battery_stress_cost[k] gates this battery only)
             stress_conf_k = batt_stress_conf[k] if batt_stress_conf else None
@@ -8289,25 +8596,49 @@ class Optimization:
         p_deferrable = self.vars["p_deferrable"]
 
         for gi, group in enumerate(groups):
-            indices = [int(name.replace("deferrable", "")) for name in group["names"]]
+            members = [utils.parse_deferrable_group_member(name) for name in group["names"]]
+            indices = [idx for kind, idx in members if kind == "deferrable"]
             max_power = group.get("max_power")
             mutual_exclusion = group.get("mutual_exclusion", False)
 
-            self.logger.debug(f"Adding group {gi} constraints for deferrable loads {indices}")
+            self.logger.debug(f"Adding group {gi} constraints for group members {members}")
 
-            # Shared power budget: sum of group members <= max_power at each timestep.
-            # A semi-continuous load with a fractional remainder step counts at its ON
-            # level, not at the remainder step's average power (issue #1105).
+            # Shared power budget at each timestep (#1366):
+            #   sum_i w_i * p_deferrable_i + sum_k (c_k * charge_k + d_k * discharge_k)
+            #   <= max_power
+            # with charge_k = -p_sto_neg[k] and discharge_k = p_sto_pos[k], both >= 0
+            # and kept apart by the battery's direction binary E[k]. Validation
+            # (utils.check_deferrable_load_groups) keeps w and c in (0, 1] and d in
+            # [-c, 0]. A unit weight adds the plain term and a zero discharge weight
+            # adds nothing, so a group without weights builds the same row as before.
+            # The relaxed retry rebuilds this row on the same battery variables and
+            # the same Parameter. A semi-continuous load with a fractional remainder
+            # step counts at its ON level, not at the remainder step's average power
+            # (issue #1105); its weight scales that term the same way.
             if max_power is not None:
-                group_power_terms = []
-                for i in indices:
-                    if i in self._semi_cont_remainder and i in self._semi_cont_on_level:
-                        group_power_terms.append(
-                            cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
-                        )
-                    else:
-                        group_power_terms.append(p_deferrable[i])
-                constraints.append(sum(group_power_terms) <= max_power)
+                weights = group.get("weights") or {}
+                terms = []
+                for name, (kind, idx) in zip(group["names"], members, strict=True):
+                    if kind == "deferrable":
+                        weight = weights.get(name, 1)
+                        if idx in self._semi_cont_remainder and idx in self._semi_cont_on_level:
+                            term = cp.multiply(
+                                self._semi_cont_on_level[idx], self.vars["p_def_bin2"][idx]
+                            )
+                        else:
+                            term = p_deferrable[idx]
+                        terms.append(term if weight == 1 else weight * term)
+                        continue
+                    battery_weight = weights.get(name) or {}
+                    charge_weight = battery_weight.get("charge", 1)
+                    discharge_weight = battery_weight.get("discharge", 0)
+                    charge = -self.vars["p_sto_neg"][idx]
+                    terms.append(charge if charge_weight == 1 else charge_weight * charge)
+                    if discharge_weight != 0:
+                        terms.append(discharge_weight * self.vars["p_sto_pos"][idx])
+                group_power_sum = sum(terms)
+                limit = self.param_group_max_power.get(gi)
+                constraints.append(group_power_sum <= (max_power if limit is None else limit))
 
             # Mutual exclusion: at most one load active per timestep. This is a
             # PHYSICAL limit (one heat source cannot serve two targets at once), so
@@ -8337,6 +8668,93 @@ class Optimization:
                         constraints.append(self.vars["p_deferrable"][i] <= nominal * bin_var)
                         activity_bins.append(bin_var)
                 constraints.append(cp.sum(cp.vstack(activity_bins), axis=0) <= 1)
+
+    def _warn_deferrable_group_budgets(self) -> None:
+        """After a failed relaxed retry, point at the group budgets as a likely cause (#1366)."""
+        budget_groups = [
+            gi
+            for gi, group in enumerate(self.optim_conf.get("deferrable_load_groups") or [])
+            if group.get("max_power") is not None
+        ]
+        if budget_groups:
+            self.logger.warning(
+                "deferrable_load_groups %s set a max_power that every step must meet. Power "
+                "forced into a step (a def_current_power pin, a load inside its minimum on "
+                "time or already running as a single constant load, a hard soc_target, or a "
+                "battery below its minimum state of charge) can exceed it and make the "
+                "problem infeasible. A runtime max_power worked out from a meter reading has "
+                "to add back what the group's own members draw now.",
+                budget_groups,
+            )
+
+    def _update_deferrable_group_params(self, num_timesteps: int) -> None:
+        """Refresh the per-step deferrable_load_groups budgets for this run (#1366).
+
+        A runtime ``max_power`` list of 2 or more entries is held in a Parameter, so
+        a new list on each MPC call reuses the cached problem. A scalar or a
+        one-entry list stays a constant in the row, as before. The list must have
+        one entry per step of this run's horizon. An infinite entry (no limit at
+        that step) is stored as a finite value above anything the group can draw.
+        Creating, resizing or dropping a
+        Parameter clears the built problem, so it is rebuilt against the current
+        set of Parameters.
+
+        :param num_timesteps: the number of steps in this run
+        :type num_timesteps: int
+        :raises utils.RuntimeParamError: for a list of the wrong length or with an
+            entry that is not a number of 0 or above
+        """
+        per_step = {}
+        for gi, group in enumerate(self.optim_conf.get("deferrable_load_groups") or []):
+            max_power = group.get("max_power")
+            if not isinstance(max_power, list) or len(max_power) < 2:
+                continue
+            if len(max_power) != num_timesteps:
+                raise utils.RuntimeParamError(
+                    f"deferrable_load_groups[{gi}]: 'max_power' has {len(max_power)} "
+                    f"entries, but this run has {num_timesteps} timesteps"
+                )
+            # Checked here too for direct Optimization callers, who skip
+            # treat_runtimeparams. Infinity means no limit at that step.
+            if not all(utils._is_real_number(v, allow_inf=True) and v >= 0 for v in max_power):
+                raise utils.RuntimeParamError(
+                    f"deferrable_load_groups[{gi}]: every 'max_power' entry must be a "
+                    "number of 0 or above"
+                )
+            values = np.asarray(max_power, dtype=float)
+            no_limit = np.isinf(values)
+            if no_limit.any():
+                # cvxpy before 1.9 refuses inf in a nonneg Parameter (its check works
+                # out inf - inf), so a no-limit step gets a finite value the group
+                # can never reach: every member at its full power, twice, plus 1 W.
+                # Validation keeps the weights at 1 or below; a larger one from a
+                # direct caller still scales its member's share of the ceiling.
+                weights = group.get("weights") or {}
+                ceiling = 0.0
+                for name in group["names"]:
+                    kind, idx = utils.parse_deferrable_group_member(name)
+                    weight = weights.get(name)
+                    if kind == "deferrable":
+                        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][idx]
+                        factor = 1.0 if weight is None else max(1.0, float(weight))
+                        ceiling += factor * float(np.max(nominal))
+                    elif idx < len(self.param_battery_charge_power_max):
+                        charge_weight = (weight or {}).get("charge", 1)
+                        charge_max = self.param_battery_charge_power_max[idx].value
+                        ceiling += max(1.0, float(charge_weight)) * float(charge_max or 0)
+                values[no_limit] = 2.0 * ceiling + 1.0
+            per_step[gi] = values
+        for gi in list(self.param_group_max_power):
+            if gi not in per_step:
+                del self.param_group_max_power[gi]
+                self.prob = None
+        for gi, values in per_step.items():
+            param = self.param_group_max_power.get(gi)
+            if param is None or param.shape != (num_timesteps,):
+                param = cp.Parameter(num_timesteps, nonneg=True, name=f"group{gi}_max_power")
+                self.param_group_max_power[gi] = param
+                self.prob = None
+            param.value = values
 
     def _build_results_dataframe(
         self,
@@ -8747,6 +9165,8 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
+        soc_floor: list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
@@ -8792,6 +9212,20 @@ class Optimization:
         (``Forecast.get_pv_plant_inverters``). It is read only above one inverter, where
         the PV of each inverter is the sum of its columns; with one PV inverter the whole
         ``p_pv`` goes to it and the argument may be ``None``.
+
+        ``battery_discharge_availability`` has the shape and validation of
+        ``battery_availability`` but scales only the discharge power limit, so a
+        battery can be kept from discharging while it may still charge. It
+        multiplies with ``battery_availability``. ``None`` (the default) changes
+        nothing.
+
+        ``soc_floor`` (see _soc_floor_energy) is a soft per-step minimum SoC for
+        each battery: every Wh the plan stays under it is priced at
+        SOC_FLOOR_SHORTFALL_PENALTY_FACTOR, so it holds whenever it can and the
+        floor itself never makes the problem infeasible. A run that starts under the floor keeps that
+        shortfall instead of charging back up (it holds at ``soc_init``, and a
+        later rise is built by its own increase); a floor out of reach is lowered
+        to what the battery can reach. ``None`` (the default) changes nothing.
         """
         with self._solve_lock:
             return self._perform_optimization_locked(
@@ -8821,6 +9255,8 @@ class Optimization:
                 def_availability=def_availability,
                 p_pv_plants=p_pv_plants,
                 pv_plant_inverters=pv_plant_inverters,
+                battery_discharge_availability=battery_discharge_availability,
+                soc_floor=soc_floor,
             )
 
     def _surplus_is_generation(self, p_pv) -> bool:
@@ -8864,6 +9300,8 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
+        soc_floor: list | None = None,
     ) -> pd.DataFrame:
         _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Opt-in coordinator backend (emhass.coordinator): the devices are planned as separate
@@ -8985,6 +9423,9 @@ class Optimization:
             # Re-initialize the intermediate SOC target mask with the new horizon (#553)
             self._init_soc_target_params()
 
+            # Re-initialize the soft SoC floor with the new horizon (#1348)
+            self._init_soc_floor_params()
+
             # Re-initialize the per-battery availability ceilings with the new horizon
             self._init_battery_availability_params()
 
@@ -9053,16 +9494,30 @@ class Optimization:
         # target below defaults its timestep to the last connected step.
         n_steps = self.num_timesteps
         avail_list = None
+        dis_avail_list = None
         if self.optim_conf["set_use_battery"]:
             avail_list = self._normalize_battery_availability(battery_availability, n_steps)
+            # Discharge-only cap (#1348), same shapes and validation as
+            # battery_availability; it scales the discharge ceiling alone.
+            if battery_discharge_availability is not None:
+                dis_avail_list = self._normalize_availability(
+                    battery_discharge_availability,
+                    n_steps,
+                    self.n_batt,
+                    "battery_discharge_availability",
+                    "number_of_batteries",
+                )
             energy_max_list = self._normalize_soc_arg(
                 battery_discharge_energy_max, "battery_discharge_energy_max"
             )
             for k in range(self.n_batt):
                 chg_k = float(batt_conf["charge_power_max"][k])
                 dis_k = float(batt_conf["discharge_power_max"][k])
+                dis_scale = avail_list[k]
+                if dis_avail_list is not None:
+                    dis_scale = dis_scale * dis_avail_list[k]
                 self.param_batt_charge_ceiling[k].value = avail_list[k] * chg_k
-                self.param_batt_discharge_ceiling[k].value = avail_list[k] * dis_k
+                self.param_batt_discharge_ceiling[k].value = dis_scale * dis_k
                 unreachable = dis_k * self.time_step * n_steps + 1.0
                 if energy_max_list[k] is None:
                     self.param_batt_discharge_energy_max[k].value = unreachable
@@ -9158,6 +9613,26 @@ class Optimization:
                     f"{soc_target_clamped} by timestep {k_target} (requested "
                     f"soc_target={target_list[k]}, soc_target_timestep={timestep_list[k]})."
                 )
+
+        # Optional soft per-step SoC floor (#1348). Reset on every call so a floor
+        # from a previous run is cleared. Which batteries have a floor is part of the
+        # problem's structure (a shortfall Variable, a constraint and an objective term
+        # each), so the cached problem is rebuilt when that changes; the floor values
+        # and their price are Parameter values.
+        soc_floor_present = [False] * self.n_batt
+        for k in range(self.n_batt):
+            self.param_soc_floor[k].value = np.zeros(self.num_timesteps)
+        if self.optim_conf["set_use_battery"] and soc_floor is not None:
+            floor_list = self._soc_floor_energy(
+                soc_floor, n_steps, batt_conf, soc_init_list, avail_list
+            )
+            for k, floor_k in enumerate(floor_list):
+                if floor_k is not None:
+                    self.param_soc_floor[k].value = floor_k
+                    soc_floor_present[k] = True
+        soc_floor_present = tuple(soc_floor_present)
+        if soc_floor_present != self._soc_floor_built:
+            self.prob = None
 
         # Capacity / demand charge runtime inputs: the already-incurred
         # incumbent peak (issue #623 Phase 2), the tariff demand-window mask
@@ -9325,6 +9800,21 @@ class Optimization:
                 * SOC_FINAL_DEVIATION_PENALTY_FACTOR
                 * max(float(np.max(np.maximum(np.asarray(soc_tariff, dtype=float), 0.0))), 1e-3)
             )
+        # Price of a Wh-step under the soc_floor (#1348): above the largest import
+        # or export price by size, since a reserve can be traded for selling, for
+        # not buying, or for room to soak up a paid (negative) import. Same scaling
+        # and 1e-3 floor as the soc_final penalty above.
+        if any(soc_floor_present):
+            self.param_soc_floor_penalty.value = (
+                0.001
+                * SOC_FLOOR_SHORTFALL_PENALTY_FACTOR
+                * penalty_scale
+                * max(
+                    float(np.max(np.abs(np.asarray(unit_load_cost, dtype=float)))),
+                    float(np.max(np.abs(np.asarray(unit_prod_price, dtype=float)))),
+                    1e-3,
+                )
+            )
         self.param_prod_price.value = unit_prod_price
         if self.n_inv > 1:
             # Spill only competes with a negative price, so in each step the base is the
@@ -9429,7 +9919,9 @@ class Optimization:
                 # budget allows, leave it outside the band instead of going
                 # infeasible.
                 if avail_list is not None and (
-                    np.any(avail_list[k] < 1) or energy_max_list[k] is not None
+                    np.any(avail_list[k] < 1)
+                    or (dis_avail_list is not None and np.any(dis_avail_list[k] < 1))
+                    or energy_max_list[k] is not None
                 ):
                     start_wh = soc_init_list[k] * batt_conf["cap"][k]
                     chg_reach = (
@@ -10057,6 +10549,10 @@ class Optimization:
         inv_stress_conf = self._inv_stress_conf
         batt_stress_conf = self._batt_stress_conf
 
+        # Per-step deferrable_load_groups budgets (#1366): checked against this
+        # run's horizon and refreshed before the build, also on a cached problem.
+        self._update_deferrable_group_params(len(data_opt))
+
         # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
@@ -10111,6 +10607,18 @@ class Optimization:
                 if inv_stress_conf["active"]:
                     self.vars["inv_stress_cost"] = inv_stress_conf["vars"]
 
+            # Soft soc_floor (#1348): one non-negative shortfall per step for each
+            # battery with a floor in this run, none at all without one.
+            if any(soc_floor_present):
+                self.vars["soc_floor_shortfall"] = [
+                    cp.Variable(self.num_timesteps, nonneg=True, name=f"soc_floor_shortfall_{k}")
+                    if soc_floor_present[k]
+                    else None
+                    for k in range(self.n_batt)
+                ]
+            else:
+                self.vars.pop("soc_floor_shortfall", None)
+
             # Add Constraints
             self._add_main_power_balance_constraints(constraints)
             self._add_hybrid_inverter_constraints(constraints, inv_stress_conf)
@@ -10158,6 +10666,7 @@ class Optimization:
             # for, so cached-retry rebuilds see them (issue #1048).
             self._batt_stress_conf = batt_stress_conf
             self._inv_stress_conf = inv_stress_conf
+            self._soc_floor_built = soc_floor_present
 
         # A max_thermal_power cap below the load's minimum power forces that step
         # off, so a forced run pinned there would make the model infeasible -
@@ -10446,6 +10955,7 @@ class Optimization:
                         self.logger.error(
                             f"Relaxed optimization also failed with status: {prob_relaxed.status}"
                         )
+                        self._warn_deferrable_group_budgets()
                     # Use the relaxed result for this run only. self.prob keeps
                     # pointing at the clean cached problem: the relaxed solve is a
                     # one-shot rescue, never a permanent replacement (issue #1048).
@@ -10523,6 +11033,7 @@ class Optimization:
                 "Total value of the Cost function = %.02f",
                 solved_prob.value,
             )
+            self._warn_soc_floor_missed()
 
         # Results Extraction
         # #610: pass the per-battery soc_init list built above, except at
@@ -10747,6 +11258,8 @@ class Optimization:
         def_availability: float | list | None = None,
         p_pv_plants: pd.DataFrame | None = None,
         pv_plant_inverters: list | None = None,
+        battery_discharge_availability: float | list | None = None,
+        soc_floor: list | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -10898,6 +11411,17 @@ class Optimization:
             to build the PV of each inverter. It is passed through unsliced. \
             ``None`` (the default) is right at one inverter.
         :type pv_plant_inverters: list, optional
+        :param battery_discharge_availability: Optional per-battery fraction in \
+            [0, 1] per timestep that scales only the discharge power limit (0 = \
+            may not discharge, charging still allowed). Same shapes as \
+            ``battery_availability``, and multiplied with it.
+        :type battery_discharge_availability: float | list, optional
+        :param soc_floor: Optional per-battery minimum SoC per timestep, a list of \
+            fractions in [0, 1] for each battery (``None`` for no floor; with one \
+            battery a flat list is its series). It is a soft floor: a miss is \
+            priced, never infeasible. A run that starts under it keeps that \
+            shortfall and holds at ``soc_init``. See ``_soc_floor_energy``.
+        :type soc_floor: list, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -10956,6 +11480,8 @@ class Optimization:
             def_availability=def_availability,
             p_pv_plants=p_pv_plants_slice,
             pv_plant_inverters=pv_plant_inverters,
+            battery_discharge_availability=battery_discharge_availability,
+            soc_floor=soc_floor,
         )
         return self.opt_res
 

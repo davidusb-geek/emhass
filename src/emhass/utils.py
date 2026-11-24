@@ -33,6 +33,20 @@ import yaml
 from plotly.subplots import make_subplots
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+from emhass.connection_manager import (
+    HASS_URL_UNSET_REFUSED,
+    MIN_CONTAINED_TOKEN,
+    OLD_PLACEHOLDER_HASS_URL,
+    PLACEHOLDER_HASS_URL,
+    PLACEHOLDER_URL_REFUSED,
+    SUPERVISOR_TOKEN_REFUSED,
+    canonical_supervisor_url,
+    is_placeholder_hass_url,
+    is_real_token,
+    is_supervisor_token_for_another_host,
+    is_supervisor_url,
+    is_unset_hass_url,
+)
 from emhass.coordinator.site import (
     compile_site,
     reserved_secret_values,
@@ -3325,6 +3339,21 @@ async def treat_runtimeparams(
             params["passed_data"]["battery_discharge_energy_max"] = runtimeparams.get(
                 "battery_discharge_energy_max", None
             )
+            # Discharge-only cap (#1348), same shape and validation as
+            # battery_availability (done in Optimization.perform_optimization).
+            params["passed_data"]["battery_discharge_availability"] = runtimeparams.get(
+                "battery_discharge_availability", None
+            )
+            # Soft per-step SoC floor (#1348), runtime-only, default None (no floor). A
+            # percentage is rejected here like soc_target; shape and range checks
+            # happen in Optimization.perform_optimization.
+            soc_floor = runtimeparams.get("soc_floor", None)
+            params["passed_data"]["soc_floor"] = soc_floor
+            reject_soc_fraction_above_one("soc_floor", soc_floor, logger)
+            if isinstance(soc_floor, list):
+                for k, entry in enumerate(soc_floor):
+                    if isinstance(entry, list):
+                        reject_soc_fraction_above_one(f"soc_floor[{k}]", entry, logger)
             # Per-deferrable-load availability, same shape and validation as
             # battery_availability (done in Optimization.perform_optimization).
             params["passed_data"]["def_availability"] = runtimeparams.get("def_availability", None)
@@ -4340,6 +4369,12 @@ async def treat_runtimeparams(
     # before the value reaches the OptimizationCache key or the model build.
     optim_conf = canonicalize_capacity_charge_config(optim_conf, logger)
     params["optim_conf"] = optim_conf
+    # deferrable_load_groups on the final parameters (#1366): after the runtime
+    # merge, the heat_topology compile and the load-count re-normalisation, so a
+    # runtime change to the battery or inverter settings is checked too.
+    check_deferrable_load_groups(
+        optim_conf, plant_conf, config_file=False, error_cls=RuntimeParamError
+    )
 
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
@@ -7333,6 +7368,19 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
 # secrets): never sent to a remote solver, whichever path planned.
 _own_api_tokens: set[str] = set()
 
+# Every Home Assistant token build_secrets has read, from any source, including one a later
+# source replaced: never sent to a remote solver either.
+_own_ha_tokens: set[str] = set()
+
+
+def _remember_ha_token(value) -> None:
+    """Keep a Home Assistant token value build_secrets read (not a placeholder)."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return
+    text = str(value).strip()
+    if text and text != "empty":
+        _own_ha_tokens.add(text)
+
 
 def _participant_secrets_from_options(
     options: dict, params_secrets: dict, logger: logging.Logger
@@ -7398,7 +7446,7 @@ async def build_secrets(
     if argument is None:
         argument = {}
     params_secrets = {
-        "hass_url": "https://myhass.duckdns.org/",
+        "hass_url": PLACEHOLDER_HASS_URL,
         "long_lived_token": "thatverylongtokenhere",
         "time_zone": "Europe/Paris",
         "Latitude": 45.83,
@@ -7426,14 +7474,24 @@ async def build_secrets(
     # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
     # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
+    options_read = False
     if options_path and pathlib.Path(options_path).is_file():
         async with aiofiles.open(options_path) as data:
             content = await data.read()
             options = orjson.loads(content)
+            options_read = True
 
             # Obtain secrets from Home Assistant?
             url_from_options = options.get("hass_url", "empty")
             key_from_options = options.get("long_lived_token", "empty")
+            _remember_ha_token(key_from_options)
+            # The example URL counts as unset here too, before anything is sent to it.
+            if is_placeholder_hass_url(url_from_options):
+                logger.warning(
+                    "The add-on option hass_url is still the example from the docs, so it is "
+                    "treated as unset."
+                )
+                url_from_options = "empty"
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
             data_path_value = options.get("data_path", None)
@@ -7546,79 +7604,83 @@ async def build_secrets(
                 else:
                     # For addons, use supervisor API for both REST and WebSocket access
                     params_secrets["hass_url"] = "http://supervisor/core/api"
-                headers = {
-                    "Authorization": "Bearer " + params_secrets["long_lived_token"],
-                    "content-type": "application/json",
-                }
-                # Obtain secrets from Home Assistant via API
-                logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        params_secrets["hass_url"] + "/config", headers=headers
-                    ) as response:
-                        if response.status < 400:
-                            config_hass = await response.json()
-                            params_secrets.update(
-                                {
-                                    "hass_url": params_secrets["hass_url"],
-                                    "long_lived_token": params_secrets["long_lived_token"],
-                                    "time_zone": config_hass["time_zone"],
-                                    "Latitude": config_hass["latitude"],
-                                    "Longitude": config_hass["longitude"],
-                                    "Altitude": config_hass["elevation"],
-                                    # If defined in HA config, use them, otherwise keep defaults
-                                    "solcast_api_key": config_hass.get(
-                                        "solcast_api_key", params_secrets["solcast_api_key"]
-                                    ),
-                                    "solcast_rooftop_id": config_hass.get(
-                                        "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
-                                    ),
-                                    "solar_forecast_kwp": config_hass.get(
-                                        "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
-                                    ),
-                                    "influxdb_username": config_hass.get(
-                                        "influxdb_username", params_secrets.get("influxdb_username")
-                                    ),
-                                    "influxdb_password": config_hass.get(
-                                        "influxdb_password", params_secrets.get("influxdb_password")
-                                    ),
-                                    "victoriametrics_username": config_hass.get(
-                                        "victoriametrics_username",
-                                        params_secrets.get("victoriametrics_username"),
-                                    ),
-                                    "victoriametrics_password": config_hass.get(
-                                        "victoriametrics_password",
-                                        params_secrets.get("victoriametrics_password"),
-                                    ),
-                                }
-                            )
-                        else:
-                            # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                            logger.warning(
-                                "Error obtaining secrets from Home Assistant Supervisor API"
-                            )
-                            logger.debug("Obtaining url and key secrets from options.json")
-                            if url_from_options != "empty" and url_from_options != "":
-                                params_secrets["hass_url"] = url_from_options
-                            if key_from_options != "empty" and key_from_options != "":
-                                params_secrets["long_lived_token"] = key_from_options
-                            if (
-                                options.get("time_zone", "empty") != "empty"
-                                and options["time_zone"] != ""
-                            ):
-                                params_secrets["time_zone"] = options["time_zone"]
-                            if options.get("Latitude", None) is not None and bool(
-                                options["Latitude"]
-                            ):
-                                params_secrets["Latitude"] = options["Latitude"]
-                            if options.get("Longitude", None) is not None and bool(
-                                options["Longitude"]
-                            ):
-                                params_secrets["Longitude"] = options["Longitude"]
-                            if options.get("Altitude", None) is not None and bool(
-                                options["Altitude"]
-                            ):
-                                params_secrets["Altitude"] = options["Altitude"]
+                params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
+                config_hass = None
+                if is_supervisor_url(params_secrets["hass_url"]):
+                    headers = {
+                        "Authorization": "Bearer " + params_secrets["long_lived_token"],
+                        "content-type": "application/json",
+                    }
+                    # Obtain secrets from Home Assistant via API
+                    logger.debug("Obtaining secrets from Home Assistant Supervisor API")
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            params_secrets["hass_url"] + "/config", headers=headers
+                        ) as response:
+                            if response.status < 400:
+                                config_hass = await response.json()
+                            else:
+                                logger.warning(
+                                    "Error obtaining secrets from Home Assistant Supervisor API"
+                                )
+                else:
+                    # The Supervisor token is only for the Supervisor proxy, so it is never sent
+                    # to the Home Assistant URL set in the options. Use the options instead.
+                    logger.info(
+                        "hass_url in the add-on options is not the Supervisor, so the "
+                        "Supervisor API is not called. Time zone and location come from the "
+                        "options, the environment or the defaults."
+                    )
+                if config_hass is not None:
+                    params_secrets.update(
+                        {
+                            "hass_url": params_secrets["hass_url"],
+                            "long_lived_token": params_secrets["long_lived_token"],
+                            "time_zone": config_hass["time_zone"],
+                            "Latitude": config_hass["latitude"],
+                            "Longitude": config_hass["longitude"],
+                            "Altitude": config_hass["elevation"],
+                            # If defined in HA config, use them, otherwise keep defaults
+                            "solcast_api_key": config_hass.get(
+                                "solcast_api_key", params_secrets["solcast_api_key"]
+                            ),
+                            "solcast_rooftop_id": config_hass.get(
+                                "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
+                            ),
+                            "solar_forecast_kwp": config_hass.get(
+                                "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
+                            ),
+                            "influxdb_username": config_hass.get(
+                                "influxdb_username", params_secrets.get("influxdb_username")
+                            ),
+                            "influxdb_password": config_hass.get(
+                                "influxdb_password", params_secrets.get("influxdb_password")
+                            ),
+                            "victoriametrics_username": config_hass.get(
+                                "victoriametrics_username",
+                                params_secrets.get("victoriametrics_username"),
+                            ),
+                            "victoriametrics_password": config_hass.get(
+                                "victoriametrics_password",
+                                params_secrets.get("victoriametrics_password"),
+                            ),
+                        }
+                    )
+                else:
+                    # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                    logger.debug("Obtaining url and key secrets from options.json")
+                    if url_from_options != "empty" and url_from_options != "":
+                        params_secrets["hass_url"] = url_from_options
+                    if key_from_options != "empty" and key_from_options != "":
+                        params_secrets["long_lived_token"] = key_from_options
+                    if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
+                        params_secrets["time_zone"] = options["time_zone"]
+                    if options.get("Latitude", None) is not None and bool(options["Latitude"]):
+                        params_secrets["Latitude"] = options["Latitude"]
+                    if options.get("Longitude", None) is not None and bool(options["Longitude"]):
+                        params_secrets["Longitude"] = options["Longitude"]
+                    if options.get("Altitude", None) is not None and bool(options["Altitude"]):
+                        params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
             # This logic runs regardless of whether HA API call above succeeded or failed,
@@ -7693,6 +7755,8 @@ async def build_secrets(
             ) from None
         except Exception as e:
             raise ValueError(f"Could not read the secrets file ({type(e).__name__})") from None
+        if isinstance(loaded, dict):
+            _remember_ha_token(loaded.get("long_lived_token"))
         params_secrets.update(loaded)
     # The web server's API token is read by api_auth on its own. Keep it out of the
     # secrets that go on into params, logs and the configuration routes - but
@@ -7708,9 +7772,296 @@ async def build_secrets(
         logger.debug("Obtaining url from passed argument")
     if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
+        _remember_ha_token(argument["key"])
         logger.debug("Obtaining long_lived_token from passed argument")
 
+    # The default hass_url is only an example, so it counts as unset, like a blank or "empty"
+    # one: the add-on (the Supervisor token plus its options file) falls back to the
+    # Supervisor, and anywhere else a token set without a URL is dropped, not sent. A
+    # SUPERVISOR_TOKEN set by hand outside the add-on is not a reason to send anything to
+    # http://supervisor, and neither is a blank URL, which the request code would otherwise
+    # read as the Supervisor. This runs before the Supervisor-token check below, which then
+    # sees the Supervisor URL.
+    url_is_example = is_placeholder_hass_url(params_secrets["hass_url"])
+    if url_is_example or is_unset_hass_url(params_secrets["hass_url"]):
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+        if supervisor_token and options_read:
+            logger.warning(
+                (
+                    "hass_url is still the example from the docs"
+                    if url_is_example
+                    else "hass_url is not set"
+                )
+                + ", so the Supervisor URL and the Supervisor token are used instead. To use "
+                "a long-lived access token, set hass_url as well."
+            )
+            params_secrets["hass_url"] = "http://supervisor/core/api"
+            params_secrets["long_lived_token"] = supervisor_token
+        elif is_real_token(params_secrets["long_lived_token"]):
+            logger.error(PLACEHOLDER_URL_REFUSED if url_is_example else HASS_URL_UNSET_REFUSED)
+            params_secrets["long_lived_token"] = ""
+
+    # Whichever source set them, never hand on the Supervisor token with another URL.
+    params_secrets["hass_url"] = canonical_supervisor_url(params_secrets["hass_url"])
+    if is_supervisor_token_for_another_host(
+        params_secrets["hass_url"], params_secrets["long_lived_token"]
+    ):
+        logger.error(SUPERVISOR_TOKEN_REFUSED)
+        params_secrets["long_lived_token"] = ""
+
     return emhass_conf, params_secrets
+
+
+_GROUP_BATTERY_NAME = re.compile(r"battery([0-9]+)")
+
+
+def parse_deferrable_group_member(name: str) -> tuple[str, int]:
+    """
+    Parse one entry of a deferrable_load_groups ``names`` list (#1366).
+
+    ``batteryK`` (ASCII digits only, 0-based) is a battery. Anything else is read
+    as a deferrable load exactly as before, ``int(name.replace("deferrable", ""))``.
+
+    :param name: the member name
+    :type name: str
+    :return: ("battery", K) or ("deferrable", N)
+    :rtype: tuple[str, int]
+    :raises ValueError: when the name is neither form
+    """
+    match = _GROUP_BATTERY_NAME.fullmatch(name)
+    if match:
+        return "battery", int(match.group(1))
+    return "deferrable", int(name.replace("deferrable", ""))
+
+
+def _is_real_number(value, allow_inf: bool = False) -> bool:
+    """True for a finite int or float (numpy scalars included), never for a bool.
+
+    With ``allow_inf``, positive infinity is accepted too.
+    """
+    if isinstance(value, bool | np.bool_) or not isinstance(
+        value, int | float | np.integer | np.floating
+    ):
+        return False
+    try:
+        return math.isfinite(value) or (allow_inf and value == math.inf)
+    except OverflowError:  # an int too large for a float
+        return False
+
+
+def _check_group_battery_weight(weight, label: str) -> None:
+    """Check a battery member's weight object; raise ValueError on the first fault."""
+    if not isinstance(weight, dict):
+        raise ValueError(f"{label} must be an object with 'charge' and 'discharge'")
+    if any(key not in ("charge", "discharge") for key in weight):
+        raise ValueError(f"{label} only takes 'charge' and 'discharge'")
+    charge = weight.get("charge", 1.0)
+    discharge = weight.get("discharge", 0.0)
+    if not _is_real_number(charge) or not 0 < charge <= 1:
+        raise ValueError(f"{label}: 'charge' must be a number above 0 and at most 1")
+    # float() first: negating an unsigned NumPy charge would wrap around.
+    if not _is_real_number(discharge) or not -float(charge) <= discharge <= 0:
+        raise ValueError(f"{label}: 'discharge' must be a number from minus 'charge' to 0")
+
+
+def _deferrable_group_problem(
+    gi: int,
+    group,
+    optim_conf: dict,
+    plant_conf: dict,
+    config_file: bool,
+    mutex_seen: set[int],
+) -> str | None:
+    """Return the first fault in one deferrable_load_groups entry, or None."""
+    prefix = f"deferrable_load_groups[{gi}]:"
+    if not isinstance(group, dict):
+        return f"{prefix} each group must be an object"
+    names = group.get("names", [])
+    if not isinstance(names, list) or not names:
+        return f"{prefix} 'names' must be a list with at least 1 deferrable load reference"
+    try:
+        num_def_loads = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    except (TypeError, ValueError):
+        num_def_loads = 0
+    # On the final parameters a group with neither a budget nor mutual exclusion
+    # adds nothing, so a repeated name there stays harmless, as it always was (a
+    # heat_topology actuator group can list the same flow twice).
+    raw_mutex = group.get("mutual_exclusion", False)
+    no_op_final = (
+        not config_file
+        and group.get("max_power") is None
+        and (raw_mutex is None or raw_mutex is False)
+    )
+    members = []
+    seen = set()
+    for j, name in enumerate(names):
+        if not isinstance(name, str):
+            return f"{prefix} names[{j}] must be a string"
+        try:
+            kind, idx = parse_deferrable_group_member(name)
+        except ValueError:
+            return f"{prefix} names[{j}] is not deferrableN or batteryK"
+        if kind == "deferrable" and not 0 <= idx < num_def_loads:
+            return (
+                f"{prefix} names[{j}] refers to a deferrable load that is not configured "
+                f"(number_of_deferrable_loads is {num_def_loads})"
+            )
+        if (kind, idx) in seen and not no_op_final:
+            return f"{prefix} names[{j}] is duplicated within the group"
+        seen.add((kind, idx))
+        members.append((kind, idx))
+    deferrables = [idx for kind, idx in members if kind == "deferrable"]
+    batteries = [idx for kind, idx in members if kind == "battery"]
+    if not deferrables:
+        return f"{prefix} 'names' must contain at least 1 deferrable load reference"
+
+    mutual_exclusion = group.get("mutual_exclusion", False)
+    if mutual_exclusion is None and not config_file:
+        mutual_exclusion = False  # null has always read as false at runtime
+    if not isinstance(mutual_exclusion, bool):
+        return f"{prefix} 'mutual_exclusion' must be a boolean"
+    if batteries:
+        # A battery member puts the battery's AC power into the row: only the
+        # one non-hybrid inverter layout has it on the AC side (#1366, v1).
+        if mutual_exclusion:
+            return f"{prefix} a battery cannot be in a mutual exclusion group"
+        if not optim_conf.get("set_use_battery", False):
+            return f"{prefix} a battery member needs set_use_battery"
+        try:
+            num_batteries = validate_num_batteries(plant_conf)
+        except BatteryConfigError:
+            return f"{prefix} a battery member needs a valid number_of_batteries"
+        for j, (kind, idx) in enumerate(members):
+            if kind == "battery" and idx >= num_batteries:
+                return (
+                    f"{prefix} names[{j}] refers to a battery that is not configured "
+                    f"(number_of_batteries is {num_batteries})"
+                )
+        try:
+            num_inverters = validate_num_inverters(plant_conf)
+        except InverterConfigError:
+            # build_params never refuses on an inverter fault; the final check
+            # in treat_runtimeparams runs after the inverter count is refused.
+            num_inverters = None if config_file else 0
+        if num_inverters is not None and (
+            num_inverters != 1 or plant_conf.get("inverter_is_hybrid", False)
+        ):
+            return (
+                f"{prefix} a battery member needs number_of_inverters 1 "
+                "and inverter_is_hybrid false"
+            )
+        # A load missing from is_electric_load is electric, as in the builder.
+        is_electric = optim_conf.get("is_electric_load")
+        if not isinstance(is_electric, list):
+            is_electric = []
+        if any(idx < len(is_electric) and not bool(is_electric[idx]) for idx in deferrables):
+            return f"{prefix} a group with a battery cannot hold a non-electric load"
+    if config_file and mutual_exclusion:
+        for idx in deferrables:
+            if idx in mutex_seen:
+                return (
+                    f"{prefix} deferrable load {idx} is already in another mutual exclusion "
+                    "group. A load can be in at most one mutual exclusion group"
+                )
+        mutex_seen.update(deferrables)
+
+    max_power = group.get("max_power")
+    if max_power is None:
+        # On the final parameters a group with neither field stays the no-op it
+        # always was there (a heat_topology actuator group without
+        # max_combined_power compiles to one).
+        if config_file and not mutual_exclusion:
+            return f"{prefix} 'max_power' is required when 'mutual_exclusion' is false"
+    elif isinstance(max_power, list):
+        if config_file:
+            return (
+                f"{prefix} 'max_power' must be a number in the configuration; "
+                "a per-step list can only be passed at runtime"
+            )
+        if not max_power:
+            return f"{prefix} 'max_power' must not be an empty list"
+        # Infinity is kept, in a list as for a number: it solves as "no limit".
+        if not all(_is_real_number(v, allow_inf=True) and v >= 0 for v in max_power):
+            return f"{prefix} every 'max_power' entry must be a number of 0 or above"
+    elif not _is_real_number(max_power, allow_inf=True):
+        # Infinity is kept: it has always built and solved as "no limit".
+        if config_file:
+            return f"{prefix} 'max_power' must be a number"
+        return f"{prefix} 'max_power' must be a number or a list of numbers"
+    elif max_power < 0 or (config_file and max_power == 0):
+        return f"{prefix} 'max_power' must be a positive number"
+
+    weights = group.get("weights")
+    if weights is None:
+        return None
+    if not isinstance(weights, dict):
+        return f"{prefix} 'weights' must be an object keyed by member name"
+    by_name = dict(zip(names, members, strict=True))
+    for key, weight in weights.items():
+        if key not in by_name:
+            return f"{prefix} every 'weights' key must be a name listed in the group"
+        kind, idx = by_name[key]
+        member = "deferrable load" if kind == "deferrable" else "battery"
+        label = f"{prefix} the weight of {member} {idx}"
+        if kind == "battery":
+            try:
+                _check_group_battery_weight(weight, label)
+            except ValueError as err:
+                return str(err)
+        elif not _is_real_number(weight) or not 0 < weight <= 1:
+            return f"{label} must be a number above 0 and at most 1"
+    return None
+
+
+def check_deferrable_load_groups(
+    optim_conf: dict,
+    plant_conf: dict,
+    *,
+    config_file: bool,
+    error_cls: type[ValueError] = ValueError,
+) -> None:
+    """
+    Validate optim_conf["deferrable_load_groups"] (#1366).
+
+    Runs in build_params on the configuration (``config_file=True``) and at the end
+    of treat_runtimeparams on the final parameters of every run, after the runtime
+    merge and the heat_topology compile (``config_file=False``), so a runtime
+    change to the battery or inverter settings is checked against the groups too.
+
+    The configuration rules are stricter: ``max_power`` is a number above 0, and a
+    load is in at most one mutual exclusion group. On the final parameters
+    ``max_power`` may be 0 or a per-step list of numbers 0 or above (its length is
+    checked against the horizon by the optimizer), mutual exclusion groups may
+    overlap, as runtime and heat_topology groups always could, and a group with
+    neither ``max_power`` nor mutual exclusion (``mutual_exclusion`` false or null)
+    is accepted and adds nothing, as before, even with a repeated name. A missing or
+    empty ``deferrable_load_groups`` (any false value, 0 included) means no groups on
+    both paths.
+
+    The first fault is raised as ``error_cls``; the message names the group and
+    member by position and never repeats a value from the request.
+
+    :param optim_conf: the optimization configuration
+    :type optim_conf: dict
+    :param plant_conf: the plant configuration
+    :type plant_conf: dict
+    :param config_file: True for the configuration rules, False for the final ones
+    :type config_file: bool
+    :param error_cls: the exception class to raise
+    :type error_cls: type[ValueError]
+    """
+    groups = optim_conf.get("deferrable_load_groups")
+    if not groups:  # null, "", {}, [], 0 and false all mean no groups
+        return
+    if not isinstance(groups, list):
+        raise error_cls("deferrable_load_groups must be a list of group objects")
+    mutex_seen: set[int] = set()
+    for gi, group in enumerate(groups):
+        problem = _deferrable_group_problem(
+            gi, group, optim_conf, plant_conf, config_file, mutex_seen
+        )
+        if problem is not None:
+            raise error_cls(problem)
 
 
 async def build_params(
@@ -7828,59 +8179,9 @@ async def build_params(
                 def_array_name,
                 logger,
             )
-        # Validate deferrable_load_groups
-        groups = params["optim_conf"].get("deferrable_load_groups", [])
-        if groups:
-            seen_indices = set()
-            for gi, group in enumerate(groups):
-                # Validate names
-                names = group.get("names", [])
-                if not names:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'names' must contain at least 1 deferrable load reference"
-                    )
-                indices = []
-                group_indices = set()
-                for name in names:
-                    try:
-                        idx = int(name.replace("deferrable", ""))
-                    except ValueError as err:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: could not parse index from name '{name}'"
-                        ) from err
-                    if idx < 0 or idx >= num_def_loads:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' references index {idx}, "
-                            f"but only {num_def_loads} deferrable loads are configured"
-                        )
-                    if idx in group_indices:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' is duplicated within the group"
-                        )
-                    if idx in seen_indices:
-                        raise ValueError(
-                            f"deferrable_load_groups[{gi}]: '{name}' is already in another group. "
-                            f"A deferrable load cannot belong to multiple groups"
-                        )
-                    indices.append(idx)
-                    group_indices.add(idx)
-                seen_indices.update(indices)
-
-                # Validate max_power (optional when mutual_exclusion is true)
-                max_power = group.get("max_power")
-                mutual_exclusion = group.get("mutual_exclusion", False)
-                if max_power is not None and max_power <= 0:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'max_power' must be a positive number"
-                    )
-                if not isinstance(mutual_exclusion, bool):
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'mutual_exclusion' must be a boolean"
-                    )
-                if max_power is None and not mutual_exclusion:
-                    raise ValueError(
-                        f"deferrable_load_groups[{gi}]: 'max_power' is required when 'mutual_exclusion' is false"
-                    )
+        # Validate deferrable_load_groups against the configuration rules (#1366).
+        # The final parameters of every run are checked again in treat_runtimeparams.
+        check_deferrable_load_groups(params["optim_conf"], params["plant_conf"], config_file=True)
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
 
@@ -7960,12 +8261,39 @@ async def build_params(
     if own_api_token:
         reserved.add(str(own_api_token))
     reserved |= _own_api_tokens  # as build_secrets read it (secrets file, options.json)
+    # Home Assistant's tokens from the environment, whatever long_lived_token holds now
+    # (build_secrets drops the Supervisor token for another host): never a remote's token
+    for env_token in ("SUPERVISOR_TOKEN", "EMHASS_KEY"):
+        value = os.getenv(env_token, "").strip()
+        if value:
+            reserved.add(value)
+    # Every Home Assistant token build_secrets read, one a later source replaced included
+    reserved |= _own_ha_tokens
+    # Compared without surrounding whitespace: a padded copy is still the same token to
+    # whoever receives it
+    reserved = {str(r).strip() for r in reserved if str(r).strip()}
+    # The token values among them: a remote's token that holds one with something around it
+    # ("Bearer <token>", a stray character) is withheld too. Long ones only, so a short
+    # value cannot match by accident.
+    own_tokens = {
+        str(t).strip()
+        for t in (
+            params_secrets.get("long_lived_token"),
+            own_api_token,
+            os.getenv("SUPERVISOR_TOKEN"),
+            os.getenv("EMHASS_KEY"),
+            *_own_api_tokens,
+            *_own_ha_tokens,
+        )
+        if t is not None and len(str(t).strip()) >= MIN_CONTAINED_TOKEN
+    }
     for element in configured_site if isinstance(configured_site, list) else []:
         solver = element.get("solver") if isinstance(element, dict) else None
         name = solver.get("token_secret") if isinstance(solver, dict) else None
         if not site_token_secret_usable(name) or params_secrets.get(name) is None:
             continue
-        if str(params_secrets[name]) in reserved:
+        candidate = str(params_secrets[name])
+        if candidate.strip() in reserved or any(t in candidate for t in own_tokens):
             # the same value as one of EMHASS's own secrets (Home Assistant's
             # token, say): never sent to a remote - it is reached without one
             # (the element named, never anything of the secret)
@@ -8002,7 +8330,8 @@ async def build_params(
         logger.warning("Unable to detect weather_forecast_method parameter")
     #  Check if secrets parameters still defaults values
     secret_params = [
-        "https://myhass.duckdns.org/",
+        PLACEHOLDER_HASS_URL,
+        OLD_PLACEHOLDER_HASS_URL,
         "thatverylongtokenhere",
         45.83,
         6.86,
@@ -8025,6 +8354,8 @@ async def build_params(
         "soc_target_timestep": None,
         "battery_availability": None,
         "battery_discharge_energy_max": None,
+        "battery_discharge_availability": None,
+        "soc_floor": None,
         "def_availability": None,
         "current_period_peak": None,
         "capacity_charge_window": None,

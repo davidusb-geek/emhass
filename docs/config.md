@@ -58,7 +58,7 @@ A second part of this section is given by some privacy-sensitive parameters that
 
 The **secrets** parameters are:
 
-- `hass_url`: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
+- `hass_url`: The URL to your Home Assistant instance. For example: https://homeassistant.invalid:8123/ (a placeholder, replace it with your own)
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
 - `emhass_api_token`: The token the EMHASS web API requires (at least 16 characters; optional: if it is not set EMHASS generates one). See [API authentication](api_authentication.md).
 - `time_zone`: The time zone of your system. For example: Europe/Paris.
@@ -192,12 +192,20 @@ Example:
 	"deferrable_load_max_cost": [0, 0.65]
 	```
 	Here `deferrable0` stays mandatory and `deferrable1` is scheduled only if its full run costs less than 0.65. Defaults to `0` for every load (all loads mandatory).
-- `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
-	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
-	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its ON level (its nominal power; a thermal source may have a lower ceiling), including the fractional remainder step, not at its step-average power. In the relaxed fallback (`Optimal (Relaxed)`) the ON/OFF structure is dropped and every member counts at its relaxed power.
-	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads — the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones.
+- `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating) or a supply limit below the grid connection (e.g. a phase behind a 25 A fuse, a 16 A circuit or a subpanel). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
+	- `names`: List of the group's members: deferrable loads (e.g. `["deferrable0", "deferrable1"]`) and, for a budget, batteries (`battery0` is the first battery, then `battery1`, ...). A group needs at least one deferrable load.
+	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for the group's members at any timestep. Required when `mutual_exclusion` is `false`. A semi-continuous load counts at its ON level (its nominal power; a thermal source may have a lower ceiling), including the fractional remainder step, not at its step-average power. In the relaxed fallback (`Optimal (Relaxed)`) the ON/OFF structure is dropped and every member counts at its relaxed power. In `config.json` it is a number above 0. At runtime it can also be 0, or a list with one value per timestep of that call's horizon (each 0 or above), for example the room left on a phase through the day. Unlike forecast lists, a longer list is not trimmed: a list of the wrong length is an error stating both lengths. A one-entry list works as a number.
+	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads: the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones. Batteries can't be in a mutual exclusion group.
+	- `weights` *(optional)*: How much of each member's power counts against `max_power`, keyed by a name listed in `names`. For a deferrable load it is a number above 0 and at most 1, default 1, so a three-phase load can count as a third on one phase's budget. For a battery it is `{"charge": c, "discharge": d}`: `c` above 0 and at most 1 (default 1) and `d` from `-c` to 0 (default 0). By default only charging counts; `"discharge": -1` lets discharging into the same supply make room for the other members. The plan then relies on that discharge happening, so leave it at 0 unless the battery reliably follows the plan. Weights only apply to `max_power`, not to mutual exclusion.
 
-	A load cannot belong to multiple groups. Examples:
+	A battery can be a member only with `set_use_battery`, `number_of_inverters` 1 and `inverter_is_hybrid` false (an AC-coupled battery, the only layout where the battery's power in the model is on the AC side), and its group can't hold a non-electric load (`is_electric_load` false). These rules are checked on the final parameters of every run, so a runtime change to any of these settings is checked too.
+
+	A load can be in several groups. In `config.json` it can be in only one group with `mutual_exclusion`. Things to keep in mind with a budget:
+	- It caps power drawn through the limit only. Nothing caps a battery discharging back through it.
+	- It caps the average over a timestep, so a load that is really on/off should be semi-continuous (`treat_deferrable_load_as_semi_cont`). The relaxed retry after a failed solve drops semi-continuity, so there the budget only holds as an average.
+	- It is a hard limit. If something forces more power into a timestep than `max_power` allows (a `def_current_power` pin, a load inside its minimum on time or already running as a single constant load, a hard `soc_target`, or a battery below its minimum state of charge), the whole optimization is infeasible. `max_power` is the room for the group's own members, so a runtime value worked out from a meter reading has to add back what they draw now.
+
+	Examples:
 	```json
 	"deferrable_load_groups": [
 	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500}
@@ -211,6 +219,14 @@ Example:
 	```json
 	"deferrable_load_groups": [
 	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500, "mutual_exclusion": true}
+	]
+	```
+	Two loads on one circuit (3300 W left for them) inside a phase that also feeds a battery (5000 W left for the three). The battery member needs `set_use_battery` true, `number_of_inverters` 1 and `inverter_is_hybrid` false:
+	```json
+	"deferrable_load_groups": [
+	  {"names": ["deferrable0", "deferrable1"], "max_power": 3300},
+	  {"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000,
+	   "weights": {"battery0": {"charge": 1.0, "discharge": 0.0}}}
 	]
 	```
 	Defaults to an empty list (no groups).
@@ -313,7 +329,7 @@ Then the additional technical parameters:
 
 - `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False). It is ignored when `number_of_inverters` is above 1 (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below).
 - `inverter_ac_output_max` and `inverter_ac_input_max`: The maximum hybrid inverter AC output power (to the house and grid) and AC input power (from the grid, to charge the battery), in Watts (Default 5000 each). With more than one inverter each of them is a list, one cap per inverter (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below).
-- `inverter_efficiency_dc_ac` and `inverter_efficiency_ac_dc`: Scalar efficiencies (percentage/100, Default 1.0) of the hybrid inverter conversion from the DC bus to AC and from AC to the DC bus. These are the default conversion model and stay fully supported; with only these set, the model is the one of every earlier release. Both are inverter parameters, not battery parameters: the battery's own efficiencies are `battery_charge_efficiency` and `battery_discharge_efficiency` (below). With more than one inverter each accepts a single value or a list with one entry per inverter (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below).
+- `inverter_efficiency_dc_ac` and `inverter_efficiency_ac_dc`: Scalar efficiencies (percentage/100, Default 1.0) of the hybrid inverter conversion from the DC bus to AC and from AC to the DC bus. These are the default conversion model and stay fully supported; with only these set, the model is the one of every earlier release. Both are inverter parameters, not battery parameters: the battery's own efficiencies are `battery_charge_efficiency` and `battery_discharge_efficiency` (below). On a hybrid inverter `inverter_efficiency_dc_ac` is applied to the PV forecast too (see [The PV forecast on a hybrid inverter](#the-pv-forecast-on-a-hybrid-inverter)). With more than one inverter each accepts a single value or a list with one entry per inverter (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below).
 - `inverter_power_curve_dc_ac` and `inverter_power_curve_ac_dc`: Optional opt-in replacement of one direction's scalar efficiency by a power-dependent efficiency curve given as `[ac_power_w, efficiency]` points on the AC side (issue #746), solved as an exact piecewise-linear power transfer. Empty (the default) keeps the scalar. See [Hybrid inverter power curves](#hybrid-inverter-power-curves) below.
 - `compute_curtailment`: Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon (issue #342). With more than one inverter it accepts a single value or a list with one entry per inverter (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below, and [How the optimizer models more than one inverter](#how-the-optimizer-models-more-than-one-inverter) for what curtailment does per inverter).
 - `inverter_stress_cost`: The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20). With more than one inverter it accepts a single value or a list with one entry per inverter (see [Per-inverter settings](#per-inverter-settings-and-the-one-inverter-default) below).
@@ -323,6 +339,20 @@ Then the additional technical parameters:
 - `pv_plant_inverter_index`: Which inverter each PV plant is attached to, as a list of 0-based inverter numbers with one entry per PV plant, in the order of `pv_module_model`. No default. Required when `number_of_inverters` is above 1, and ignored with one inverter in the same way as `battery_inverter_index`.
 
 When `pv_module_model` is a list, each entry is one PV plant and the other PV parameters are read per plant by position, so each of them needs a list with at least one entry per plant. The PVLib path (`weather_forecast_method` `open-meteo`) reads all of `pv_inverter_model`, `surface_tilt`, `surface_azimuth`, `modules_per_string` and `strings_per_inverter`; the `solar.forecast` method reads only `surface_tilt` and `surface_azimuth`. A list that is shorter than `pv_module_model`, or a single value where a list is expected, is a configuration error naming the parameter. A longer list keeps working with one inverter, the extra entries are ignored and a warning says so (with more than one inverter it is an error, see Per-inverter settings below).
+
+### The PV forecast on a hybrid inverter
+
+On a hybrid inverter the optimizer treats the PV forecast as DC power: it goes on the DC bus with the batteries, and `inverter_efficiency_dc_ac` (or the `inverter_power_curve_dc_ac` curve) is applied to it on the way to AC. That covers one inverter with `inverter_is_hybrid` true, and every inverter with PV when there is more than one, PV-only inverters included. With one inverter and `inverter_is_hybrid` false, PV goes straight to the AC side.
+
+The forecast is often already AC. The built-in PVLib forecast includes the `pv_inverter_model` loss, and Solcast gives its rooftop forecast as AC (the Forecast.Solar API documentation does not state which). With an AC forecast the inverter loss is counted twice: at 0.97 a 1000 W forecast step gives 970 W of AC, and a clear 19 kWh day comes out about 570 Wh short. At the default of 1.0 nothing is lost.
+
+If you pass an AC forecast at runtime (`pv_power_forecast`, see [Passing data](passing_data.md)), divide each value of `pv_power_forecast`, and of `pv_power_forecast_p10` if you send it, by `inverter_efficiency_dc_ac` before you send it, or each inverter's series by that inverter's efficiency when there is more than one. A forecast that is already DC, before the inverter, needs no change. At 0.97, sending 1030.9 W gives 1000 W of AC. `P_PV` in the results and the published `sensor.p_pv_forecast` then show the divided values, about 3 % above the AC you will measure. Keep in mind:
+
+- On a hybrid, don't set the efficiency to 1.0 instead: it also covers battery discharge. A PV-only inverter (above one inverter) has no battery behind it, so with an AC forecast its `inverter_efficiency_dc_ac` entry can simply be 1.0.
+- With a `dc_ac` curve the loss changes with power, so one factor is only approximate.
+- Dividing can't bring back PV that the forecast already clipped at its inverter's rating, and a forecast EMHASS gets itself (the built-in PVLib one, or Solcast through `weather_forecast_method`) can't be scaled this way.
+- In naive MPC, unless you pass the load forecast as a list too, the first step is blended with the latest `sensor_power_photovoltaics` reading (`alpha` and `beta`, see [Now/current values in forecasts](forecasts.md#nowcurrent-values-in-forecasts)). If that sensor reads AC, the first step ends up between the two: with the default `alpha` and `beta` of 0.5, at 0.8, sending 1250 W with 1000 W measured gives 900 W of AC instead of 1000 W. Use a sensor that reads DC PV, or pass `alpha` 1 and `beta` 0 to turn the blend off (that turns off the load blend too). With more than one inverter the blend is done on the total, so the sensor has to measure the PV of all of them.
+- With `set_use_adjusted_pv` on, the forecast, a runtime one included, is refitted after you send it: the model learns how the history of `sensor_power_photovoltaics_forecast` compares with `sensor_power_photovoltaics` and applies that to what you send, so the plan follows what that sensor measures. By default that history is `sensor.p_pv_forecast`, which EMHASS publishes after the adjustment. If the sensor reads the hybrid's DC PV input, keep dividing: at 0.8 a divided forecast settles close to DC on average, while an undivided one settles about 11 % below it. Right after you start dividing, the history is still on the old scale, so the forecast comes out too high at first (up to about 25 % on the first day at 0.8) and takes some days to settle. With the default `historic_days_to_retrieve` of 2 it swings above and below for about a week first. If the sensor reads AC, the adjustment pulls the forecast toward AC whatever you send (an undivided one stays at AC), so use a sensor that reads DC PV. If its model can't be trained or loaded, EMHASS logs a warning and uses the forecast as you sent it. With more than one inverter the adjustment refits the total and then splits it across the inverters, so the sensor has to measure the PV of all of them.
 
 ### Per-inverter settings and the one-inverter default
 

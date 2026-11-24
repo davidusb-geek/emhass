@@ -41,7 +41,15 @@ from emhass.command_line import (
     publish_data,
     set_input_data_dict,
 )
-from emhass.retrieve_hass import _SUPERVISOR_URLS
+from emhass.connection_manager import (
+    PLACEHOLDER_URL_REFUSED,
+    SUPERVISOR_TOKEN_REFUSED,
+    SUPERVISOR_URLS,
+    canonical_supervisor_url,
+    is_refused_placeholder,
+    is_supervisor_token_for_another_host,
+)
+from emhass.retrieve_hass import _upstream_error
 
 PARAMS_FILE = "params.pkl"
 # The longest horizon a coordinator may ask about: a week, at any step.
@@ -80,9 +88,17 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
         sensor = sensor[0] if sensor else None
     if not (isinstance(sensor, str) and sensor and base and token):
         return None
+    # The example hass_url is not anyone's Home Assistant. Never send it a token.
+    if is_refused_placeholder(base, token):
+        logger.error(PLACEHOLDER_URL_REFUSED)
+        return None
+    # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
+    if is_supervisor_token_for_another_host(base, token):
+        logger.error(SUPERVISOR_TOKEN_REFUSED)
+        return None
     # As RetrieveHass builds it: the Supervisor's URL already ends in /api.
-    root = str(base).rstrip("/")
-    path = "/states/" if root in _SUPERVISOR_URLS else "/api/states/"
+    root = str(canonical_supervisor_url(base)).rstrip("/")
+    path = "/states/" if root in SUPERVISOR_URLS else "/api/states/"
     url = root + path + urllib.parse.quote(sensor)
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     # ssl_no_verify, as the user set it for Home Assistant's other calls
@@ -102,8 +118,19 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     try:
         with opener.open(req, timeout=5) as r:  # Home Assistant's own URL
             state = json.load(r)
-        value = float(state["state"])
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in
+        # Its type and HTTP status, and for a connection that failed the type of the
+        # reason (refused, not found, TLS). Never its text: a header error quotes the
+        # header, token included.
+        why = _upstream_error(exc)
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, BaseException):
+            why += f", {type(reason).__name__}"
+        logger.warning("participant_api: could not read %s (%s)", sensor, why)
+        return None
+    try:
+        value = float(state["state"])
+    except Exception as exc:  # noqa: BLE001 - not a number: the configured target stands in
         logger.warning("participant_api: could not read %s (%s)", sensor, exc)
         return None
     unit = str((state.get("attributes") or {}).get("unit_of_measurement") or "").strip()

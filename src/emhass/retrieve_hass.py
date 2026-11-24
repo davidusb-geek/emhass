@@ -19,7 +19,22 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass.connection_manager import get_websocket_client
+from emhass.connection_manager import (
+    HASS_URL_UNSET_REFUSED,
+    PLACEHOLDER_URL_REFUSED,
+    SUPERVISOR_TOKEN_REFUSED,
+    SUPERVISOR_URLS,
+    canonical_supervisor_url,
+    get_websocket_client,
+    holds_supervisor_token,
+    is_real_token,
+    is_refused_placeholder,
+    is_supervisor_request_url,
+    is_supervisor_token_for_another_host,
+    is_token_for_placeholder,
+    is_unset_hass_url,
+)
+from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
 from emhass.utils import (
     data_file_path,
     is_valid_db_host,
@@ -48,8 +63,15 @@ _TIMESTAMP_TOLERANCE = pd.Timedelta(seconds=1)
 _STATISTICS_PERIOD = pd.Timedelta(minutes=5)
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
-# The forms of the Supervisor proxy URL the code accepts (compared without a trailing slash).
-_SUPERVISOR_URLS = frozenset({hass_url, "https://supervisor/core/api"})
+
+
+def _uses_supervisor_api(url: str | None) -> bool:
+    """True when ``url`` is the Supervisor proxy URL.
+
+    Any case, surrounding spaces or a trailing slash count. An unset or ``"empty"`` URL does
+    not: callers that default it to the Supervisor do that first.
+    """
+    return canonical_supervisor_url(url) == hass_url
 
 
 def _influx_string(value) -> str:
@@ -91,11 +113,13 @@ def _upstream_error(exc: BaseException) -> str:
     return text + (f": {reason}" if reason else "")
 
 
-def _is_supervisor_url(url: str | None) -> bool:
-    """True when ``url`` is the Supervisor proxy, or unset (which means the Supervisor)."""
-    if url is None or not str(url).strip() or str(url).strip() == "empty":
-        return True
-    return str(url).strip().rstrip("/").lower() in _SUPERVISOR_URLS
+def _names_the_supervisor(url: str | None) -> bool:
+    """True only when ``url`` is the Supervisor proxy URL itself, not when it is unset.
+
+    build_secrets writes that URL out for the add-on, so an unset URL here is not the
+    add-on, and outside it "supervisor" is whatever the local DNS answers.
+    """
+    return str(url or "").strip().rstrip("/").lower() in SUPERVISOR_URLS
 
 
 # When a var_list entry is an arithmetic expression, every entity it references is
@@ -184,16 +208,12 @@ class RetrieveHass:
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
         # The Supervisor token is only for the Supervisor proxy. Never send it to another host.
-        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
-        if (
-            supervisor_token
-            and long_lived_token == supervisor_token
-            and not _is_supervisor_url(hass_url)
-        ):
-            logger.error(
-                "The Supervisor token is set as the token for a Home Assistant URL that is not "
-                "the Supervisor. It will not be sent. Set a long-lived access token for that URL."
-            )
+        if is_supervisor_token_for_another_host(hass_url, long_lived_token):
+            logger.error(SUPERVISOR_TOKEN_REFUSED)
+            self.long_lived_token = ""
+        # The example hass_url is not anyone's Home Assistant. Never send it a token.
+        if is_token_for_placeholder(hass_url, self.long_lived_token):
+            logger.error(PLACEHOLDER_URL_REFUSED)
             self.long_lived_token = ""
         if isinstance(freq, int | float | str):
             self.freq = pd.Timedelta(minutes=int(freq))
@@ -376,8 +396,10 @@ class RetrieveHass:
         # Resolve the token: if empty, fall back to SUPERVISOR_TOKEN env var (injected by HA addon supervisor)
         token = self.long_lived_token
         if not token or token == "empty":
-            # Only the Supervisor proxy may receive the Supervisor token.
-            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
+            # Only the Supervisor proxy, named as such, may receive the Supervisor token.
+            token = (
+                os.getenv("SUPERVISOR_TOKEN", "") if _names_the_supervisor(self.hass_url) else ""
+            )
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for HA config retrieval."
@@ -385,8 +407,18 @@ class RetrieveHass:
 
         # Resolve the URL: if empty, use the default supervisor URL
         url_to_use = self.hass_url
-        if not url_to_use or url_to_use == "empty":
+        if is_unset_hass_url(url_to_use):
             url_to_use = hass_url  # default: http://supervisor/core/api
+            # No URL means the Supervisor, which only takes the Supervisor token. Any other
+            # token is not sent there (outside the add-on, "supervisor" is whatever answers).
+            if token and str(token).strip() != os.getenv("SUPERVISOR_TOKEN", "").strip():
+                if is_real_token(token):
+                    self.logger.error(HASS_URL_UNSET_REFUSED)
+                else:
+                    self.logger.info(
+                        "No Home Assistant URL set. Using only local configuration file."
+                    )
+                return True
 
         # If we still have no token after checking env, skip HA config retrieval
         if not token:
@@ -409,8 +441,8 @@ class RetrieveHass:
 
         # Construct the URL (incorporating the PR's helpful checks)
         # The Supervisor API sometimes uses a different path structure
-        if url_to_use == hass_url:
-            url = url_to_use + "/config"
+        if _uses_supervisor_api(url_to_use):
+            url = hass_url + "/config"
         else:
             # Helpful check for users who forget the trailing slash
             if not url_to_use.endswith("/"):
@@ -588,8 +620,8 @@ class RetrieveHass:
         # Format the date with a strict 'Z' suffix instead of '+00:00'
         day_str = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         # Check if using supervisor API or Core API
-        if self.hass_url == hass_url:
-            base_url = f"{self.hass_url}/history/period/{day_str}"
+        if _uses_supervisor_api(self.hass_url):
+            base_url = f"{hass_url}/history/period/{day_str}"
         else:
             # Ensure trailing slash for Core API
             if self.hass_url[-1] != "/":
@@ -667,13 +699,15 @@ class RetrieveHass:
         hold_unchanged_tail: bool = False,
         unavailable: list | None = None,
         staleness: list | None = None,
+        bucket_rows: list | None = None,
     ) -> pd.DataFrame | None:
         """Helper to convert raw data to a resampled DataFrame.
 
         ``unavailable`` collects the buckets where the sensor was unavailable or unknown.
         ``staleness`` collects the (last real state per bucket, real readings per
         bucket, marker buckets) triple described for ``record_staleness`` in
-        :meth:`get_data`.
+        :meth:`get_data`. ``bucket_rows`` collects the (sum, number of numeric rows)
+        pair per bucket, to merge a bucket that holds rows from two days.
         """
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
@@ -706,12 +740,19 @@ class RetrieveHass:
         states = df_tp[var].sort_index()
         last_state = states.iloc[-1]
         raw_states = df_tp[var] if staleness is not None else None
-        df_tp = df_tp.resample(self.freq).mean()
+        # Every day on one grid anchored on the epoch. With a step that divides a day
+        # these are the buckets from each day's own midnight; with one that does not,
+        # the bucket across midnight gets rows from both days and is merged later.
+        resampler = df_tp.resample(self.freq, origin="epoch")
+        if bucket_rows is not None:
+            bucket_rows.append((resampler[var].sum(), resampler[var].count()))
+        df_tp = resampler.mean()
         if staleness is not None:
             staleness.append(self._staleness_buckets(raw_states, states, df_tp.index, day))
         tail = self._tail_buckets(df_tp.index[-1], day, is_last_day)
         if unavailable is not None:
-            day_end = self._as_utc(day) + pd.Timedelta(days=1) - self.freq
+            # The bucket holding the day's last instant, which may end after midnight
+            day_end = (self._as_utc(day) + pd.Timedelta(days=1)).ceil(self.freq) - self.freq
             after = (
                 tail
                 if is_last_day
@@ -739,11 +780,13 @@ class RetrieveHass:
 
         Home Assistant only returns a row per recorded state change, so nothing is
         recorded after a sensor's last change. Data not belonging to the period
-        containing now has no tail.
+        containing now has no tail. The day's first bucket can start before its
+        midnight when the time step does not divide a day.
         """
         day = self._as_utc(day)
         last_bucket = pd.Timestamp.now(tz="UTC").floor(self.freq)
-        if not (is_last_day and day <= last_seen < last_bucket < day + pd.Timedelta(days=1)):
+        in_day = day < last_seen + self.freq and last_bucket < day + pd.Timedelta(days=1)
+        if not (is_last_day and in_day and last_seen < last_bucket):
             return pd.DatetimeIndex([], tz="UTC")
         return pd.date_range(last_seen + self.freq, last_bucket, freq=self.freq)
 
@@ -757,7 +800,9 @@ class RetrieveHass:
         after its last row) when the last recorded state is unavailable. Buckets that
         have a numeric reading of their own are observed and not listed.
         """
-        last_unavailable = states.isna().resample(self.freq).last().astype("boolean")
+        last_unavailable = (
+            states.isna().resample(self.freq, origin="epoch").last().astype("boolean")
+        )
         carried = last_unavailable.ffill().fillna(False).to_numpy(dtype=bool)
         buckets = resampled.index[resampled.isna().to_numpy() & carried]
         return buckets.append(after) if pd.isna(states.iloc[-1]) else buckets
@@ -795,7 +840,9 @@ class RetrieveHass:
                 .reindex(buckets, fill_value=0)
                 .astype("int64")
             )
-        has_marker = states.isna().resample(self.freq).sum().reindex(buckets, fill_value=0)
+        has_marker = (
+            states.isna().resample(self.freq, origin="epoch").sum().reindex(buckets, fill_value=0)
+        )
         return last, count, buckets[has_marker.to_numpy() > 0]
 
     async def _fetch_live_state(
@@ -808,8 +855,8 @@ class RetrieveHass:
                 f"{entity_id} is not a plain entity id; its freshness cannot be verified."
             )
             return None
-        if self.hass_url == hass_url:  # Supervisor API
-            url = f"{self.hass_url}/states/{entity_id}"
+        if _uses_supervisor_api(self.hass_url):
+            url = f"{hass_url}/states/{entity_id}"
         else:
             url = f"{self.hass_url.rstrip('/')}/api/states/{entity_id}"
         try:
@@ -906,6 +953,31 @@ class RetrieveHass:
                     latest = (at, row["state"])
         return latest
 
+    def _merge_straddling_buckets(self, bucket_rows_by_var: dict[str, list]) -> None:
+        """Merge the two halves of each bucket that holds rows from two days.
+
+        With a time step that does not divide a day, the bucket across midnight is
+        resampled once from each day's rows, so ``df_final`` holds it twice. Each
+        sensor's value there becomes the mean of all the bucket's numeric rows. A
+        bucket listed as unavailable from one day's side is dropped from the list
+        when the other day has a reading in it.
+        """
+        duplicated = self.df_final.index.duplicated()
+        if duplicated.any():
+            straddling = self.df_final.index[duplicated].unique()
+            merged = self.df_final[~duplicated].copy()
+            for var, parts in bucket_rows_by_var.items():
+                sums = pd.concat([total for total, _ in parts])
+                counts = pd.concat([rows for _, rows in parts])
+                sums = sums[sums.index.isin(straddling)].groupby(level=0).sum()
+                counts = counts[counts.index.isin(straddling)].groupby(level=0).sum()
+                merged.loc[counts.index, var] = sums / counts.where(counts > 0)
+            self.df_final = merged
+        for var, buckets in list(self.unavailable_buckets.items()):
+            if var in self.df_final.columns:
+                observed = self.df_final[var].reindex(buckets).notna().to_numpy()
+                self.unavailable_buckets[var] = buckets[~observed]
+
     async def _get_data_rest_api(
         self,
         days_list: pd.date_range,
@@ -919,20 +991,31 @@ class RetrieveHass:
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
+        # The history requests go to test_url when one is given, and the live-state check
+        # still goes to hass_url: the Supervisor token needs both on the Supervisor proxy.
+        to_supervisor = _is_supervisor_url(self.hass_url)
+        if test_url is not None and test_url != "empty":
+            to_supervisor = to_supervisor and is_supervisor_request_url(test_url)
         # Resolve the token to use for authentication.
         # If long_lived_token is empty or not set, fall back to the SUPERVISOR_TOKEN
         # environment variable injected by Home Assistant when running as an addon.
         token = self.long_lived_token
+        if token and token != "empty" and not to_supervisor and holds_supervisor_token(token):
+            self.logger.error(SUPERVISOR_TOKEN_REFUSED)
+            return False
         if not token or token == "empty":
-            # Only the Supervisor proxy may receive the Supervisor token.
-            token = os.getenv("SUPERVISOR_TOKEN", "") if _is_supervisor_url(self.hass_url) else ""
+            # Only the Supervisor proxy, named as such, may receive the Supervisor token.
+            use_supervisor_token = to_supervisor and _names_the_supervisor(self.hass_url)
+            token = os.getenv("SUPERVISOR_TOKEN", "") if use_supervisor_token else ""
             if token:
                 self.logger.debug(
                     "Using SUPERVISOR_TOKEN from environment for REST API authentication."
                 )
             else:
                 self.logger.error(
-                    "No valid authentication token found. Set a long_lived_token or run as a HA addon."
+                    "No valid authentication token found. Set a long-lived access token for "
+                    "this Home Assistant URL (add-on option long_lived_token, the secrets file "
+                    "or --key). The add-on's Supervisor token is only used with the Supervisor URL."
                 )
                 return False
         headers = {
@@ -1000,9 +1083,15 @@ class RetrieveHass:
                         return False
 
             partial_days = 0
+            # With a step that does not divide a day, the bucket across each midnight
+            # holds rows from both days: keep each kept day's per-bucket sums and row
+            # counts so the two halves can be merged once every day is in.
+            straddles = pd.Timedelta(days=1) % self.freq != pd.Timedelta(0)
+            bucket_rows_by_var: dict[str, list] = {}
             for day_idx, day in enumerate(days_list):
                 day_frames = []
                 day_staleness = {}
+                day_bucket_rows = {}
                 skip_day = False
                 missing_var = False
                 for var in var_list:
@@ -1012,6 +1101,7 @@ class RetrieveHass:
                     # Outages are only tracked for the ML opt-in; other callers skip the work.
                     unavailable: list | None = [] if hold_unchanged_tail else None
                     staleness: list | None = [] if record_staleness else None
+                    bucket_rows: list | None = [] if straddles else None
                     if data is not None:
                         df_resampled = self._process_history_dataframe(
                             data,
@@ -1022,9 +1112,12 @@ class RetrieveHass:
                             hold_unchanged_tail=hold_unchanged_tail,
                             unavailable=unavailable,
                             staleness=staleness,
+                            bucket_rows=bucket_rows,
                         )
                     if staleness:
                         day_staleness[var] = staleness[0]
+                    if bucket_rows:
+                        day_bucket_rows[var] = bucket_rows[0]
                     if unavailable:
                         self.unavailable_buckets[var] = self.unavailable_buckets.get(
                             var, pd.DatetimeIndex([], tz="UTC")
@@ -1048,6 +1141,8 @@ class RetrieveHass:
                     partial_days += 1
                 for var, aux in day_staleness.items():
                     staleness_by_var.setdefault(var, []).append(aux)
+                for var, rows in day_bucket_rows.items():
+                    bucket_rows_by_var.setdefault(var, []).append(rows)
                 # Merge the day's per-variable frames on their real resampled
                 # indices; a variable missing for this day (kept mode) is just
                 # absent from the day's frame, and the cross-day concat below
@@ -1071,6 +1166,8 @@ class RetrieveHass:
             )
             return False
 
+        if straddles:
+            self._merge_straddling_buckets(bucket_rows_by_var)
         # Final Cleanup
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
@@ -1083,14 +1180,19 @@ class RetrieveHass:
         # entire range is listed here without a matching df_final column, so
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
-        # Each day is resampled from its own midnight, so with a step that does
-        # not divide a day the days sit on different grids, and the cleanup above
-        # keeps only the days on the first day's grid. Keep the aux series to the
-        # labels df_final holds, so the off-grid days do not void the days on it.
+        # Keep the aux series to the labels df_final holds. Every day is on one
+        # grid now, so nothing is expected to fall outside it; the filter stays
+        # as a guard for the documented contract.
         final_index = self.df_final.index
         for var, parts in staleness_by_var.items():
             last = pd.concat([last for last, _, _ in parts])
             count = pd.concat([count for _, count, _ in parts])
+            if straddles:
+                # A bucket across midnight has an entry from each day: the later real
+                # state wins (a day with no real state there is skipped) and the
+                # readings add up.
+                last = last.groupby(level=0).last()
+                count = count.groupby(level=0).sum()
             on_final = last.index.isin(final_index)
             if not on_final.all():
                 self.logger.debug(
@@ -2407,10 +2509,10 @@ class RetrieveHass:
             )
             return None
         # Set the URL
-        if self.hass_url == hass_url:  # If we are using the supervisor API
-            url = self.hass_url + "/states/" + entity_id
+        if _uses_supervisor_api(self.hass_url):  # If we are using the supervisor API
+            url = hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
-            url = self.hass_url + "api/states/" + entity_id
+            url = self.hass_url.rstrip("/") + "/api/states/" + entity_id
         headers = {
             "Authorization": header_auth + " " + self.long_lived_token,
             "content-type": header_accept,
@@ -2621,6 +2723,11 @@ class RetrieveHass:
             )
             response_ok = True
             response_status_code = 200
+        elif is_refused_placeholder(self.hass_url, self.long_lived_token):
+            # A token was set without a URL (and dropped), so nothing is posted there either.
+            self.logger.error(PLACEHOLDER_URL_REFUSED)
+            response_ok = False
+            response_status_code = 0
         else:
             # Always use REST API for posting data, regardless of use_websocket setting
             # Use persistent session for connection reuse (avoids TLS handshake per request)
@@ -2778,10 +2885,10 @@ class RetrieveHass:
                 "Not publishing: %r is not an entity id like sensor.my_name", entity_id
             )
             return False
-        if self.hass_url == hass_url:  # supervisor API
-            url = self.hass_url + "/states/" + entity_id
+        if _uses_supervisor_api(self.hass_url):  # supervisor API
+            url = hass_url + "/states/" + entity_id
         else:  # Home Assistant Core API
-            url = self.hass_url + "api/states/" + entity_id
+            url = self.hass_url.rstrip("/") + "/api/states/" + entity_id
         headers = {
             "Authorization": header_auth + " " + self.long_lived_token,
             "content-type": header_accept,
@@ -2790,6 +2897,9 @@ class RetrieveHass:
         if self.get_data_from_file:
             self.logger.debug(f"Skipping scalar POST for {entity_id} (get_data_from_file)")
             return True
+        if is_refused_placeholder(self.hass_url, self.long_lived_token):
+            self.logger.error(PLACEHOLDER_URL_REFUSED)
+            return False
         try:
             session = await self._get_session()
             async with session.post(

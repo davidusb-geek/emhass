@@ -71,8 +71,10 @@ def reserved_secret_values(params_secrets: Any, remote: Any = frozenset()) -> se
             or "api_token" in k.lower()
             or "api_key" in k.lower()
         )
-        and isinstance(v, str)
-        and v
+        # a number too: YAML reads an unquoted all-digit secret as one
+        and isinstance(v, str | int | float)
+        and not isinstance(v, bool)
+        and str(v)
     }
 
 

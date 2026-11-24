@@ -53,6 +53,52 @@ def _reported_reach(message):
     return float(message.split("reachable SoC is ~")[1].split()[0])
 
 
+def _group_constraints_before_1366(self, constraints, relaxed=False):
+    """Optimization._add_deferrable_group_constraints as it was before #1366.
+
+    Kept verbatim (docstring and comments aside) so the no-op test can check that a
+    group valid before #1366 still builds exactly the same problem. Includes the
+    #1105 ON-level term for a semi-continuous member with a remainder step.
+    """
+    groups = self.optim_conf.get("deferrable_load_groups", [])
+    if not groups:
+        return
+    p_deferrable = self.vars["p_deferrable"]
+    for gi, group in enumerate(groups):
+        indices = [int(name.replace("deferrable", "")) for name in group["names"]]
+        max_power = group.get("max_power")
+        mutual_exclusion = group.get("mutual_exclusion", False)
+        if max_power is not None:
+            group_power_terms = []
+            for i in indices:
+                if i in self._semi_cont_remainder and i in self._semi_cont_on_level:
+                    group_power_terms.append(
+                        cp.multiply(self._semi_cont_on_level[i], self.vars["p_def_bin2"][i])
+                    )
+                else:
+                    group_power_terms.append(p_deferrable[i])
+            constraints.append(sum(group_power_terms) <= max_power)
+        if mutual_exclusion:
+            semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"]
+            activity_bins = []
+            for i in indices:
+                if semi_cont[i] and not relaxed:
+                    activity_bins.append(self.vars["p_def_bin2"][i])
+                else:
+                    bin_var = cp.Variable(
+                        self.num_timesteps,
+                        boolean=True,
+                        name=f"group{gi}_active_{i}",
+                    )
+                    self.vars["group_activity"][(gi, i)] = bin_var
+                    nominal = self.optim_conf["nominal_power_of_deferrable_loads"][i]
+                    if isinstance(nominal, list):
+                        nominal = max(nominal)
+                    constraints.append(self.vars["p_deferrable"][i] <= nominal * bin_var)
+                    activity_bins.append(bin_var)
+            constraints.append(cp.sum(cp.vstack(activity_bins), axis=0) <= 1)
+
+
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The fixtures below are 48 half-hour steps; the real-clock grid is 46 or 50 on
@@ -11138,23 +11184,737 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(groups[0]["mutual_exclusion"])
 
     async def test_deferrable_load_group_validation_overlapping_groups(self):
-        """Test that a load in multiple groups raises error."""
+        """A load can be in several budget groups, but in only one mutual exclusion
+        group, in config.json (#1366; budget overlap was refused before)."""
+        budget_groups = [
+            {"names": ["deferrable0", "deferrable1"], "max_power": 2500},
+            {"names": ["deferrable1", "deferrable2"], "max_power": 2000},
+        ]
+        params = await self._build_params_with_groups(budget_groups, number_of_deferrable_loads=3)
+        self.assertEqual(params["optim_conf"]["deferrable_load_groups"], budget_groups)
+        # A budget group may overlap one mutual exclusion group.
+        await self._build_params_with_groups(
+            [
+                {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+                {"names": ["deferrable1", "deferrable2"], "max_power": 2000},
+            ],
+            number_of_deferrable_loads=3,
+        )
         with self.assertRaises(ValueError):
             await self._build_params_with_groups(
                 [
-                    {
-                        "names": ["deferrable0", "deferrable1"],
-                        "max_power": 2500,
-                        "mutual_exclusion": False,
-                    },
-                    {
-                        "names": ["deferrable1", "deferrable2"],
-                        "max_power": 2000,
-                        "mutual_exclusion": False,
-                    },
+                    {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+                    {"names": ["deferrable1", "deferrable2"], "mutual_exclusion": True},
                 ],
                 number_of_deferrable_loads=3,
             )
+
+    def test_deferrable_load_group_overlapping_budgets_both_hold(self):
+        """Two overlapping budget groups each hold at every step (#1366)."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [3000.0, 2400.0],
+                "minimum_power_of_deferrable_loads": [0, 0],
+                "operating_hours_of_each_deferrable_load": [3, 2],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": 3300},
+                    {"names": ["deferrable1"], "max_power": 1500},
+                ],
+            }
+        )
+        opt = self.create_optimization()
+        res = opt.perform_dayahead_forecast_optim(
+            self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertLessEqual((res["P_deferrable0"] + res["P_deferrable1"]).max(), 3300 + 1e-3)
+        self.assertLessEqual(res["P_deferrable1"].max(), 1500 + 1e-3)
+        # 2 h at 2400 W delivered under a 1500 W cap: the load spreads out.
+        self.assertAlmostEqual(res["P_deferrable1"].sum() * 0.5, 4800, delta=1)
+
+    # ---- #1366: batteries, weights and per-step lists in deferrable_load_groups ----
+
+    def _setup_shared_supply(self, groups):
+        """Two loads and a battery on one supply, sized like #1334: a 3 kW charger,
+        a 2.4 kW appliance and a 2.4 kW battery, all wanting a 3 h cheap window."""
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 5000,
+                "battery_charge_power_max": 2400,
+                "battery_discharge_power_max": 2400,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 0.95,
+                "maximum_power_from_grid": 9000,
+                "inverter_is_hybrid": False,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 2,
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [3000.0, 2400.0],
+                "operating_hours_of_each_deferrable_load": [3, 2],
+                "start_timesteps_of_each_deferrable_load": [0, 0],
+                "end_timesteps_of_each_deferrable_load": [0, 0],
+                "minimum_power_of_deferrable_loads": [0, 0],
+                "set_deferrable_startup_penalty": [False, False],
+                "deferrable_load_groups": groups,
+            }
+        )
+
+    def _solve_shared_supply(self, opt, soc_init=0.1, soc_final=0.9):
+        n = 48
+        unit_load_cost = np.full(n, 0.40)
+        unit_load_cost[4:10] = 0.05
+        return opt.perform_optimization(
+            self.prepare_forecast_data(),
+            np.zeros(n),
+            np.full(n, 300.0),
+            unit_load_cost,
+            np.zeros(n),
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+
+    def test_deferrable_load_group_counts_battery_charging(self):
+        """A battery member's charging counts against the group's max_power (#1366).
+
+        Before #1366 a battery could not be a member, so the same 5 kW supply could only
+        be described by a group on the two loads, and loads plus battery charging went
+        over it (7.4 kW in the #1334 test). The fallback below builds that config, so on
+        the old code this fails on the budget assertion, not on the battery name.
+        """
+        if hasattr(utils, "parse_deferrable_group_member"):
+            names = ["deferrable0", "deferrable1", "battery0"]
+        else:
+            names = ["deferrable0", "deferrable1"]
+        self._setup_shared_supply([{"names": names, "max_power": 5000}])
+        opt = self.create_optimization()
+        res = self._solve_shared_supply(opt)
+        self.assertEqual(opt.optim_status, "Optimal")
+        loads = res["P_deferrable0"] + res["P_deferrable1"]
+        charge = (-res["P_batt"]).clip(lower=0)
+        self.assertLessEqual((loads + charge).max(), 5000 + 1e-3)
+        # The battery still charges: the cap is shared, not a ban.
+        self.assertGreater(charge.max(), 1000)
+
+    def test_deferrable_load_group_battery_discharge_netting_is_opt_in(self):
+        """By default discharge does not make room in the budget; discharge -1 nets it.
+
+        An on/off 2000 W load under a 1000 W budget can only run while the battery
+        discharges at least 1000 W into the same supply, and only with netting on.
+        """
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 5000,
+                "battery_charge_power_max": 2400,
+                "battery_discharge_power_max": 2400,
+                "inverter_is_hybrid": False,
+            }
+        )
+        for discharge_weight in (0.0, -1.0):
+            with self.subTest(discharge=discharge_weight):
+                self.optim_conf.update(
+                    {
+                        "set_use_battery": True,
+                        "treat_deferrable_load_as_semi_cont": [True, False],
+                        "set_deferrable_load_single_constant": [False, False],
+                        "nominal_power_of_deferrable_loads": [2000.0, 750.0],
+                        "minimum_power_of_deferrable_loads": [0, 0],
+                        "operating_hours_of_each_deferrable_load": [2, 0],
+                        "start_timesteps_of_each_deferrable_load": [0, 0],
+                        "end_timesteps_of_each_deferrable_load": [0, 0],
+                        "deferrable_load_groups": [
+                            {
+                                "names": ["deferrable0", "battery0"],
+                                "max_power": 1000,
+                                "weights": {
+                                    "battery0": {"charge": 1.0, "discharge": discharge_weight}
+                                },
+                            }
+                        ],
+                    }
+                )
+                opt = self.create_optimization()
+                res = self._solve_shared_supply(opt, soc_init=0.9, soc_final=0.5)
+                self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                load = res["P_deferrable0"]
+                charge = (-res["P_batt"]).clip(lower=0)
+                discharge = res["P_batt"].clip(lower=0)
+                if discharge_weight == 0:
+                    # The 2000 W load never fits: discharge buys no room.
+                    self.assertLessEqual((load + charge).max(), 1000 + 1e-3)
+                else:
+                    self.assertEqual(opt.optim_status, "Optimal")
+                    self.assertGreater(load.max(), 1999)
+                    self.assertLessEqual((load + charge - discharge).max(), 1000 + 1e-3)
+
+    def test_deferrable_load_group_weight_scales_member(self):
+        """A weight counts a member at a share of its power (#1366): a 3 kW three-phase
+        load at a third on one phase's 1 kW budget. Without the weight the load cannot
+        deliver its energy in the window, so the old code ends Infeasible."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+                "minimum_power_of_deferrable_loads": [0, 0],
+                "operating_hours_of_each_deferrable_load": [3, 0],
+                "start_timesteps_of_each_deferrable_load": [0, 0],
+                "end_timesteps_of_each_deferrable_load": [8, 0],
+                "deferrable_load_groups": [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 1000,
+                        "weights": {"deferrable0": 1 / 3},
+                    }
+                ],
+            }
+        )
+        opt = self.create_optimization()
+        res = opt.perform_dayahead_forecast_optim(
+            self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        weighted = res["P_deferrable0"] / 3 + res["P_deferrable1"]
+        self.assertLessEqual(weighted.max(), 1000 + 1e-3)
+        self.assertGreater(res["P_deferrable0"].max(), 1001)
+
+    def test_deferrable_load_group_runtime_list_length(self):
+        """A per-step max_power of the wrong length is refused with both lengths named;
+        a one-entry list still works as a number (#1366)."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": [2500.0] * 47}
+                ],
+            }
+        )
+        opt = self.create_optimization()
+        with self.assertRaises(ValueError) as caught:
+            opt.perform_dayahead_forecast_optim(
+                self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+            )
+        self.assertIsInstance(caught.exception, utils.RuntimeParamError)
+        self.assertIn("47 entries", str(caught.exception))
+        self.assertIn("48 timesteps", str(caught.exception))
+        self.optim_conf["deferrable_load_groups"][0]["max_power"] = [2500.0]
+        opt = self.create_optimization()
+        res = opt.perform_dayahead_forecast_optim(
+            self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertLessEqual((res["P_deferrable0"] + res["P_deferrable1"]).max(), 2500 + 1e-3)
+        self.assertEqual(getattr(opt, "param_group_max_power", {}), {})
+        # A direct Optimization caller skips treat_runtimeparams: the entries are
+        # checked here too, with the same error.
+        for label, bad in (
+            ("strings", ["2500"] * 48),
+            ("bools", [True] * 48),
+            ("nested", [[1.0, 2.0]] * 48),
+            ("nan", [float("nan")] * 48),
+            ("negative", [-1.0] * 48),
+        ):
+            with self.subTest(label):
+                self.optim_conf["deferrable_load_groups"][0]["max_power"] = bad
+                opt = self.create_optimization()
+                with self.assertRaises(utils.RuntimeParamError) as caught:
+                    opt.perform_dayahead_forecast_optim(
+                        self.prepare_forecast_data(), self.p_pv_forecast, self.p_load_forecast
+                    )
+                self.assertIn("every 'max_power' entry", str(caught.exception))
+
+    def test_deferrable_load_group_per_step_list_parameter(self):
+        """A per-step max_power list goes into a Parameter: each step's entry binds, and
+        a new list on the same object updates it without rebuilding the problem."""
+        limits = [2500.0] * 24 + [0.0] * 24
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": limits}
+                ],
+            }
+        )
+        opt = self.create_optimization()
+        df = self.prepare_forecast_data()
+        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        combined = (res["P_deferrable0"] + res["P_deferrable1"]).to_numpy()
+        self.assertTrue((combined <= np.array(limits) + 1e-3).all())
+        prob = opt.prob
+        # Swap the halves: the same problem object, the new values bind.
+        swapped = limits[24:] + limits[:24]
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = swapped
+        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIs(opt.prob, prob)
+        combined = (res["P_deferrable0"] + res["P_deferrable1"]).to_numpy()
+        self.assertTrue((combined <= np.array(swapped) + 1e-3).all())
+        self.assertGreater(combined[24:].max(), 1)
+        # Back to a scalar: the Parameter is dropped and the problem is rebuilt.
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = 2500.0
+        opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIsNot(opt.prob, prob)
+        self.assertEqual(opt.param_group_max_power, {})
+
+    def test_deferrable_load_group_per_step_list_no_limit_steps_stay_finite(self):
+        """An inf entry in a per-step max_power list means no limit at that step
+        (#1366). cvxpy before 1.9 refuses inf in a nonneg Parameter, so the step gets
+        a finite value above anything the group can draw: both loads at full power and
+        the battery at full charge, twice, plus 1 W. It never binds, and the next list
+        on the same problem moves the no-limit steps."""
+        self._setup_shared_supply(
+            [
+                {
+                    "names": ["deferrable0", "deferrable1", "battery0"],
+                    "max_power": [float("inf")] * 24 + [1500.0] * 24,
+                }
+            ]
+        )
+        ceiling = 2 * (3000.0 + 2400.0 + 2400.0) + 1
+        opt = self.create_optimization()
+        df = self.prepare_forecast_data()
+        res = opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        value = opt.param_group_max_power[0].value
+        self.assertTrue(np.isfinite(value).all())
+        np.testing.assert_array_equal(value, [ceiling] * 24 + [1500.0] * 24)
+        charge = (-res["P_batt"]).clip(lower=0)
+        combined = (res["P_deferrable0"] + res["P_deferrable1"] + charge).to_numpy()
+        self.assertLessEqual(combined[24:].max(), 1500 + 1e-3)
+        prob = opt.prob
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = [1500.0] * 24 + [
+            float("inf")
+        ] * 24
+        opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIs(opt.prob, prob)
+        np.testing.assert_array_equal(
+            opt.param_group_max_power[0].value, [1500.0] * 24 + [ceiling] * 24
+        )
+
+    def test_deferrable_load_group_one_of_two_per_step_lists_back_to_a_scalar(self):
+        """Two per-step groups, then the first goes back to a number on the same
+        Optimization (#1366): only the second keeps its Parameter, the problem is
+        rebuilt, and each group is held by its own limit. deferrable0 can only start
+        at step 12, so the cheapest steps (0 to 11) would go to deferrable1, but the
+        second list is 0 there. After step 24 the loads run above the first list's
+        1000 W, so a stale first list would show."""
+        n = 48
+        first = [2500.0] * 24 + [1000.0] * 24
+        second = [0.0] * 12 + [3000.0] * 36
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "operating_hours_of_each_deferrable_load": [4, 2],
+                "start_timesteps_of_each_deferrable_load": [12, 0],
+                "end_timesteps_of_each_deferrable_load": [0, 0],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": first},
+                    {"names": ["deferrable1"], "max_power": second},
+                ],
+            }
+        )
+        unit_load_cost = np.full(n, 0.40)
+        unit_load_cost[:12] = 0.05
+        unit_load_cost[24:36] = 0.10
+
+        def solve():
+            return opt.perform_optimization(
+                self.prepare_forecast_data(),
+                np.zeros(n),
+                np.full(n, 300.0),
+                unit_load_cost,
+                np.zeros(n),
+            )
+
+        opt = self.create_optimization()
+        solve()
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(sorted(opt.param_group_max_power), [0, 1])
+        prob = opt.prob
+        opt.optim_conf["deferrable_load_groups"][0]["max_power"] = 1500.0
+        res = solve()
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIsNot(opt.prob, prob)
+        self.assertEqual(list(opt.param_group_max_power), [1])
+        np.testing.assert_array_equal(opt.param_group_max_power[1].value, second)
+        self.assertTrue(any(p is opt.param_group_max_power[1] for p in opt.prob.parameters()))
+        d0, d1 = res["P_deferrable0"].to_numpy(), res["P_deferrable1"].to_numpy()
+        combined = d0 + d1
+        self.assertLessEqual(combined.max(), 1500 + 1e-3)
+        self.assertAlmostEqual(d1.sum() * 0.5, 750.0 * 2, delta=1)
+        self.assertLessEqual(d1[:12].max(), 1e-3)
+        self.assertTrue((d1 <= np.array(second) + 1e-3).all())
+        self.assertGreater(combined[24:].max(), 1000 + 1)
+
+    def test_deferrable_load_group_battery_term_survives_relaxed_retry(self):
+        """The relaxed retry rebuilds the group row with the battery term (#1366)."""
+        self._setup_shared_supply(
+            [{"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000}]
+        )
+        opt = self.create_optimization()
+        with mock.patch.object(Optimization, "_needs_relaxed_retry", return_value=True):
+            res = self._solve_shared_supply(opt)
+        self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+        loads = res["P_deferrable0"] + res["P_deferrable1"]
+        charge = (-res["P_batt"]).clip(lower=0)
+        self.assertLessEqual((loads + charge).max(), 5000 + 1e-3)
+        self.assertGreater(charge.max(), 1000)
+
+    def test_deferrable_load_group_forced_power_above_budget_fails_clearly(self):
+        """Power forced into a step above the group's max_power ends Infeasible, as
+        before, and the log names the budget groups as the likely cause (#1366). The
+        budget is only below the pin at the first step, so without the pin the same
+        case solves."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "operating_hours_of_each_deferrable_load": [2, 0],
+                "deferrable_load_groups": [
+                    {"names": ["deferrable0", "deferrable1"], "max_power": [500.0] + [5000.0] * 47}
+                ],
+            }
+        )
+        df = self.prepare_forecast_data()
+        opt = self.create_optimization()
+        opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Pin load 0 at 1500 W now (below its nominal power, so the pin is kept).
+        self.optim_conf["def_current_power"] = [1500.0, 0.0]
+        opt = self.create_optimization()
+        with self.assertLogs(logger, level="WARNING") as logs:
+            opt.perform_dayahead_forecast_optim(df, self.p_pv_forecast, self.p_load_forecast)
+        self.assertEqual(opt.optim_status, "Infeasible")
+        self.assertTrue(
+            any("deferrable_load_groups [0] set a max_power" in line for line in logs.output),
+            logs.output,
+        )
+
+    def test_deferrable_load_group_battery_adds_no_binaries(self):
+        """A battery member adds one linear row and no variables (#1366)."""
+
+        def counts(groups):
+            self._setup_shared_supply(groups)
+            opt = self.create_optimization()
+            self._solve_shared_supply(opt)
+            variables = opt.prob.variables()
+            booleans = sum(v.size for v in variables if v.attributes.get("boolean"))
+            return sum(v.size for v in variables), booleans, opt.optim_status
+
+        loads_only = counts([{"names": ["deferrable0", "deferrable1"], "max_power": 5000}])
+        with_battery = counts(
+            [{"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000}]
+        )
+        self.assertEqual(loads_only, with_battery)
+
+    def test_deferrable_load_group_one_battery_in_two_groups_with_different_weights(self):
+        """One battery in two overlapping groups, each with its own weights (#1366).
+
+        g0 nets discharge (`discharge: -1`) at 1000 W, so the on/off 2000 W load runs
+        only while the battery discharges at least 1000 W. g1 has default weights at
+        2500 W, so discharging buys no room there: with the load at 2000 W the other
+        load gets at most 500 W, however hard the battery discharges. Both groups are
+        run in both orders, so weights taken from one fixed group fail either way.
+        """
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 5000,
+                "battery_charge_power_max": 2400,
+                "battery_discharge_power_max": 2400,
+                "inverter_is_hybrid": False,
+            }
+        )
+        g0 = {
+            "names": ["deferrable0", "battery0"],
+            "max_power": 1000,
+            "weights": {"battery0": {"discharge": -1.0}},
+        }
+        g1 = {"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 2500}
+        for label, groups in (("netting first", [g0, g1]), ("netting second", [g1, g0])):
+            with self.subTest(label):
+                self.optim_conf.update(
+                    {
+                        "set_use_battery": True,
+                        "treat_deferrable_load_as_semi_cont": [True, False],
+                        "set_deferrable_load_single_constant": [False, False],
+                        "nominal_power_of_deferrable_loads": [2000.0, 1500.0],
+                        "minimum_power_of_deferrable_loads": [0, 0],
+                        "operating_hours_of_each_deferrable_load": [2, 1],
+                        "start_timesteps_of_each_deferrable_load": [0, 0],
+                        "end_timesteps_of_each_deferrable_load": [0, 0],
+                        "deferrable_load_groups": copy.deepcopy(groups),
+                    }
+                )
+                opt = self.create_optimization()
+                res = self._solve_shared_supply(opt, soc_init=0.9, soc_final=0.5)
+                self.assertEqual(opt.optim_status, "Optimal")
+                d0, d1 = res["P_deferrable0"], res["P_deferrable1"]
+                charge = (-res["P_batt"]).clip(lower=0)
+                discharge = res["P_batt"].clip(lower=0)
+                self.assertLessEqual((d0 + charge - discharge).max(), 1000 + 1e-3)
+                self.assertLessEqual((d0 + d1 + charge).max(), 2500 + 1e-3)
+                running = d0 > 1
+                self.assertGreater(d0.max(), 1999)
+                self.assertGreaterEqual(discharge[running].min(), 1000 - 1e-3)
+                # Netting stays in g0: in a step where the load runs (so the battery
+                # discharges at least 1000 W), g1 still leaves the other load only
+                # 500 W. Had g0's netting leaked into g1, that discharge would free
+                # 1000 W more there and the other load could run at its full 1500 W.
+                t = int(np.argmax(running.to_numpy()))
+                p_def = opt.vars["p_deferrable"]
+                probe = cp.Problem(
+                    cp.Maximize(p_def[1][t]), [*opt.prob.constraints, p_def[0][t] == 2000]
+                )
+                probe.solve(solver=cp.HIGHS)
+                self.assertEqual(probe.status, "optimal")
+                self.assertAlmostEqual(probe.value, 500, delta=1e-3)
+                # Without the load in that step the other load may take its 1500 W.
+                probe = cp.Problem(
+                    cp.Maximize(p_def[1][t]), [*opt.prob.constraints, p_def[0][t] == 0]
+                )
+                probe.solve(solver=cp.HIGHS)
+                self.assertAlmostEqual(probe.value, 1500, delta=1e-3)
+
+    def test_deferrable_load_group_names_the_second_battery(self):
+        """`battery1` is the second battery (#1366): the group row holds its charging,
+        not the first battery's, nor both together."""
+        self._setup_shared_supply([{"names": ["deferrable0", "battery1"], "max_power": 2000}])
+        self.plant_conf["number_of_batteries"] = 2
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [3, 0]
+        opt = self.create_optimization()
+        res = self._solve_shared_supply(opt)
+        self.assertEqual(opt.optim_status, "Optimal")
+        charge0 = (-res["P_batt_0"]).clip(lower=0)
+        charge1 = (-res["P_batt_1"]).clip(lower=0)
+        self.assertLessEqual((res["P_deferrable0"] + charge1).max(), 2000 + 1e-3)
+        # battery0 is outside the group: it charges at full power in the cheap window.
+        self.assertGreater(charge0.max(), 2000 + 1)
+        self.assertGreater(charge1.max(), 100)
+
+    def test_deferrable_load_group_battery_charge_weight_below_one(self):
+        """A battery charge weight below 1 counts that share of charging (#1366): at
+        0.5 the battery charges at its full 2400 W under a 1200 W budget, where the
+        unit weight caps it at 1200 W. The cheap window is two steps, too short to
+        fill the battery, so the plan charges as hard as the row allows there."""
+        n = 48
+        unit_load_cost = np.full(n, 0.40)
+        unit_load_cost[4:6] = 0.05
+        for charge_weight, cap in ((0.5, 2400), (1.0, 1200)):
+            with self.subTest(charge=charge_weight):
+                self._setup_shared_supply(
+                    [
+                        {
+                            "names": ["deferrable0", "battery0"],
+                            "max_power": 1200,
+                            "weights": {"battery0": {"charge": charge_weight}},
+                        }
+                    ]
+                )
+                self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+                opt = self.create_optimization()
+                res = opt.perform_optimization(
+                    self.prepare_forecast_data(),
+                    np.zeros(n),
+                    np.full(n, 300.0),
+                    unit_load_cost,
+                    np.zeros(n),
+                    soc_init=0.1,
+                    soc_final=0.9,
+                )
+                self.assertEqual(opt.optim_status, "Optimal")
+                charge = (-res["P_batt"]).clip(lower=0)
+                self.assertLessEqual(
+                    (res["P_deferrable0"] + charge_weight * charge).max(), 1200 + 1e-3
+                )
+                self.assertAlmostEqual(charge.iloc[4:6].min(), cap, delta=1)
+                self.assertLessEqual(charge.max(), cap + 1e-3)
+
+    def test_deferrable_load_group_battery_budget_with_a_mutex_group(self):
+        """A battery belongs in a budget group next to a mutex group on the same
+        loads (#1366): at most one load runs per step and loads plus charging stay
+        within 5000 W, in the normal solve and in the relaxed retry. 3000 W + 1500 W
+        fits the budget, so only the mutex group keeps them apart; 3000 W + 2400 W of
+        charging does not, so the budget binds."""
+        groups = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True},
+            {"names": ["deferrable0", "deferrable1", "battery0"], "max_power": 5000},
+        ]
+        for relaxed in (False, True):
+            with self.subTest(relaxed=relaxed):
+                self._setup_shared_supply(copy.deepcopy(groups))
+                self.optim_conf.update(
+                    {
+                        "treat_deferrable_load_as_semi_cont": [True, True],
+                        "nominal_power_of_deferrable_loads": [3000.0, 1500.0],
+                    }
+                )
+                opt = self.create_optimization()
+                with mock.patch.object(Optimization, "_needs_relaxed_retry", return_value=relaxed):
+                    res = self._solve_shared_supply(opt)
+                expected = "Optimal (Relaxed)" if relaxed else "Optimal"
+                self.assertEqual(opt.optim_status, expected)
+                d0, d1 = res["P_deferrable0"], res["P_deferrable1"]
+                charge = (-res["P_batt"]).clip(lower=0)
+                self.assertFalse(((d0 > 1) & (d1 > 1)).any())
+                self.assertLessEqual((d0 + d1 + charge).max(), 5000 + 1e-3)
+                self.assertAlmostEqual(d0.sum() * 0.5, 9000, delta=1)
+                self.assertAlmostEqual(d1.sum() * 0.5, 3000, delta=1)
+                self.assertGreater(charge.max(), 1000)
+
+    def test_deferrable_load_group_battery_availability_with_a_battery_member(self):
+        """Where battery_availability is 0 the battery member adds nothing to the row
+        (#1366): no charging there, the load may take the whole 3000 W budget, and the
+        budget holds at every step. Half the load's cheap steps (4 to 6) are also the
+        battery's, where load plus charging would reach 5400 W without the battery in
+        the group; the other half (30 to 32) is while the battery is away."""
+        self._setup_shared_supply([{"names": ["deferrable0", "battery0"], "max_power": 3000}])
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [3, 0]
+        opt = self.create_optimization()
+        n = 48
+        unit_load_cost = np.full(n, 0.40)
+        unit_load_cost[4:7] = 0.05  # the load and the battery both want these steps
+        unit_load_cost[30:33] = 0.05  # the rest of the load's window, with the battery away
+        availability = [1.0] * 24 + [0.0] * 24
+        res = opt.perform_optimization(
+            self.prepare_forecast_data(),
+            np.zeros(n),
+            np.full(n, 300.0),
+            unit_load_cost,
+            np.zeros(n),
+            soc_init=0.1,
+            soc_final=0.5,
+            battery_availability=availability,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        load = res["P_deferrable0"]
+        charge = (-res["P_batt"]).clip(lower=0)
+        self.assertLessEqual((load + charge).max(), 3000 + 1e-3)
+        self.assertAlmostEqual((load + charge).iloc[4:7].min(), 3000, delta=1)
+        self.assertLessEqual(res["P_batt"].iloc[24:].abs().max(), 1e-3)
+        self.assertAlmostEqual(load.iloc[30:33].min(), 3000, delta=1)
+        self.assertGreater(charge.iloc[:24].max(), 1000)
+
+    def test_deferrable_load_groups_without_new_fields_build_the_same_problem(self):
+        """Default-is-a-no-op (#1366): every group config valid before #1366 builds the
+        same constraint rows and gives the same plan as the builder before #1366."""
+        defaults = copy.deepcopy(self.optim_conf)
+        three_loads = {
+            "number_of_deferrable_loads": 3,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0, 1000.0],
+            "operating_hours_of_each_deferrable_load": [4, 2, 2],
+            "treat_deferrable_load_as_semi_cont": [True, True, False],
+            "set_deferrable_load_single_constant": [False, False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0, 0],
+            "minimum_power_of_deferrable_loads": [0, 0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0, 0],
+            "set_deferrable_load_as_timeseries": [False, False, False],
+            "deferrable_load_max_cost": [0.0, 0.0, 0.0],
+            "is_electric_load": [True, True, True],
+        }
+        d01 = ["deferrable0", "deferrable1"]
+        scenarios = {
+            "no groups": ({}, []),
+            "budget": ({}, [{"names": d01, "max_power": 2500, "mutual_exclusion": False}]),
+            "mutex only": ({}, [{"names": d01, "mutual_exclusion": True}]),
+            "budget and mutex": ({}, [{"names": d01, "max_power": 3200, "mutual_exclusion": True}]),
+            "one-entry list": ({}, [{"names": d01, "max_power": [2500.0]}]),
+            "runtime scalar 0": (
+                {"operating_hours_of_each_deferrable_load": [0, 0]},
+                [{"names": d01, "max_power": 0}],
+            ),
+            "unknown key": ({}, [{"names": d01, "max_power": 2500, "note": "phase 3"}]),
+            "runtime budget overlap": (
+                three_loads,
+                [
+                    {"names": d01, "max_power": 3500},
+                    {"names": ["deferrable1", "deferrable2"], "max_power": 1500},
+                ],
+            ),
+            "overlapping mutex (heat_topology, runtime)": (
+                three_loads,
+                [
+                    {"names": d01, "mutual_exclusion": True},
+                    {"names": ["deferrable1", "deferrable2"], "mutual_exclusion": True},
+                ],
+            ),
+            "battery on, loads-only group": (
+                {"set_use_battery": True},
+                [{"names": d01, "max_power": 2500}],
+            ),
+            "per-step list": ({}, [{"names": d01, "max_power": [3000.0] * 24 + [1500.0] * 24}]),
+            "per-step list with no-limit steps": (
+                {},
+                [{"names": d01, "max_power": [float("inf")] * 24 + [1500.0] * 24}],
+            ),
+            "no-op group (heat_topology without max_combined_power)": (
+                {},
+                [{"names": d01, "mutual_exclusion": False}],
+            ),
+            "no-op group with a repeated name": (
+                {},
+                [{"names": ["deferrable0", "deferrable0"], "mutual_exclusion": False}],
+            ),
+            "mutual_exclusion null": (
+                {},
+                [{"names": d01, "max_power": 2500, "mutual_exclusion": None}],
+            ),
+            "groups an empty object": ({}, {}),
+        }
+        df = self.prepare_forecast_data()
+
+        def solve(overrides, groups, builder):
+            optim_conf = copy.deepcopy(defaults)
+            optim_conf.update(copy.deepcopy(overrides))
+            optim_conf["deferrable_load_groups"] = copy.deepcopy(groups)
+            with mock.patch.object(Optimization, "_add_deferrable_group_constraints", builder):
+                opt = self.create_optimization(optim_conf=optim_conf)
+                res = opt.perform_dayahead_forecast_optim(
+                    df, self.p_pv_forecast, self.p_load_forecast
+                )
+            return opt, res
+
+        for label, (overrides, groups) in scenarios.items():
+            with self.subTest(label):
+                new_opt, new_res = solve(
+                    overrides, groups, Optimization._add_deferrable_group_constraints
+                )
+                old_opt, old_res = solve(overrides, groups, _group_constraints_before_1366)
+                new_data = new_opt.prob.get_problem_data(cp.HIGHS)[0]
+                old_data = old_opt.prob.get_problem_data(cp.HIGHS)[0]
+                self.assertEqual(sorted(new_data), sorted(old_data))
+                for key, old_value in old_data.items():
+                    new_value = new_data[key]
+                    if hasattr(old_value, "toarray"):
+                        self.assertEqual(old_value.shape, new_value.shape, key)
+                        self.assertEqual((old_value != new_value).nnz, 0, key)
+                    elif isinstance(old_value, list):
+                        # bool_vars_idx and int_vars_idx: the same integer columns.
+                        self.assertEqual(old_value, new_value, key)
+                    elif isinstance(old_value, np.ndarray):
+                        # A no-limit step goes into the Parameter as a finite value
+                        # that never binds (cvxpy before 1.9 refuses inf there); the
+                        # old builder kept inf as a constant. Every other entry and
+                        # array is unchanged.
+                        self.assertEqual(old_value.shape, new_value.shape, key)
+                        differs = old_value != new_value
+                        if label == "per-step list with no-limit steps" and differs.any():
+                            nominals = new_opt.optim_conf["nominal_power_of_deferrable_loads"]
+                            ceiling = sum(float(np.max(nominal)) for nominal in nominals[:2])
+                            self.assertTrue(np.isposinf(old_value[differs]).all(), key)
+                            self.assertTrue(np.isfinite(new_value[differs]).all(), key)
+                            self.assertTrue((new_value[differs] > ceiling).all(), key)
+                        else:
+                            self.assertTrue(np.array_equal(old_value, new_value), key)
+                self.assertEqual(new_opt.optim_status, old_opt.optim_status)
+                pd.testing.assert_frame_equal(new_res, old_res, check_exact=False, atol=1e-6)
 
     def test_deferrable_load_groups_mutex_semi_cont(self):
         """Two semi-cont loads in a mutual_exclusion group are never co-active."""
