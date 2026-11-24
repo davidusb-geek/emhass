@@ -69,7 +69,7 @@ fit_heating_hours:
 ```
 After fitting the model the following information is logged by EMHASS:
 
-    2024-04-17 12:41:50,019 - web_server - INFO - Passed runtime parameters: {'csv_file': 'heating_prediction.csv', 'features': ['degreeday', 'solar'], 'target': 'heating_hours', 'regression_model': 'RandomForestRegression', 'model_type': 'heating_hours_degreeday', 'timestamp': 'timestamp', 'date_features': ['month', 'day_of_week']}
+    2024-04-17 12:41:50,019 - web_server - INFO - Passed runtime parameters: {"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "heating_hours", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"]}
     2024-04-17 12:41:50,020 - web_server - INFO -  >> Setting input data dict
     2024-04-17 12:41:50,021 - web_server - INFO - Setting up needed data
     2024-04-17 12:41:50,048 - web_server - INFO -  >> Performing a machine learning regressor fit...
@@ -138,7 +138,7 @@ predict_heating_hours:
 After predicting the model the following information is logged by EMHASS:
 
 ```
-2024-04-17 14:25:40,695 - web_server - INFO - Passed runtime parameters: {'mlr_predict_entity_id': 'sensor.predicted_hours', 'mlr_predict_unit_of_measurement': 'h', 'mlr_predict_friendly_name': 'Predicted hours', 'new_values': [8.2, 7.23, 2, 6], 'model_type': 'heating_hours_degreeday'}
+2024-04-17 14:25:40,695 - web_server - INFO - Passed runtime parameters: {"mlr_predict_entity_id": "sensor.predicted_hours", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "Predicted hours", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday"}
 2024-04-17 14:25:40,696 - web_server - INFO -  >> Setting input data dict
 2024-04-17 14:25:40,696 - web_server - INFO - Setting up needed data
 2024-04-17 14:25:40,700 - web_server - INFO -  >> Performing a machine learning regressor predict...

@@ -561,3 +561,16 @@ def test_a_malformed_log_call_neither_raises_into_the_dry_run_nor_leaks(logged, 
     for special in SPECIALS[:1] + SPECIALS[2:]:
         assert special not in everything, repr(special)
     assert "forged" not in everything
+
+
+def test_runtime_parameters_are_logged_as_json(logged):
+    # #468: JSON rather than a Python dict, so the line can be pasted back into
+    # the web UI. It stays one escaped line like the rest of the dry-run log.
+    body = {"prediction_horizon": 4, "soc_init": 0.43, "note": HOSTILE}
+    _post("naive-mpc-optim", body)
+    prefix = "Passed runtime parameters: "
+    lines = [m.removeprefix(prefix) for m in logged if m.startswith(prefix)]
+    assert len(lines) == 1, logged
+    assert json.loads(lines[0]) == body
+    for special in SPECIALS:
+        assert special not in lines[0], repr(special)
