@@ -3546,10 +3546,21 @@ class TestSupervisorUrlForms(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(live, {"state": "1"})
                 self.assertEqual(self._sent(mocked), [expected])
 
+    # Core URLs with and without the trailing slash: publishing gets one "/api/states/".
+    CORE_STATES = (
+        ("http://ha:8123", "http://ha:8123/api/states/sensor.x"),
+        ("http://ha:8123/", "http://ha:8123/api/states/sensor.x"),
+        ("https://ha.example.invalid/ha/", "https://ha.example.invalid/ha/api/states/sensor.x"),
+        ("https://supervisor/core/api", "https://supervisor/core/api/api/states/sensor.x"),
+    )
+
+    def _publish_cases(self):
+        return [*self._cases("states/sensor.x"), *self.CORE_STATES]
+
     async def test_post_data(self):
         data = pd.Series([1.0, 2.0], index=pd.date_range("2026-11-01", periods=2, freq="30min"))
         data.name = "x"
-        for url, expected in self._cases("states/sensor.x"):
+        for url, expected in self._publish_cases():
             with self.subTest(url=url), aioresponses() as mocked:
                 rh = self._rh(url)
                 self.addAsyncCleanup(rh.close)
@@ -3558,7 +3569,7 @@ class TestSupervisorUrlForms(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self._sent(mocked), [expected])
 
     async def test_post_scalar_sensor(self):
-        for url, expected in self._cases("states/sensor.x"):
+        for url, expected in self._publish_cases():
             with self.subTest(url=url), aioresponses() as mocked:
                 rh = self._rh(url)
                 self.addAsyncCleanup(rh.close)
