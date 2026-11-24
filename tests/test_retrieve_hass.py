@@ -3572,17 +3572,19 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
 
     DAYS = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
     LOAD, PV = "sensor.power_load", "sensor.power_pv"
+    NOW = datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC)
 
     @staticmethod
     def _rh(freq):
-        rh = object.__new__(RetrieveHass)
-        rh.freq = pd.Timedelta(freq)
-        rh.long_lived_token = "token"
-        rh.hass_url = "http://ha.invalid/"
-        rh.ssl_verify = True
-        rh.use_influxdb = rh.use_victoriametrics = rh.use_websocket = False
-        rh.logger = logger
-        return rh
+        return RetrieveHass(
+            "http://ha.invalid/",
+            "token",
+            pd.Timedelta(freq),
+            datetime.UTC,
+            {},
+            emhass_conf,
+            logger,
+        )
 
     @staticmethod
     def _rows(entries):
@@ -3657,7 +3659,14 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
         for minutes in (5, 15, 30, 60, 120):
             with self.subTest(minutes=minutes):
                 rh = self._rh(f"{minutes}min")
-                df = await self._get(rh, payloads)
+                with patch.object(RetrieveHass, "_merge_straddling_buckets", create=True) as merge:
+                    df = await self._get(rh, payloads, record_staleness=True)
+                # Nothing to merge: each bucket comes from a single day.
+                merge.assert_not_called()
+                for var in (self.LOAD, self.PV):
+                    # Every row but the one stamped at each day start is a real reading.
+                    self.assertTrue(rh.bucket_row_count[var].index.is_unique)
+                    self.assertEqual(int(rh.bucket_row_count[var].sum()), 4 * 1439)
                 days = []
                 for day in self.DAYS:
                     frames = []
@@ -3765,9 +3774,7 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
                     ),
                 }
                 with (
-                    time_machine.travel(
-                        datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
-                    ),
+                    time_machine.travel(self.NOW, tick=False),
                     patch.object(RetrieveHass, "_fetch_live_state", new=AsyncMock(return_value={})),
                     patch.object(RetrieveHass, "_live_state_is_fresh", return_value=True),
                 ):
@@ -3779,9 +3786,7 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
 
     def _process(self, rows, day, is_last_day, freq="7min", **kwargs):
         rh = self._rh(freq)
-        with time_machine.travel(
-            datetime.datetime(2026, 2, 20, 10, 20, tzinfo=datetime.UTC), tick=False
-        ):
+        with time_machine.travel(self.NOW, tick=False):
             frame = rh._process_history_dataframe(
                 self._rows(rows),
                 self.LOAD,
