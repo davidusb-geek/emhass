@@ -1181,8 +1181,8 @@ class RetrieveHass:
         # consumers must key off df_final.columns rather than this list.
         self.var_list = var_list
         # Keep the aux series to the labels df_final holds. Every day is on one
-        # grid, so this only holds the documented contract if a label ever falls
-        # outside the cleaned-up index.
+        # grid now, so nothing is expected to fall outside it; the filter stays
+        # as a guard for the documented contract.
         final_index = self.df_final.index
         for var, parts in staleness_by_var.items():
             last = pd.concat([last for last, _, _ in parts])

@@ -3806,7 +3806,7 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
             True,
             hold_unchanged_tail=True,
         )
-        running = pd.Timestamp("2026-02-20 10:20", tz="UTC").floor(rh.freq)
+        running = pd.Timestamp(self.NOW).floor(rh.freq)
         self.assertTrue(self._on_epoch_grid(frame.index, rh.freq))
         self.assertEqual(frame.index[0], pd.Timestamp("2026-02-19 23:55", tz="UTC"))
         self.assertEqual(frame.index[-1], running)
