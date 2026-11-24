@@ -909,10 +909,12 @@ def _runtime_params_for_log(runtimeparams: dict) -> str:
     to replay a run (#468). As with ``repr()`` before, a string value cannot break
     the line or drive the terminal: ``json.dumps`` escapes the control characters,
     and every other non-printable character (DEL, C1, line separators, format
-    characters) is written as a ``\\u`` escape, which keeps the JSON valid.
+    characters) is written as a ``\\u`` escape, which keeps the JSON valid. The
+    token is masked before that escaping, which could otherwise leave it in a
+    spelling the log filter does not recognise.
     """
     try:
-        text = json.dumps(api_auth.redacted(runtimeparams), ensure_ascii=False)
+        text = api_auth.mask_text(json.dumps(api_auth.redacted(runtimeparams), ensure_ascii=False))
     except (TypeError, ValueError, RecursionError):
         return str(api_auth.redacted(runtimeparams))
     return "".join(

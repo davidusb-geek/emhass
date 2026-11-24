@@ -574,3 +574,17 @@ def test_runtime_parameters_are_logged_as_json(logged):
     assert json.loads(lines[0]) == body
     for special in SPECIALS:
         assert special not in lines[0], repr(special)
+
+
+@pytest.mark.parametrize("token", [TOKEN, TAB_TOKEN, "NelTökQ7Kp3\x85SepVq7Kp3ZxW9"])
+def test_token_under_another_key_is_masked_in_the_runtime_parameters(logged, token):
+    # Escaping the JSON can turn the token into a spelling the log filter does
+    # not know (a raw "ö" next to an escaped NEL), so it is masked first.
+    body = {"prediction_horizon": 4, "notes": {"pasted": token}}
+    with _token(token):
+        _post("naive-mpc-optim", body)
+    prefix = "Passed runtime parameters: "
+    lines = [m for m in logged if m.startswith(prefix)]
+    assert len(lines) == 1, logged
+    _assert_no_token_fragment(lines[0], token)
+    assert json.loads(lines[0].removeprefix(prefix))["notes"]["pasted"] == "***"
