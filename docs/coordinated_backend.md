@@ -69,6 +69,8 @@ The coordinator asks it what it would do at given prices, and, once it has chose
 
 **Serving this EMHASS** to a coordinator elsewhere: set `participant_api` and a `participant_token` secret.
 
+**On the Home Assistant add-on**, these secrets come from its Configuration page (`options.json`) rather than `secrets_emhass.yaml`: `participant_token`, and `remote_solver_tokens`, a list of `name` and `token` pairs, the tokens of the remote solvers `site` names. Each is stored under its `name`, which a remote's `token_secret` names. A name must be one a `token_secret` may take (lower case letters, digits and `_`, not one of EMHASS's own secrets); an entry that is not is skipped, and the log says which entry by its position. The participant API is served on the add-on's port 5000, not through ingress, which refuses it.
+
 ```json
 "participant_api": {"publish_prefix": "garage_"}
 ```
