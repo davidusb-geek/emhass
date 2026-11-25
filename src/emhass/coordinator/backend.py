@@ -813,7 +813,7 @@ def _site(
             tags.setdefault(lim, []).append(rid)
     for key, g in groups.items():
         if key not in g["devices"] and (
-            key in nodes or key in limit_ids or key == MAIN or SITE_DEVICE.match(key)
+            key in nodes or key in limit_ids or key == MAIN or SITE_DEVICE.fullmatch(key)
         ):
             return empty, f"site: the group {key!r} has the name of an element"
     for d in devices:  # a device site leaves out stays EMHASS's

@@ -1594,3 +1594,47 @@ def test_the_site_schema_refuses_what_the_site_check_refuses(site):
 
     assert site_mod.site_problem(site) is not None
     assert not _schema_accepts(site)
+
+
+@pytest.mark.parametrize(
+    "site",
+    [
+        [{"id": "panel\n", "parent": "grid"}],  # a node
+        [{"id": "feed\n", "type": "limit", "max_import": 1000}],
+        [{"id": "garage\n", "parent": "grid", "solver": {"url": "https://g.invalid/p"}}],
+        [{"id": "battery0\n", "parent": "grid"}],  # a device's name, with a newline
+        [{"id": "deferrable0", "parent": "grid", "group": "pool\n"}],
+        [{"id": "garage", "parent": "grid", "solver": {"url": "https://g.invalid/p\n"}}],
+        [
+            {
+                "id": "garage",
+                "parent": "grid",
+                "solver": {"url": "https://g.invalid/p", "token_secret": "garage_token\n"},
+            }
+        ],
+    ],
+)
+def test_a_trailing_newline_is_not_part_of_a_valid_name(site):
+    """A name or URL is matched whole: "panel\\n" is not "panel"."""
+    from emhass.coordinator import site as site_mod
+
+    assert site_mod.site_problem(site) is not None
+    # without the newline each one is accepted, so the newline is what is refused
+    assert site_mod.site_problem(_strip_newlines(site)) is None
+
+
+def _strip_newlines(value):
+    if isinstance(value, str):
+        return value.rstrip("\n")
+    if isinstance(value, list):
+        return [_strip_newlines(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_newlines(v) for k, v in value.items()}
+    return value
+
+
+def test_a_token_secret_name_is_matched_whole():
+    from emhass.coordinator import site as site_mod
+
+    assert site_mod.site_token_secret_usable("garage_token")
+    assert not site_mod.site_token_secret_usable("garage_token\n")
