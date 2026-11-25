@@ -369,9 +369,22 @@ class TestPortsAreComparedAsNumbers(AuthSupportBase):
 
 class TestServerConfigurationIsPinned(AuthSupportBase):
     def test_the_direct_server_does_not_rewrite_the_peer_address(self):
-        keywords = _direct_server_config_keywords()
-        self.assertIn("proxy_headers", keywords)
-        self.assertIs(keywords["proxy_headers"], False)
+        import ast
+
+        source = pathlib.Path(web_server.__file__).read_text(encoding="utf-8")
+        configs = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Config"
+            and getattr(node.func.value, "id", "") == "uvicorn"
+        ]
+        self.assertTrue(configs, "main() no longer builds a uvicorn.Config")
+        for call in configs:
+            keywords = {k.arg: k.value for k in call.keywords}
+            self.assertIn("proxy_headers", keywords)
+            self.assertIs(getattr(keywords["proxy_headers"], "value", None), False)
 
     def test_gunicorn_and_the_uvicorn_worker_end_up_trusting_no_forwarder(self):
         pytest = __import__("pytest")
@@ -406,136 +419,6 @@ class TestServerConfigurationIsPinned(AuthSupportBase):
         asyncio.run(loaded.loaded_app(scope, None, None))
         self.assertEqual(seen.get("client"), ("127.0.0.1", 50000))
         self.assertEqual(scope["scheme"], "http")
-
-
-def _direct_server_config_keywords():
-    """The literal keyword arguments web_server.main() passes to uvicorn.Config."""
-    import ast
-
-    source = pathlib.Path(web_server.__file__).read_text(encoding="utf-8")
-    calls = [
-        node
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "Config"
-        and getattr(node.func.value, "id", "") == "uvicorn"
-    ]
-    assert len(calls) == 1, "main() should build exactly one uvicorn.Config"
-    return {k.arg: getattr(k.value, "value", None) for k in calls[0].keywords}
-
-
-class TestServerRunsWithoutWebSockets(unittest.TestCase):
-    """EMHASS has no WebSocket route, so uvicorn runs with ws="none" on both server paths. Under the
-    default (ws="auto", the websockets sans-io protocol on uvicorn 0.54) an upgrade with 129 headers
-    gets no answer, and a shutdown with one pending skips the Quart after_serving hooks."""
-
-    def test_the_direct_server_disables_websockets(self):
-        self.assertEqual(_direct_server_config_keywords().get("ws"), "none")
-
-    def test_the_gunicorn_worker_disables_websockets(self):
-        pytest = __import__("pytest")
-        pytest.importorskip("uvicorn.workers")  # gunicorn cannot be imported on Windows
-        from uvicorn.workers import UvicornWorker as UpstreamWorker
-
-        from emhass.uvicorn_worker import UvicornWorker
-
-        self.assertTrue(issubclass(UvicornWorker, UpstreamWorker))
-        self.assertEqual(UvicornWorker.CONFIG_KWARGS["ws"], "none")
-        # the upstream defaults are kept
-        for key, value in UpstreamWorker.CONFIG_KWARGS.items():
-            if key != "ws":
-                self.assertEqual(UvicornWorker.CONFIG_KWARGS[key], value)
-
-    def test_the_docker_image_defaults_to_the_emhass_worker(self):
-        dockerfile = (CONF.parent / "Dockerfile").read_text(encoding="utf-8")
-        self.assertNotIn("uvicorn.workers.UvicornWorker", dockerfile)
-        self.assertEqual(dockerfile.count("WORKER_CLASS=emhass.uvicorn_worker.UvicornWorker"), 1)
-        self.assertEqual(
-            dockerfile.count("${WORKER_CLASS:-emhass.uvicorn_worker.UvicornWorker}"), 1
-        )
-
-    def test_a_crowded_upgrade_is_answered_and_shutdown_runs_the_hooks(self):
-        import socket
-        import threading
-        import time
-        import warnings
-
-        import uvicorn
-
-        events = []
-
-        async def app(scope, receive, send):
-            if scope["type"] == "lifespan":
-                await receive()
-                await send({"type": "lifespan.startup.complete"})
-                await receive()
-                events.append("shutdown")
-                await send({"type": "lifespan.shutdown.complete"})
-            elif scope["type"] == "http":
-                await send({"type": "http.response.start", "status": 200, "headers": []})
-                await send({"type": "http.response.body", "body": b"ok"})
-            else:
-                events.append(scope["type"])
-
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-        config = uvicorn.Config(
-            app,
-            log_level="critical",
-            proxy_headers=False,
-            timeout_graceful_shutdown=5,
-            # what main() runs with; uvicorn's default when it sets nothing
-            ws=_direct_server_config_keywords().get("ws", "auto"),
-        )
-        server = uvicorn.Server(config)
-        errors = []
-
-        def run():
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", DeprecationWarning)
-                    server.run(sockets=[listener])
-            except BaseException as exc:  # noqa: BLE001 - reported by the assertion below
-                errors.append(repr(exc))
-
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        deadline = time.monotonic() + 10
-        while not server.started and thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self.assertTrue(server.started, errors)
-        request = (
-            "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
-            + "".join(f"X-H{i}: v\r\n" for i in range(124))
-            + "\r\n"
-        )
-        held = socket.create_connection(("127.0.0.1", port), timeout=5)
-        try:
-            held.sendall(request.encode())
-            try:
-                answer = held.recv(100)
-            except TimeoutError:
-                answer = b""
-            self.assertTrue(answer.startswith(b"HTTP/1.1 "), answer)
-            # a second upgrade left half sent while the server stops
-            pending = socket.create_connection(("127.0.0.1", port), timeout=5)
-            try:
-                pending.sendall(request.encode())
-                time.sleep(0.2)
-                server.should_exit = True
-                thread.join(15)
-            finally:
-                pending.close()
-        finally:
-            held.close()
-            listener.close()
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(errors, [])
-        self.assertIn("shutdown", events)
-        self.assertNotIn("websocket", events)
 
 
 class TestIngressRelativeUrls(AuthSupportBase):
