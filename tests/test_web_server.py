@@ -1,6 +1,8 @@
 import logging
+import os
 import pathlib
 import pickle
+import sys
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1419,6 +1421,89 @@ class TestRuntimeParametersLog(unittest.IsolatedAsyncioTestCase):
         for special in ("\r", "\n", "\x1b", "\x7f", " ", " ", "\x85", "\t", "\x00"):
             self.assertNotIn(special, logged)
         self.assertNotIn("‮", logged)
+
+
+class TestLaunchAddressLog(unittest.IsolatedAsyncioTestCase):
+    """The start-up log names the address the server listens on."""
+
+    async def run_initialize(self, server_ip, gunicorn, ip_env=None):
+        env = {"PORT": "5000", "LOGGING_LEVEL": "INFO"}
+        if ip_env is not None:
+            env["IP"] = ip_env
+        modules = {"gunicorn": MagicMock()} if gunicorn else {}
+        # initialize() sets the level of the app's own logger
+        original_level = web_server.app.logger.level
+        paths = (pathlib.Path("c.json"),) * 6
+        with (
+            patch.dict(sys.modules, modules),
+            patch.dict(os.environ, env),
+            patch.dict(web_server.params_secrets, {"hass_url": "http://ha.invalid:8123"}),
+            patch.dict(web_server.emhass_conf, {"config_path": "c", "data_path": "d"}),
+            patch.object(web_server, "entity_path", pathlib.Path()),
+            patch.object(web_server, "injection_dict", {}),
+            patch.object(web_server, "continual_publish_thread", []),
+            patch.object(web_server, "_setup_paths", AsyncMock(return_value=paths)),
+            patch.object(web_server, "_setup_secrets", AsyncMock(return_value=server_ip)),
+            patch.object(web_server.api_auth, "log_status"),
+            patch.object(
+                web_server, "_build_configuration", AsyncMock(return_value=({}, "profit", "INFO"))
+            ),
+            patch.object(web_server, "_validate_data_path"),
+            patch.object(web_server, "_load_injection_dict", AsyncMock(return_value={})),
+            patch.object(web_server, "_build_and_save_params", AsyncMock(return_value={})),
+            patch.object(web_server, "_configure_logging", AsyncMock()),
+            patch.object(web_server, "_cleanup_entities", return_value=pathlib.Path()),
+            patch.object(web_server, "_initialize_connections", AsyncMock()),
+        ):
+            if not gunicorn:
+                sys.modules.pop("gunicorn", None)
+            if ip_env is None:
+                os.environ.pop("IP", None)
+            try:
+                with self.assertLogs(web_server.app.logger, level="INFO") as cm:
+                    await web_server.initialize({})
+            finally:
+                web_server.app.logger.setLevel(original_level)
+        return [r.getMessage() for r in cm.records if "Launching" in r.getMessage()], [
+            r.getMessage() for r in cm.records if r.levelno == logging.WARNING
+        ]
+
+    async def test_gunicorn_logs_the_ip_env_bind(self):
+        launch, warnings = await self.run_initialize("192.0.2.5", gunicorn=True, ip_env="0.0.0.0")
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://0.0.0.0:5000"])
+        self.assertTrue(any("server_ip is 192.0.2.5" in w for w in warnings), warnings)
+
+    async def test_gunicorn_default_has_no_warning(self):
+        launch, warnings = await self.run_initialize("0.0.0.0", gunicorn=True, ip_env="0.0.0.0")
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://0.0.0.0:5000"])
+        self.assertFalse(any("server_ip" in w for w in warnings), warnings)
+
+    async def test_gunicorn_ip_env_with_server_ip_unset_has_no_warning(self):
+        # server_ip falls back to 0.0.0.0 when it is not set
+        launch, warnings = await self.run_initialize("0.0.0.0", gunicorn=True, ip_env="127.0.0.1")
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://127.0.0.1:5000"])
+        self.assertFalse(any("server_ip" in w for w in warnings), warnings)
+
+    async def test_gunicorn_ip_env_equal_to_server_ip_has_no_warning(self):
+        launch, warnings = await self.run_initialize(
+            "192.0.2.5", gunicorn=True, ip_env="192.0.2.5"
+        )
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://192.0.2.5:5000"])
+        self.assertFalse(any("server_ip" in w for w in warnings), warnings)
+
+    async def test_gunicorn_without_ip_env_listens_on_all_interfaces(self):
+        launch, warnings = await self.run_initialize("192.0.2.5", gunicorn=True)
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://0.0.0.0:5000"])
+        self.assertTrue(any("server_ip is 192.0.2.5" in w for w in warnings), warnings)
+
+    async def test_gunicorn_empty_ip_env_listens_on_all_interfaces(self):
+        launch, _ = await self.run_initialize("0.0.0.0", gunicorn=True, ip_env="")
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://0.0.0.0:5000"])
+
+    async def test_run_directly_logs_server_ip(self):
+        launch, warnings = await self.run_initialize("127.0.0.1", gunicorn=False)
+        self.assertEqual(launch, ["Launching the emhass webserver at: http://127.0.0.1:5000"])
+        self.assertFalse(any("server_ip" in w for w in warnings), warnings)
 
 
 if __name__ == "__main__":

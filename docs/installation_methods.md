@@ -82,6 +82,8 @@ docker run -it --restart always  -p 5000:5000 --name emhass-container -v /emhass
   docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```  
 
+- Inside the container the web server listens on the address in the `IP` environment variable (default `0.0.0.0`, all interfaces) and the port in `PORT` (default `5000`). `server_ip` in `secrets_emhass.yaml` does not change it: it is used only when `web_server.py` is run directly. To choose which host address the port is reachable on, use Docker's port mapping, for example `-p 192.0.2.10:5000:5000`.
+
 ## Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*
 
 If you wish to run EMHASS optimizations with cli commands. *(no persistent web server session)* you can run EMHASS via the python package alone *(not wrapped in a Docker container)*.

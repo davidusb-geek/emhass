@@ -2120,6 +2120,26 @@ async def _initialize_connections(params: dict) -> None:
         )
 
 
+def _log_launch_address(server_ip: str | None, port: int) -> None:
+    """Log the address the web server listens on.
+
+    Under Gunicorn (the Docker image and the add-on) the IP environment variable
+    sets it (gunicorn.conf.py); server_ip sets it only when this module is run
+    directly (main()).
+    """
+    host = api_auth.bind_host(server_ip) or "0.0.0.0"
+    app.logger.info("Launching the emhass webserver at: http://%s:%s", host, port)
+    # 0.0.0.0 is the default when server_ip is not set, so it is not reported
+    if server_ip and server_ip != "0.0.0.0" and server_ip != host:
+        app.logger.warning(
+            "server_ip is %s, but the web server listens on %s. Under Gunicorn (the Docker "
+            "image and the add-on) the IP environment variable sets the address; server_ip "
+            "is used only when web_server.py is run directly.",
+            server_ip,
+            host,
+        )
+
+
 async def initialize(args: dict | None = None):
     global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
     # Grab the logging level early from ENV so initialization functions can log properly
@@ -2163,7 +2183,7 @@ async def initialize(args: dict | None = None):
     # Log Startup Info
     # Logging
     port = int(os.environ.get("PORT", 5000))
-    app.logger.info("Launching the emhass webserver at: http://" + server_ip + ":" + str(port))
+    _log_launch_address(server_ip, port)
     app.logger.info(
         "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )
