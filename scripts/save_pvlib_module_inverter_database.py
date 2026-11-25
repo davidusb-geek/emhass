@@ -193,7 +193,6 @@ def describe_differences(name: str, committed: pd.DataFrame, rebuilt: pd.DataFra
         )
         # Compare the rest with plain labels on both sides.
         committed, rebuilt = plain_labels(committed), plain_labels(rebuilt)
-    labels_line = len(lines)
     added = [c for c in rebuilt.columns if c not in committed.columns]
     removed = [c for c in committed.columns if c not in rebuilt.columns]
     if added:
@@ -207,26 +206,25 @@ def describe_differences(name: str, committed: pd.DataFrame, rebuilt: pd.DataFra
             f"  parameter rows differ: only in rebuilt {rows_added}, only in committed {rows_removed}"
             + ("" if rows_added or rows_removed else ", same rows in a different order")
         )
-    else:
-        changed = [
-            c
-            for c in committed.columns
-            if c in rebuilt.columns and not committed[c].equals(rebuilt[c])
-        ]
-        if changed:
-            lines.append(f"  {len(changed)} model(s) with changed values, e.g. {changed[:5]}")
+    # Compare the models both tables have on the parameter rows both tables have, so a
+    # changed value or type is reported whatever else differs.
     common = [c for c in committed.columns if c in rebuilt.columns]
+    common_rows = [r for r in committed.index if r in rebuilt.index]
+    old = committed.loc[common_rows, common]
+    new = rebuilt.loc[common_rows, common]
+    changed = [c for c in common if not old[c].equals(new[c])]
+    if changed:
+        lines.append(f"  {len(changed)} model(s) with changed values, e.g. {changed[:5]}")
+    retyped = [
+        c for c in common if c not in changed and not old[c].map(type).equals(new[c].map(type))
+    ]
+    if retyped:
+        lines.append(
+            f"  {len(retyped)} model(s) with the same values but other types "
+            f"(for example 60 and 60.0), e.g. {retyped[:5]}"
+        )
     if not added and not removed and common != list(rebuilt.columns):
         lines.append("  same models but in a different column order")
-    if len(lines) == labels_line and committed.equals(rebuilt):
-        retyped = [
-            c for c in committed.columns if not committed[c].map(type).equals(rebuilt[c].map(type))
-        ]
-        if retyped:
-            lines.append(
-                f"  {len(retyped)} model(s) with the same values but other types "
-                f"(for example 60 and 60.0), e.g. {retyped[:5]}"
-            )
     if len(lines) == 1:
         lines.append("  tables differ in dtypes or layout")
     return lines

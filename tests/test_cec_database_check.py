@@ -82,6 +82,19 @@ def test_a_new_parameter_row_is_named():
     )
     report = "\n".join(cecdb.describe_differences("cec_modules", committed, rebuilt))
     assert "only in rebuilt ['gamma_r'], only in committed []" in report
+    assert "changed values" not in report
+    assert "other types" not in report
+
+
+def test_a_new_parameter_row_does_not_hide_a_changed_value():
+    committed = _table()
+    rebuilt = _table(Maker_A_100=["Maker A", 0.5, 11], Maker_B_200=["Maker B", 0.25, 20])
+    rebuilt = pd.concat(
+        [rebuilt, pd.DataFrame([[1, 2]], index=["gamma_r"], columns=rebuilt.columns)]
+    )
+    report = "\n".join(cecdb.describe_differences("cec_modules", committed, rebuilt))
+    assert "only in rebuilt ['gamma_r'], only in committed []" in report
+    assert "1 model(s) with changed values, e.g. ['Maker_A_100']" in report
 
 
 def test_a_reordered_table_is_reported():
@@ -235,6 +248,25 @@ def test_a_label_dtype_change_does_not_hide_a_type_only_change():
     assert len(report) == 3, report
     assert "labels have another dtype" in report[1]
     assert "1 model(s) with the same values but other types" in report[2]
+
+
+def test_a_changed_value_does_not_hide_a_type_only_change():
+    committed = _table()
+    rebuilt = _table(Maker_A_100=["Maker A", 0.5, 10.0], Maker_B_200=["Maker B", 0.3, 20])
+    report = "\n".join(cecdb.describe_differences("cec_modules", committed, rebuilt))
+    assert "1 model(s) with changed values, e.g. ['Maker_B_200']" in report
+    assert "1 model(s) with the same values but other types" in report
+    assert "e.g. ['Maker_A_100']" in report
+
+
+def test_a_type_only_change_is_found_on_the_rows_both_tables_have():
+    committed = _table()
+    rebuilt = _table(Maker_A_100=["Maker A", 0.5, 10.0], Maker_B_200=["Maker B", 0.25, 20])
+    rebuilt = rebuilt.drop(index="alpha_sc")
+    report = "\n".join(cecdb.describe_differences("cec_modules", committed, rebuilt))
+    assert "only in rebuilt [], only in committed ['alpha_sc']" in report
+    assert "changed values" not in report
+    assert "1 model(s) with the same values but other types" in report
 
 
 def test_the_build_keeps_labels_as_plain_objects(tmp_path, monkeypatch):
