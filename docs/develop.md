@@ -405,6 +405,8 @@ GitHub does not give repository secrets such as `SONAR_TOKEN` to workflows trigg
 | Failed | The step fails and its log reports `QUALITY GATE STATUS: FAILED`. |
 | Unavailable | No verdict was reported: the step failed for another reason (token, network, timeout), or it never ran because an earlier step failed. |
 
+Dependabot pull requests use branches in this repository, but runs that Dependabot triggers receive only Dependabot secrets. The Codecov upload can then fail before the scan starts, so the result is unavailable.
+
 A pull request run analyses the head merged into `master`, not the head alone. If the head conflicts with `master`, the workflow does not run and the result is unavailable.
 
 Only "Passed" counts as a pass. For a failed gate, follow the dashboard link in the log, fix the findings and run the analysis again on the new revision. On a timeout or other unavailable result, re-run the job; the analysis is not verified until a verdict is reported. On pushes to `master` the gate covers the project's whole new code period, so it can fail because of findings merged earlier.
@@ -413,7 +415,19 @@ The check is not required for every pull request, because fork pull requests can
 
 #### Maintainer verification of a fork pull request
 
-A maintainer can analyse a fork contribution by opening a temporary pull request from a branch in this repository. **This runs the contributor's code with this repository's credentials.** Dependency installation and tests run in the same job as the later Sonar and Codecov steps, so they can interfere with those steps and obtain their tokens. Other workflows also run: `Code Quality Scan` installs the project with permission to write packages and attestations and to request an OIDC token, and others can write security results. A changed workflow can run as soon as the branch is pushed. Never copy unreviewed fork code into this repository.
+A maintainer can analyse a fork contribution by opening a temporary pull request from a branch in this repository. **This runs the contributor's code with this repository's credentials.** Never copy unreviewed fork code into this repository.
+
+Opening that pull request to `master` starts these workflows:
+
+| Workflow | Runs contributor code | Exposed |
+| --- | --- | --- |
+| `CodeCov` | Installs the project and runs the tests | `SONAR_TOKEN`, `CODECOV_TOKEN`, write access to security results |
+| `Code Quality Scan` | Installs the project | `SOURCERY_TOKEN`, write access to packages and attestations, OIDC token requests |
+| `Python test` | Installs the project and runs the tests on Linux, macOS and Windows | Write access to security results |
+| `Test Building Docker Image` | Builds and runs the image | Write access to security results in the job that does so |
+| `CodeQL` | Analyses the source without running it | Write access to security results |
+
+Treat every credential in a job as available to any code that runs in it, including code that runs before the step that uses the credential. Package write access can allow container images to be published. If `.github/` differs from `master`, workflows can change, and can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check published packages and security alerts.
 
 In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhass`.
 
@@ -431,8 +445,15 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    ```
 
 4. Open a draft pull request from that branch to `master`, titled so that it is clearly not for merging.
-5. Wait for the `CodeCov` job. Confirm the verdict on SonarQube Cloud itself, on the temporary pull request's analysis page, and check that it shows the reviewed head SHA. Do not rely on the job log alone: the contributor's code runs earlier in the same job and can alter what the log shows. This is why the review in step 2 matters.
-6. Comment on the original pull request with the reviewed head SHA, the base SHA, the result, and links to the workflow run and the Sonar analysis.
-7. Close the temporary pull request without merging it and delete the branch.
+5. Wait for the `CodeCov` job. In the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit is the revision that was analysed. If the head is not the one you reviewed, discard the result.
+6. Confirm the verdict on SonarQube Cloud itself, on the temporary pull request's analysis page, and check that it shows the reviewed head SHA. Do not rely on the job log alone: the contributor's code runs earlier in the same job and can alter what later steps log. This is why the review in step 2 matters.
+7. Comment on the original pull request with the head, base and merge SHAs from that line, the result, and links to the workflow run and the Sonar analysis.
+8. Close the temporary pull request without merging it and delete the branch.
 
-The result applies only to the recorded revisions. It is stale if the contributor changes the head (including a rebase or force-push), or if `master` has since changed files the pull request also touches or the CI or Sonar configuration. Review the new revision before verifying it again.
+The result is stale as soon as the original pull request's head or `master` differs from the recorded SHAs. A changed head always needs a new review and verification. If only `master` has moved, the result still applies only if both of these commands print the same tree ID:
+
+```bash
+git fetch upstream master
+git merge-tree --write-tree <base-sha> <head-sha>
+git merge-tree --write-tree upstream/master <head-sha>
+```
