@@ -11,15 +11,49 @@ def _get_last_release_date_from_git() -> str:
     Derive the last release date dynamically from the latest git tag.
 
     Returns the commit date (in ISO 8601 format) of the most recent tag.
+    Tries tags reachable from HEAD first, then falls back to the latest tag
+    by creator date (e.g. when history was rewritten and tags are detached).
     Falls back to an empty string if git commands fail, so callers can
     decide how to handle the absence of a release date.
     """
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    last_tag = ""
     try:
         last_tag = subprocess.check_output(
-            ["git", "describe", "--tags", "--abbrev=0"], text=True
+            ["git", "describe", "--tags", "--abbrev=0"],
+            cwd=repo_dir,
+            stderr=subprocess.DEVNULL,
+            text=True,
         ).strip()
+    except subprocess.CalledProcessError:
+        try:
+            last_tag = subprocess.check_output(
+                [
+                    "git",
+                    "for-each-ref",
+                    "--sort=-creatordate",
+                    "--count=1",
+                    "--format=%(refname:short)",
+                    "refs/tags",
+                ],
+                cwd=repo_dir,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+    if not last_tag:
+        return ""
+
+    try:
         last_tag_date = subprocess.check_output(
-            ["git", "show", "-s", "--format=%cI", last_tag], text=True
+            ["git", "show", "-s", "--format=%cI", last_tag],
+            cwd=repo_dir,
+            stderr=subprocess.DEVNULL,
+            text=True,
         ).strip()
         return last_tag_date
     except Exception:
@@ -59,6 +93,11 @@ def get_merged_prs():
 
 
 def generate_markdown():
+    if not LAST_RELEASE_DATE:
+        raise RuntimeError(
+            "Unable to determine LAST_RELEASE_DATE from git tags. "
+            "Set the LAST_RELEASE_DATE environment variable (ISO 8601 format)."
+        )
     prs = get_merged_prs()
     last_release_dt = datetime.fromisoformat(LAST_RELEASE_DATE.replace("Z", "+00:00"))
 
