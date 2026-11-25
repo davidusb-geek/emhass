@@ -100,7 +100,6 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     root = str(canonical_supervisor_url(base)).rstrip("/")
     path = "/states/" if root in SUPERVISOR_URLS else "/api/states/"
     url = root + path + urllib.parse.quote(sensor)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     # ssl_no_verify, as the user set it for Home Assistant's other calls
     context = (
         ssl._create_unverified_context()  # noqa: S323 - the user's own setting
@@ -116,6 +115,9 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
         urllib.request.ProxyHandler({}), _NoRedirect, urllib.request.HTTPSHandler(context=context)
     )
     try:
+        # Built in here: a hass_url with neither a scheme nor a port cannot
+        # be asked at all, which is a failure to read the sensor like any other
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with opener.open(req, timeout=5) as r:  # Home Assistant's own URL
             state = json.load(r)
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in

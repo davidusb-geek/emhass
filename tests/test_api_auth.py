@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import pathlib
+import re
+import secrets
 import sys
 import tempfile
 import unittest
@@ -1185,6 +1187,290 @@ class TestWithHardeningHooks(AuthTestBase):
         response = await self.client.get("/login")
         self.assertEqual(response.mimetype, "text/html")
         self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+
+
+EXAMPLE = "replace-with-a-long-random-value"
+STRONG = "a-strong-operator-token-0123456789"
+# The example line shipped in secrets_emhass(example).yaml before the placeholder was removed.
+OLD_EXAMPLE_LINE = '# emhass_api_token: "replace-with-a-long-random-value"'
+REPO = pathlib.Path(__file__).resolve().parents[1]
+# A token value as the docs write one: after EMHASS_API_TOKEN= or :, after emhass_api_token: or
+# participant_token: (also as a quoted JSON key), or after "Bearer ".
+TOKEN_LITERAL = re.compile(
+    r"(?i)(?:\bEMHASS_API_TOKEN[\"']?[ \t]*[=:][ \t]*|\bparticipant_token[\"']?[ \t]*:[ \t]*"
+    r"|\bBearer[ \t]+)[\"']?([^\s\"'`\\),]+)"
+)
+
+
+class TestExampleToken(AuthTestBase):
+    """Placeholder values published in the example file or the docs are known to everyone, so a
+    configured token that is a copy of one is refused like a short one: 503 rather than a token every
+    reader of the example knows."""
+
+    async def assert_closed(self, secrets=None, options=None, data_dir=None):
+        with self.assertLogs(self.logger, level="ERROR") as logs:
+            await api_auth.configure(secrets, options, self.logger, data_dir=data_dir)
+        text = "\n".join(logs.output)
+        self.assertIn("Refusing emhass_api_token", text)
+        self.assertIn("placeholder", text)
+        for value in (EXAMPLE, STRONG):
+            self.assertNotIn(value.casefold(), text.casefold())
+        self.assertIsNone(api_auth.current_token())
+        for headers in (
+            {},
+            {"Authorization": "Bearer " + EXAMPLE},
+            {"Authorization": "Bearer " + STRONG},
+        ):
+            with self.subTest(headers=headers):
+                response = await self.client.get("/api/v1/last-run", headers=headers)
+                self.assertEqual(response.status_code, 503)
+        response = await self.client.post("/login", form={"token": EXAMPLE})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("Set-Cookie", response.headers)
+
+    def test_placeholder_list_is_usable(self):
+        # An empty or very short canonical entry would be contained in ordinary tokens.
+        for value in api_auth.EXAMPLE_TOKENS:
+            with self.subTest(value=value):
+                self.assertGreaterEqual(
+                    len(api_auth._canonical(value)), api_auth._EXAMPLE_MIN_CANONICAL
+                )
+                self.assertTrue(api_auth.is_example_token(value))
+
+    def test_scan_pattern_sees_every_form(self):
+        # The docs scan below must see each way a token is written down.
+        forms = (
+            "-e EMHASS_API_TOKEN=abcdefghijklmnopq",
+            "EMHASS_API_TOKEN: abcdefghijklmnopq",
+            'EMHASS_API_TOKEN = "abcdefghijklmnopq"',
+            'emhass_api_token: "abcdefghijklmnopq"',
+            '"emhass_api_token": "abcdefghijklmnopq"',
+            "participant_token: 'abcdefghijklmnopq'",
+            'bearer: "Bearer abcdefghijklmnopq"',
+            "authorization: bearer abcdefghijklmnopq",
+        )
+        for text in forms:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    [m.group(1) for m in TOKEN_LITERAL.finditer(text)], ["abcdefghijklmnopq"]
+                )
+
+    def test_every_published_token_literal_is_refused(self):
+        # Keeps the list in step with the docs: every value of 16+ characters written as the API
+        # token, the participant token or a bearer value in the docs, the README or the example
+        # file must be refused. Values shorter than that are refused by the length rule anyway.
+        files = [
+            REPO / "secrets_emhass(example).yaml",
+            *sorted(REPO.glob("*.md")),
+            *sorted((REPO / "docs").rglob("*.md")),
+            *sorted((REPO / "docs").rglob("*.txt")),
+        ]
+        found = {}
+        for path in files:
+            for match in TOKEN_LITERAL.finditer(path.read_text(encoding="utf-8")):
+                value = match.group(1)
+                if len(value) >= api_auth.MIN_LENGTH:
+                    found.setdefault(value, path.name)
+        for value, where in found.items():
+            with self.subTest(value=value, where=where):
+                self.assertTrue(api_auth.is_example_token(value))
+
+    def test_shipped_example_line_uncommented_means_not_set(self):
+        # The example no longer carries a value, so copying the line as it is leaves the token
+        # unset and EMHASS generates one.
+        lines = [
+            line
+            for line in (REPO / "secrets_emhass(example).yaml")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.lstrip("# ").startswith(api_auth.SETTING_NAME + ":")
+        ]
+        self.assertEqual(len(lines), 1)
+        path = self.write_secrets(lines[0].lstrip("# ") + "\n")
+        self.assertIsNone(api_auth.read_api_token(path, None, {}))
+
+    async def test_old_example_line_uncommented_fails_closed(self):
+        await self.assert_closed(secrets=self.write_secrets(OLD_EXAMPLE_LINE.lstrip("# ") + "\n"))
+
+    async def test_example_in_each_source_fails_closed(self):
+        for kind in ("env", "options", "secrets"):
+            with self.subTest(kind=kind):
+                api_auth.reset()
+                os.environ.pop(api_auth.ENV_NAME, None)
+                secrets_path = options = None
+                if kind == "env":
+                    os.environ[api_auth.ENV_NAME] = EXAMPLE
+                elif kind == "options":
+                    options = self.write_options(json.dumps({api_auth.SETTING_NAME: EXAMPLE}))
+                else:
+                    secrets_path = self.write_secrets(f'{api_auth.SETTING_NAME}: "{EXAMPLE}"\n')
+                await self.assert_closed(secrets=secrets_path, options=options)
+
+    def test_error_names_the_source_in_force(self):
+        cases = (
+            ({api_auth.ENV_NAME: EXAMPLE}, None, None, "environment variable"),
+            ({}, {api_auth.SETTING_NAME: EXAMPLE}, None, "options file"),
+            ({api_auth.ENV_NAME: STRONG}, None, EXAMPLE, "secrets file"),
+        )
+        for env, options, secret, where in cases:
+            with self.subTest(where=where):
+                options_path = self.write_options(json.dumps(options)) if options else None
+                secrets_path = (
+                    self.write_secrets(f'{api_auth.SETTING_NAME}: "{secret}"\n') if secret else None
+                )
+                with self.assertRaises(api_auth.PlaceholderTokenError) as ctx:
+                    api_auth.read_api_token(secrets_path, options_path, env)
+                self.assertIn(where, str(ctx.exception))
+                self.assertNotIn(EXAMPLE, str(ctx.exception))
+
+    def test_copied_variants_are_refused(self):
+        variants = (
+            EXAMPLE.upper(),
+            '"' + EXAMPLE + '"',  # quotes kept by a Docker env file or a paste into the add-on
+            "'" + EXAMPLE + "'",
+            EXAMPLE + " # token",  # inline comment kept by an env file
+            EXAMPLE + "\u00a0",
+            "\ufeff" + EXAMPLE,
+            EXAMPLE.replace("-", "\u200b-"),
+            EXAMPLE.replace("-", "_"),
+            EXAMPLE.replace("-", "\u2011"),  # non-breaking hyphen
+            "".join(chr(ord(c) + 0xFEE0) if c.isalpha() else c for c in EXAMPLE),  # full width
+            "Bearer " + EXAMPLE,
+            "EMHASS_API_TOKEN=" + EXAMPLE,
+            EXAMPLE + "2",
+            "x" + EXAMPLE,
+            '"a-long-development-token"',
+            "Bearer PASTE_THE_TOKEN_HERE",
+            '"YOUR_API_TOKEN"',
+            "Bearer YOUR_API_TOKEN",
+            "<emhass_api_token>",
+            "$EMHASS_API_TOKEN",
+            "Bearer YOURHAKEYHERE",
+            "HOMEASSISTANTKEYHERE",
+            "<your_secret_api_key>",
+            "$(openssl rand -hex 32)",
+            "openssl rand -base64 32",
+            EXAMPLE.replace("e", "e\u0301"),  # accents written as combining marks
+            # the wrapper words a copy keeps
+            "Authorization: Bearer YOUR_API_TOKEN",
+            "Authorization: Bearer $EMHASS_API_TOKEN",
+            'emhass_bearer: "Bearer PASTE_THE_TOKEN_HERE"',
+            "-H 'Authorization: Bearer $EMHASS_API_TOKEN'",
+            # two placeholders that overlap
+            "thatverylongtokenhereplacewithalongrandomvalue",
+        )
+        for value in variants:
+            with self.subTest(value=value):
+                with self.assertRaises(api_auth.PlaceholderTokenError):
+                    api_auth.read_api_token(None, None, {api_auth.ENV_NAME: value})
+
+    def test_random_tokens_are_never_refused(self):
+        for _ in range(2000):
+            for value in (secrets.token_urlsafe(32), secrets.token_hex(32)):
+                self.assertFalse(api_auth.is_example_token(value), value)
+
+    def test_long_tokens(self):
+        cap = api_auth._EXAMPLE_CHECK_MAX
+        # ASCII padding that reduces to nothing does not hide a placeholder, however long
+        self.assertTrue(api_auth.is_example_token(" " * cap + EXAMPLE + "-" * cap))
+        # a long non-ASCII token is checked at its head and its tail
+        self.assertTrue(api_auth.is_example_token(EXAMPLE + "\u200b" * cap))
+        self.assertTrue(api_auth.is_example_token("\u200b" * cap + EXAMPLE))
+
+    def test_a_placeholder_with_a_long_random_part_is_a_token_of_its_own(self):
+        # Only a copy is refused: enough other letters and digits make a token as strong as
+        # those characters, whatever name or placeholder they sit next to.
+        for value in (
+            "emhass_api_token_" + secrets.token_hex(16),
+            "emhass-api-token-prod-" + secrets.token_urlsafe(24),
+            "EMHASS_API_TOKEN=" + secrets.token_hex(16),
+            "my-your-api-token-" + secrets.token_hex(16),
+            EXAMPLE + "-" + secrets.token_hex(8),
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(api_auth.is_example_token(value))
+        # words such as "set" or "env" inside the random part are not taken out
+        self.assertFalse(api_auth.is_example_token("emhass_api_token_setenvexport0a1b2"))
+        # fewer than MIN_LENGTH other letters and digits: still a copy
+        for value in (EXAMPLE + "-" + "a1" * 7 + "a", "Bearer emhass_api_token_x"):
+            with self.subTest(value=value):
+                self.assertTrue(api_auth.is_example_token(value))
+
+    def test_is_text(self):
+        self.assertTrue(api_auth.is_text("token-0123456789abcdef"))
+        for value in ("\ud800" * 20, ["x"] * 20, None, 1):
+            with self.subTest(value=value):
+                self.assertFalse(api_auth.is_text(value))
+
+    def test_values_that_are_not_text_are_not_placeholders(self):
+        for value in (None, 12345678901234567, ["a"] * 20, {"a": 1}):
+            with self.subTest(value=value):
+                self.assertFalse(api_auth.is_example_token(value))
+
+    def test_the_token_in_force_stays_as_configured(self):
+        # Only the placeholder check normalises; the token compared with credentials is unchanged.
+        value = "Some-Token-With-Case-0123\u00e9"
+        self.assertEqual(api_auth.read_api_token(None, None, {api_auth.ENV_NAME: value}), value)
+
+    async def test_example_in_the_secrets_file_does_not_replace_a_strong_env_token(self):
+        # The reported case: the secrets file wins over EMHASS_API_TOKEN, so a copied example
+        # line used to replace the operator's strong token with the public one, without a word.
+        os.environ[api_auth.ENV_NAME] = STRONG
+        secrets_path = self.write_secrets(f'{api_auth.SETTING_NAME}: "{EXAMPLE}"\n')
+        await self.assert_closed(secrets=secrets_path)
+
+    async def test_example_replaced_by_a_later_source_is_not_in_force_so_not_refused(self):
+        os.environ[api_auth.ENV_NAME] = EXAMPLE
+        secrets_path = self.write_secrets(f'{api_auth.SETTING_NAME}: "{STRONG}"\n')
+        await api_auth.configure(secrets_path, None, self.logger)
+        self.assertEqual(api_auth.current_token(), STRONG)
+        response = await self.client.get(
+            "/api/v1/last-run", headers={"Authorization": "Bearer " + EXAMPLE}
+        )
+        self.assertEqual(response.status_code, 401)
+        response = await self.client.get(
+            "/api/v1/last-run", headers={"Authorization": "Bearer " + STRONG}
+        )
+        self.assertEqual(response.status_code, 200)
+
+    async def test_auth_disabled_with_a_placeholder_still_fails_closed(self):
+        # As for a short token: a source that cannot be used fails closed before the opt-out
+        # is looked at, so the operator sees the error instead of running on a public token.
+        os.environ[api_auth.DISABLE_ENV] = "true"
+        secrets_path = self.write_secrets(f'{api_auth.SETTING_NAME}: "{EXAMPLE}"\n')
+        await self.assert_closed(secrets=secrets_path)
+
+    async def test_generated_token_file_holding_a_placeholder_fails_closed(self):
+        data = self.dir / "data"
+        data.mkdir()
+        token_file = data / api_auth.TOKEN_FILE_NAME
+        token_file.write_text('"' + EXAMPLE + '"\n', encoding="utf-8")
+        await self.assert_closed(data_dir=data)
+        # left for the operator to delete, never replaced behind their back
+        self.assertEqual(token_file.read_text(encoding="utf-8").strip(), '"' + EXAMPLE + '"')
+
+    async def test_example_added_after_the_snapshot_fails_closed(self):
+        os.environ[api_auth.AUTOGENERATE_ENV] = "false"
+        await api_auth.configure(None, None, self.logger)
+        self.assertIsNone(api_auth.current_token())
+        secrets_path = self.write_secrets(f'{api_auth.SETTING_NAME}: "{EXAMPLE}"\n')
+        with self.assertLogs(self.logger, level="ERROR") as logs:
+            api_auth.recheck_now(secrets_path, None, self.logger)
+        self.assertIn("Refusing emhass_api_token", "\n".join(logs.output))
+        response = await self.client.get(
+            "/api/v1/last-run", headers={"Authorization": "Bearer " + EXAMPLE}
+        )
+        self.assertEqual(response.status_code, 503)
+
+    async def test_before_configure_a_placeholder_or_short_env_token_is_not_used(self):
+        for value in (EXAMPLE, '"' + EXAMPLE + '"', "short-token"):
+            with self.subTest(value=value):
+                os.environ[api_auth.ENV_NAME] = value
+                self.assertIsNone(api_auth.current_token())
+                response = await self.client.get(
+                    "/api/v1/last-run", headers={"Authorization": "Bearer " + value}
+                )
+                self.assertEqual(response.status_code, 503)
 
 
 if __name__ == "__main__":
