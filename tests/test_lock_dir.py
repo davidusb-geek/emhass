@@ -145,12 +145,52 @@ def test_a_refused_chmod_keeps_a_folder_made_0700(shared_tmp):
 
 
 @posix_only
+@pytest.mark.parametrize("mode", [0o500, 0o600, 0o300, 0o000], ids=oct)
+def test_an_own_folder_with_owner_bits_off_is_set_to_0700(shared_tmp, mode, caplog):
+    """No group or other bits, so no other account can have used it: it is set to
+    0700 and used, not given up for the data folder."""
+    tmp, data = shared_tmp
+    folder = tmp / f"emhass-{os.geteuid()}"
+    folder.mkdir(mode=0o700)
+    folder.chmod(mode)
+    with caplog.at_level(logging.WARNING, logger=utils.__name__):
+        assert utils.private_temp_dir(data) == folder
+    assert os.lstat(folder).st_mode & 0o777 == 0o700
+    assert not caplog.records
+
+
+@posix_only
+def test_a_worker_in_the_mkdir_to_chmod_gap_picks_the_same_folder(shared_tmp):
+    """Under a umask that takes owner bits off, mkdir gives 0500 until chmod runs.
+    A second worker that looks in that gap must still pick the folder the first
+    one is about to use, or the two would lock different files."""
+    _, data = shared_tmp
+    real_chmod = os.chmod
+    seen = []
+
+    def chmod_after_another_call(path, mode, *args, **kwargs):
+        if not seen:
+            seen.append(None)
+            seen.append(utils.private_temp_dir(data))  # the other worker, in the gap
+        return real_chmod(path, mode, *args, **kwargs)
+
+    old = os.umask(0o277)
+    try:
+        with mock.patch("os.chmod", side_effect=chmod_after_another_call):
+            first = utils.private_temp_dir(data)
+    finally:
+        os.umask(old)
+    assert seen, "the gap was reached"
+    assert first == seen[1] != data
+    assert os.lstat(first).st_mode & 0o777 == 0o700
+
+
+@posix_only
 @pytest.mark.parametrize(
     "kind",
     [
         "open to others",
         "group readable",
-        "not writable",
         "a file",
         "a symlink",
         "another account's",
@@ -166,9 +206,6 @@ def test_an_unusable_folder_falls_back_to_the_data_folder(shared_tmp, kind, capl
     elif kind == "group readable":
         folder.mkdir(mode=0o700)
         folder.chmod(0o750)
-    elif kind == "not writable":
-        folder.mkdir(mode=0o700)
-        folder.chmod(0o500)
     elif kind == "a file":
         folder.write_text("")
         folder.chmod(0o700)  # only the folder check can reject it

@@ -9198,9 +9198,11 @@ def private_temp_dir(fallback: pathlib.Path | str) -> pathlib.Path:
     On Linux and the BSDs the system temp folder is shared by every account on the
     host, so a file there with one of EMHASS's fixed names may already exist, made
     by another account, and EMHASS could not open or lock it. The files go in
-    ``<temp>/emhass-<uid>`` instead, made 0700 for this account. If that path is not
-    a folder of this account's with mode 0700 (it was already there, or its mode
-    could not be set), ``fallback`` (the data folder) is used, with a warning once.
+    ``<temp>/emhass-<uid>`` instead, made 0700 for this account. A folder of this
+    account's with no group or other bits (a umask can take owner bits off) is set
+    to 0700. If that path is not a folder of this account's with mode 0700 (it was
+    already there open to others, or its mode could not be set), ``fallback`` (the
+    data folder) is used, with a warning once.
     If it cannot be made at all (a read-only temp folder), it is returned as it is
     and opening a file there fails, as it did before. On Windows the temp folder
     is already per account and is used as it is.
@@ -9217,13 +9219,19 @@ def private_temp_dir(fallback: pathlib.Path | str) -> pathlib.Path:
         pass
     except OSError:
         return folder
-    else:
-        try:
-            os.chmod(folder, 0o700)  # the umask may have taken owner bits off
-        except OSError:
-            pass  # the check below decides, the same way on every call
     try:
         st = os.lstat(folder)
+        mode = stat.S_IMODE(st.st_mode)
+        if stat.S_ISDIR(st.st_mode) and st.st_uid == uid and mode != 0o700 and not mode & 0o077:
+            # Our own folder that no other account can use, but the umask took owner
+            # bits off at mkdir. Every call (another worker's too, even one that runs
+            # before the maker gets here) sets it to 0700, so they all agree on it.
+            try:
+                os.chmod(folder, 0o700)
+            except OSError:
+                pass  # the check below decides, the same way on every call
+            else:
+                st = os.lstat(folder)
     except OSError:
         return folder
     if stat.S_ISDIR(st.st_mode) and st.st_uid == uid and stat.S_IMODE(st.st_mode) == 0o700:
