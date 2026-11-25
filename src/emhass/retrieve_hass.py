@@ -254,8 +254,11 @@ class RetrieveHass:
         self.ssl_verify = None
         ssl_no_verify = False
         if self.params:
+            # The configuration keeps it in retrieve_hass_conf (associations.csv)
+            if self.params.get("retrieve_hass_conf", {}).get("ssl_no_verify") is True:
+                ssl_no_verify = True
             # Check root params
-            if self.params.get("ssl_no_verify", False):
+            elif self.params.get("ssl_no_verify", False):
                 ssl_no_verify = True
             # Check passed_data (runtime parameters)
             elif "passed_data" in self.params and self.params["passed_data"].get(

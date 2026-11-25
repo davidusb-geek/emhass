@@ -3854,6 +3854,44 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found[0].dtype, frame.index.dtype)
 
 
+class TestSslNoVerify(unittest.IsolatedAsyncioTestCase):
+    """ssl_no_verify, saved in the configuration, reaches the Home Assistant calls."""
+
+    async def build(self, ssl_no_verify=None):
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+            environ.pop(name, None)
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        if ssl_no_verify is not None:
+            config["ssl_no_verify"] = ssl_no_verify
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        return RetrieveHass(
+            "https://ha.invalid:8123/", "token", 30, "UTC", params, emhass_conf, logger
+        )
+
+    async def test_default_verifies(self):
+        self.assertIsNone((await self.build()).ssl_verify)
+        self.assertIsNone((await self.build(False)).ssl_verify)
+        # only a real true turns it off, not text such as "false"
+        self.assertIsNone((await self.build("false")).ssl_verify)
+
+    async def test_set_in_the_configuration_turns_verification_off(self):
+        with self.assertLogs(logger, level="WARNING") as cm:
+            rh = await self.build(True)
+        self.assertIs(rh.ssl_verify, False)
+        self.assertTrue(any("SSL verification is disabled" in m for m in cm.output))
+
+    async def test_requests_are_sent_with_it(self):
+        rh = await self.build(True)
+        self.addAsyncCleanup(rh.close)
+        with aioresponses() as mocked:
+            mocked.get("https://ha.invalid:8123/api/config", payload={"time_zone": "UTC"})
+            await rh.get_ha_config()
+            (call,) = mocked.requests.values()
+        self.assertIs(call[0].kwargs.get("ssl"), False)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
