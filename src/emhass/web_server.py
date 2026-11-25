@@ -12,7 +12,6 @@ import os
 import pickle
 import platform
 import re
-import tempfile
 import time
 import weakref
 from contextlib import asynccontextmanager
@@ -85,6 +84,7 @@ from emhass.utils import (
     inverter_config_faults,
     inverter_power_curve_faults,
     param_to_config,
+    private_temp_dir,
     read_flag,
     replace_file,
     save_shape_faults,
@@ -333,11 +333,11 @@ async def _non_json_body_response():
 
 def _dry_run_slot() -> Path:
     """The lock file that lets one dry run at a time run on this EMHASS, across
-    all its Gunicorn workers. It is outside the data folder, where a dry run
-    writes nothing, and named after that folder, so two EMHASS on one host
-    each have their own."""
+    all its Gunicorn workers. It is normally outside the data folder, where a dry
+    run writes nothing, in this account's own temp folder (see private_temp_dir), and
+    named after the data folder, so two EMHASS on one host each have their own."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-dry-run-{key[:16]}.lock"
 
 
 # How long a configuration save waits for another one to finish writing. Writing the
@@ -349,7 +349,7 @@ def _config_save_slot() -> Path:
     """The lock file that lets one configuration save at a time write config.json and
     params.pkl, across all Gunicorn workers. Placed and named like the dry run's."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-config-save-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-config-save-{key[:16]}.lock"
 
 
 async def _write_config_json(path: Path, content: str) -> None:
@@ -380,7 +380,7 @@ async def _wait_for_lock(slot, timeout_s: float) -> bool:
 def _live_optim_slot() -> Path:
     """One live optimization at a time across workers sharing a data folder."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-live-optim-{key[:16]}.lock"
 
 
 @asynccontextmanager

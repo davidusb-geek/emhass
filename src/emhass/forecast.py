@@ -46,7 +46,6 @@ import os
 import pickle
 import pickle as cPickle
 import re
-import tempfile
 from datetime import datetime, timedelta
 from typing import Literal
 from urllib.parse import quote
@@ -79,6 +78,7 @@ from emhass.utils import (
     get_days_list,
     get_forecast_start,
     literal_eval_bounded,
+    private_temp_dir,
     pv_carrying_inverters,
     replace_file,
     set_df_index_freq,
@@ -877,7 +877,7 @@ class Forecast:
         Returns True (and reserves) if it fits under max_calls, else False.
         """
         today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
-        temp_dir = tempfile.gettempdir()
+        temp_dir = private_temp_dir(self.emhass_conf["data_path"])
         counter_path = os.path.join(temp_dir, f"emhass_solcast_calls_{today}.count")
 
         try:
