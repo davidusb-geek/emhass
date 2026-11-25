@@ -25,7 +25,7 @@ To install first pull the latest image:
 # pull Docker image
 docker pull ghcr.io/davidusb-geek/emhass:latest
 # run Docker image, mounting the dir storing config.json and secrets_emhass.yaml from host
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 
 ```{important}
