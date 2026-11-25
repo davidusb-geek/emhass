@@ -1485,9 +1485,7 @@ class TestLaunchAddressLog(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any("server_ip" in w for w in warnings), warnings)
 
     async def test_gunicorn_ip_env_equal_to_server_ip_has_no_warning(self):
-        launch, warnings = await self.run_initialize(
-            "192.0.2.5", gunicorn=True, ip_env="192.0.2.5"
-        )
+        launch, warnings = await self.run_initialize("192.0.2.5", gunicorn=True, ip_env="192.0.2.5")
         self.assertEqual(launch, ["Launching the emhass webserver at: http://192.0.2.5:5000"])
         self.assertFalse(any("server_ip" in w for w in warnings), warnings)
 
