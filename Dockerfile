@@ -21,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_NO_CACHE=1 \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH" \
-    WORKER_CLASS=uvicorn.workers.UvicornWorker \
+    WORKER_CLASS=emhass.uvicorn_worker.UvicornWorker \
     PORT=5000 \
     IP=0.0.0.0
 
@@ -106,7 +106,7 @@ if [ ! -f /data/opt_res_latest.csv ]; then \
     echo 'Initializing data: Copying default CSV file...'; \
     cp /app/data/opt_res_latest.csv /data/; \
 fi && \
-WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
+WORKER_CLASS=${WORKER_CLASS:-emhass.uvicorn_worker.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
 exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]

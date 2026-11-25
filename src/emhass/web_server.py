@@ -2184,7 +2184,7 @@ async def main() -> None:
     Main function to handle command line arguments.
 
     Note: In production, the app should be run via gunicorn with uvicorn workers:
-    gunicorn emhass.web_server:app -c gunicorn.conf.py -k uvicorn.workers.UvicornWorker
+    gunicorn emhass.web_server:app -c gunicorn.conf.py -k emhass.uvicorn_worker.UvicornWorker
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", type=str, help="HA URL")
@@ -2200,7 +2200,10 @@ async def main() -> None:
     app.logger.info(f"Starting server directly on {host}:{port}")
     # Use uvicorn.Server to run within existing event loop
     # proxy_headers=False: access control must see the real TCP peer, never an X-Forwarded-For value
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning", proxy_headers=False)
+    # ws="none": there is no WebSocket route, same as emhass.uvicorn_worker for gunicorn
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="warning", proxy_headers=False, ws="none"
+    )
     server = uvicorn.Server(config)
     await server.serve()
 
