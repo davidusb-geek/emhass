@@ -42,6 +42,27 @@ jobs:
           load: true
       - name: Test Image #Assume Docker fail with FileNotFound secrets_emhass.yaml error
         run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      - name: Test image starts without network access
+        run: |
+          docker run -d --name emhass-offline --network none ${{ steps.build.outputs.imageid }}
+          # Any HTTP answer means the server is up: /healthz returns 503 until a first optimization has run.
+          # Up to 90 tries 5 s apart, as the aarch64 image runs under QEMU.
+          start=$SECONDS
+          for _ in $(seq 1 90); do
+            if status=$(docker exec emhass-offline python -c "import http.client; c = http.client.HTTPConnection('127.0.0.1', 5000, timeout=5); c.request('GET', '/healthz'); print(c.getresponse().status)" 2>/dev/null); then
+              echo "EMHASS answered /healthz (HTTP $status) after $((SECONDS - start)) s with no network access"
+              docker rm -f emhass-offline
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' emhass-offline)" != "true" ]; then
+              echo "Container exited before serving"
+              break
+            fi
+            sleep 5
+          done
+          docker logs emhass-offline
+          docker rm -f emhass-offline
+          exit 1
       # Google OSV-Scanner
       # Extract Debian and Python packadge list stored in Image
       - name: Export Debian package list
