@@ -6,6 +6,7 @@ import contextvars
 import errno
 import hashlib
 import hmac
+import json
 import logging
 import os
 import pickle
@@ -903,6 +904,27 @@ async def parameter_set():
     return await make_response({}, 200)
 
 
+def _runtime_params_for_log(runtimeparams: dict) -> str:
+    """The runtime parameters as JSON for a log line, with the API token masked.
+
+    JSON rather than a Python dict, so the line can be pasted back into the web UI
+    to replay a run (#468). As with ``repr()`` before, a string value cannot break
+    the line or drive the terminal: ``json.dumps`` escapes the control characters,
+    and every other non-printable character (DEL, C1, line separators, format
+    characters) is written as a ``\\u`` escape, which keeps the JSON valid. The
+    token is masked before that escaping, which could otherwise leave it in a
+    spelling the log filter does not recognise.
+    """
+    try:
+        text = api_auth.mask_text(json.dumps(api_auth.redacted(runtimeparams), ensure_ascii=False))
+    except (TypeError, ValueError, RecursionError):
+        return str(api_auth.redacted(runtimeparams))
+    return "".join(
+        char if char.isprintable() else "\\u007f" if char == "\x7f" else json.dumps(char)[1:-1]
+        for char in text
+    )
+
+
 async def _load_params_and_runtime(request, emhass_conf, logger):
     """
     Loads configuration parameters from pickle and runtime parameters from the request.
@@ -918,7 +940,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     try:
         runtimeparams = await request.get_json()
         if runtimeparams:
-            logger.info("Passed runtime parameters: " + str(api_auth.redacted(runtimeparams)))
+            logger.info("Passed runtime parameters: " + _runtime_params_for_log(runtimeparams))
         else:
             runtimeparams = {}
     except Exception as e:
@@ -1638,7 +1660,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
 
     if runtime:
-        app.logger.info(f"Passed runtime parameters: {api_auth.redacted(runtime)}")
+        app.logger.info(f"Passed runtime parameters: {_runtime_params_for_log(runtime)}")
     params, costfun = await _load_params(emhass_conf, app.logger)
     if params is None:
         _explain("The configuration could not be read. Nothing was run")

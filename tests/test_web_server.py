@@ -1375,5 +1375,51 @@ class TestThermalCalibrationAndUiMetadata(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta2["last_run"]["duration_total_seconds"], 0.12)
 
 
+class TestRuntimeParametersLog(unittest.IsolatedAsyncioTestCase):
+    """The runtime parameters are logged as JSON, so they can be pasted back into
+    the web UI to replay a run (#468)."""
+
+    BODY = {
+        "load_cost_forecast": [0.3091, 0.3287],
+        "prediction_horizon": 32,
+        "soc_init": 0.43,
+        "set_use_battery": True,
+        "def_total_hours": [0],
+        "sensor_power_load_no_var_loads": "sensor.küche_load",
+        "list_hp_periods": None,
+    }
+
+    async def logged_params(self, body):
+        logger = logging.getLogger("test_runtime_parameters_log")
+        with patch.object(
+            web_server, "_load_params", AsyncMock(return_value=({"optim_conf": {}}, "profit"))
+        ):
+            async with web_server.app.test_request_context(
+                "/action/naive-mpc-optim", method="POST", json=body
+            ):
+                with self.assertLogs(logger, level="INFO") as logs:
+                    await web_server._load_params_and_runtime(
+                        web_server.request, web_server.emhass_conf, logger
+                    )
+        prefix = "Passed runtime parameters: "
+        lines = [r.getMessage() for r in logs.records if r.getMessage().startswith(prefix)]
+        self.assertEqual(len(lines), 1)
+        return lines[0].removeprefix(prefix)
+
+    async def test_runtime_parameters_are_logged_as_json(self):
+        logged = await self.logged_params(self.BODY)
+        self.assertEqual(orjson.loads(logged), self.BODY)
+        self.assertIn('"set_use_battery": true', logged)
+        self.assertIn('"sensor.küche_load"', logged)
+
+    async def test_json_log_line_stays_one_escaped_line(self):
+        hostile = "x\r\nERROR - forged\x1b[31m\x7f  \x85\t\x00‮"
+        logged = await self.logged_params({"note": hostile})
+        self.assertEqual(orjson.loads(logged), {"note": hostile})
+        for special in ("\r", "\n", "\x1b", "\x7f", " ", " ", "\x85", "\t", "\x00"):
+            self.assertNotIn(special, logged)
+        self.assertNotIn("‮", logged)
+
+
 if __name__ == "__main__":
     unittest.main()
