@@ -427,7 +427,7 @@ Opening that pull request to `master` starts these workflows:
 | `Test Building Docker Image` | Builds and runs the image | Write access to security results in the job that does so |
 | `CodeQL` | Analyses the source without running it | Write access to security results |
 
-Treat every credential in a job as available to any code that runs in it, including code that runs before the step that uses the credential. Package write access can allow container images to be published. If `.github/` differs from `master`, workflows can change, and can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check published packages and security alerts.
+Treat every credential in a job as available to any code that runs in it, including code that runs before the step that uses the credential. Package and attestation write access together can allow container images to be published and attested. If `.github/` differs from `master`, workflows can change, and can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check published packages, attestations and security alerts. Do not run any workflow manually on the temporary branch, because the publishing workflows would publish its code.
 
 In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhass`.
 
@@ -445,15 +445,9 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    ```
 
 4. Open a draft pull request from that branch to `master`, titled so that it is clearly not for merging.
-5. Wait for the `CodeCov` job. In the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit is the revision that was analysed. If the head is not the one you reviewed, discard the result.
-6. Confirm the verdict on SonarQube Cloud itself, on the temporary pull request's analysis page, and check that it shows the reviewed head SHA. Do not rely on the job log alone: the contributor's code runs earlier in the same job and can alter what later steps log. This is why the review in step 2 matters.
+5. Wait for the `CodeCov` job. In the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit, whose SHA may be abbreviated, is the revision that was analysed. If the head is not the one you reviewed, discard the result.
+6. Confirm the verdict on SonarQube Cloud itself, on the temporary pull request's analysis page, and check that it shows the reviewed head SHA. Neither the job log nor SonarQube Cloud can prove the result for malicious code: it runs earlier in the same job and can alter the files, the log or the submitted analysis. Both depend on the review in step 2.
 7. Comment on the original pull request with the head, base and merge SHAs from that line, the result, and links to the workflow run and the Sonar analysis.
 8. Close the temporary pull request without merging it and delete the branch.
 
-The result is stale as soon as the original pull request's head or `master` differs from the recorded SHAs. A changed head always needs a new review and verification. If only `master` has moved, the result still applies only if both of these commands print the same tree ID:
-
-```bash
-git fetch upstream master
-git merge-tree --write-tree <base-sha> <head-sha>
-git merge-tree --write-tree upstream/master <head-sha>
-```
+The result applies only to the head and base SHAs from step 5. It is stale as soon as the original pull request's head or `master` differs from them: verify again, with a new review if the head changed.
