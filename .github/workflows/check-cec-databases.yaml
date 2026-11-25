@@ -1,0 +1,68 @@
+name: Check CEC databases
+
+# Rebuilds src/emhass/data/cec_modules.pbz2 and cec_inverters.pbz2 from the sources recorded in
+# scripts/cec_database_source.json and fails if the committed tables differ from the rebuild.
+# Run the same check locally after downloading the two SAM CSVs at the recorded commit:
+#   python scripts/save_pvlib_module_inverter_database.py --check --sam-dir <folder with the CSVs>
+
+on:
+  pull_request:
+    paths:
+      - "src/emhass/data/cec_modules.pbz2"
+      - "src/emhass/data/cec_inverters.pbz2"
+      - "src/emhass/data/emhass_modules.csv"
+      - "src/emhass/data/emhass_inverters.csv"
+      - "scripts/save_pvlib_module_inverter_database.py"
+      - "scripts/cec_database_source.json"
+      - ".github/workflows/check-cec-databases.yaml"
+  push:
+    branches: [master]
+    paths:
+      - "src/emhass/data/cec_modules.pbz2"
+      - "src/emhass/data/cec_inverters.pbz2"
+      - "src/emhass/data/emhass_modules.csv"
+      - "src/emhass/data/emhass_inverters.csv"
+      - "scripts/save_pvlib_module_inverter_database.py"
+      - "scripts/cec_database_source.json"
+      - ".github/workflows/check-cec-databases.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install the recorded pandas and pvlib versions
+        run: |
+          PANDAS_VERSION=$(jq -er .pandas_version scripts/cec_database_source.json)
+          PVLIB_VERSION=$(jq -er .pvlib_version scripts/cec_database_source.json)
+          python3 -m pip install "pandas==${PANDAS_VERSION}" "pvlib==${PVLIB_VERSION}"
+
+      - name: Download the SAM CEC libraries at the recorded commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SAM_COMMIT=$(jq -er .sam_commit scripts/cec_database_source.json)
+          [[ "$SAM_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "sam_commit must be a full 40-character commit sha"; exit 1; }
+          BRANCH=$(gh api repos/NatLabRockies/SAM --jq .default_branch)
+          STATUS=$(gh api "repos/NatLabRockies/SAM/compare/${SAM_COMMIT}...${BRANCH}" --jq .status)
+          [[ "$STATUS" == "ahead" || "$STATUS" == "identical" ]] || { echo "sam_commit is not on SAM's ${BRANCH} branch (compare status: $STATUS)"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/sam"
+          for name in "CEC Modules.csv" "CEC Inverters.csv"; do
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/sam/$name" \
+              "https://raw.githubusercontent.com/NatLabRockies/SAM/${SAM_COMMIT}/deploy/libraries/${name// /%20}"
+          done
+          ls -l "$RUNNER_TEMP/sam"
+
+      - name: Rebuild and compare
+        run: python3 scripts/save_pvlib_module_inverter_database.py --check --sam-dir "$RUNNER_TEMP/sam"
