@@ -9240,9 +9240,8 @@ def private_temp_dir(fallback: pathlib.Path | str) -> pathlib.Path:
         _private_temp_dir_warned = True
         logging.getLogger(__name__).warning(
             "%s is not a folder that only this account can use; EMHASS keeps its lock "
-            "and counter files in %s instead",
+            "and counter files in the data folder instead",
             folder,
-            fallback,
         )
     return pathlib.Path(fallback)
 
