@@ -97,6 +97,9 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # Entrypoint script inline
+# The environment is fully synced at build time (step 4), so start with --no-sync. Without it, uv
+# rebuilds the project when a new container starts and fetches the build backend from PyPI, which
+# fails without network access.
 ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "-c", "set -e && \
 if [ ! -f /data/long_train_data.pkl ]; then \
     echo 'Initializing data: Copying default PKL file...'; \
@@ -109,4 +112,4 @@ fi && \
 WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
-exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
+exec uv run --no-sync gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
