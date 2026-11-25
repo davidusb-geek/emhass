@@ -139,7 +139,7 @@ With Docker, you can test the production EMHASS environment for both Docker and 
 
 Depending on the method you wish to test, the `docker run` command will require different passed arguments to function. See following examples.
 
-The web server requires an API token (see [API authentication](api_authentication.md)). For a throw-away development container set `-e EMHASS_API_TOKEN=a-long-development-token` and send it as `Authorization: Bearer <token>`, or, on a network you fully control, `-e EMHASS_API_AUTH_DISABLED=true`. The test suite sets the opt-out for the older web tests in `tests/conftest.py`; `tests/test_api_auth.py`, `tests/test_api_ingress.py` and `tests/test_api_provisioning.py` test the real behaviour.
+The web server requires an API token (see [API authentication](api_authentication.md)). For a throw-away development container, make a token first in a POSIX shell (`export EMHASS_API_TOKEN="$(openssl rand -hex 32)"`), pass it with `-e EMHASS_API_TOKEN` and send it as `Authorization: Bearer $EMHASS_API_TOKEN`, or, on a network you fully control, `-e EMHASS_API_AUTH_DISABLED=true`. The test suite sets the opt-out for the older web tests in `tests/conftest.py`; `tests/test_api_auth.py`, `tests/test_api_ingress.py` and `tests/test_api_provisioning.py` test the real behaviour.
 
 _Note: Make sure your terminal is in the root `emhass` repository directory before running the docker build._
 

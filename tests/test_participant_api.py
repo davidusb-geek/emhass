@@ -274,6 +274,26 @@ def test_a_short_participant_token_is_not_served(data_path):
     assert not (status == 503 and str(api_auth.MIN_LENGTH) in body["detail"]), body
 
 
+def test_a_placeholder_participant_token_is_not_served(data_path):
+    """As the API token: a participant_token that is a copy of a placeholder value published in the
+    example file or the docs is known to everyone, so the API answers 503."""
+    params = _params(_conf(data_path), **GARAGE)
+    token = '"replace-with-a-long-random-value"'
+    status, body = _client_get(data_path, params, "/participant/v1/describe", token=token)
+    assert status == 503 and "placeholder" in body["detail"]
+    assert "replace" not in body["detail"]
+
+
+def test_a_participant_token_that_is_not_text_is_not_served(data_path):
+    """A YAML list or mapping is not a token: 503 with the reason, never a 500."""
+    params = _params(_conf(data_path), **GARAGE)
+    for token in (["x"] * 20, "\ud800" * 20):
+        status, body = _client_get(
+            data_path, params, "/participant/v1/describe", token=token, presented="wrong"
+        )
+        assert status == 503 and "text" in body["detail"], token
+
+
 def test_the_participant_api_needs_one_web_worker(data_path, monkeypatch):
     """A coordinator's answers live in one worker's memory: with more, its
     commit could reach a worker that never gave the answer it names."""
