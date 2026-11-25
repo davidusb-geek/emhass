@@ -11,6 +11,7 @@ import copy
 import functools
 import io
 import json
+import logging
 import pathlib
 import pickle
 import shutil
@@ -1393,6 +1394,25 @@ def test_the_battery_charge_never_sends_the_supervisor_token_to_another_host(bas
     with mock.patch("urllib.request.OpenerDirector.open") as opened:
         assert participant_api.soc_now(conf, logger) is None
     opened.assert_not_called()
+
+
+def test_the_battery_charge_stands_in_for_a_url_urllib_cannot_ask(caplog):
+    """A hass_url with neither a scheme nor a port, as `homeassistant.local`:
+    urllib cannot even build the request. That is a failure to read the sensor
+    like any other, so the configured target stands in, and the coordinator
+    is not answered with a 400 (#1404)."""
+    conf = {
+        "sensor_battery_state_of_charge": "sensor.soc",
+        "hass_url": "homeassistant.local",
+        "long_lived_token": "t",
+    }
+    with (
+        caplog.at_level(logging.WARNING),
+        mock.patch("urllib.request.OpenerDirector.open") as opened,
+    ):
+        assert participant_api.soc_now(conf, logger) is None
+    opened.assert_not_called()
+    assert "could not read sensor.soc" in caplog.text
 
 
 @pytest.mark.parametrize(
