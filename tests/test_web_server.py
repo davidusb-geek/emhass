@@ -1,9 +1,12 @@
+import asyncio
 import logging
 import os
 import pathlib
 import pickle
+import runpy
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -834,7 +837,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertIn("missing", str(context.exception))
 
     @patch("emhass.web_server.clear_file_log", new_callable=AsyncMock)
-    @patch("logging.FileHandler")
+    @patch("emhass.web_server._ActionLogHandler")
     @patch("emhass.web_server.app.logger")
     async def test_configure_logging(self, mock_logger, mock_file_handler, mock_clear_log):
         # We test a few logging levels to ensure the if/elif block is fully covered
@@ -1502,6 +1505,413 @@ class TestLaunchAddressLog(unittest.IsolatedAsyncioTestCase):
         launch, warnings = await self.run_initialize("127.0.0.1", gunicorn=False)
         self.assertEqual(launch, ["Launching the emhass webserver at: http://127.0.0.1:5000"])
         self.assertFalse(any("server_ip" in w for w in warnings), warnings)
+
+
+GUNICORN_CONF = pathlib.Path(web_server.__file__).parents[2] / "gunicorn.conf.py"
+
+
+class TestNoRestartByRequestCount(unittest.TestCase):
+    """The request count takes requests without credentials too, so by default
+    it restarts nothing."""
+
+    def test_no_request_limit_unless_asked_for(self):
+        with patch.dict(os.environ):
+            os.environ.pop("MAX_REQUESTS", None)
+            self.assertEqual(runpy.run_path(str(GUNICORN_CONF))["max_requests"], 0)
+            os.environ["MAX_REQUESTS"] = "500"
+            self.assertEqual(runpy.run_path(str(GUNICORN_CONF))["max_requests"], 500)
+
+    def test_the_uvicorn_worker_gets_a_limit_it_never_reaches(self):
+        try:  # gunicorn cannot be imported on Windows
+            from gunicorn.config import Config
+            from uvicorn.workers import UvicornWorker
+        except ImportError as exc:
+            self.skipTest(f"gunicorn is not importable here: {exc}")
+        with patch.dict(os.environ):
+            os.environ.pop("MAX_REQUESTS", None)
+            conf = runpy.run_path(str(GUNICORN_CONF))
+        # the worker takes over uvicorn's loggers; give them back afterwards
+        for name in ("uvicorn.error", "uvicorn.access"):
+            logger = logging.getLogger(name)
+            self.enterContext(patch.object(logger, "handlers", logger.handlers[:]))
+            self.enterContext(patch.object(logger, "propagate", logger.propagate))
+            self.addCleanup(logger.setLevel, logger.level)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config()
+            cfg.set("max_requests", conf["max_requests"])
+            cfg.set("max_requests_jitter", conf["max_requests_jitter"])
+            cfg.set("worker_tmp_dir", tmp)
+            worker = UvicornWorker(1, os.getpid(), [], None, 30, cfg, cfg.logger_class(cfg))
+            try:
+                # uvicorn stops a worker once its request count reaches this
+                self.assertEqual(worker.config.limit_max_requests, sys.maxsize)
+            finally:
+                worker.tmp.close()
+
+
+class TestActionLogStaysShort(unittest.TestCase):
+    """The action log is read whole after every action, and only a start of the
+    server empties it: its handler keeps the end of it."""
+
+    def setUp(self):
+        self.enterContext(patch.object(web_server, "ACTION_LOG_MAX_BYTES", 4000))
+        self.enterContext(patch.object(web_server, "ACTION_LOG_KEEP_BYTES", 1000))
+        self.path = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory())) / "log.txt"
+        self.handler = web_server._ActionLogHandler(str(self.path))
+        self.handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+        self.addCleanup(self.handler.close)
+        self.logger = logging.Logger("action-log-test")
+        self.logger.addHandler(self.handler)
+
+    def test_a_short_log_is_left_alone(self):
+        for number in range(20):
+            self.logger.info("line %03d", number)
+        lines = self.path.read_text().splitlines()
+        self.assertEqual(lines, [f"INFO - line {n:03d}" for n in range(20)])
+
+    def test_past_the_limit_only_whole_lines_from_the_end_are_kept(self):
+        sizes = []
+        for number in range(2000):
+            self.logger.info("line %04d", number)
+            sizes.append(self.path.stat().st_size)
+        self.assertLessEqual(max(sizes), 4000 + len("INFO - line 0000\r\n"))
+        self.assertLess(min(sizes[1000:]), 1100)  # it was cut back, more than once
+        content = self.path.read_bytes()
+        self.assertNotIn(b"\x00", content)  # appended at the new end, no hole left behind
+        lines = content.decode().splitlines()
+        numbers = [int(line.removeprefix("INFO - line ")) for line in lines]
+        # every line kept is whole, in order, and the run ends with the last record
+        self.assertEqual(numbers, list(range(numbers[0], 2000)))
+        self.assertGreater(numbers[0], 0)
+
+    def test_a_newest_record_longer_than_what_is_kept_is_kept_whole(self):
+        for number in range(200):
+            self.logger.info("line %04d", number)
+        self.logger.info(" >> Performing x...")
+        self.logger.error("x" * 6000)
+        lines = self.path.read_text().splitlines()
+        # the record whole, and its action's line with whole lines before it
+        self.assertEqual(lines[-1], "ERROR - " + "x" * 6000)
+        self.assertEqual(lines[-2], "INFO -  >> Performing x...")
+        numbers = [int(line.removeprefix("INFO - line ")) for line in lines[:-2]]
+        self.assertEqual(numbers, list(range(numbers[0], 200)))
+        self.assertLessEqual(len("\n".join(lines[:-1]).encode()) + 2, 1000)
+        self.logger.info("after")  # the next record cuts it, as any other
+        self.assertEqual(self.path.read_text().splitlines(), ["INFO - after"])
+
+    def test_a_long_record_in_a_short_log_keeps_all_before_it(self):
+        self.logger.info("first")
+        self.logger.error("x" * 6000)
+        self.assertEqual(
+            self.path.read_text().splitlines(), ["INFO - first", "ERROR - " + "x" * 6000]
+        )
+
+    def test_a_cut_that_fails_loses_no_record(self):
+        with patch("builtins.open", side_effect=OSError("no")):
+            for number in range(600):
+                self.logger.info("line %04d", number)
+        self.assertEqual(len(self.path.read_text().splitlines()), 600)
+        self.logger.info("line 0600")  # the next record cuts it
+        lines = self.path.read_text().splitlines()
+        self.assertLess(len(lines), 600)
+        self.assertEqual(lines[-1], "INFO - line 0600")
+
+
+class TestActionLogReaders(unittest.IsolatedAsyncioTestCase):
+    """A read that overlaps a cut of the log can see bytes that do not decode."""
+
+    async def test_undecodable_bytes_do_not_stop_a_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = pathlib.Path(tmp) / web_server.action_log_str
+            log_file.write_bytes(
+                # \x81 decodes neither as UTF-8 nor as cp1252 (Windows' default)
+                b"INFO - web_server -  >> Performing x...\n\x81\xff\nERROR - web_server - boom\n"
+            )
+            with patch.object(web_server, "emhass_conf", {"data_path": pathlib.Path(tmp)}):
+                self.assertTrue(await web_server.check_file_log())
+                self.assertTrue(await web_server.check_file_log(" >> Performing x"))
+                lines = await web_server.grab_log(" >> Performing x")
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[-1], "ERROR - web_server - boom")
+
+
+class TestActionLogCutsAreKnown(unittest.IsolatedAsyncioTestCase):
+    """A cut of the action log can take an action's line, or its error, with an older
+    record. The readers must still see the action's lines and report its error."""
+
+    def setUp(self):
+        self.enterContext(patch.object(web_server, "ACTION_LOG_MAX_BYTES", 4000))
+        self.enterContext(patch.object(web_server, "ACTION_LOG_KEEP_BYTES", 1000))
+        tmp = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": tmp}))
+        self.path = tmp / web_server.action_log_str
+        self.handler = web_server._ActionLogHandler(str(self.path))
+        self.handler.setFormatter(logging.Formatter("%(levelname)s - %(name)s - %(message)s"))
+        self.addCleanup(self.handler.close)
+        self.logger = web_server.app.logger
+        self.enterContext(patch.object(self.logger, "handlers", [self.handler]))
+        self.enterContext(patch.object(self.logger, "propagate", False))
+        self.addCleanup(self.logger.setLevel, self.logger.level)
+        self.set_level(logging.INFO)
+
+    def set_level(self, level):
+        self.logger.setLevel(level)
+        self.handler.setLevel(level)
+
+    async def test_a_long_multi_line_error_is_kept_whole_with_its_action_line(self):
+        for number in range(150):
+            self.logger.info("line %04d", number)
+        self.logger.info(" >> Performing dayahead-optim...")
+        self.logger.error("failed:\n" + "\n".join(f"row {n:02d} " + "v" * 40 for n in range(40)))
+        lines = self.path.read_text().splitlines()
+        self.assertIn("ERROR - emhass.web_server - failed:", lines)
+        self.assertIn("INFO - emhass.web_server -  >> Performing dayahead-optim...", lines)
+        self.assertTrue(await web_server.check_file_log(" >> "))
+        log = await web_server.grab_log(" >> ")
+        self.assertTrue(log[0].endswith(" >> Performing dayahead-optim..."))
+
+    async def test_an_error_after_a_long_record_is_still_reported(self):
+        self.logger.info(" >> Obtaining params: ")
+        self.logger.info("Passed runtime parameters: " + "p" * 6000)
+        self.logger.error("Unable to read the runtime parameters")
+        # the long record went, and the action's line with it
+        self.assertEqual(
+            self.path.read_text().splitlines(),
+            ["ERROR - emhass.web_server - Unable to read the runtime parameters"],
+        )
+        self.assertTrue(await web_server.check_file_log(" >> Obtaining params: "))
+        self.assertEqual(
+            await web_server.grab_log(" >> Obtaining params: "),
+            ["ERROR - emhass.web_server - Unable to read the runtime parameters"],
+        )
+
+    async def test_an_error_cut_by_later_lines_is_still_reported(self):
+        self.cut_after_an_error(" >> Performing x...")
+        self.assertFalse(
+            any(line.startswith("ERROR") for line in self.path.read_text().splitlines())
+        )
+        self.assertTrue(await web_server.check_file_log(" >> "))
+        self.assertTrue(await web_server.check_file_log(" >> Performing x..."))
+        # the next action starts clean
+        self.logger.info(" >> Performing y...")
+        self.logger.info("fine")
+        self.assertFalse(await web_server.check_file_log(" >> "))
+
+    async def test_at_warning_level_an_old_error_fails_no_later_action(self):
+        self.set_level(logging.WARNING)
+        self.logger.error("an old error")
+        for number in range(400):
+            self.logger.warning("warning %04d", number)
+        self.logger.info(" >> Performing x...")  # not written at this level
+        self.assertFalse(await web_server.check_file_log(" >> "))
+        self.assertEqual(await web_server.grab_log(" >> "), [])
+
+    async def test_a_request_s_own_text_is_not_taken_for_an_action_line(self):
+        self.set_level(logging.WARNING)
+        self.logger.warning("Rejected runtime parameter: %r", "x >> y")
+        self.logger.error("an error")
+        for number in range(400):
+            self.logger.warning("warning %04d", number)
+        # a later action, whose own " >> " lines are not written at this level
+        self.logger.info(" >> Obtaining params: ")
+        self.assertFalse(await web_server.check_file_log(" >> "))
+
+    def cut_after_an_error(self, action_line):
+        self.logger.info(action_line)
+        self.logger.error("boom")
+        for number in range(400):
+            self.logger.info("after the error %04d", number)
+
+    async def test_a_ref_that_matches_no_action_line_is_left_as_it_was(self):
+        # weather-forecast-cache's line is worded otherwise than the ref asked for later
+        self.cut_after_an_error(" >> Performing weather forecast, try to caching result")
+        ref = " >> Performing weather-forecast-cache..."
+        self.assertFalse(await web_server.check_file_log(ref))
+        self.assertEqual(await web_server.grab_log(ref), [])
+        self.assertTrue(await web_server.check_file_log(" >> "))
+
+    async def test_a_closed_handler_still_tracks_what_it_writes(self):
+        self.cut_after_an_error(" >> Performing a...")
+        self.assertTrue(await web_server.check_file_log(" >> "))
+        self.handler.close()  # still attached: the next record opens the file again
+        self.logger.info(" >> Performing b...")
+        self.logger.info("fine")
+        self.assertFalse(await web_server.check_file_log(" >> "))
+
+    async def test_a_second_start_replaces_the_handler_of_the_file(self):
+        # python -m emhass.web_server runs initialize() twice
+        with patch.object(web_server.log, "default_handler", logging.NullHandler()):
+            await web_server._configure_logging("INFO")
+            await web_server._configure_logging("INFO")
+        handlers = [h for h in self.logger.handlers if isinstance(h, logging.FileHandler)]
+        for handler in handlers:
+            self.addCleanup(handler.close)
+        self.assertEqual(len(handlers), 1)
+        self.assertIsNot(handlers[0], self.handler)
+        self.cut_after_an_error(" >> Performing x...")
+        lines = self.path.read_text().splitlines()
+        self.assertEqual(lines.count("INFO - emhass.web_server - after the error 0399"), 1)
+        self.assertTrue(await web_server.check_file_log(" >> "))
+
+
+def _scope(path="/healthz", host=b"emhass.local:5000", kind="http"):
+    scope = {
+        "type": kind,
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http" if kind == "http" else "ws",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"x",
+        "root_path": "",
+        "headers": [] if host is None else [(b"host", host)],
+        "client": ("192.0.2.10", 40000),
+        "server": ("192.0.2.1", 5000),
+    }
+    return scope
+
+
+class TestMalformedRequestsAreRefused(unittest.IsolatedAsyncioTestCase):
+    """Requests Quart cannot take in get a 400 before they reach it."""
+
+    async def asyncSetUp(self):
+        self.enterContext(
+            patch.dict(web_server._malformed_log, {"count": 0, "last": float("-inf")})
+        )
+
+    async def call(self, app, scope):
+        sent = []
+        messages = [{"type": "http.request", "body": b"", "more_body": False}]
+
+        async def receive():
+            if messages:
+                return messages.pop()
+            await asyncio.sleep(0)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        await asyncio.wait_for(app(scope, receive, send), 10)
+        return sent
+
+    async def test_what_quart_fails_on_is_named(self):
+        for scope, problem in [
+            (_scope(path=""), "the request has no path"),
+            (_scope(path="http://["), "the request target is not a valid URL"),
+            (_scope(path="x://["), "the request target is not a valid URL"),
+            (_scope(path="http://[::1"), "the request target is not a valid URL"),
+            (_scope(path="x://\uff20"), "the request target is not a valid URL"),
+            (_scope(path="x://a\uff0fb"), "the request target is not a valid URL"),
+            (_scope(host=b"a..b"), "the Host header is not a valid host name"),
+            (_scope(host=b"a..b:5000"), "the Host header is not a valid host name"),
+            (_scope(host=b"x" * 64 + b".example"), "the Host header is not a valid host name"),
+        ]:
+            with self.subTest(path=scope["path"], host=scope["headers"]):
+                self.assertEqual(web_server._malformed_request(scope), problem)
+
+    async def test_a_long_non_ascii_host_is_left_to_werkzeug_and_costs_nothing(self):
+        # werkzeug takes it as an empty host; IDNA on it would take a quarter second
+        scope = _scope(host=b"\xe9" * 200_000)
+        started = time.perf_counter()
+        self.assertIsNone(web_server._malformed_request(scope))
+        self.assertLess(time.perf_counter() - started, 0.05)
+
+    async def test_ordinary_targets_pass(self):
+        for path in ("/healthz", "/", "http://emhass.local/healthz", "*", "x:"):
+            with self.subTest(path=path):
+                self.assertIsNone(web_server._malformed_request(_scope(path=path)))
+
+    async def test_refusals_stay_out_of_the_action_log_and_are_counted(self):
+        wrapped = web_server._refusing_malformed_requests(AsyncMock())
+        with self.assertNoLogs(web_server.app.logger):
+            with self.assertLogs("uvicorn.error", "WARNING") as first:
+                await self.call(wrapped, _scope(path=""))
+            with self.assertNoLogs("uvicorn.error"):  # within the minute: counted only
+                for _ in range(5):
+                    await self.call(wrapped, _scope(host=b"a..b"))
+            web_server._malformed_log["last"] -= web_server.MALFORMED_LOG_INTERVAL_S
+            with self.assertLogs("uvicorn.error", "WARNING") as later:
+                await self.call(wrapped, _scope(path="http://["))
+        self.assertIn("refused 1 malformed", first.output[0])
+        self.assertIn("refused 6 malformed", later.output[0])
+        self.assertIn("not a valid URL", later.output[0])
+
+    async def test_ordinary_requests_pass(self):
+        for host in (
+            b"emhass.local:5000",
+            b"192.0.2.1",
+            b"[2001:db8::1]:5000",
+            b"homeassistant",
+            b"x" * 63 + b".example",
+            b"",
+            None,
+        ):
+            with self.subTest(host=host):
+                self.assertIsNone(web_server._malformed_request(_scope(host=host)))
+
+    async def test_a_malformed_request_never_reaches_the_app(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        sent = await self.call(wrapped, _scope(path=""))
+        inner.assert_not_awaited()
+        self.assertEqual(sent[0]["type"], "http.response.start")
+        self.assertEqual(sent[0]["status"], 400)
+        self.assertEqual(sent[1]["body"], b"EMHASS >> Bad request: the request has no path.\n")
+        headers = dict(sent[0]["headers"])
+        self.assertEqual(int(headers[b"content-length"]), len(sent[1]["body"]))
+        self.assertEqual(headers[b"x-content-type-options"], b"nosniff")
+
+    async def test_a_malformed_websocket_is_closed(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        sent = await self.call(wrapped, _scope(host=b"a..b", kind="websocket"))
+        inner.assert_not_awaited()
+        self.assertEqual(sent, [{"type": "websocket.close", "code": 1008}])
+
+    async def test_everything_else_goes_through_unchanged(self):
+        inner = AsyncMock()
+        wrapped = web_server._refusing_malformed_requests(inner)
+        scope = _scope()
+        await self.call(wrapped, scope)
+        inner.assert_awaited_once()
+        self.assertIs(inner.await_args.args[0], scope)
+        lifespan = {"type": "lifespan"}
+        await self.call(wrapped, lifespan)
+        self.assertIs(inner.await_args.args[0], lifespan)
+
+    async def test_the_app_is_served_through_it(self):
+        for scope in (_scope(host=b"a..b"), _scope(path="http://[")):
+            with self.subTest(path=scope["path"]):
+                sent = await self.call(web_server.app, scope)
+                self.assertEqual(sent[0]["status"], 400)
+
+
+class TestActionLogHandlerIsUsed(unittest.IsolatedAsyncioTestCase):
+    async def test_the_server_logs_actions_through_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(web_server, "emhass_conf", {"data_path": pathlib.Path(tmp)}),
+                patch.object(web_server.app.logger, "handlers", web_server.app.logger.handlers[:]),
+                patch.object(web_server.app.logger, "level", web_server.app.logger.level),
+                patch.object(web_server.app.logger, "propagate", False),
+            ):
+                await web_server._configure_logging("INFO")
+                added = [
+                    h
+                    for h in web_server.app.logger.handlers
+                    if isinstance(h, web_server._ActionLogHandler)
+                ]
+                try:
+                    self.assertEqual(len(added), 1)
+                    self.assertEqual(
+                        pathlib.Path(added[0].baseFilename),
+                        pathlib.Path(tmp) / web_server.action_log_str,
+                    )
+                finally:
+                    for handler in added:
+                        handler.close()
 
 
 if __name__ == "__main__":
