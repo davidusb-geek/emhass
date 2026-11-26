@@ -373,7 +373,11 @@ def _with_backend(res, requested: str, fallback_reason: str | None, extra=None):
     """Mark which backend made the plan in `res`: the one requested, or cvxpy
     and why. Only with a coordinator backend requested, so a default
     configuration's results keep exactly their columns. `extra`: columns the
-    coordinator left for a fallback (its remotes' statuses and powers)."""
+    coordinator left for a fallback (its remotes' statuses and powers).
+    A backend EMHASS does not know is written as "unknown": a saved value is copied
+    into every row, so it is not copied as it is."""
+    if requested not in _BACKENDS:
+        requested = "unknown"
     res["backend_requested"] = requested
     res["backend_used"] = "cvxpy" if fallback_reason else requested
     res["backend_fallback_reason"] = fallback_reason or ""
@@ -382,7 +386,7 @@ def _with_backend(res, requested: str, fallback_reason: str | None, extra=None):
     return res
 
 
-_BACKENDS = ("cvxpy", "dantzig_wolfe")
+_BACKENDS = utils.OPTIMIZATION_BACKENDS
 
 
 def _coordinated_plant_problem(plant_conf: dict) -> str | None:
@@ -427,7 +431,13 @@ def _coordinated_config_problem(optim_conf: dict) -> str | None:
     if backend == "admm":
         return "admm is planned for a later release, not available yet"
     if backend not in _BACKENDS:
-        return f"unknown backend {backend!r} (known: {', '.join(_BACKENDS)})"
+        # Not quoted: the reason goes into every row of the plan
+        return f"unknown backend (known: {', '.join(_BACKENDS)})"
+    groups = optim_conf.get("deferrable_load_groups")
+    if isinstance(groups, list) and len(groups) > utils.MAX_LOAD_GROUPS:
+        # A configuration saved before the bound (or a heat_topology's groups): its
+        # time and memory grow faster than the groups, so the default solver plans
+        return f"more than {utils.MAX_LOAD_GROUPS} deferrable_load_groups"
     if optim_conf.get("site") is not None:
         return site_problem(optim_conf["site"])
     return None
@@ -520,7 +530,8 @@ class Optimization:
         self.inverter_specs: list[dict] = []
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
-        self.time_step = self.freq.seconds / 3600  # in hours
+        # total_seconds: .seconds is 0 for a step of a whole day (1440 minutes)
+        self.time_step = self.freq.total_seconds() / 3600  # in hours
         self.var_pv = self.retrieve_hass_conf["sensor_power_photovoltaics"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
@@ -545,14 +556,11 @@ class Optimization:
             # Fallback to the argument (default 24h)
             self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
 
-        # Configuration for Solver
-        if "num_threads" in optim_conf.keys():
-            if optim_conf["num_threads"] == 0:
-                self.num_threads = int(os.cpu_count())
-            else:
-                self.num_threads = int(optim_conf["num_threads"])
-        else:
-            self.num_threads = int(os.cpu_count())
+        # Configuration for Solver: the threads the solver is given, within the bound (0 is
+        # the solver's own default)
+        self.num_threads = utils.bounded_solver_option(
+            "num_threads", optim_conf.get("num_threads", 0), 0, logger
+        )
 
         # Force HiGHS solver or use configured one, defaulting to Highs if not specified
         if "lp_solver" in optim_conf.keys():
@@ -10699,9 +10707,14 @@ class Optimization:
         if debug:
             solver_opts["verbose"] = True
 
-        # Retrieve Constraints (Time & Threads)
-        threads = self.optim_conf.get("num_threads", 0)
-        timeout = self.optim_conf.get("lp_solver_timeout", 180)
+        # Retrieve Constraints (Time & Threads), within utils.PARAM_BOUNDS: a value saved
+        # before the bounds is clamped to them here, not passed to the solver as it is
+        threads = utils.bounded_solver_option(
+            "num_threads", self.optim_conf.get("num_threads", 0), 0, self.logger
+        )
+        timeout = utils.bounded_solver_option(
+            "lp_solver_timeout", self.optim_conf.get("lp_solver_timeout", 180), 180, self.logger
+        )
 
         # Select Solver
         # We strictly default to HiGHS.
@@ -10734,6 +10747,9 @@ class Optimization:
         # Configure HiGHS (The Default)
         if selected_solver == cp.HIGHS:
             solver_opts["time_limit"] = float(timeout)
+            # 0 (the default) passes no count: HiGHS uses its own default. HiGHS fixes its
+            # thread pool at the first solve of the process, so a count passed on every
+            # solve would make a later solve with another count fail
             if threads > 0:
                 solver_opts["threads"] = int(threads)
             # 'run_crossover' ensures a cleaner solution (closer to simplex vertex)

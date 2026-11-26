@@ -313,6 +313,36 @@ def get_forecast_dates(
     return [ts.isoformat() for ts in forecast_dates]
 
 
+def _days_covering_horizon(
+    horizon: int,
+    freq: int,
+    delta_forecast: int,
+    time_zone: datetime.tzinfo,
+    method_ts_round: str,
+    now: datetime,
+) -> tuple[int, list[str]]:
+    """The fewest local calendar days past ``delta_forecast`` whose grid has at least
+    ``horizon`` steps, and that grid.
+
+    A local day is 23 to 25 hours, and the grid of a span is its length divided by
+    the step, rounded, so the answer is within a few days of horizon x step / 1440:
+    the search starts just below that, not at ``delta_forecast``, and builds a grid
+    a handful of times at most instead of once per day.
+
+    :raises RuntimeParamError: Should no day in the range cover the horizon.
+    """
+    # Steps an hour of DST and the rounding can take off a grid
+    slack = math.ceil(60 / freq) + 1
+    days = max(delta_forecast + 1, math.ceil((horizon - slack) * freq / 1440))
+    last = max(math.ceil((horizon + slack) * freq / 1440) + 1, days + 2)
+    while days <= last:
+        dates = get_forecast_dates(freq, days, time_zone, method_ts_round=method_ts_round, now=now)
+        if len(dates) >= horizon:
+            return days, dates
+        days += 1
+    raise RuntimeParamError("prediction_horizon is longer than the forecast grid can be made")
+
+
 def normalize_heat_cool_mode(
     value: str,
     *,
@@ -1763,6 +1793,28 @@ def _extend_optim_conf_with_compiled_topology(
     )
 
 
+def apply_compiled_topology(
+    optim_conf: dict, compiled: dict, extend: bool, logger: logging.Logger
+) -> None:
+    """Merge a compiled heat_topology (compile_heat_topology) into ``optim_conf`` as a
+    run does: with ``extend`` (extend_deferrable_loads) its loads are added after the
+    configured ones; else, in replace mode, its loads replace them, a field the compiler
+    fills taking the configured value where one is set, but for the structural fields
+    (_TOPOLOGY_REPLACED_KEYS). A run and the count of its size (config_shape) both use
+    this, so they agree on the loads, their nominal powers and their minimum times.
+    """
+    if extend:
+        _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+        return
+    for key, val in compiled.items():
+        if key not in optim_conf or optim_conf[key] in (None, [], {}):
+            optim_conf[key] = val
+        elif key in _TOPOLOGY_REPLACED_KEYS:
+            # Always the compiled values: otherwise the compiled def_load_config
+            # would not match number_of_deferrable_loads, etc.
+            optim_conf[key] = val
+
+
 def calculate_thermal_loss_signed(
     outdoor_temperature_forecast: np.ndarray | pd.Series,
     indoor_temperature: float,
@@ -2748,10 +2800,19 @@ async def treat_runtimeparams(
     default_currency_unit = "€"
     default_temperature_unit = "°C"
 
-    # Some default data needed
+    # The ceilings of saved settings refuse only the actions that solve; the others
+    # (publish-data, the forecasters, the calibrations) are warned. They are judged on
+    # the run's final settings, after the request, so a request that lowers the load
+    # count runs on a configuration saved with more than the ceiling.
+    optimizing = set_type in _OPTIMIZING_ACTIONS
+    # Some default data needed: one publish id per load, for at most the saved ceiling
+    # of loads before the final count is known. The ids of any further load are padded
+    # once it is (below).
     load_ids = [
         _default_load_publish_ids(k, default_temperature_unit)
-        for k in range(params["optim_conf"]["number_of_deferrable_loads"])
+        for k in range(
+            min(params["optim_conf"]["number_of_deferrable_loads"], MAX_SAVED_DEFERRABLE_LOADS)
+        )
     ]
     custom_deferrable_forecast_id = [ids["custom_deferrable_forecast_id"] for ids in load_ids]
     custom_deferrable_state_id = [ids["custom_deferrable_state_id"] for ids in load_ids]
@@ -2848,11 +2909,50 @@ async def treat_runtimeparams(
 
     # Set once the runtime block below has validated the inverter parameters (#1150).
     inverters_checked = False
+    # Set when the request has a hand in the final deferrable_load_groups: its own
+    # groups, a heat_topology (which compiles to groups) or another backend
+    request_shapes_groups = False
+    # The sizes the saved settings give, before a request changes them: a request is
+    # refused over a bound only when it asks for more than these
+    saved_step_minutes = _minutes(params["retrieve_hass_conf"].get("optimization_time_step"))
+    saved_grid_steps = grid_time_steps(
+        saved_step_minutes, _days(params["optim_conf"].get("delta_forecast_daily"))
+    )
+    # The saved heat_topology, compiled once: the compile below uses it again when a
+    # request leaves the topology as saved
+    saved_heat_topology = params["optim_conf"].get("heat_topology")
+    saved_compiled = saved_topology(params["optim_conf"])
+    saved_size = saved_run_size(params, saved_compiled)
 
     # If any runtime parameters where passed in action call
     if runtimeparams is not None:
         if type(runtimeparams) is str:
             runtimeparams = orjson.loads(runtimeparams)
+        if not isinstance(runtimeparams, dict):
+            raise RuntimeParamError("The runtime parameters must be a JSON object")
+        # The request's own settings are held to their bounds before any of them is
+        # used. A saved value over a bound is only reported.
+        bound_faults = bounded_value_faults(runtimeparams, params["optim_conf"])
+        if bound_faults:
+            raise RuntimeParamError(bound_faults[0])
+        # As the numbers they stand for, so "96" or 96.0 is used as 96 below
+        runtimeparams.update(bounded_value_forms(runtimeparams))
+        warn_saved_values_over_bounds(params, runtimeparams, logger)
+        request_backend = runtimeparams.get("optimization_backend")
+        request_groups = runtimeparams.get("deferrable_load_groups")
+        request_shapes_groups = (
+            (
+                request_groups is not None
+                and not same_value(
+                    request_groups, params["optim_conf"].get("deferrable_load_groups")
+                )
+            )
+            or bool(runtimeparams.get("heat_topology"))
+            or (
+                request_backend is not None
+                and request_backend != params["optim_conf"].get("optimization_backend")
+            )
+        )
 
         # Remember which per-battery array params were configured with genuinely
         # distinct per-battery entries: the association loop below overwrites the
@@ -2954,7 +3054,7 @@ async def treat_runtimeparams(
                 try:
                     # If it's a string representation of a list, parse it
                     if isinstance(value, str):
-                        parsed = ast.literal_eval(value)
+                        parsed = literal_eval_bounded(value, LITERAL_LIST_MAX_CHARS)
                         params["plant_conf"][key] = parsed
                     # If already a list/array, use it directly
                     # Ruff preferred bitwise OR '|' for union types
@@ -3058,7 +3158,7 @@ async def treat_runtimeparams(
             )
         else:
             optimization_time_step = int(
-                params["retrieve_hass_conf"]["optimization_time_step"].seconds / 60.0
+                params["retrieve_hass_conf"]["optimization_time_step"].total_seconds() / 60.0
             )
 
         if (
@@ -3091,8 +3191,32 @@ async def treat_runtimeparams(
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
         else:
             delta_forecast = int(params["optim_conf"]["delta_forecast_daily"].days)
+        # The grid the two give, before it is built: each is within its own bound, but
+        # a long forecast at a short step is not. Held to the request's bound when the
+        # request set either, else to the saved one.
+        grid_from_request = any(
+            _setting(runtimeparams, key, legacy) is not None for key, legacy in _GRID_KEYS
+        )
+        check_time_grid(
+            _minutes(params["retrieve_hass_conf"]["optimization_time_step"]),
+            delta_forecast,
+            grid_from_request,
+            logger,
+            saved_steps=saved_grid_steps,
+            optimizing=optimizing,
+        )
         if runtimeparams.get("time_zone", None) is not None:
-            time_zone = pytz.timezone(params["retrieve_hass_conf"]["time_zone"])
+            # The request's zone. The configured one is already a tz object here.
+            zone_refused = RuntimeParamError(
+                "time_zone must be a time zone name such as Europe/Paris"
+            )
+            zone_name = runtimeparams["time_zone"]
+            if not isinstance(zone_name, str) or len(zone_name) > 64:
+                raise zone_refused
+            try:
+                time_zone = pytz.timezone(zone_name)
+            except (pytz.UnknownTimeZoneError, ValueError):
+                raise zone_refused from None
             params["retrieve_hass_conf"]["time_zone"] = time_zone
         else:
             time_zone = params["retrieve_hass_conf"]["time_zone"]
@@ -3101,7 +3225,7 @@ async def treat_runtimeparams(
         # the optimizer will actually use.
         method_ts_round = params["retrieve_hass_conf"].get("method_ts_round", "nearest")
         if method_ts_round not in ("nearest", "first", "last"):
-            logger.error("Wrong method_ts_round passed parameter: %r", method_ts_round)
+            logger.error("method_ts_round must be nearest, first or last")
             method_ts_round = "nearest"  # actions that build a Forecast still fail on it
         # The request clock is read here, once, and used for every grid of this request.
         # Forecast reuses the captured start instead of reading the clock again, so the
@@ -3197,14 +3321,14 @@ async def treat_runtimeparams(
             # the request; downstream slicing still trims it to prediction_horizon.
             required_delta_forecast = delta_forecast
             extended_forecast_dates = forecast_dates
-            while len(extended_forecast_dates) < int(prediction_horizon):
-                required_delta_forecast += 1
-                extended_forecast_dates = get_forecast_dates(
+            if len(forecast_dates) < int(prediction_horizon):
+                required_delta_forecast, extended_forecast_dates = _days_covering_horizon(
+                    int(prediction_horizon),
                     optimization_time_step,
-                    required_delta_forecast,
+                    delta_forecast,
                     time_zone,
-                    method_ts_round=method_ts_round,
-                    now=request_now,
+                    method_ts_round,
+                    request_now,
                 )
             if required_delta_forecast > delta_forecast:
                 logger.info(
@@ -3580,7 +3704,9 @@ async def treat_runtimeparams(
                 # values are subject to the same #1135 finite-real contract.
                 if isinstance(forecast_input, str):
                     try:
-                        parsed_forecast = ast.literal_eval(forecast_input)
+                        parsed_forecast = literal_eval_bounded(
+                            forecast_input, LITERAL_LIST_MAX_CHARS
+                        )
                     except (SyntaxError, ValueError):
                         parsed_forecast = None
                     if isinstance(parsed_forecast, list):
@@ -3735,7 +3861,7 @@ async def treat_runtimeparams(
             if value is None:
                 return False
             try:
-                return ast.literal_eval(str(value).capitalize())
+                return literal_eval_bounded(str(value).capitalize(), LITERAL_FLAG_MAX_CHARS)
             except (ValueError, SyntaxError):
                 return False
 
@@ -3803,8 +3929,9 @@ async def treat_runtimeparams(
             model_predict_publish = False
         else:
             try:
-                model_predict_publish = ast.literal_eval(
-                    str(runtimeparams["model_predict_publish"]).capitalize()
+                model_predict_publish = literal_eval_bounded(
+                    str(runtimeparams["model_predict_publish"]).capitalize(),
+                    LITERAL_FLAG_MAX_CHARS,
                 )
             except (ValueError, SyntaxError):
                 # The parser's error quotes the capitalized text, which the log
@@ -4074,6 +4201,18 @@ async def treat_runtimeparams(
         # Entity ids end up in a Home Assistant URL path and in a saved file name
         validate_runtime_entity_ids(runtimeparams)
 
+    else:
+        # No request: the run is made of the saved settings alone. The forecast grid
+        # is built later, from them, so it is held to the saved bound here.
+        warn_saved_values_over_bounds(params, {}, logger)
+        check_time_grid(
+            _minutes(params["retrieve_hass_conf"].get("optimization_time_step")),
+            _days(params["optim_conf"].get("delta_forecast_daily")),
+            False,
+            logger,
+            optimizing=optimizing,
+        )
+
     # split config categories from params
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
@@ -4132,19 +4271,25 @@ async def treat_runtimeparams(
         and heat_topology
         and heat_topology.get("extend_deferrable_loads", False)
     )
+    # The loads the compiled topology gives, for the load count check below
+    topology_loads = None
     if isinstance(heat_topology, dict) and heat_topology:
-        try:
-            compiled = compile_heat_topology(heat_topology)
-        except ValueError as e:
-            logger.error("heat_topology compile failed: %s", e)
-            raise
+        if saved_compiled is not None and heat_topology is saved_heat_topology:
+            compiled = saved_compiled
+        else:
+            try:
+                compiled = compile_heat_topology(heat_topology)
+            except ValueError as e:
+                logger.error("heat_topology compile failed: %s", e)
+                raise
+        topology_loads = len(compiled.get("def_load_config") or [])
         if heat_topology.get("extend_deferrable_loads", False):
             # Opt-in append mode: keep the user's configured deferrable loads
             # and add the compiled topology loads AFTER them. Setting the flag
             # is the user asserting their flat per-load config describes real
             # loads (the compiler cannot tell configured loads apart from
             # defaults, which is why replace is the default).
-            _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+            apply_compiled_topology(optim_conf, compiled, True, logger)
             # naive-mpc-optim reads the operating timesteps from passed_data.
             passed = params.get("passed_data") or {}
             if passed.get("operating_timesteps_of_each_deferrable_load") is not None:
@@ -4156,15 +4301,7 @@ async def treat_runtimeparams(
             # allowing user-set fields to win for things the compiler always
             # populates (e.g. operating_hours).
             _warn_replaced_deferrable_loads(optim_conf, compiled, emhass_conf, logger)
-            for key, val in compiled.items():
-                if key not in optim_conf or optim_conf[key] in (None, [], {}):
-                    optim_conf[key] = val
-                else:
-                    # For the structural fields we ALWAYS want compiled values
-                    # (otherwise the compiled def_load_config doesn't match
-                    # number_of_deferrable_loads, etc.)
-                    if key in _TOPOLOGY_REPLACED_KEYS:
-                        optim_conf[key] = val
+            apply_compiled_topology(optim_conf, compiled, False, logger)
         params["optim_conf"] = optim_conf
         logger.info(
             "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
@@ -4242,6 +4379,25 @@ async def treat_runtimeparams(
                 "re-normalisation"
             )
             final_num_def_loads = None
+        # The request's own count is bounded at the top. Its def_load_config or
+        # heat_topology can still add loads; checked here, before any per-load list
+        # is built for the final count. Only the loads the request gives count against
+        # its bound; the rest come from the saved settings, which are warned about
+        # over the bound and refused only over the saved ceiling.
+        if final_num_def_loads is not None:
+            if (
+                _loads_from_request(
+                    runtimeparams or {}, final_num_def_loads, topology_loads, extend_mode
+                )
+                > MAX_DEFERRABLE_LOADS
+            ):
+                raise RuntimeParamError(
+                    f"The request gives more than {MAX_DEFERRABLE_LOADS} deferrable loads in all"
+                )
+            check_saved_load_count(final_num_def_loads, logger, final=True, optimizing=optimizing)
+            _check_run_load_steps(
+                params, set_type, runtimeparams or {}, final_num_def_loads, saved_size, logger
+            )
         if final_num_def_loads is not None:
             # Write the cast int back: downstream readers of
             # optim_conf["number_of_deferrable_loads"] need an int, not
@@ -4279,6 +4435,12 @@ async def treat_runtimeparams(
                     continue
 
                 current_value = optim_conf.get(def_array_name)
+                if isinstance(current_value, int | float):
+                    # A saved single value means every load, as a request's does (the
+                    # bounds take one for def_minimum_on_time and def_minimum_off_time);
+                    # the optimizer reads a list
+                    optim_conf[def_array_name] = [current_value] * final_num_def_loads
+                    continue
                 if isinstance(current_value, list):
                     # Copy before padding: check_def_loads mutates in place,
                     # and this list may be the same object as
@@ -4305,6 +4467,14 @@ async def treat_runtimeparams(
                     logger,
                 )
             params["optim_conf"] = optim_conf
+            # The minimum on and off times of every load, now each has its entry
+            _check_run_min_time_terms(
+                params, set_type, runtimeparams or {}, final_num_def_loads, saved_size, logger
+            )
+            if set_type in _OPTIMIZING_ACTIONS:
+                read_request_load_numbers(
+                    optim_conf, runtimeparams or {}, logger, final_num_def_loads
+                )
             # The default publish ids were built from the load count before the
             # steps above could change it (a heat_topology compile, a runtime
             # def_load_config). Pad each per-load id list with the defaults for
@@ -4388,9 +4558,17 @@ async def treat_runtimeparams(
     params["optim_conf"] = optim_conf
     # deferrable_load_groups on the final parameters (#1366): after the runtime
     # merge, the heat_topology compile and the load-count re-normalisation, so a
-    # runtime change to the battery or inverter settings is checked too.
+    # runtime change to the battery or inverter settings is checked too. Too many
+    # groups is refused when the request had a hand in them (its own groups, its
+    # backend, a topology it compiles to groups), and only warned about when they are
+    # the saved configuration's.
+    groups_fault = _load_groups_fault(
+        optim_conf.get("deferrable_load_groups"), optim_conf.get("optimization_backend")
+    )
+    if groups_fault is not None and request_shapes_groups:
+        raise RuntimeParamError(groups_fault)
     check_deferrable_load_groups(
-        optim_conf, plant_conf, config_file=False, error_cls=RuntimeParamError
+        optim_conf, plant_conf, config_file=False, error_cls=RuntimeParamError, logger=logger
     )
 
     # Serialize the final params
@@ -6396,6 +6574,60 @@ def _parse_thermal_entities(rt: dict, load_index: int) -> dict[str, str]:
     }
 
 
+_THERMAL_ARRAY_KEYS = (
+    "indoor_temperature",
+    "outdoor_temperature",
+    "heater_power",
+    "predicted_temperature",
+)
+
+
+def check_thermal_calibration_payload(rt: dict) -> None:
+    """Hold a thermal-model-calibration payload to its bounds before anything is read.
+
+    The arrays have at most MAX_THERMAL_ROWS entries, lookback_hours is bounded
+    (PARAM_BOUNDS), and date_ranges is a list of at most MAX_THERMAL_DATE_RANGES
+    [start, end] pairs, each start before its end and at most MAX_HISTORY_DAYS apart.
+
+    :raises RuntimeParamError: Fixed text naming the key and the bound.
+    """
+    faults = bounded_value_faults(rt)
+    if faults:
+        raise RuntimeParamError(faults[0])
+    # As the numbers they stand for ("48.0" is 48 hours)
+    rt.update(bounded_value_forms(rt))
+    for key in _THERMAL_ARRAY_KEYS:
+        value = rt.get(key)
+        if isinstance(value, list) and len(value) > MAX_THERMAL_ROWS:
+            raise RuntimeParamError(f"{key} must have at most {MAX_THERMAL_ROWS} entries")
+    date_ranges = rt.get("date_ranges")
+    if date_ranges is None or date_ranges == []:
+        return
+    refused = RuntimeParamError(
+        f"date_ranges must be a list of at most {MAX_THERMAL_DATE_RANGES} [start, end] "
+        f"pairs, each start before its end and at most {MAX_HISTORY_DAYS} days apart"
+    )
+    if not isinstance(date_ranges, list) or len(date_ranges) > MAX_THERMAL_DATE_RANGES:
+        raise refused
+    for entry in date_ranges:
+        if not isinstance(entry, list | tuple) or len(entry) != 2:
+            raise refused
+        if not all(
+            (isinstance(v, str) and len(v) <= 64)
+            or (isinstance(v, int | float) and not isinstance(v, bool))
+            for v in entry
+        ):
+            raise refused
+        try:
+            start = pd.to_datetime(entry[0], utc=True)
+            end = pd.to_datetime(entry[1], utc=True)
+            usable = start < end and end - start <= pd.Timedelta(days=MAX_HISTORY_DAYS)
+        except Exception:  # noqa: BLE001 - any parse failure is the same refusal
+            usable = False
+        if not usable:
+            raise refused
+
+
 def _parse_thermal_calibration_config(
     params_dict: dict,
     rt: dict,
@@ -6819,9 +7051,31 @@ async def compute_thermal_model_calibration(
         logger=logger,
         warn_msg="Ignoring malformed JSON runtimeparams in thermal-model-calibration",
     )
+    check_thermal_calibration_payload(rt)
     params_dict = _parse_json_dict(params)
     rh_conf = params_dict.get("retrieve_hass_conf") or {}
-    cfg = _parse_thermal_calibration_config(params_dict, rt)
+    try:
+        cfg = _parse_thermal_calibration_config(params_dict, rt)
+    except RuntimeParamError:
+        raise
+    except (ValueError, TypeError, OverflowError):
+        # Their texts can quote the payload; the reply is a fixed one
+        raise RuntimeParamError(
+            "The thermal calibration settings could not be read: a value has the wrong type"
+        ) from None
+    # The history is read, or made up offline, one row per step of the lookback
+    if cfg["dt_hours"] > 0 and cfg["lookback_hours"] / cfg["dt_hours"] > MAX_THERMAL_ROWS:
+        raise RuntimeParamError(
+            f"lookback_hours must give at most {MAX_THERMAL_ROWS} rows at the optimization_time_step"
+        )
+    # date_ranges, when given, sets the window in its place: its first range is the one
+    # read, and is held to the same rows
+    if cfg["has_explicit_window"] and cfg["dt_hours"] > 0:
+        span_hours = (cfg["end_utc"] - cfg["start_utc"]).total_seconds() / 3600
+        if span_hours / cfg["dt_hours"] > MAX_THERMAL_ROWS:
+            raise RuntimeParamError(
+                f"date_ranges must give at most {MAX_THERMAL_ROWS} rows at the optimization_time_step"
+            )
 
     df_raw, data_source = await _load_thermal_calibration_frame(
         emhass_conf, params_dict, rh_conf, rt, cfg, get_data_from_file, logger
@@ -8062,6 +8316,7 @@ def check_deferrable_load_groups(
     *,
     config_file: bool,
     error_cls: type[ValueError] = ValueError,
+    logger: logging.Logger | None = None,
 ) -> None:
     """
     Validate optim_conf["deferrable_load_groups"] (#1366).
@@ -8098,6 +8353,17 @@ def check_deferrable_load_groups(
         return
     if not isinstance(groups, list):
         raise error_cls("deferrable_load_groups must be a list of group objects")
+    # More groups than a request or a save may set: only a configuration saved before
+    # the bound has them, and it keeps working (bounded_value_faults refuses a new one)
+    size_fault = _load_groups_fault(groups, optim_conf.get("optimization_backend"))
+    if size_fault is not None and logger is not None:
+        _warn_saved_once(
+            logger,
+            "deferrable_load_groups",
+            len(groups),
+            "In the saved configuration, %s; a request or a new save is held to that",
+            size_fault,
+        )
     mutex_seen: set[int] = set()
     for gi, group in enumerate(groups):
         problem = _deferrable_group_problem(
@@ -8224,7 +8490,9 @@ async def build_params(
             )
         # Validate deferrable_load_groups against the configuration rules (#1366).
         # The final parameters of every run are checked again in treat_runtimeparams.
-        check_deferrable_load_groups(params["optim_conf"], params["plant_conf"], config_file=True)
+        check_deferrable_load_groups(
+            params["optim_conf"], params["plant_conf"], config_file=True, logger=logger
+        )
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
 
@@ -8471,7 +8739,7 @@ def _as_capacity_sequence(value):
         return value.ravel().tolist()
     if isinstance(value, str) and value.strip().startswith("["):
         try:
-            parsed = ast.literal_eval(value)
+            parsed = literal_eval_bounded(value, LITERAL_LIST_MAX_CHARS)
         except (ValueError, SyntaxError):
             return None
         return list(parsed) if isinstance(parsed, list | tuple) else None
@@ -8528,7 +8796,7 @@ def canonicalize_capacity_charge_config(
             elif len(seq) == k_components:
                 optim_conf["capacity_charge_interval_timesteps"] = seq
             else:
-                raise ValueError(
+                raise SettingsError(
                     f"capacity_charge_interval_timesteps has {len(seq)} entries but "
                     f"capacity_cost_per_kw defines {k_components} capacity component(s); "
                     "provide a single value (shared measurement basis) or a list of "
@@ -8722,7 +8990,10 @@ def _coerce_batt_element(
         try:
             return float(value)
         except ValueError as err:
-            raise ValueError(f"{parameter_name}: non-numeric string element {value!r}") from err
+            # The text names the setting only: the dry run returns the log it reaches
+            raise SettingsError(
+                f"{parameter_name}: an entry is a text that is not a number"
+            ) from err
     return value
 
 
@@ -8849,7 +9120,7 @@ def check_batt_params(
         return parameter[parameter_name]
     if isinstance(current, list):
         if len(current) != num_batteries:
-            raise ValueError(
+            raise SettingsError(
                 f"{parameter_name} has {len(current)} entries but "
                 f"number_of_batteries={num_batteries}; provide a scalar (broadcast "
                 f"to every battery) or a list of exactly {num_batteries} entries"
@@ -9060,6 +9331,12 @@ class RuntimeParamError(ValueError):
     per-load number list). The message is fixed text and never quotes the value."""
 
 
+class SettingsError(ValueError):
+    """A setting EMHASS checks has the wrong length or shape. The message names the
+    setting and the counts it was checked against, never the value it was given, so it
+    may be logged where the dry run returns the log."""
+
+
 # Connection settings that only the configuration may set. A runtime request
 # must not redirect the data source or carry its credentials elsewhere.
 # use_influxdb is not here: the web UI's export passes it, and it only picks the
@@ -9093,6 +9370,1286 @@ RUNTIME_DENIED_KEYS: frozenset[str] = frozenset(
         "emhass_api_token",
     }
 )
+
+# Settings that size the work of one run. A request, a configuration save and a
+# calibration payload are held to these bounds; each one is far above any real setup.
+# Without them a single small request could hold or kill the worker.
+MAX_TIME_STEPS = 5760  # 4 days at 1-minute steps, 120 days at 30-minute steps
+# A configuration saved before the bounds may hold more. A run from saved settings
+# alone is only warned about up to this many, and refused above it: a grid that long
+# fails every run anyway, after holding the worker.
+MAX_SAVED_TIME_STEPS = 4 * MAX_TIME_STEPS
+MAX_DEFERRABLE_LOADS = 100
+MAX_SAVED_DEFERRABLE_LOADS = 4 * MAX_DEFERRABLE_LOADS
+# Deferrable loads plus the batteries in use, x the time steps of one solve. Measured
+# at small sizes, the model takes about 15 KB per load step and 35 to 40 KB per
+# battery step. Saved settings are refused over four times it.
+MAX_LOAD_STEPS = 100_000
+MAX_SAVED_LOAD_STEPS = 4 * MAX_LOAD_STEPS
+# The minimum on and off times add, per load and per time step, one constraint that
+# sums up to that many steps: steps x min(minimum time, steps) terms a load. Measured on
+# one thread, a run takes about 220 bytes more a term (cvxpy's problem data about half
+# of it, HiGHS the rest), so the budget is about 1.1 GB. Saved settings are refused over
+# four times it.
+MAX_MIN_TIME_TERMS = 5_000_000
+MAX_SAVED_MIN_TIME_TERMS = 4 * MAX_MIN_TIME_TERMS
+MAX_HISTORY_DAYS = 730
+# The coordinator (optimization_backend dantzig_wolfe) holds at most this many
+# groups; the default solver takes more, up to a sanity cap
+MAX_LOAD_GROUPS = 16
+MAX_LOAD_GROUPS_CVXPY = 256
+# Every distinct member a group can list: each deferrable load and each battery
+MAX_LOAD_GROUP_NAMES = MAX_DEFERRABLE_LOADS + MAX_BATTERIES
+MAX_CURTAILMENT_MARGIN = 48
+MAX_PV_BIAS_ROWS = 105120  # a year of 5-minute steps
+MAX_THERMAL_ROWS = 20160  # two weeks of 1-minute steps, 70 days of 5-minute ones
+MAX_THERMAL_DATE_RANGES = 16
+# The solver's own limits: seconds per solve, and threads (0 is the solver's own default)
+MAX_SOLVER_TIMEOUT_S = 300
+
+
+def max_solver_threads(cpu_count: int | None) -> int:
+    """The most solver threads a setting may ask for on a machine of ``cpu_count`` cores."""
+    return min(64, cpu_count or 1)
+
+
+MAX_SOLVER_THREADS = max_solver_threads(os.cpu_count())
+# The machine learning forecaster: tuning trials and auto-regression lags
+MAX_TUNE_TRIALS = 500
+MAX_FORECAST_LAGS = 10080  # a week of 1-minute steps
+# The backends the optimizer knows (optimization.py)
+OPTIMIZATION_BACKENDS = ("cvxpy", "dantzig_wolfe")
+# key -> (kind, lowest, highest).
+# "int": a whole number (an integral float or a numeric string counts, a boolean
+#   does not) from lowest to highest;
+# "number": a finite number from lowest to highest;
+# "positive": a finite number above 0 and at most highest (lowest is 0);
+# "steps": per-load step counts, a number from lowest to highest (a fraction is cut
+#   to whole steps) or a list of at most MAX_DEFERRABLE_LOADS of them;
+# "list": a list of at most highest entries.
+# A lowest of 0 on a day or hour count keeps that setting's own floor, which still
+# raises a low value. Legacy names are listed with their new ones.
+PARAM_BOUNDS: dict[str, tuple[str, int | float, int | float]] = {
+    # Two steps at least: a one-step forecast has no time step to read
+    "prediction_horizon": ("int", 2, MAX_TIME_STEPS),
+    "optimization_time_step": ("int", 1, 1440),
+    "freq": ("int", 1, 1440),
+    "delta_forecast_daily": ("int", 1, MAX_TIME_STEPS),
+    "delta_forecast": ("int", 1, MAX_TIME_STEPS),
+    "number_of_deferrable_loads": ("int", 0, MAX_DEFERRABLE_LOADS),
+    "num_def_loads": ("int", 0, MAX_DEFERRABLE_LOADS),
+    "def_load_config": ("list", 0, MAX_DEFERRABLE_LOADS),
+    "historic_days_to_retrieve": ("int", 0, MAX_HISTORY_DAYS),
+    "days_to_retrieve": ("int", 0, MAX_HISTORY_DAYS),
+    "calibration_days_to_retrieve": ("int", 0, MAX_HISTORY_DAYS),
+    "curtailment_margin": ("int", 0, MAX_CURTAILMENT_MARGIN),
+    "lookback_hours": ("int", 0, MAX_HISTORY_DAYS * 24),
+    "lp_solver_timeout": ("positive", 0, MAX_SOLVER_TIMEOUT_S),
+    "num_threads": ("int", 0, MAX_SOLVER_THREADS),
+    "lp_solver_mip_rel_gap": ("number", 0, 1),
+    "def_minimum_on_time": ("steps", 0, MAX_TIME_STEPS),
+    "def_minimum_off_time": ("steps", 0, MAX_TIME_STEPS),
+    "n_trials": ("int", 1, MAX_TUNE_TRIALS),
+    "num_lags": ("int", 1, MAX_FORECAST_LAGS),
+}
+# The saved settings among them, with their legacy names
+_SAVED_BOUNDED_KEYS = {
+    "optimization_time_step": "freq",
+    "delta_forecast_daily": "delta_forecast",
+    "number_of_deferrable_loads": "num_def_loads",
+    "historic_days_to_retrieve": "days_to_retrieve",
+    "lp_solver_timeout": None,
+    "num_threads": None,
+    "lp_solver_mip_rel_gap": None,
+    "num_lags": None,
+}
+# The settings a time grid is made of, each with its legacy name
+_GRID_KEYS = (("optimization_time_step", "freq"), ("delta_forecast_daily", "delta_forecast"))
+
+
+def _bound_number(value) -> int | float | None:
+    """``value`` as a number for a bounds check: an int, a float or a numeric string.
+    None for anything else, a boolean included."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, str) and len(value) <= 64:
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _is_finite(number: float) -> bool:
+    """True for an int (any size) and a finite float."""
+    return isinstance(number, int) or math.isfinite(number)
+
+
+def _whole_in(value, low, high) -> bool:
+    """True when ``value`` is a whole number from ``low`` to ``high``."""
+    number = _bound_number(value)
+    return (
+        number is not None
+        and (isinstance(number, int) or number.is_integer())
+        and low <= number <= high
+    )
+
+
+def _number_in(value, low, high) -> bool:
+    """True when ``value`` is a finite number from ``low`` to ``high``."""
+    number = _bound_number(value)
+    return number is not None and _is_finite(number) and low <= number <= high
+
+
+def _bound_fault(key: str, value) -> str | None:
+    """The fixed text for ``value`` of ``key`` outside PARAM_BOUNDS, or None."""
+    kind, low, high = PARAM_BOUNDS[key]
+    if kind == "list":
+        if isinstance(value, list) and len(value) <= high:
+            return None
+        return f"{key} must be a list of at most {high} entries"
+    if kind == "steps":
+        # A fraction was always cut to the whole steps below it, and still is
+        entries = value if isinstance(value, list) else [value]
+        if len(entries) <= MAX_DEFERRABLE_LOADS and all(
+            entry is None or _number_in(entry, low, high) for entry in entries
+        ):
+            return None
+        return (
+            f"{key} must be a number of time steps from {low} to {high}, or a list of "
+            f"at most {MAX_DEFERRABLE_LOADS} of them"
+        )
+    if kind in ("number", "positive"):
+        number = _bound_number(value)
+        if (
+            number is not None
+            and _is_finite(number)
+            and (number > low if kind == "positive" else number >= low)
+            and number <= high
+        ):
+            return None
+        if kind == "positive":
+            return f"{key} must be a number above {low} and at most {high}"
+        return f"{key} must be a number from {low} to {high}"
+    if _whole_in(value, low, high):
+        return None
+    return f"{key} must be a whole number from {low} to {high}"
+
+
+def _bound_form(key: str, value):
+    """``value`` of ``key``, which has passed _bound_fault, as the number it stands for:
+    "3.0", 3.0 and "3" become 3 for a whole number. Lists of entries are kept as lists."""
+    kind = PARAM_BOUNDS[key][0]
+    if kind == "list":
+        return value
+    if kind == "steps":
+        if isinstance(value, list):
+            return [None if entry is None else int(_bound_number(entry)) for entry in value]
+        return int(_bound_number(value))
+    number = _bound_number(value)
+    if kind == "int":
+        return int(number)
+    return float(number)
+
+
+def same_value(a, b) -> bool:
+    """True when ``a`` and ``b`` are the same setting value: equal, with a boolean only
+    the same as a boolean (True is not 1) and a text only the same as a text. An int and
+    a float of the same number are the same: a saved 600.0 comes back from the page as
+    600. Lists and objects compare entry by entry."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        return a == b
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, list):
+        return len(a) == len(b) and all(same_value(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(same_value(a[k], b[k]) for k in a)
+    return a == b
+
+
+def _kept(values: dict, key: str, unchanged: dict | None) -> bool:
+    """True when ``values`` sends ``key`` back as ``unchanged`` (the configuration saved
+    now) holds it."""
+    return (
+        unchanged is not None and key in unchanged and same_value(unchanged[key], values.get(key))
+    )
+
+
+def bounded_value_forms(values: dict) -> dict:
+    """The PARAM_BOUNDS settings in ``values`` as numbers, by key, for writing back.
+
+    Call it after bounded_value_faults found nothing: a numeric string or an integral
+    float that passed the check would otherwise reach code that needs an int (a slice,
+    a range, pd.Timedelta) as it is, at run time or in every run after a save. A value
+    outside its bound is left as it was: on a save, one sent back unchanged from before
+    the bounds (which bounded_value_faults does not check). A value within its bound is
+    written as its number even when it is sent back unchanged: a 2.0 sent over a saved
+    2 is saved as 2.
+    """
+    return {
+        key: _bound_form(key, values[key])
+        for key in PARAM_BOUNDS
+        if values.get(key) is not None and _bound_fault(key, values[key]) is None
+    }
+
+
+def _load_groups_fault(groups, backend) -> str | None:
+    """The fixed text for deferrable_load_groups with too many groups or names for
+    ``backend``, or None. Anything else about the groups is check_deferrable_load_groups'
+    to say."""
+    if not isinstance(groups, list):
+        return None
+    coordinated = backend == "dantzig_wolfe"
+    cap = MAX_LOAD_GROUPS if coordinated else MAX_LOAD_GROUPS_CVXPY
+    if len(groups) > cap or any(
+        isinstance(group, dict)
+        and isinstance(group.get("names"), list)
+        and len(group["names"]) > MAX_LOAD_GROUP_NAMES
+        for group in groups
+    ):
+        text = (
+            f"deferrable_load_groups must have at most {cap} groups "
+            f"of at most {MAX_LOAD_GROUP_NAMES} names each"
+        )
+        return f"{text} with optimization_backend dantzig_wolfe" if coordinated else text
+    return None
+
+
+def _setting(values: dict, key: str, legacy: str | None = None):
+    """The value of ``key`` in ``values``, or of its legacy name; None when neither is set."""
+    value = values.get(key)
+    if value is None and legacy is not None:
+        value = values.get(legacy)
+    return value
+
+
+def nominal_time_steps(step_minutes, days) -> int:
+    """The steps a forecast of ``days`` local days at ``step_minutes`` minutes makes,
+    counting 24-hour days: a DST change moves the real grid by an hour at most."""
+    return math.ceil(float(days) * 1440 / float(step_minutes))
+
+
+def config_time_steps(values: dict, fallback: dict | None = None) -> int | None:
+    """The time steps of the forecast grid a configuration gives, with ``fallback`` for
+    a key it leaves out; None when they do not make a grid."""
+    fallback = fallback or {}
+    step = _setting(values, *_GRID_KEYS[0])
+    days = _setting(values, *_GRID_KEYS[1])
+    if step is None:
+        step = _setting(fallback, *_GRID_KEYS[0])
+    if days is None:
+        days = _setting(fallback, *_GRID_KEYS[1])
+    return grid_time_steps(step, days)
+
+
+def _grid_fault(values: dict, fallback: dict, current: dict | None = None) -> str | None:
+    """The fixed text when the time grid ``values`` give, with ``fallback`` for a key
+    they leave out, has more than MAX_TIME_STEPS steps and more than the ``current``
+    configuration gives, or None."""
+    step = _setting(values, *_GRID_KEYS[0])
+    days = _setting(values, *_GRID_KEYS[1])
+    # A value outside its own bound has its own fault
+    if (step is not None and not _whole_in(step, 1, 1440)) or (
+        days is not None and not _whole_in(days, 1, MAX_TIME_STEPS)
+    ):
+        return None
+    steps = config_time_steps(values, fallback)
+    if steps is None or steps <= MAX_TIME_STEPS:
+        return None
+    if current is not None:
+        current_steps = config_time_steps(current, fallback)
+        if current_steps is not None and steps <= current_steps:
+            return None  # no longer than the grid already saved
+    return (
+        f"delta_forecast_daily and optimization_time_step give more than "
+        f"{MAX_TIME_STEPS} time steps"
+    )
+
+
+def bounded_value_faults(
+    values: dict, saved: dict | None = None, unchanged: dict | None = None
+) -> list[str]:
+    """The settings in ``values`` outside their bounds, one fixed text each.
+
+    Covers PARAM_BOUNDS, optimization_backend and the size of deferrable_load_groups.
+    Each text names the key and the allowed range, never the value. A null is not a
+    fault: the web UI saves an emptied field as null, and in a request null means
+    "not set".
+
+    :param saved: The settings ``values`` are applied over (the saved configuration
+        for a request). It decides the group cap when ``values`` sets the groups and
+        not the backend, and a request that turns the coordinator on has the saved
+        groups held to the coordinator's cap. Only what ``values`` sets is refused.
+    :param unchanged: The configuration saved now, for a save: a setting it already
+        holds, outside its bound since before the bounds, is not refused when it is
+        saved again unchanged. A change is held to the bound.
+    """
+    saved = saved or {}
+
+    def kept(key):
+        return _kept(values, key, unchanged)
+
+    faults = []
+    for key in PARAM_BOUNDS:
+        if values.get(key) is not None and not kept(key):
+            fault = _bound_fault(key, values[key])
+            if fault is not None:
+                faults.append(fault)
+    backend = values.get("optimization_backend")
+    if (
+        backend is not None
+        and not (isinstance(backend, str) and backend in OPTIMIZATION_BACKENDS)
+        and not kept("optimization_backend")
+    ):
+        faults.append(f"optimization_backend must be one of {', '.join(OPTIMIZATION_BACKENDS)}")
+    if kept("deferrable_load_groups") and (backend is None or kept("optimization_backend")):
+        return faults
+    groups = values.get("deferrable_load_groups")
+    if (
+        groups is not None
+        and same_value(groups, saved.get("deferrable_load_groups"))
+        and (backend is None or backend == saved.get("optimization_backend"))
+    ):
+        # A request that repeats the saved groups is judged as the saved settings are
+        return faults
+    if (
+        groups is None
+        and backend == "dantzig_wolfe"
+        and saved.get("optimization_backend") != backend
+    ):
+        # The request turns the coordinator on over the saved groups
+        groups = saved.get("deferrable_load_groups")
+    groups_fault = _load_groups_fault(
+        groups, saved.get("optimization_backend") if backend is None else backend
+    )
+    if groups_fault is not None:
+        faults.append(groups_fault)
+    return faults
+
+
+# The saved settings already warned about in this process, by key and value: a saved
+# value outside its bound is reported once, not at every run or publish
+_SAVED_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_saved_once(logger: logging.Logger, key: str, value, message: str, *args) -> None:
+    """Log ``message`` once per process for ``key`` holding ``value`` (which is not
+    logged: it only tells a new saved value from the one already reported)."""
+    mark = (key, repr(value)[:200])
+    if mark in _SAVED_WARNED:
+        return
+    _SAVED_WARNED.add(mark)
+    logger.warning(message, *args)
+
+
+def grid_time_steps(step_minutes, days) -> int | None:
+    """nominal_time_steps for a step in minutes and days that make a grid, else None."""
+    number_step, number_days = _bound_number(step_minutes), _bound_number(days)
+    if (
+        number_step is None
+        or number_days is None
+        or not (_is_finite(number_step) and _is_finite(number_days))
+        or number_step <= 0
+        or number_days < 0
+    ):
+        return None
+    return nominal_time_steps(number_step, number_days)
+
+
+def check_time_grid(
+    step_minutes,
+    days,
+    from_request: bool,
+    logger: logging.Logger,
+    saved_steps: int | None = None,
+    optimizing: bool = True,
+) -> None:
+    """Hold the time grid of a run to MAX_TIME_STEPS before it is built.
+
+    A request that sets the time step or the forecast days is refused over
+    MAX_TIME_STEPS, unless its grid is no longer than the saved one (``saved_steps``):
+    a request that repeats the saved step is judged as the saved settings are. A grid
+    from the saved settings is warned about over MAX_TIME_STEPS and, for an
+    ``optimizing`` action, refused over MAX_SAVED_TIME_STEPS. The count is of 24-hour
+    days, so a 25-hour DST day never tips a grid over.
+
+    :raises RuntimeParamError: Fixed text naming the settings and the bound.
+    """
+    steps = grid_time_steps(step_minutes, days)
+    if steps is None:
+        return  # not a grid; the code that builds one says so
+    if from_request and steps > MAX_TIME_STEPS and (saved_steps is None or steps > saved_steps):
+        raise RuntimeParamError(
+            f"delta_forecast_daily and optimization_time_step give more than "
+            f"{MAX_TIME_STEPS} time steps"
+        )
+    if optimizing and steps > MAX_SAVED_TIME_STEPS:
+        raise RuntimeParamError(
+            f"The saved delta_forecast_daily and optimization_time_step give more than "
+            f"{MAX_SAVED_TIME_STEPS} time steps"
+        )
+    if steps > MAX_TIME_STEPS:
+        _warn_saved_once(
+            logger,
+            "time grid",
+            steps,
+            "The saved delta_forecast_daily and optimization_time_step give more than "
+            "%s time steps, the most a request or a new save may set",
+            MAX_TIME_STEPS,
+        )
+
+
+LOAD_STEPS_REFUSED = (
+    f"number_of_deferrable_loads plus the batteries in use (number_of_batteries, with "
+    f"set_use_battery) x the time steps of one solve (prediction_horizon, or "
+    f"delta_forecast_daily x 1440 / optimization_time_step) must be at most "
+    f"{MAX_LOAD_STEPS}"
+)
+MIN_TIME_TERMS_REFUSED = (
+    f"def_minimum_on_time and def_minimum_off_time may give at most {MAX_MIN_TIME_TERMS} "
+    f"terms in all (for each load, the time steps of one solve x the smaller of its "
+    f"minimum time and those time steps)"
+)
+
+
+def _check_budget(
+    value,
+    from_request: bool,
+    saved_value,
+    logger: logging.Logger,
+    budget: tuple[int, int, str, str, str],
+    optimizing: bool = True,
+) -> None:
+    """Hold ``value`` (the size of one solve) to ``budget``: (bound, saved ceiling, the
+    text a request gets, what the saved settings are called, the warning's key).
+
+    A request that sets a sizing setting is refused over the bound when it asks for more
+    than the saved settings give (``saved_value``). Saved settings are warned about over
+    the bound and, for an optimizing action, refused over the saved ceiling.
+
+    :raises RuntimeParamError: Fixed text naming the settings and the budget.
+    """
+    bound, ceiling, refused, saved_name, warn_key = budget
+    number = _bound_number(value)
+    if number is None or not _is_finite(number):
+        return
+    saved = _bound_number(saved_value)
+    if from_request and number > bound and (saved is None or number > saved):
+        raise RuntimeParamError(refused)
+    if optimizing and number > ceiling:
+        raise RuntimeParamError(f"The saved {saved_name} is more than {ceiling}")
+    if number > bound:
+        _warn_saved_once(
+            logger,
+            warn_key,
+            number,
+            "The saved %s is more than %s, the most a request or a new save may set",
+            saved_name,
+            bound,
+        )
+
+
+_LOAD_STEPS_BUDGET = (
+    MAX_LOAD_STEPS,
+    MAX_SAVED_LOAD_STEPS,
+    LOAD_STEPS_REFUSED,
+    "number_of_deferrable_loads plus the batteries in use x the time steps",
+    "load steps",
+)
+_MIN_TIME_BUDGET = (
+    MAX_MIN_TIME_TERMS,
+    MAX_SAVED_MIN_TIME_TERMS,
+    MIN_TIME_TERMS_REFUSED,
+    "count of def_minimum_on_time and def_minimum_off_time terms",
+    "minimum time terms",
+)
+
+
+def check_load_steps(
+    units, steps, from_request: bool, saved_load_steps, logger: logging.Logger
+) -> None:
+    """Hold deferrable loads plus batteries in use (``units``) x time steps of one solve
+    to MAX_LOAD_STEPS; saved settings to MAX_SAVED_LOAD_STEPS (see _check_budget).
+
+    :raises RuntimeParamError: Fixed text naming the settings and the budget.
+    """
+    number_units, number_steps = _bound_number(units), _bound_number(steps)
+    if number_units is None or number_steps is None:
+        return
+    if not (_is_finite(number_units) and _is_finite(number_steps)):
+        return
+    _check_budget(
+        number_units * number_steps, from_request, saved_load_steps, logger, _LOAD_STEPS_BUDGET
+    )
+
+
+def _per_load(values, k: int):
+    """Entry ``k`` of a per-load setting: a list's entry (None past its end), or a
+    single value that stands for every load."""
+    if isinstance(values, list):
+        return values[k] if k < len(values) else None
+    return values
+
+
+def batteries_in_use(optim_conf: dict, plant_conf: dict) -> int | None:
+    """The batteries an optimization models: number_of_batteries when set_use_battery
+    is set, else none. None when the count is not a number.
+
+    set_use_battery is read as the optimizer reads it (``if optim_conf["set_use_battery"]``),
+    so any value Python takes as true counts: the text "false" models a battery there,
+    and so counts here.
+    """
+    if not bool((optim_conf or {}).get("set_use_battery")):
+        return 0
+    number = _bound_number((plant_conf or {}).get("number_of_batteries", 1))
+    if number is None or not _is_finite(number):
+        return None
+    return max(int(number), 0)
+
+
+def min_time_terms(optim_conf: dict, loads, steps) -> int | None:
+    """The terms the minimum on and off times of ``loads`` deferrable loads add to one
+    solve of ``steps`` time steps: for each load and each of the two, steps x the
+    smaller of its minimum time and the steps.
+
+    The optimizer adds them for every load but a sequence load (a list as its nominal
+    power). A single-constant load counts too: the optimizer leaves them out for it, but
+    the relaxed retry after a failed solve turns single-constant off for every load and
+    builds them. A single value stands for every load, as a request's does. None when
+    the loads or steps cannot be told.
+    """
+    number_loads, number_steps = _bound_number(loads), _bound_number(steps)
+    if (
+        number_loads is None
+        or number_steps is None
+        or not (_is_finite(number_loads) and _is_finite(number_steps))
+    ):
+        return None
+    loads, steps = max(int(number_loads), 0), max(int(number_steps), 0)
+    nominal = optim_conf.get("nominal_power_of_deferrable_loads")
+    total = 0
+    for key in ("def_minimum_on_time", "def_minimum_off_time"):
+        values = optim_conf.get(key)
+        if values is None:
+            continue
+        count = min(loads, len(values)) if isinstance(values, list) else loads
+        for k in range(count):
+            if isinstance(_per_load(nominal, k), list):
+                continue
+            minimum = _bound_number(_per_load(values, k))
+            if minimum is None or not _is_finite(minimum) or minimum < 1:
+                continue
+            total += steps * min(int(minimum), steps)
+    return total
+
+
+def check_min_time_terms(terms, from_request: bool, saved_terms, logger: logging.Logger) -> None:
+    """Hold the minimum on and off time terms of one solve (min_time_terms) to
+    MAX_MIN_TIME_TERMS; saved settings to MAX_SAVED_MIN_TIME_TERMS (see _check_budget).
+
+    :raises RuntimeParamError: Fixed text naming the settings and the budget.
+    """
+    _check_budget(terms, from_request, saved_terms, logger, _MIN_TIME_BUDGET)
+
+
+def _minutes(value):
+    """A time step as minutes: a timedelta, or a number already in minutes."""
+    if isinstance(value, timedelta):
+        return value.total_seconds() / 60
+    return value
+
+
+def _days(value):
+    """A forecast length as days: a timedelta, or a number already in days."""
+    if isinstance(value, timedelta):
+        return value.total_seconds() / 86400
+    return value
+
+
+class ConfigShape(NamedTuple):
+    """What a configuration makes every run solve: deferrable loads, their groups and
+    the backend, the forecast grid's time steps, the batteries in use and the minimum
+    on and off time terms over that grid. None where it cannot be told."""
+
+    loads: int | None
+    groups: list | None
+    backend: str | None
+    steps: int | None
+    batteries: int | None = 0
+    min_time_terms: int | None = 0
+
+
+# The log of the topology merge config_shape does only to count: a run logs its own
+_SHAPE_LOGGER = logging.getLogger(__name__ + ".shape")
+_SHAPE_LOGGER.addHandler(logging.NullHandler())
+_SHAPE_LOGGER.propagate = False
+
+
+def _load_settings(merged: dict, loads: int | None, compiled: dict, extend: bool) -> dict:
+    """The per-load settings of ``merged`` (a configuration, flat) as a run has them
+    once it has merged the ``compiled`` heat_topology (apply_compiled_topology): its
+    nominal powers and minimum times among them, so a sequence load the topology
+    replaces is counted with the power the run uses. ``merged`` as it is when the
+    configured loads a topology extends cannot be told or are past the saved ceiling,
+    or when the merge fails (the run then fails at it too)."""
+    work = dict(merged)
+    if extend:
+        if loads is None or not 0 <= loads <= MAX_SAVED_DEFERRABLE_LOADS:
+            return merged
+        work["number_of_deferrable_loads"] = loads
+    try:
+        apply_compiled_topology(work, compiled, extend, _SHAPE_LOGGER)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return merged
+    return work
+
+
+def config_shape(config: dict, defaults: dict | None, compiled: dict | None) -> ConfigShape:
+    """The ConfigShape of a configuration (``config`` over ``defaults``), with
+    ``compiled`` its compiled heat_topology (compile_heat_topology), or None for none.
+
+    The one count of what a configuration makes a run solve: a save is checked with it,
+    and a run measures a request against it (saved_run_size). A topology's loads and
+    groups replace the configured ones, or with its extend_deferrable_loads are added
+    to them, and the minimum on and off times are counted over the per-load settings
+    the run has once it has merged the topology (_load_settings).
+    """
+    defaults = defaults or {}
+    base = _setting(config, "number_of_deferrable_loads", "num_def_loads")
+    if base is None:
+        base = _setting(defaults, "number_of_deferrable_loads", "num_def_loads")
+    number = _bound_number(base)
+    loads = int(number) if number is not None and _is_finite(number) else None
+    groups = config.get("deferrable_load_groups", defaults.get("deferrable_load_groups"))
+    groups = groups if isinstance(groups, list) else []
+    backend = config.get("optimization_backend") or defaults.get("optimization_backend")
+    merged = {**defaults, **{k: v for k, v in config.items() if v is not None}}
+    load_settings = merged
+    if compiled is not None:
+        topology = config.get("heat_topology") or {}
+        extend = isinstance(topology, dict) and bool(topology.get("extend_deferrable_loads", False))
+        load_settings = _load_settings(merged, loads, compiled, extend)
+        topology_loads = len(compiled.get("def_load_config") or [])
+        topology_groups = list(compiled.get("deferrable_load_groups") or [])
+        if extend:
+            loads = None if loads is None else loads + topology_loads
+            groups = groups + topology_groups
+        else:
+            loads, groups = topology_loads, topology_groups
+    steps = config_time_steps(config, defaults)
+    return ConfigShape(
+        loads,
+        groups,
+        backend,
+        steps,
+        batteries_in_use(merged, merged),
+        None if loads is None or steps is None else min_time_terms(load_settings, loads, steps),
+    )
+
+
+def save_shape_faults(new: ConfigShape, current: ConfigShape | None) -> list[str]:
+    """The fixed texts for a configuration to save whose deferrable loads, groups (a
+    heat_topology's included), loads plus batteries in use x time steps or minimum on
+    and off time terms are over their bounds, and over what the ``current`` saved
+    configuration already gives: a configuration saved before the bounds can be saved
+    again unchanged."""
+    faults = []
+
+    def worse(value, current_value):
+        return current_value is None or value > current_value
+
+    if new.loads is not None and new.loads > MAX_DEFERRABLE_LOADS:
+        if worse(new.loads, current.loads if current else None):
+            faults.append(
+                f"number_of_deferrable_loads and heat_topology give more than "
+                f"{MAX_DEFERRABLE_LOADS} deferrable loads in all"
+            )
+    groups_fault = _load_groups_fault(new.groups, new.backend)
+    if groups_fault is not None:
+        current_fault = (
+            _load_groups_fault(current.groups, new.backend) if current is not None else None
+        )
+        if current_fault is None or len(new.groups or []) > len(current.groups or []):
+            faults.append(groups_fault)
+
+    def load_steps(shape):
+        if shape is None or None in (shape.loads, shape.steps, shape.batteries):
+            return None
+        return (shape.loads + shape.batteries) * shape.steps
+
+    new_load_steps = load_steps(new)
+    if (
+        new_load_steps is not None
+        and new_load_steps > MAX_LOAD_STEPS
+        and worse(new_load_steps, load_steps(current))
+    ):
+        faults.append(LOAD_STEPS_REFUSED)
+    if (
+        new.min_time_terms is not None
+        and new.min_time_terms > MAX_MIN_TIME_TERMS
+        and worse(new.min_time_terms, current.min_time_terms if current else None)
+    ):
+        faults.append(MIN_TIME_TERMS_REFUSED)
+    return faults
+
+
+def stored_config_faults(
+    stored: dict,
+    compiled: dict | None,
+    current: dict | None,
+    current_compiled: dict | None,
+) -> list[str]:
+    """The fixed texts for the configuration a save is about to store, judged by what
+    it stores, not by the names the request used.
+
+    ``stored`` is the configuration as it will be written (param_to_config of the built
+    params, every key under the name it is stored by) and ``current`` the one saved now,
+    as it is served; ``compiled`` and ``current_compiled`` their compiled
+    heat_topology, or None. A legacy name in a request (freq, delta_forecast,
+    num_def_loads) is not stored as itself: checking the request would count a step or
+    a load count that the save does not keep. The time grid, the deferrable loads, the
+    groups and the two budgets are held to their bounds unless ``current`` already
+    gives as much, as for save_shape_faults.
+    """
+    faults = []
+    steps = config_time_steps(stored)
+    if steps is not None and steps > MAX_TIME_STEPS:
+        current_steps = config_time_steps(current) if current is not None else None
+        if current_steps is None or steps > current_steps:
+            faults.append(
+                f"delta_forecast_daily and optimization_time_step give more than "
+                f"{MAX_TIME_STEPS} time steps"
+            )
+    current_shape = None if current is None else config_shape(current, None, current_compiled)
+    faults += save_shape_faults(config_shape(stored, None, compiled), current_shape)
+    return faults
+
+
+_REQUEST_LOAD_COUNT_KEYS = ("number_of_deferrable_loads", "num_def_loads", "def_load_config")
+# The request settings that size one solve: its loads, its batteries and its steps,
+# each under its name and its legacy name in associations.csv, which a request may use
+_REQUEST_LOAD_STEP_KEYS = (
+    *_REQUEST_LOAD_COUNT_KEYS,
+    "heat_topology",
+    "prediction_horizon",
+    "optimization_time_step",
+    "freq",
+    "delta_forecast_daily",
+    "delta_forecast",
+    "number_of_batteries",
+    "num_batteries",
+    "set_use_battery",
+)
+# ... and those that size its minimum on and off time terms
+_REQUEST_MIN_TIME_KEYS = (
+    *_REQUEST_LOAD_STEP_KEYS,
+    "def_minimum_on_time",
+    "def_minimum_off_time",
+    "set_deferrable_load_single_constant",
+    "set_def_constant",
+    "nominal_power_of_deferrable_loads",
+    "P_deferrable_nom",
+)
+# The actions that solve an optimization over the run's time steps. A dry run and the
+# coordinator's participant run one of them.
+_OPTIMIZING_ACTIONS = ("dayahead-optim", "naive-mpc-optim", "perfect-optim")
+
+
+def _run_time_steps(params: dict, set_type: str, step_minutes) -> int | None:
+    """The time steps one solve of ``set_type`` has, from the final params: the horizon
+    for naive-mpc, else the forecast grid (perfect-optim solves one forecast window per
+    history day). None when they cannot be told."""
+    if set_type == "naive-mpc-optim":
+        passed = params.get("passed_data") or {}
+        horizon = _bound_number(passed.get("prediction_horizon"))
+        return None if horizon is None or not _is_finite(horizon) else int(horizon)
+    return grid_time_steps(
+        step_minutes, _days((params.get("optim_conf") or {}).get("delta_forecast_daily"))
+    )
+
+
+class SavedRunSize(NamedTuple):
+    """What one solve of the saved settings has, before a request changes them: a
+    request is refused over a budget only when it asks for more than these."""
+
+    loads: int | float | None
+    batteries: int | None
+    steps: int | None
+    min_time_terms: int | None
+
+
+def saved_topology(optim_conf: dict) -> dict | None:
+    """The compiled heat_topology of saved settings, as a run compiles it; None when
+    there is none or it does not compile (the run then fails at it)."""
+    topology = optim_conf.get("heat_topology")
+    if not (isinstance(topology, dict) and topology):
+        return None
+    try:
+        return compile_heat_topology(topology)
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError, IndexError):
+        return None
+
+
+# saved_run_size compiles the saved heat_topology itself unless it is given
+_COMPILE_SAVED = object()
+
+
+def saved_run_size(params: dict, compiled=_COMPILE_SAVED) -> SavedRunSize:
+    """The SavedRunSize of ``params`` (the saved settings): one solve over their own
+    forecast grid, counted by config_shape as a save counts them, so a save and a run
+    agree: the loads after the saved heat_topology is compiled and merged, the nominal
+    powers and minimum times the run then has, the batteries in use and the steps.
+
+    A naive-mpc-optim run solves its prediction_horizon instead, and every naive-mpc
+    request sends one. It is measured against the saved grid too: a request is refused
+    over a budget only when it gives more than the saved settings give at their own
+    grid. ``compiled`` is the saved topology compiled (saved_topology), when the caller
+    has it.
+    """
+    optim_conf = params.get("optim_conf") or {}
+    if compiled is _COMPILE_SAVED:
+        compiled = saved_topology(optim_conf)
+    plant_conf = params.get("plant_conf") or {}
+    settings = {
+        **optim_conf,
+        "optimization_time_step": _minutes(
+            (params.get("retrieve_hass_conf") or {}).get("optimization_time_step")
+        ),
+        "delta_forecast_daily": _days(optim_conf.get("delta_forecast_daily")),
+    }
+    if "number_of_batteries" in plant_conf:
+        settings["number_of_batteries"] = plant_conf["number_of_batteries"]
+    shape = config_shape(settings, None, compiled)
+    return SavedRunSize(shape.loads, shape.batteries, shape.steps, shape.min_time_terms)
+
+
+def _check_run_load_steps(
+    params: dict,
+    set_type: str,
+    runtimeparams: dict,
+    final_count: int,
+    saved: SavedRunSize,
+    logger: logging.Logger,
+) -> None:
+    """check_load_steps for the final parameters of an optimizing action, a request
+    measured against the saved settings' size (saved_run_size, the saved topology's
+    loads included, whether or not the request sends its own)."""
+    if set_type not in _OPTIMIZING_ACTIONS:
+        return
+    step = _minutes((params.get("retrieve_hass_conf") or {}).get("optimization_time_step"))
+    steps = _run_time_steps(params, set_type, step)
+    batteries = batteries_in_use(params.get("optim_conf") or {}, params.get("plant_conf") or {})
+    if batteries is None:
+        return  # not a count; require_valid_battery_count refuses it
+    from_request = any(runtimeparams.get(key) is not None for key in _REQUEST_LOAD_STEP_KEYS)
+    saved_load_steps = None
+    if from_request and None not in (saved.loads, saved.batteries, saved.steps):
+        saved_load_steps = (saved.loads + saved.batteries) * saved.steps
+    check_load_steps(final_count + batteries, steps, from_request, saved_load_steps, logger)
+
+
+def _check_run_min_time_terms(
+    params: dict,
+    set_type: str,
+    runtimeparams: dict,
+    final_count: int,
+    saved: SavedRunSize,
+    logger: logging.Logger,
+) -> None:
+    """check_min_time_terms for the final parameters of an optimizing action."""
+    if set_type not in _OPTIMIZING_ACTIONS:
+        return
+    step = _minutes((params.get("retrieve_hass_conf") or {}).get("optimization_time_step"))
+    steps = _run_time_steps(params, set_type, step)
+    terms = min_time_terms(params.get("optim_conf") or {}, final_count, steps)
+    from_request = any(runtimeparams.get(key) is not None for key in _REQUEST_MIN_TIME_KEYS)
+    check_min_time_terms(terms, from_request, saved.min_time_terms, logger)
+
+
+# The largest size of a per-load number: far above any real power in W, hours or cost,
+# and small enough that the solve's products of them (hours x power) stay finite
+MAX_LOAD_NUMBER = 1e15
+# The per-load settings a solve reads as numbers (a sequence load's nominal power is a
+# list of them), each with whether an entry must be whole and its lowest value. A null
+# entry takes the default (check_def_loads), except for the minimum power, which has
+# none: the optimizer compares every entry with 0.
+_DEF_LOAD_NUMBER_ARRAYS: dict[str, tuple[bool, float]] = {
+    "start_timesteps_of_each_deferrable_load": (True, -MAX_LOAD_NUMBER),
+    "end_timesteps_of_each_deferrable_load": (True, -MAX_LOAD_NUMBER),
+    "operating_hours_of_each_deferrable_load": (False, -MAX_LOAD_NUMBER),
+    # The solver holds the nominal power parameter non-negative
+    "nominal_power_of_deferrable_loads": (False, 0),
+    "minimum_power_of_deferrable_loads": (False, 0),
+    "set_deferrable_startup_penalty": (False, -MAX_LOAD_NUMBER),
+    "deferrable_load_max_cost": (False, -MAX_LOAD_NUMBER),
+    "set_deferrable_max_startups": (True, -MAX_LOAD_NUMBER),
+}
+# The per-load flags: a boolean, or a list of them
+_DEF_LOAD_FLAG_ARRAYS = (
+    "treat_deferrable_load_as_semi_cont",
+    "set_deferrable_load_single_constant",
+)
+# The texts a request's flag may be, as _cast_bool reads them (in any case)
+_FLAG_TEXTS = {"true": True, "false": False}
+
+
+def load_flags_text(name: str) -> str:
+    """The fixed text for a per-load flag setting ``name`` that a run cannot read."""
+    return f"{name} must be true or false, or a list of them with one per deferrable load"
+
+
+def _load_flag(entry, texts: bool):
+    """A per-load flag entry as the boolean a run reads it as, or None.
+
+    A boolean, and 0 or 1, which every reader of a flag takes as false and true (the
+    optimizer tests the entry, the request reader _cast_bool reads its text). With
+    ``texts``, for a request, also the text true or false in any case, as _cast_bool
+    reads it. Any other entry (another number or text, a list, an object) is not
+    read the same way by every reader: the optimizer would take the text "false" as
+    true.
+    """
+    if isinstance(entry, bool):
+        return entry
+    if isinstance(entry, int | float):
+        return bool(entry) if entry in (0, 1) else None
+    if texts and isinstance(entry, str):
+        return _FLAG_TEXTS.get(entry.lower())
+    return None
+
+
+def _read_flag_entries(values, texts: bool):
+    """``values`` of a per-load flag setting as booleans, and the index of the first
+    entry that cannot be read (-1 for a single value), or None. A single value stands
+    for every load; a null entry is kept, to take the default (check_def_loads)."""
+    if not isinstance(values, list):
+        flag = _load_flag(values, texts)
+        return (values, -1) if flag is None else (flag, None)
+    read = []
+    for k, entry in enumerate(values):
+        if entry is None:
+            read.append(None)
+            continue
+        flag = _load_flag(entry, texts)
+        if flag is None:
+            return values, k
+        read.append(flag)
+    return read, None
+
+
+def load_numbers_text(name: str) -> str:
+    """The fixed text for a per-load number setting ``name`` that a solve cannot read.
+    It says "whole" for the time steps and the startups, which must be whole numbers."""
+    whole, low = _DEF_LOAD_NUMBER_ARRAYS[name]
+    kind = "whole number" if whole else "number"
+    return (
+        f"{name} must be a {kind} from {low:g} to {MAX_LOAD_NUMBER:g}, "
+        f"or a list of {kind}s with one per deferrable load"
+    )
+
+
+def _load_number(entry, whole: bool, low: float = -MAX_LOAD_NUMBER):
+    """A per-load entry as the number a solve can use: a number as it is, a numeric text
+    as its number, an integral float as an int where a whole one is needed. None when it
+    is neither, not finite, outside ``low`` to MAX_LOAD_NUMBER, or a fraction where a
+    whole one is needed, and for a boolean, which is a flag, not a number."""
+    if isinstance(entry, bool):
+        return None
+    if isinstance(entry, int | float):
+        number = entry
+    else:
+        number = _bound_number(entry) if isinstance(entry, str) else None
+    if number is None or not _is_finite(number) or not low <= number <= MAX_LOAD_NUMBER:
+        return None
+    if whole and not isinstance(number, int):
+        return int(number) if number.is_integer() else None
+    return number
+
+
+def _read_load_entries(name: str, values, loads: int | None):
+    """``values`` of the per-load number setting ``name`` as a solve reads them, and the
+    index of the first entry that cannot be read (-1 for a single value), or None.
+
+    A single value stands for every load; a minimum power, which the optimizer only
+    reads as a list, is made one for ``loads`` loads. A null entry is kept where the
+    setting has a default, and a sequence load's nominal power is a non-empty list.
+    """
+    whole, low = _DEF_LOAD_NUMBER_ARRAYS[name]
+    if not isinstance(values, list):
+        number = _load_number(values, whole, low)
+        if number is None:
+            return values, -1
+        if name == "minimum_power_of_deferrable_loads":
+            return ([number] * loads, None) if loads is not None else (values, -1)
+        return number, None
+    read = []
+    for k, entry in enumerate(values):
+        if entry is None and name in DEF_LOAD_ARRAY_PARAMS:
+            read.append(None)
+            continue
+        if name == "nominal_power_of_deferrable_loads" and isinstance(entry, list):
+            # A sequence load: its power at each step of its run
+            sequence = [_load_number(step, False, low) for step in entry]
+            if not sequence or any(step is None for step in sequence):
+                return values, k
+            read.append(sequence)
+            continue
+        number = _load_number(entry, whole, low)
+        if number is None:
+            return values, k
+        read.append(number)
+    return read, None
+
+
+def read_request_load_numbers(
+    optim_conf: dict, runtimeparams: dict, logger: logging.Logger, loads: int | None = None
+) -> None:
+    """Hold the per-load number settings a request gives to numbers, before the solve.
+
+    An entry that is not a number would fail deep in the optimizer as a 500 (a text
+    compared with a number, or turned into an array). A numeric text is read as its
+    number, as the bounded settings are. Only the settings the request gives are
+    checked; the final, padded lists in ``optim_conf`` are written back. ``loads`` is
+    the run's load count, for a single minimum power.
+
+    :raises RuntimeParamError: Fixed text naming the setting.
+    """
+    for name in _DEF_LOAD_NUMBER_ARRAYS:
+        legacy = DEF_LOAD_ARRAY_LEGACY_NAMES.get(name)
+        if runtimeparams.get(name) is None and (
+            legacy is None or runtimeparams.get(legacy) is None
+        ):
+            continue
+        values = optim_conf.get(name)
+        if values is None or (
+            not isinstance(values, list) and name != "minimum_power_of_deferrable_loads"
+        ):
+            continue
+        read, bad = _read_load_entries(name, values, loads)
+        if bad is not None:
+            if bad < 0:
+                logger.error("%s is not a number in its range", name)
+            else:
+                logger.error("%s[%d] is not a number in its range", name, bad)
+            raise RuntimeParamError(load_numbers_text(name))
+        optim_conf[name] = read
+    for name in _DEF_LOAD_FLAG_ARRAYS:
+        legacy = DEF_LOAD_ARRAY_LEGACY_NAMES.get(name)
+        given = runtimeparams.get(name)
+        if given is None and legacy is not None:
+            given = runtimeparams.get(legacy)
+        if given is None:
+            continue
+        # The request's own value, entry by entry: by now a text may have been cast
+        # (set_deferrable_load_single_constant) or copied as it is
+        _, bad = _read_flag_entries(given, texts=True)
+        if bad is not None:
+            if bad < 0:
+                logger.error("%s is not true or false", name)
+            else:
+                logger.error("%s[%d] is not true or false", name, bad)
+            raise RuntimeParamError(load_flags_text(name))
+        # The final, padded list as the booleans checked, so every reader of it, the
+        # optimizer's test of each entry among them, reads what the request meant
+        values = optim_conf.get(name)
+        if isinstance(values, list):
+            flags = [_load_flag(value, True) for value in values]
+            optim_conf[name] = [
+                value if flag is None else flag for value, flag in zip(values, flags, strict=True)
+            ]
+
+
+def stored_load_number_faults(config: dict, unchanged: dict | None) -> tuple[list[str], dict]:
+    """The fixed texts for the per-load settings of ``config`` (what a save stores) that
+    a solve could not read, and the forms to store for those it can, by key.
+
+    The same reader as a request's (_read_load_entries): a numeric text is stored as its
+    number, a single minimum power as one per load. A value the save sends back as
+    ``unchanged`` (the configuration saved now) holds it is not refused, as for the
+    bounded settings.
+    """
+    faults: list[str] = []
+    forms: dict = {}
+    number = _bound_number(config.get("number_of_deferrable_loads"))
+    loads = (
+        int(number)
+        if number is not None
+        and _is_finite(number)
+        and float(number).is_integer()
+        and 0 <= number <= MAX_DEFERRABLE_LOADS
+        else None
+    )
+    for name in _DEF_LOAD_NUMBER_ARRAYS:
+        values = config.get(name)
+        if values is None:
+            continue
+        read, bad = _read_load_entries(name, values, loads)
+        if bad is None:
+            forms[name] = read
+        elif not _kept(config, name, unchanged):
+            faults.append(load_numbers_text(name))
+    for name in _DEF_LOAD_FLAG_ARRAYS:
+        # Each entry a boolean, 0 or 1, which a run reads as stored: a text is not
+        # (the optimizer would take "false" as true)
+        value = config.get(name)
+        if value is None:
+            continue
+        _, bad = _read_flag_entries(value, texts=False)
+        if bad is not None and not _kept(config, name, unchanged):
+            faults.append(load_flags_text(name))
+    return faults, forms
+
+
+def _loads_from_request(
+    runtimeparams: dict, final_count: int, topology_loads: int | None, extend_mode: bool
+) -> int:
+    """How many of the run's ``final_count`` deferrable loads the request gives.
+
+    The request gives its own count (or def_load_config), and the loads of a
+    heat_topology it sends. A saved topology's loads, and a saved count a request
+    topology extends, are the saved settings'. In replace mode the topology's loads
+    are the whole count, and a request count is replaced.
+    """
+    sets_count = any(runtimeparams.get(key) is not None for key in _REQUEST_LOAD_COUNT_KEYS)
+    sends_topology = isinstance(runtimeparams.get("heat_topology"), dict) and bool(
+        runtimeparams["heat_topology"]
+    )
+    if topology_loads is None:
+        return final_count if sets_count else 0
+    if not extend_mode:
+        return final_count if sends_topology else 0
+    own_loads = max(final_count - topology_loads, 0)
+    return (own_loads if sets_count else 0) + (topology_loads if sends_topology else 0)
+
+
+def check_saved_load_count(
+    count, logger: logging.Logger, final: bool = False, optimizing: bool = True
+) -> None:
+    """Hold a deferrable load count from saved settings alone to the saved ceiling.
+
+    For an ``optimizing`` action, refused over MAX_SAVED_DEFERRABLE_LOADS; with
+    ``final`` (the count after the heat_topology compile), warned about over
+    MAX_DEFERRABLE_LOADS.
+
+    :raises RuntimeParamError: Fixed text naming the bound.
+    """
+    number = _bound_number(count)
+    if number is None or not _is_finite(number):
+        return
+    if optimizing and number > MAX_SAVED_DEFERRABLE_LOADS:
+        raise RuntimeParamError(
+            f"The saved configuration gives more than {MAX_SAVED_DEFERRABLE_LOADS} "
+            "deferrable loads in all"
+        )
+    if final and number > MAX_DEFERRABLE_LOADS:
+        _warn_saved_once(
+            logger,
+            "deferrable loads",
+            number,
+            "The saved configuration gives more than %s deferrable loads in all, the "
+            "most a request or a new save may set",
+            MAX_DEFERRABLE_LOADS,
+        )
+
+
+# The solver options already warned about in this process, so a saved value outside
+# its bound is reported once, not at every solve
+_SOLVER_OPTIONS_WARNED: set[str] = set()
+
+
+def bounded_solver_option(key: str, value, default, logger: logging.Logger):
+    """``value`` of the solver option ``key`` as the solver may use it: within
+    PARAM_BOUNDS. A value saved before the bounds is clamped to them (a time limit
+    that is not a number above 0 takes ``default``), and warned about once.
+    """
+    kind, low, high = PARAM_BOUNDS[key]
+    number = _bound_number(value)
+    if number is None or not _is_finite(number) or (kind == "positive" and number <= low):
+        used = default
+    else:
+        used = min(max(number, low), high)
+    used = int(used) if kind == "int" else float(used)
+    if (
+        value is not None
+        and (number is None or used != number)
+        and key not in _SOLVER_OPTIONS_WARNED
+    ):
+        _SOLVER_OPTIONS_WARNED.add(key)
+        # The fixed text of the bound (None is outside every bound), then what is used
+        logger.warning(
+            "In the configuration, %s; the solver uses %s", _bound_fault(key, None), used
+        )
+    return used
+
+
+def warn_saved_values_over_bounds(
+    params: dict, runtimeparams: dict, logger: logging.Logger
+) -> None:
+    """Log one warning for each saved setting outside its bound that the request leaves.
+
+    A saved value is not refused at run time: an upgrade must not make every
+    scheduled run fail. A new save or a request is held to the bound.
+    """
+    for key, legacy in _SAVED_BOUNDED_KEYS.items():
+        if _setting(runtimeparams, key, legacy) is not None:
+            continue
+        for section in ("retrieve_hass_conf", "optim_conf"):
+            value = (params.get(section) or {}).get(key)
+            if value is None:
+                continue
+            if isinstance(value, timedelta):
+                value = _days(value) if key == "delta_forecast_daily" else _minutes(value)
+            number = _bound_number(value)
+            high = PARAM_BOUNDS[key][2]
+            if number is not None and number > high:
+                _warn_saved_once(
+                    logger,
+                    key,
+                    value,
+                    "%s in the saved configuration is above %s, the most a request "
+                    "or a new save may set",
+                    key,
+                    high,
+                )
+            elif _bound_fault(key, value) is not None:
+                _warn_saved_once(
+                    logger,
+                    key,
+                    value,
+                    "%s in the saved configuration is outside the bounds a request or "
+                    "a new save is held to",
+                    key,
+                )
+            break
+
+
+# The longest text literal_eval_bounded reads for a list and for a true/false flag
+LITERAL_LIST_MAX_CHARS = 256 * 1024
+LITERAL_FLAG_MAX_CHARS = 16
+# A short list given as text, such as solar_forecast_kwp's one value per plane
+LITERAL_SHORT_LIST_MAX_CHARS = 4096
+
+
+def literal_eval_bounded(text: str, max_chars: int):
+    """ast.literal_eval for text a request or a saved setting sent, length first.
+
+    The parser can fail in more ways than ValueError and SyntaxError (a deeply nested
+    text raises MemoryError or RecursionError, an unhashable set member TypeError);
+    each comes back as one ValueError whose text quotes nothing from ``text``.
+
+    :raises ValueError: When ``text`` is longer than ``max_chars`` or not a literal.
+    """
+    if len(text) > max_chars:
+        raise ValueError(f"the text is longer than {max_chars} characters")
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        raise ValueError("the text is not a Python literal") from None
+
 
 _RUNTIME_FILE_NAME_MAX = 128
 _TIMESTAMP_COL_NAME_RE = re.compile(r"[A-Za-z0-9_. -]{1,64}")
@@ -9385,11 +10942,20 @@ def is_valid_db_port(value) -> bool:
     return isinstance(value, int) and 1 <= value <= 65535
 
 
-def config_value_faults(config: dict) -> list[str]:
-    """Faults in the settings that name files, hosts or the cost function.
+def config_value_faults(
+    config: dict, defaults: dict | None = None, current: dict | None = None
+) -> list[str]:
+    """Faults in the settings that name files, hosts or the cost function, or that are
+    outside their bounds (bounded_value_faults), or whose time grid is too long.
 
     Used when a configuration is saved, so a value that the runtime checks would
     refuse cannot be stored instead.
+
+    :param defaults: What a key ``config`` leaves out is saved as (the shipped
+        defaults): the time grid is counted with it.
+    :param current: The configuration saved now. A setting already outside its bound
+        and saved again unchanged, or a grid no longer than the saved one, is not
+        refused: an upgrade must not stop a configuration from being saved again.
     """
     faults = []
     costfun = config.get("costfun")
@@ -9420,6 +10986,11 @@ def config_value_faults(config: dict) -> list[str]:
             validate_runtime_file_name("model_type", model_type)
         except RuntimeParamError as exc:
             faults.append(str(exc))
+    # The settings that size a run, held to the bounds a request is held to
+    faults += bounded_value_faults(config, defaults, unchanged=current)
+    grid_fault = _grid_fault(config, defaults or {}, current)
+    if grid_fault is not None:
+        faults.append(grid_fault)
     return faults
 
 
@@ -10997,6 +12568,9 @@ def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:
     :rtype: pd.DatetimeIndex
 
     """
+    # A second line behind the checks on the settings: never more than
+    # MAX_HISTORY_DAYS of history, one Home Assistant query per day.
+    days_to_retrieve = min(days_to_retrieve, MAX_HISTORY_DAYS)
     today = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     d = (today - timedelta(days=days_to_retrieve)).isoformat()
     days_list = pd.date_range(start=d, end=today.isoformat(), freq="D").normalize()

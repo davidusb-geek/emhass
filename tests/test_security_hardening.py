@@ -302,6 +302,29 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         warned = [m for m in cm.output if "only be set in the configuration" in m]
         self.assertEqual(len(warned), len(runtime))
 
+    async def test_a_runtime_time_zone_is_used(self):
+        # It used to fail for every value: the configured zone, already a tz object,
+        # was passed to pytz.timezone instead of the request's name.
+        # Not the configured zone (Europe/Paris), so a run that ignored the request's
+        # zone would show it
+        params, retrieve_hass_conf, *_ = await self._treat(
+            {"time_zone": "Asia/Tokyo"}, "dayahead-optim"
+        )
+        self.assertEqual(retrieve_hass_conf["time_zone"], pytz.timezone("Asia/Tokyo"))
+        self.assertEqual(orjson.loads(params)["retrieve_hass_conf"]["time_zone"], "Asia/Tokyo")
+        start = orjson.loads(params)["passed_data"]["forecast_start"]
+        self.assertTrue(start.endswith("+09:00"), start)
+
+    async def test_a_runtime_time_zone_that_is_not_a_zone_is_refused(self):
+        for value in ("Mars/Olympus_Mons", "", 5, ["Europe/Paris"], "Europe/" + "x" * 64):
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeParamError) as caught:
+                    await self._treat({"time_zone": value}, "dayahead-optim")
+                self.assertEqual(
+                    str(caught.exception),
+                    "time_zone must be a time zone name such as Europe/Paris",
+                )
+
     async def test_use_influxdb_is_allowed_at_runtime(self):
         # The web UI's export passes it. It picks the configured server, which stays fixed.
         base = orjson.loads(self.params_json)
@@ -604,6 +627,47 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
             with self.subTest(bad=bad), self.assertRaises(RuntimeParamError):
                 await self._treat({"model_type": bad}, "forecast-model-fit")
 
+    async def test_a_parser_failure_in_a_text_list_falls_back_to_the_default(self):
+        # 200 000 minus signs make the parser raise MemoryError, which used to escape
+        default = orjson.loads(self.params_json)["plant_conf"]["maximum_power_from_grid"]
+        _, _, _, plant_conf = await self._treat(
+            {"maximum_power_from_grid": "-" * 200000 + "1"}, "dayahead-optim"
+        )
+        self.assertEqual(plant_conf["maximum_power_from_grid"], default)
+        _, _, _, plant_conf = await self._treat(
+            {"maximum_power_from_grid": "[5000, 6000]"}, "dayahead-optim"
+        )
+        self.assertEqual(plant_conf["maximum_power_from_grid"], [5000, 6000])
+        # A true/false flag is read from a short text only
+        params, *_ = await self._treat({"model_predict_publish": "true"}, "forecast-model-predict")
+        self.assertIs(orjson.loads(params)["passed_data"]["model_predict_publish"], True)
+        with self.assertRaises(RuntimeParamError):
+            await self._treat({"model_predict_publish": "-" * 200000}, "forecast-model-predict")
+
+
+class TestLiteralEvalBounded(unittest.TestCase):
+    def test_every_parser_failure_is_one_value_error_with_fixed_text(self):
+        self.assertEqual(utils.literal_eval_bounded("[1, 2]", 16), [1, 2])
+        for text, limit in (
+            ("[1]" * 10, 8),
+            ("-" * 200000 + "1", 256 * 1024),
+            ("1" + "+1" * 200000, 1 << 20),
+            ("{{}}", 16),
+            ("[", 16),
+            ("x", 16),
+        ):
+            with self.subTest(text=text[:12]):
+                with self.assertRaises(ValueError) as caught:
+                    utils.literal_eval_bounded(text, limit)
+                self.assertIs(type(caught.exception), ValueError)
+                self.assertIn(
+                    str(caught.exception),
+                    (
+                        f"the text is longer than {limit} characters",
+                        "the text is not a Python literal",
+                    ),
+                )
+
 
 class TestPlotTitlesAreEscaped(unittest.TestCase):
     MODEL_TYPE = '<img src=x onerror="alert(1)">'
@@ -799,6 +863,74 @@ class TestRequestChecks(unittest.IsolatedAsyncioTestCase):
         text = await response.get_data(as_text=True)
         self.assertIn("csv_filename", text)
         self.assertNotIn("SHARED LOG TAIL", text)
+
+    async def test_set_config_refuses_a_body_that_is_not_an_object(self):
+        for body in ("[1]", "5", '"x"', "[{}]"):
+            with self.subTest(body=body):
+                response = await self.client.post(
+                    "/set-config", data=body, headers={"Content-Type": "application/json"}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    await response.get_json(), ["config is invalid: it must be a JSON object"]
+                )
+
+    async def test_get_json_refuses_yaml_that_is_not_a_mapping(self):
+        with patch.object(web_server, "emhass_conf", emhass_conf):
+            for body in ("- a\n- b\n", "5\n", "just text\n"):
+                with self.subTest(body=body):
+                    response = await self.client.post(
+                        "/get-json", data=body, headers={"Content-Type": "text/plain"}
+                    )
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(await response.get_json(), ["failed to Parse YAML from data"])
+
+    async def test_get_json_refuses_aliases_and_large_bodies(self):
+        lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x]"]
+        for i in range(1, 5):
+            lines.append(f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 9) + "]")
+        lines.append("sensor_replace_zero: *a4")
+        bomb = "\n".join(lines) + "\n"
+        large = "costfun: profit\n" + "#" * (256 * 1024) + "\n"
+        with patch.object(web_server, "emhass_conf", emhass_conf):
+            for name, body, reply in (
+                ("alias", bomb, ["YAML aliases and merge keys are not accepted"]),
+                ("large", large, ["The YAML must be at most 256 KiB"]),
+            ):
+                with self.subTest(name):
+                    response = await self.client.post(
+                        "/get-json", data=body, headers={"Content-Type": "text/plain"}
+                    )
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(await response.get_json(), reply)
+            # A configuration without aliases converts as before
+            response = await self.client.post(
+                "/get-json", data="costfun: cost\n", headers={"Content-Type": "text/plain"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(orjson.loads(await response.get_data())["costfun"], "cost")
+
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params", new_callable=AsyncMock)
+    async def test_action_refuses_runtime_parameters_that_are_not_an_object(
+        self, mock_load, mock_log, mock_set
+    ):
+        mock_load.return_value = ("{}", "profit")
+        mock_log.return_value = ["SHARED LOG TAIL"]
+        for body in ("[1]", "5", '"x"'):
+            with self.subTest(body=body):
+                response = await self.client.post(
+                    "/action/dayahead-optim",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    await response.get_data(as_text=True),
+                    "EMHASS >> ERROR: The runtime parameters must be a JSON object\n",
+                )
+        mock_set.assert_not_called()
 
     @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params", new_callable=AsyncMock)

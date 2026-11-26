@@ -141,13 +141,10 @@ _XFAIL_REASON: dict[str, str] = {
 # that handles this specific bad-value shape.
 _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
     {
-        # start timesteps: validate_def_timewindow(0.5, 0) produces start>end →
-        # slice [def_start:def_end] is never reached.  None element handled by
-        # the [s if s is not None else 0] guard (opt.py:2868).
+        # start timesteps and max startups: the 0.5 of [None, 0.5] is not a whole
+        # number, so the request is refused with the fixed 400 before the solve
+        # (utils.read_request_load_numbers; see _REFUSED below).
         ("start_timesteps_of_each_deferrable_load", "none_element"),
-        # set_deferrable_max_startups: `if max_starts and max_starts > 0:` guard
-        # short-circuits on None (falsy) and 0.5 only appears as a CVXPY float
-        # bound which is valid.  No crash for the [None, 0.5] shape.
         ("set_deferrable_max_startups", "none_element"),
         # #1040: treat_runtimeparams now re-runs check_def_loads over every
         # DEF_LOAD_ARRAY_PARAMS entry after the runtime association loop, and
@@ -156,6 +153,12 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         # [None, 0.5] shape for these 4 params too - only the none_element
         # case; scalar_null and str_element still crash (unguarded, no
         # change) so those stay xfail.
+        # The minimum power is read as a number too: "0.0" as 0.0, so the str_element
+        # case runs clean; "null" and a null entry (it has no default) are refused with
+        # the fixed 400 (see _REFUSED below).
+        ("minimum_power_of_deferrable_loads", "scalar_null"),
+        ("minimum_power_of_deferrable_loads", "none_element"),
+        ("minimum_power_of_deferrable_loads", "str_element"),
         ("nominal_power_of_deferrable_loads", "none_element"),
         ("operating_hours_of_each_deferrable_load", "none_element"),
         ("set_deferrable_startup_penalty", "none_element"),
@@ -168,6 +171,20 @@ _XFAIL_EXCLUDE: frozenset[tuple[str, str]] = frozenset(
         # contextual error and stay xfail.
         ("def_minimum_on_time", "none_element"),
         ("def_minimum_off_time", "none_element"),
+        # A numeric text such as "0.0" is read as the number it stands for since the
+        # bounds on these (utils.PARAM_BOUNDS), so the case runs clean.
+        ("def_minimum_on_time", "str_element"),
+        ("def_minimum_off_time", "str_element"),
+        # The per-load numbers a request gives are read as numbers before an
+        # optimizing run (utils.read_request_load_numbers), "0.0" as 0.0, so these
+        # cases run clean. A text that is not a number is refused with a fixed 400.
+        ("nominal_power_of_deferrable_loads", "str_element"),
+        ("operating_hours_of_each_deferrable_load", "str_element"),
+        ("set_deferrable_startup_penalty", "str_element"),
+        ("deferrable_load_max_cost", "str_element"),
+        ("set_deferrable_max_startups", "str_element"),
+        ("start_timesteps_of_each_deferrable_load", "str_element"),
+        ("end_timesteps_of_each_deferrable_load", "str_element"),
         # #610: check_batt_params coerces a stringly-typed "null" scalar to the
         # per-battery default and broadcasts it - a real guard, so this stays a
         # live regression test even though the same param is xfail'd for the
@@ -214,6 +231,26 @@ def _make_cases() -> list:
 
 
 _CASES: list = _make_cases()
+
+# Cases a request is refused for with a fixed RuntimeParamError (a 400): a fraction
+# where a whole number of steps or startups is needed, and a minimum power that is not
+# a number.
+_REFUSED: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("start_timesteps_of_each_deferrable_load", "none_element"),
+        ("set_deferrable_max_startups", "none_element"),
+        ("minimum_power_of_deferrable_loads", "scalar_null"),
+        ("minimum_power_of_deferrable_loads", "none_element"),
+    }
+)
+# ... and the per-load flags, read entry by entry: "null", 0.5 and the text "0.0" are
+# not true or false, and the readers of a flag do not read them alike (the optimizer
+# takes each as true, the request reader takes "0.0" as false)
+_REFUSED_FLAGS: frozenset[tuple[str, str]] = frozenset(
+    (name, value_id)
+    for name in ("treat_deferrable_load_as_semi_cont", "set_deferrable_load_single_constant")
+    for value_id in ("scalar_null", "none_element", "str_element")
+)
 
 # ──────────────────────── module-level default params ───────────────────────
 
@@ -287,6 +324,7 @@ def test_stringly_typed_resilience(param_name: str, bad_value: object):
     call is wrapped in asyncio.run() which is fine outside an active event loop.
     """
     runtimeparams_json = orjson.dumps({param_name: bad_value}).decode("utf-8")
+    value_id = next(vid for vid, value in _BAD_VALUES if value == bad_value)
 
     async def _run():
         return await utils.treat_runtimeparams(
@@ -300,6 +338,19 @@ def test_stringly_typed_resilience(param_name: str, bad_value: object):
             emhass_conf,
         )
 
+    if (param_name, value_id) in _REFUSED:
+        with pytest.raises(utils.RuntimeParamError) as caught:
+            asyncio.run(_run())
+        assert str(caught.value) == utils.load_numbers_text(param_name)
+        # The time steps and the startups say they must be whole
+        whole = param_name != "minimum_power_of_deferrable_loads"
+        assert ("must be a whole number" in str(caught.value)) == whole
+        return
+    if (param_name, value_id) in _REFUSED_FLAGS:
+        with pytest.raises(utils.RuntimeParamError) as caught:
+            asyncio.run(_run())
+        assert str(caught.value) == utils.load_flags_text(param_name)
+        return
     _, rh_conf, opt_conf, pl_conf = asyncio.run(_run())
 
     df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf)

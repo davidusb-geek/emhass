@@ -30,12 +30,15 @@ from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 from werkzeug.exceptions import HTTPException
+from yaml.composer import ComposerError
+from yaml.events import AliasEvent
 
 from emhass import api_auth, last_run, plan_store
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
     dayahead_forecast_optim,
+    error_place,
     export_influxdb_to_csv,
     forecast_calibration,
     forecast_model_fit,
@@ -60,12 +63,15 @@ from emhass.utils import (
     RuntimeParamError,
     SocFractionError,
     battery_count_faults,
+    bounded_value_faults,
+    bounded_value_forms,
     build_config,
     build_legacy_config_params,
     build_params,
     build_secrets,
     compile_heat_topology,
     compute_thermal_model_calibration,
+    config_shape,
     config_value_faults,
     db_endpoint_changes,
     db_flag,
@@ -80,7 +86,10 @@ from emhass.utils import (
     param_to_config,
     read_flag,
     replace_file,
+    save_shape_faults,
+    stored_config_faults,
     stored_db_logins,
+    stored_load_number_faults,
     try_lock_file,
     unlock_file,
 )
@@ -127,6 +136,29 @@ ORJSON_LIMITS = (
     "254 levels deep, and text must be valid UTF-8"
 )
 error_msg_associations_file = "Unable to obtain associations file"
+# The largest YAML /get-json reads: a configuration file is a few KiB.
+GET_JSON_MAX_BYTES = 256 * 1024
+# A configuration that build_params cannot read (a setting of the wrong type or shape)
+_SHAPE_REFUSED = "config is invalid: a setting has the wrong type or shape; see the log"
+
+
+class _AliasRefused(ComposerError):
+    """An alias in the YAML sent to /get-json."""
+
+
+class _NoAliasSafeLoader(yaml.SafeLoader):
+    """yaml.SafeLoader that refuses aliases. An anchor used over and over can turn a
+    few hundred bytes into a structure of millions of entries, which every later
+    step (the conversion, the JSON reply) then copies. A configuration has no use
+    for one. A merge key reuses an anchor through an alias, so it is refused too."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(AliasEvent):
+            raise _AliasRefused(
+                None, None, "aliases are not accepted", self.peek_event().start_mark
+            )
+        return super().compose_node(parent, index)
+
 
 # The (level, message) records of the dry run being served, or None outside
 # one. Each request runs in its own task with its own copy of the context, so
@@ -710,8 +742,14 @@ async def json_convert():
     """
     app.logger.info("Attempting to convert YAML to JSON")
     data = await request.get_data()
+    if len(data) > GET_JSON_MAX_BYTES:
+        app.logger.warning("Refused the YAML sent to /get-json: it is larger than 256 KiB")
+        return await make_response(["The YAML must be at most 256 KiB"], 400)
     try:
-        yaml_config = yaml.safe_load(data)
+        yaml_config = yaml.load(data, Loader=_NoAliasSafeLoader)
+    except _AliasRefused:
+        app.logger.warning("Refused the YAML sent to /get-json: it uses an alias")
+        return await make_response(["YAML aliases and merge keys are not accepted"], 400)
     except Exception as e:
         # A YAML error's text quotes the lines around the error, which can hold
         # a secret: the API token, in pieces the log mask cannot match. A tag
@@ -721,15 +759,31 @@ async def json_convert():
         app.logger.warning(f"Could not parse the YAML sent to /get-json ({type(e).__name__})")
         return await make_response(["failed to Parse YAML from data"], 400)
 
-    # If filed to Parse YAML
-    if yaml_config is None:
+    # If filed to Parse YAML. A list or a scalar is not a configuration either.
+    if not isinstance(yaml_config, dict):
         return await make_response(["failed to Parse YAML from data"], 400)
     # Test YAML is legacy config format (from config_emhass.yaml)
-    test_legacy_config = await build_legacy_config_params(emhass_conf, yaml_config, app.logger)
+    try:
+        test_legacy_config = await build_legacy_config_params(emhass_conf, yaml_config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        # A legacy section that is not a mapping, for one
+        app.logger.warning("Refused the YAML sent to /get-json: %s", type(e).__name__)
+        return await make_response([_SHAPE_REFUSED], 400)
     if test_legacy_config:
         yaml_config = test_legacy_config
+    # build_params builds one entry per deferrable load, so the sizes are checked first
+    bound_faults = bounded_value_faults(yaml_config) + battery_count_faults(yaml_config)
+    if bound_faults:
+        app.logger.warning("Refused the YAML sent to /get-json: %s", bound_faults)
+        return await make_response(bound_faults, 400)
+    # As the numbers they stand for: build_params needs an int where "3.0" or 3.0 was sent
+    yaml_config.update(bounded_value_forms(yaml_config))
     # Format YAML to params (format params. check if params match legacy option.json format)
-    params = await build_params(emhass_conf, {}, yaml_config, app.logger)
+    try:
+        params = await build_params(emhass_conf, {}, yaml_config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Refused the YAML sent to /get-json: %s", type(e).__name__)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(params) is bool and not params:
         return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
@@ -911,6 +965,70 @@ async def _db_server_change_refusal(new_params: dict, saved: dict | None):
     return await make_response([DB_SERVER_CHANGE_REFUSED], 400)
 
 
+async def _current_config() -> dict | None:
+    """The configuration saved now (config.json), or None when there is none to read."""
+    path = emhass_conf.get("config_path")
+    try:
+        if path and Path(path).is_file():
+            async with aiofiles.open(str(path), "rb") as data:
+                current = orjson.loads(await data.read())
+            return current if isinstance(current, dict) else None
+    except (OSError, orjson.JSONDecodeError):
+        return None
+    return None
+
+
+async def _served_config():
+    """The configuration saved now as /get-config serves it, which is what the
+    configuration page sends back: config.json or a legacy YAML over the defaults,
+    through build_params and param_to_config, so padded lists and legacy names read as
+    the page shows them. config.json as it is when that cannot be built, whatever the
+    error, else None."""
+    try:
+        config = await build_config(
+            emhass_conf,
+            app.logger,
+            str(emhass_conf["defaults_path"]),
+            str(emhass_conf["config_path"]),
+            str(emhass_conf.get("legacy_config_path")),
+        )
+        if isinstance(config, dict):
+            params = await build_params(emhass_conf, {}, config, app.logger)
+            if isinstance(params, dict):
+                return param_to_config(params, app.logger)
+    except Exception as exc:  # noqa: BLE001 - only the reference of the checks
+        app.logger.warning(
+            "The saved configuration could not be built to compare a save with (%s)",
+            type(exc).__name__,
+        )
+    return await _current_config()
+
+
+async def _compiled_topology(config, known_topology, known_compiled):
+    """The compiled heat_topology of ``config``: ``known_compiled`` when it is
+    ``known_topology``, None when there is none or it does not compile."""
+    if config is None:
+        return None
+    topology = config.get("heat_topology")
+    if not (isinstance(topology, dict) and topology):
+        return None
+    if topology == known_topology and known_compiled is not None:
+        return known_compiled
+    try:
+        return await asyncio.to_thread(compile_heat_topology, topology)
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+async def _current_shape(current, defaults, new_topology, new_compiled):
+    """config_shape of the configuration saved now, its heat_topology compiled (the
+    one to save, when it is the same)."""
+    if current is None:
+        return None
+    compiled = await _compiled_topology(current, new_topology, new_compiled)
+    return config_shape(current, defaults, compiled)
+
+
 @app.route("/set-config", methods=["POST"])
 async def parameter_set():
     """
@@ -952,6 +1070,9 @@ async def parameter_set():
     # check if data is empty (an empty body without a JSON content type reads as None)
     if not request_data:
         return await make_response(["failed to retrieve config json"], 400)
+    if not isinstance(request_data, dict):
+        app.logger.warning("Rejected config save: the body is not a JSON object")
+        return await make_response(["config is invalid: it must be a JSON object"], 400)
 
     # The body was parsed by the standard json module, but config.json is written with
     # orjson, which refuses more (ORJSON_LIMITS). Find that out now, but answer it after
@@ -966,6 +1087,7 @@ async def parameter_set():
     # run: the compiler's ValueError names the offending field, so surface it
     # in the UI alert now rather than failing an unattended run later.
     heat_topology = request_data.get("heat_topology")
+    new_compiled = None
     # An empty text box arrives as null, "", "null" or {} and means "no
     # topology". Anything else that is not an object (a list, a JSON topology
     # quoted as a string) would be saved and then silently ignored at run time.
@@ -994,7 +1116,7 @@ async def parameter_set():
             )
         try:
             # Off the event loop: a large topology must not stall other requests.
-            await asyncio.to_thread(compile_heat_topology, heat_topology)
+            compiled = await asyncio.to_thread(compile_heat_topology, heat_topology)
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as e:
             # The compiler raises ValueError with a field path; the others are a
             # backstop for malformed entries it does not check explicitly (e.g. a
@@ -1002,6 +1124,8 @@ async def parameter_set():
             # as an unhandled 500.
             app.logger.warning("Rejected config save: heat_topology invalid: %s", e)
             return await make_response([f"heat_topology is invalid: {e}"], 400)
+        else:
+            new_compiled = compiled
 
     # Reject an unusable inverter curve before anything is written: build_params would
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
@@ -1023,10 +1147,21 @@ async def parameter_set():
         if unwritable is None:
             raise
         inverter_faults = []
-    # Settings that become a file name or a database host, checked before they are saved.
-    # A saved CA path posted back as it is counts as unchanged first.
+    # Settings that become a file name or a database host, checked before they are
+    # saved. A saved CA path posted back as it is counts as unchanged first. A key the
+    # body leaves out is saved with its default (config, so far). A setting already
+    # saved outside its bound (before the bounds) may be saved again unchanged: the
+    # configuration saved now, as the page was served it, is the reference.
     await _take_resent_ca_paths_as_true(request_data)
-    inverter_faults += config_value_faults(request_data)
+    current = await _served_config()
+    inverter_faults += config_value_faults(request_data, config, current)
+    # Every run builds one entry per load and solves loads x time steps: the loads, the
+    # groups and that product, a heat_topology's included, are held to their bounds
+    if not inverter_faults:
+        inverter_faults += save_shape_faults(
+            config_shape(request_data, config, new_compiled),
+            await _current_shape(current, config, heat_topology, new_compiled),
+        )
     if inverter_faults:
         app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
@@ -1035,14 +1170,40 @@ async def parameter_set():
         app.logger.warning("Rejected config save: %s", unwritable)
         return await make_response([f"config is invalid: {unwritable}. {ORJSON_LIMITS}"], 400)
 
+    # The bounded settings as the numbers they stand for, so "30.0" is saved as 30 and
+    # every later run can use it
+    request_data.update(bounded_value_forms(request_data))
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
-    params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
+    try:
+        params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Rejected config save: %s: %s", type(e).__name__, e)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(params) is bool and not params:
         return await make_response([error_msg_associations_file], 500)
 
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config
     config.update(param_to_config(params, app.logger))
+    # What will be stored, judged as stored: a legacy name in the body (freq,
+    # delta_forecast, num_def_loads) is not stored as itself, so the checks above,
+    # which read the body, can count a grid or loads the save does not keep
+    stored_faults = stored_config_faults(
+        config,
+        await _compiled_topology(config, heat_topology, new_compiled),
+        current,
+        await _compiled_topology(current, heat_topology, new_compiled),
+    )
+    if stored_faults:
+        app.logger.warning("Rejected config save: settings invalid: %s", stored_faults)
+        return await make_response(stored_faults, 400)
+    # The per-load settings as a run reads them: a text or a shape the optimizer cannot
+    # use would make every later run a 500
+    load_faults, load_forms = stored_load_number_faults(config, current)
+    if load_faults:
+        app.logger.warning("Rejected config save: settings invalid: %s", load_faults)
+        return await make_response(load_faults, 400)
+    config.update(load_forms)
 
     if not os.path.exists(emhass_conf["config_path"].parent):
         return await make_response(["Unable to save config file"], 500)
@@ -1051,7 +1212,11 @@ async def parameter_set():
 
     # Build both files' contents before writing either, so a failure here leaves the
     # saved pair as it was instead of a new config.json next to an empty params.pkl.
-    saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    try:
+        saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Rejected config save: %s: %s", type(e).__name__, e)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(saved_params) is bool and not saved_params:
         return await make_response([error_msg_associations_file], 500)
     config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
@@ -1123,6 +1288,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     """
     Loads configuration parameters from pickle and runtime parameters from the request.
     Returns a tuple (params, costfun, runtimeparams) or raises an exception/returns None on failure.
+    A body that is JSON but not an object raises RuntimeParamError.
     """
     action_str = " >> Obtaining params: "
     logger.info(action_str)
@@ -1141,6 +1307,9 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
         logger.error(f"Error parsing runtime params JSON: {e}")
         logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
+    # A list or a scalar would fail deep inside the run, as a 500
+    if not isinstance(runtimeparams, dict):
+        raise RuntimeParamError("The runtime parameters must be a JSON object")
 
     # The body was parsed by the standard json module, which takes more than orjson can
     # write back (ORJSON_LIMITS; orjson.JSONEncodeError is TypeError), so say so here as
@@ -1316,6 +1485,10 @@ async def _handle_action_dispatch(
             )
             injection_dict = get_injection_dict_thermal_calibration(result)
             await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        except RuntimeParamError as exc:
+            # Fixed text naming the setting, before the handler below that quotes the error
+            logger.error("Thermal model calibration: %s", exc)
+            return f"EMHASS >> ERROR: Thermal model calibration refused: {exc}\n", 400
         except Exception as exc:
             logger.error("Thermal model calibration failed: %s", exc)
             return f"EMHASS >> ERROR: Thermal model calibration failed ({exc})\n", 400
@@ -1784,8 +1957,13 @@ async def api_v1_dry_run(action_name: str):
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
+        # The line names the error's type and place, never its text: that can quote
+        # the request, and the response returns this line. The text and the
+        # traceback stay in the console log (exc_info, made safe by
+        # _dry_run_record_safe), which the response does not carry.
         app.logger.error(
-            f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}",
+            f"Dry run of {_log_safe(action_name)} failed "
+            f"({_log_safe(type(exc).__name__ + error_place(exc))}); see the log",
             exc_info=exc,
         )
         body, code = {"status": "not-run", "plan": None}, 500
@@ -2003,9 +2181,13 @@ async def _action_call_unlocked(action_name: str):
         return not_json
 
     # Load Parameters
-    params, costfun, runtimeparams = await _load_params_and_runtime(
-        request, emhass_conf, app.logger
-    )
+    try:
+        params, costfun, runtimeparams = await _load_params_and_runtime(
+            request, emhass_conf, app.logger
+        )
+    except RuntimeParamError as exc:
+        app.logger.warning("Rejected runtime parameter: %r", str(exc))
+        return await make_response(f"EMHASS >> ERROR: {exc}\n", 400)
     if params is None:
         return await make_response(await grab_log(" >> Obtaining params: "), 400)
     # A dry run has a URL of its own. Asked for here, it is refused before

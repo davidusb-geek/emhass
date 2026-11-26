@@ -2,9 +2,11 @@
   "MPC": {
     "prediction_horizon": {
       "friendly_name": "Prediction horizon",
-      "Description": "Number of timesteps the naive-MPC optimization looks ahead. Defaults to 10. Only used by the naive-mpc-optim action. See passing_data.md / study_cases/mpc.md.",
+      "Description": "Number of timesteps the naive-MPC optimization looks ahead. Defaults to 10. A whole number from 2 to 5760. Only used by the naive-mpc-optim action, which needs at least 5 to plan. See passing_data.md / study_cases/mpc.md.",
       "input": "int",
       "default_value": 10,
+      "minimum": 2,
+      "maximum": 5760,
       "unit": "timesteps"
     },
     "soc_init": {
