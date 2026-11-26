@@ -13,10 +13,13 @@ import os
 import pathlib
 import re
 import shutil
+import ssl
 import stat
+import threading
 import time
 import uuid
 from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, NamedTuple
@@ -2917,6 +2920,20 @@ async def treat_runtimeparams(
                                 association[2],
                             )
                         continue
+                    # A database on/off setting (use_influxdb) from a request must be
+                    # true or false. Anything else is not passed on: the reader would
+                    # take it as off and log it once, as it does for a hand-written
+                    # config.json, which would then go unreported.
+                    if association[2] in DB_FLAG_KEYS:
+                        runtime_value = runtimeparams.get(association[2], None)
+                        if runtime_value is None:
+                            runtime_value = runtimeparams.get(association[1], None)
+                        if runtime_value is not None and not isinstance(runtime_value, bool):
+                            logger.warning(
+                                "Runtime parameter %s ignored: it must be true or false",
+                                association[2],
+                            )
+                            continue
                     # Check parameter name exists in runtime
                     if runtimeparams.get(association[2], None) is not None:
                         params[association[0]][association[2]] = runtimeparams[association[2]]
@@ -5932,12 +5949,22 @@ async def _run_influx_query(
     query: str,
 ) -> pd.DataFrame:
     """Execute one InfluxDB HTTP query and concatenate its series into a time-indexed DataFrame."""
+    # Redirects are not followed: the configured server must not be able to send
+    # EMHASS, with its login and query, to an address of its choosing.
     async with session.get(
         conn["base_url"],
         params={"db": conn["db"], "q": query},
         auth=conn["auth"],
         ssl=conn["verify_ssl"],
+        allow_redirects=False,
     ) as resp:
+        if 300 <= resp.status < 400:
+            raise aiohttp.ClientResponseError(
+                resp.request_info,
+                resp.history,
+                status=resp.status,
+                message="redirect not followed",
+            )
         resp.raise_for_status()
         payload = await resp.json()
     if not isinstance(payload, dict) or payload.get("error"):
@@ -6178,14 +6205,23 @@ async def _fetch_influx_thermal_window(
         logger.warning("Refusing InfluxDB thermal query due to invalid host/port configuration")
         return pd.DataFrame()
     port = int(port_val)
-    use_ssl = bool(rh_conf.get("influxdb_use_ssl", False))
+    use_ssl = db_tls_setting(rh_conf, "influxdb_use_ssl")
+    warn_if_unverified_ssl(rh_conf, "influxdb", "InfluxDB")
+    verify_ssl = db_tls_setting(rh_conf, "influxdb_verify_ssl")
+    if not use_ssl and isinstance(verify_ssl, str):
+        # Over plain HTTP no certificate is checked, and aiohttp takes no path
+        verify_ssl = True
+    verify_ssl = await db_aiohttp_ssl(verify_ssl, "influxdb_verify_ssl")
+    if verify_ssl is None:
+        logger.error(db_ca_unusable("InfluxDB"))
+        return pd.DataFrame()
     user = os.getenv("INFLUXDB_USERNAME") or str(rh_conf.get("influxdb_username") or "")
     password = os.getenv("INFLUXDB_PASSWORD") or str(rh_conf.get("influxdb_password") or "")
     conn = {
         "base_url": f"{'https' if use_ssl else 'http'}://{host}:{port}/query",
         "db": str(rh_conf.get("influxdb_database") or "homeassistant"),
         "auth": aiohttp.BasicAuth(user, password) if user else None,
-        "verify_ssl": bool(rh_conf.get("influxdb_verify_ssl", False)),
+        "verify_ssl": verify_ssl,
     }
 
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -6517,7 +6553,7 @@ async def _load_thermal_calibration_frame(
     if not df_rt.empty:
         return df_rt, "runtime_payload"
 
-    if not get_data_from_file and rh_conf.get("use_influxdb"):
+    if not get_data_from_file and db_flag(rh_conf, "use_influxdb"):
         try:
             df_inf = await _fetch_influx_thermal_window(
                 rh_conf,
@@ -6536,7 +6572,14 @@ async def _load_thermal_calibration_frame(
             if len(df_inf) >= MIN_THERMAL_ROWS:
                 return df_inf, "influxdb"
         except Exception as exc:
-            logger.warning("InfluxDB thermal history retrieval failed (%s); falling back", exc)
+            # Imported here: retrieve_hass imports this module. The error's own text can
+            # hold the server's URL or reply, which an action's log tail would show.
+            from emhass.retrieve_hass import _db_error
+
+            logger.warning(
+                "InfluxDB thermal history retrieval failed (%s); falling back",
+                _db_error(exc, "InfluxDB"),
+            )
 
     if not get_data_from_file and rh_conf.get("hass_url") not in (None, "", "empty"):
         try:
@@ -9074,6 +9117,260 @@ _DB_KEYS = (
 )
 
 
+# The on/off settings of the database integrations
+DB_FLAG_KEYS = (
+    "use_influxdb",
+    "influxdb_use_ssl",
+    "influxdb_verify_ssl",
+    "use_victoriametrics",
+    "victoriametrics_use_ssl",
+    "victoriametrics_verify_ssl",
+)
+
+
+# Warnings about the database settings go to the database logger (see
+# retrieve_hass.db_detail_logger), once per process each, never to an action's log
+_db_settings_logger = logging.getLogger("emhass.database")
+_db_settings_warned: set[str] = set()
+
+
+def _warn_db_setting_once(topic: str, message: str, level: int = logging.WARNING) -> None:
+    if topic not in _db_settings_warned:
+        _db_settings_warned.add(topic)
+        _db_settings_logger.log(level, message)
+
+
+def db_flag(conf: dict, key: str) -> bool:
+    """use_influxdb or use_victoriametrics as every reader takes it: on only when it is
+    the boolean True. Anything else, "true" included, is off, so the login is sent nowhere.
+
+    The SSL settings fail the other way: see db_tls_setting.
+    """
+    value = conf.get(key, False)
+    if not isinstance(value, bool):
+        _warn_db_setting_once(
+            key, f"{key} is not true or false, so it is taken as off", logging.ERROR
+        )
+    return value is True
+
+
+def db_tls_setting(conf: dict, key: str) -> bool | str:
+    """A ``*_use_ssl`` or ``*_verify_ssl`` setting as every reader takes it: off only when
+    it is the boolean False, or not set (the default is off). Any other value is on, so a
+    hand-written "false" or 0 never drops SSL or the certificate check.
+
+    For ``*_verify_ssl`` a non-empty text is returned as it is: the path of a CA bundle to
+    check the certificate against, as the InfluxDB client has always taken it. A text
+    that names no CA file or folder that can be loaded is not taken as on with the
+    default CAs: the reader does not contact that database (see db_ca_context).
+    """
+    value = conf.get(key, False)
+    if isinstance(value, bool):
+        return value
+    if key.endswith("_verify_ssl"):
+        _warn_db_setting_once(
+            key,
+            f"{key} is not true or false, so the certificate is checked: against the "
+            "CA file it names if it is a text (if that cannot be loaded, the database is "
+            "not contacted), else against the default CAs",
+            logging.ERROR,
+        )
+        return value if isinstance(value, str) and value else True
+    _warn_db_setting_once(key, f"{key} is not true or false, so it is taken as on", logging.ERROR)
+    return True
+
+
+# How long the CA file or folder of a *_verify_ssl setting may take to load. It is loaded
+# off the event loop: a path on a network share that does not answer can block.
+DB_CA_LOAD_TIMEOUT_S = 10
+# A name openssl rehash gives a certificate in a CA folder: its subject hash, then .N
+# (or .rN for a revocation list)
+_REHASHED_CA_NAME_RE = re.compile(r"[0-9a-f]{8}\.r?[0-9]+")
+
+
+def db_ca_unusable(server: str) -> str:
+    """The line in the action log when the CA file a database's ``*_verify_ssl`` names
+    cannot be used: that database is not contacted, so its login is sent nowhere."""
+    return f"the configured CA file for {server} cannot be used; the database was not contacted"
+
+
+def _warn_ca_unloadable(key: str) -> None:
+    _warn_db_setting_once(
+        f"{key}:unreadable",
+        f"The CA file named by {key} cannot be loaded, so that database is not contacted",
+        logging.ERROR,
+    )
+
+
+def db_ca_context(path: str, key: str) -> ssl.SSLContext | None:
+    """An SSL context checking against the CA bundle file, or the folder of CA
+    certificates (as ``openssl rehash`` leaves it), that ``path`` names.
+
+    None, logged once, when it names no regular file or folder (a FIFO or a device such
+    as CON could block the read for ever) or the file cannot be loaded: the reader then
+    does not contact that database. Checking against the default CAs instead would send
+    the login to any server one of them vouches for, where the operator chose one CA.
+
+    It blocks on the file system: call it on the read's own thread, or through
+    db_aiohttp_ssl, never on the event loop.
+    """
+    try:
+        mode = os.stat(path).st_mode
+        if stat.S_ISDIR(mode):
+            context = ssl.create_default_context(capath=path)
+            if not any(_REHASHED_CA_NAME_RE.fullmatch(name) for name in os.listdir(path)):
+                _warn_db_setting_once(
+                    f"{key}:unhashed",
+                    f"The CA folder named by {key} holds no certificate under a name "
+                    "openssl rehash gives, so no server certificate can be checked against "
+                    "it: run openssl rehash on the folder",
+                )
+            return context
+        if stat.S_ISREG(mode):
+            return ssl.create_default_context(cafile=path)
+    except (OSError, ValueError):
+        pass
+    _warn_ca_unloadable(key)
+    return None
+
+
+# The CA files of the aiohttp readers (VictoriaMetrics, the thermal reader) load on
+# threads of their own, as the InfluxDB reads do (see retrieve_hass._influx_executor): a
+# load that never returns (a stat on a network mount gone stale) holds one of these, never
+# one of the threads asyncio.to_thread and aiofiles use for everything else.
+_DB_CA_WORKERS = 2
+_db_ca_executor = ThreadPoolExecutor(max_workers=_DB_CA_WORKERS, thread_name_prefix="emhass-db-ca")
+
+
+class _DbCaLoad:
+    """A load of one CA path in flight: its future, the time.monotonic() it is due by
+    (DB_CA_LOAD_TIMEOUT_S after it was asked for), and how many callers wait for it."""
+
+    __slots__ = ("due", "future", "waiters")
+
+    def __init__(self, future: Future, due: float):
+        self.future = future
+        self.due = due
+        self.waiters = 0
+
+
+# The loads in flight, by path
+_db_ca_loads: dict[str, _DbCaLoad] = {}
+# Reentrant: cancelling a queued load runs its done callbacks, forget among them, at once
+_db_ca_loads_lock = threading.RLock()
+
+
+def _db_ca_workers_held(now: float) -> bool:
+    """True when every thread of _db_ca_executor runs a load past its due time: one
+    that may never return (a stat on a network mount gone stale)."""
+    held = sum(1 for load in _db_ca_loads.values() if load.future.running() and now >= load.due)
+    return held >= _DB_CA_WORKERS
+
+
+def _db_ca_load(path: str, key: str) -> _DbCaLoad | None:
+    """The load of ``path`` in flight, or a new one when there is none, with the caller
+    counted among its waiters (see _db_ca_leave): one at a time per path, so a path
+    whose load never returns holds one thread, however many reads ask for it.
+
+    None, and nothing queued, for a path with no load in flight while every thread
+    holds a load past its due time: it could only wait behind loads that may never
+    return, and each read would queue another item that is never run."""
+    with _db_ca_loads_lock:
+        now = time.monotonic()
+        load = _db_ca_loads.get(path)
+        if load is None:
+            if _db_ca_workers_held(now):
+                return None
+            load = _DbCaLoad(
+                _db_ca_executor.submit(db_ca_context, path, key), now + DB_CA_LOAD_TIMEOUT_S
+            )
+            _db_ca_loads[path] = load
+
+            def forget(_future, load=load):
+                with _db_ca_loads_lock:
+                    if _db_ca_loads.get(path) is load:
+                        del _db_ca_loads[path]
+
+            # It runs at once, here, when the load is already done
+            load.future.add_done_callback(forget)
+        load.waiters += 1
+        return load
+
+
+def _db_ca_leave(load: _DbCaLoad) -> None:
+    """A caller of _db_ca_load stops waiting for ``load``. A load still queued is
+    dropped once its last caller has gone, or once its due time has passed (every
+    caller is refused then); never while another caller still waits for it in time. One
+    already running cannot be stopped: it is left to end, and stays the path's load."""
+    with _db_ca_loads_lock:
+        load.waiters -= 1
+        if not load.future.done() and (load.waiters <= 0 or time.monotonic() >= load.due):
+            load.future.cancel()
+
+
+def _wake(waiter: asyncio.Future) -> None:
+    if not waiter.done():
+        waiter.set_result(None)
+
+
+async def db_aiohttp_ssl(verify: bool | str, key: str):
+    """The aiohttp ``ssl`` argument for a value from db_tls_setting: False skips the
+    certificate check, True checks it against the default CAs, a path against the CA
+    bundle file or folder it names (see db_ca_context).
+
+    None when the path cannot be used: the caller must then not contact the database.
+    The path is loaded on a thread of _db_ca_executor, so it cannot hold the event loop,
+    and a load must end within DB_CA_LOAD_TIMEOUT_S of when it was asked for; one that
+    takes longer counts as one that failed, and its thread is left to end. While a load
+    of the path is in flight a caller waits for that one, up to the same time, and
+    starts no other: one asked for after that time is refused at once, and so is a new
+    path while every thread holds such a load.
+    """
+    if not isinstance(verify, str):
+        return verify
+    load = _db_ca_load(verify, key)
+    if load is None:
+        _warn_ca_unloadable(key)
+        return None
+    future = load.future
+    try:
+        remaining = load.due - time.monotonic()
+        if remaining > 0 and not future.done():
+            # Not asyncio.wrap_future: cancelling that would cancel the shared load for
+            # every caller still waiting for it
+            loop = asyncio.get_running_loop()
+            woken = loop.create_future()
+
+            def wake(_future):
+                try:
+                    loop.call_soon_threadsafe(_wake, woken)
+                except RuntimeError:
+                    # That loop is closed: nobody there waits any more
+                    pass
+
+            future.add_done_callback(wake)
+            await asyncio.wait({woken}, timeout=remaining)
+    finally:
+        _db_ca_leave(load)
+    if future.done() and not future.cancelled():
+        return future.result()
+    _warn_ca_unloadable(key)
+    return None
+
+
+def warn_if_unverified_ssl(conf: dict, prefix: str, name: str) -> None:
+    """Warn, once, when a database is read over SSL without checking its certificate."""
+    if db_tls_setting(conf, f"{prefix}_use_ssl") and (
+        db_tls_setting(conf, f"{prefix}_verify_ssl") is False
+    ):
+        _warn_db_setting_once(
+            f"{prefix}:unverified",
+            f"{name} is read over SSL without checking the server's certificate "
+            f"({prefix}_verify_ssl is off), so the connection and its login are not "
+            "protected from someone in between",
+        )
+
+
 def is_valid_db_host(value) -> bool:
     """True when ``value`` is a plain host name or IP address (no scheme, path or query)."""
     return isinstance(value, str) and _DB_HOST_RE.fullmatch(value) is not None
@@ -9098,8 +9395,17 @@ def config_value_faults(config: dict) -> list[str]:
     costfun = config.get("costfun")
     if costfun is not None and costfun not in COSTFUN_VALUES:
         faults.append(f"costfun must be one of {', '.join(COSTFUN_VALUES)}")
+    # A flag that is not true or false would be read as off, but could look unchanged to
+    # the check that keeps a stored login with its server. The value is not quoted.
+    faults += [
+        f"{key} must be true or false"
+        for key in DB_FLAG_KEYS
+        if key in config and not isinstance(config[key], bool)
+    ]
     for use_key, host_key, port_key in _DB_KEYS:
-        enabled = bool(config.get(use_key))
+        # Not db_flag: a value this check refuses must not use up the error that
+        # db_flag logs once, for a hand-written config.json, when a reader meets it
+        enabled = config.get(use_key) is True
         # The web UI sends "" for a cleared field: fine while the integration is off
         # A key that is not sent keeps its default
         host = config.get(host_key)
@@ -9115,6 +9421,58 @@ def config_value_faults(config: dict) -> list[str]:
         except RuntimeParamError as exc:
             faults.append(str(exc))
     return faults
+
+
+# Credential values that mean "no login": empty, the add-on's "empty" and the public
+# placeholders build_secrets starts from
+_DB_LOGIN_PLACEHOLDERS = ("", "empty", "yourinfluxdbusername", "yourinfluxdbpassword")
+# (name, setting prefix, default port, environment variables that also hold a login)
+_DB_LOGINS = (
+    ("InfluxDB", "influxdb", 8086, ("INFLUXDB_USERNAME", "INFLUXDB_PASSWORD")),
+    ("VictoriaMetrics", "victoriametrics", 8428, ()),
+)
+
+
+def stored_db_logins(secrets: dict) -> list[tuple[str, str, int]]:
+    """(name, prefix, default port) of each database a real login is stored for."""
+    stored = []
+    for name, prefix, default_port, env_names in _DB_LOGINS:
+        values = [secrets.get(f"{prefix}_username"), secrets.get(f"{prefix}_password")]
+        values += [os.getenv(env_name) for env_name in env_names]
+        if any(v is not None and str(v).strip() not in _DB_LOGIN_PLACEHOLDERS for v in values):
+            stored.append((name, prefix, default_port))
+    return stored
+
+
+def db_endpoint_changes(saved_conf: dict, new_conf: dict, logins: list) -> list[str]:
+    """Names of the databases in ``logins`` whose server ``new_conf`` changes.
+
+    The stored login goes to whatever server the settings name, so a new host or port,
+    SSL or certificate checks turned off, or another CA bundle would send it somewhere
+    else. Turning SSL or the certificate check on, at the same host and port, sends it
+    nowhere new and is allowed. Values are compared as the readers use them, so a save
+    that resends the same server passes.
+    """
+
+    def endpoint(conf, prefix, default_port):
+        port = conf.get(f"{prefix}_port", default_port)
+        return (
+            str(conf.get(f"{prefix}_host", "localhost")).strip().lower(),
+            int(port) if is_valid_db_port(port) else str(port).strip(),
+        )
+
+    def weakened(key):
+        saved = db_tls_setting(saved_conf, key)
+        return saved is not False and saved != db_tls_setting(new_conf, key)
+
+    changed = []
+    for name, prefix, default_port in logins:
+        moved = endpoint(saved_conf, prefix, default_port) != endpoint(
+            new_conf, prefix, default_port
+        )
+        if moved or weakened(f"{prefix}_use_ssl") or weakened(f"{prefix}_verify_ssl"):
+            changed.append(name)
+    return changed
 
 
 def data_file_path(data_path, name) -> pathlib.Path:

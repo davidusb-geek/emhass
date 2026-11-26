@@ -94,14 +94,14 @@ EMHASS therefore listens on two ports when it runs as an add-on:
 This follows Home Assistant's own rule for add-ons: ingress runs on a port of its own, and only connections from
 `172.30.32.2` are accepted. Ingress is recognised by **which port accepted the connection and who connected**, never by a
 header: a client that reaches a port can send any header (`X-Ingress-Path`, `X-Forwarded-For`, `X-Remote-User-*`), so
-none is used to recognise ingress. (The identity headers the Supervisor adds are read for one purpose only, the administrator-only token page below, and only after the port and peer rule has already held.)
+none is used to recognise ingress. (The identity headers the Supervisor adds are read for two purposes only, the administrator-only token page below and a database server change through `/set-config`, and only after the port and peer rule has already held.)
 The servers are configured not to rewrite the peer address from `X-Forwarded-For`.
 
 **What EMHASS relies on from Home Assistant's ingress** (read from the Supervisor's `api/ingress.py` and the add-on developer documentation; not run against a live Supervisor):
 
 - The Supervisor connects from `172.30.32.2` to the add-on's `ingress_port`, and refuses a browser that has no valid ingress session.
 - With `panel_admin: true` (the default, and set explicitly in the add-on) it answers `403` unless the signed-in user is an administrator, and a request with no resolvable user is denied.
-- It adds `X-Remote-User-Id` and `X-Remote-User-Groups` after removing any copy the client sent. EMHASS reads them **only** for the `/api-token` page and for the key link on the home page, and only on the ingress port: the page needs a user id and the group `system-admin`, so it stays administrator-only even for a configuration that set `panel_admin: false`. A request with no user identity gets `403`.
+- It adds `X-Remote-User-Id` and `X-Remote-User-Groups` after removing any copy the client sent. EMHASS reads them **only** for the `/api-token` page and for the key link on the home page, and to let an administrator change the server of a database whose login is stored (see [the configuration](config.md)), and only on the ingress port: each needs a user id and the group `system-admin`, so the page stays administrator-only even for a configuration that set `panel_admin: false`. A request with no user identity gets `403`. The database exception also needs a real add-on (`SUPERVISOR_TOKEN` set) and `EMHASS_INGRESS_PEERS` left unset, so that the peer is the Supervisor at its default address.
 - It forwards redirects (`Location`), `Set-Cookie` and other response headers unchanged and does not follow redirects, and it serves the app under `/api/hassio_ingress/<token>/`, which the app does not see. Every URL, redirect and link EMHASS emits is therefore relative (a test scans the UI assets and the redirects), and the login cookie is set without a `Path`.
 
 A request that arrives through ingress and changes something must be JSON (the web UI always sends JSON), so a forged
@@ -111,7 +111,7 @@ Settings (normally automatic): `EMHASS_INGRESS_PORT` (default `8099` when `SUPER
 does for add-ons; unset otherwise) and `EMHASS_INGRESS_PEERS` (default `172.30.32.2`; a comma-separated list of
 addresses or networks that **replaces** the default).
 
-**Supervisor requirement.** The administrator-only token page trusts `X-Remote-User-Groups`, which only a Supervisor that adds the header *and* removes any client-supplied copy can vouch for (the version that introduced this has not been identified here, so it is not claimed). On a Supervisor without that behaviour, do not rely on the page: set `emhass_api_token` in the add-on options and leave the generated token unused. The same Supervisor behaviour is also what makes `panel_admin` effective. The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
+**Supervisor requirement.** The administrator-only token page, and the administrator's database server change, trust `X-Remote-User-Groups`, which only a Supervisor that adds the header *and* removes any client-supplied copy can vouch for (the version that introduced this has not been identified here, so it is not claimed). On a Supervisor without that behaviour, do not rely on the page: set `emhass_api_token` in the add-on options and leave the generated token unused. A Supervisor that does not send the header refuses the database change to administrators too; change the server in `config.json` then. The same Supervisor behaviour is also what makes `panel_admin` effective. The add-on must declare `ingress_port: 8099` and the option `emhass_api_token` (see the add-on repository). The stable
 add-on pins the EMHASS image to its own version, so both change in one update. Do not mix them: an older add-on
 configuration (ingress on port 5000) with this image shows the login page and gives you no way to learn the token, and
 this add-on configuration with an older image has nothing listening on 8099. The `emhass-test` add-on follows the

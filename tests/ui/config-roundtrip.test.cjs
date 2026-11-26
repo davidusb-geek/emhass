@@ -71,12 +71,37 @@ function parseParams(html) {
   return params;
 }
 
+// The checkboxes of a section body, as buildParamContainers' normalisation pass sees
+// them (container.querySelectorAll("input[type='checkbox']")): each one's value and
+// data-db-tls marker, and a checked setter that writes back to the markup, which is what
+// a save reads.
+const CHECKBOX_TAG = /<input\b[^>]*\btype="checkbox"[^>]*>/g;
+function setChecked(body, index, on) {
+  let n = 0;
+  body.innerHTML = body.innerHTML.replace(CHECKBOX_TAG, tag => {
+    if (n++ !== index) return tag;
+    const bare = tag.replace(/\s+checked(?=[\s>])/, '');
+    return on ? bare.replace(/^<input\b/, '<input checked') : bare;
+  });
+}
+function checkboxes(body) {
+  return [...body.innerHTML.matchAll(CHECKBOX_TAG)].map(([tag], index) => {
+    const value = /\bvalue="([^"]*)"/.exec(tag);
+    return {
+      value: value ? decode(value[1]) : '',
+      dataset: /\bdata-db-tls="true"/.test(tag) ? { dbTls: 'true' } : {},
+      set checked(on) { setChecked(body, index, on); },
+    };
+  });
+}
+
 function setup({ getConfig = () => ({}) } = {}) {
   const bodies = Object.fromEntries(Object.keys(defs).map(section => [section, {
     innerHTML: '', append(node) { this.innerHTML += serializeNode(node); },
   }]));
   const sections = Object.fromEntries(Object.keys(defs).map(section => [section, {
-    getElementsByClassName: () => [bodies[section]], querySelectorAll: () => [] }]));
+    getElementsByClassName: () => [bodies[section]],
+    querySelectorAll: selector => (selector === "input[type='checkbox']" ? checkboxes(bodies[section]) : []) }]));
   const header = (id, type) => ({ id, tagName: 'INPUT', type, value: '', checked: false, style: {}, addEventListener() {}, getElementsByClassName: () => [] });
   const headers = { set_use_battery: header('set_use_battery', 'checkbox'), set_use_pv: header('set_use_pv', 'checkbox'),
     number_of_deferrable_loads: header('number_of_deferrable_loads', 'number'), number_of_batteries: header('number_of_batteries', 'number') };
@@ -146,6 +171,40 @@ test('loading a customised configuration and saving it preserves every customise
   await s.ctx.saveConfiguration(defs);
   assert.equal(s.posts.length, 1);
   for (const [name, value] of Object.entries(CUSTOM)) assert.deepEqual(single(s.posts[0][name]), value, `${name} saved`);
+});
+
+test('the checkbox normalisation pass runs in this harness', () => {
+  // Without it the test below could not see a checkbox the pass unticks
+  const s = setup();
+  s.ctx.loadConfigurationListView(defs, { use_influxdb: true }, s.listTemplate);
+  assert.equal(s.shown('use_influxdb').checked, true);
+  const local = Object.keys(defs).find(section => 'use_influxdb' in defs[section]);
+  const box = s.ctx.document.getElementById(local).querySelectorAll("input[type='checkbox']")
+    .find(b => b.value === 'true');
+  box.checked = false;
+  assert.equal(s.shown('use_influxdb').checked, false);
+});
+
+test('a database SSL setting shows ticked unless it is false, and a save sends what EMHASS reads', async () => {
+  // EMHASS takes these as off only when false (a null is dropped, so not set): "false"
+  // as text, 0 or a CA bundle path are on, and the server keeps the path when the save
+  // sends true. A ticked box must not turn them off at the next save.
+  const hand_written = {
+    influxdb_use_ssl: 'false', influxdb_verify_ssl: '/etc/ssl/private-ca.pem',
+    victoriametrics_use_ssl: 0, victoriametrics_verify_ssl: false,
+  };
+  const expected = { influxdb_use_ssl: true, influxdb_verify_ssl: true, victoriametrics_use_ssl: true, victoriametrics_verify_ssl: false };
+  const s = setup();
+  s.ctx.loadConfigurationListView(defs, { ...CUSTOM, ...hand_written }, s.listTemplate);
+  for (const [name, ticked] of Object.entries(expected)) assert.equal(s.shown(name).checked, ticked, `${name} shown`);
+  await s.ctx.saveConfiguration(defs);
+  for (const [name, ticked] of Object.entries(expected)) assert.equal(s.posts[0][name], ticked, `${name} saved`);
+  // a null and the boolean false stay unticked; other checkboxes still need true
+  const t = setup();
+  t.ctx.loadConfigurationListView(defs, { influxdb_use_ssl: null, influxdb_verify_ssl: false, use_influxdb: 'yes' }, t.listTemplate);
+  assert.equal(t.shown('influxdb_use_ssl').checked, false);
+  assert.equal(t.shown('influxdb_verify_ssl').checked, false);
+  assert.equal(t.shown('use_influxdb').checked, false);
 });
 
 test('control: the same save from an empty configuration writes the parameter defaults, not the customised values', async () => {

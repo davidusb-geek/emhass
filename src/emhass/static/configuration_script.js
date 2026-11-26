@@ -516,6 +516,9 @@ function buildParamContainers(
     //check initial checkbox state, check "value" of input and match to "checked" value
     let checkbox = container.querySelectorAll("input[type='checkbox']");
     checkbox.forEach(function (answer) {
+      //a database SSL setting was ticked when it was built, from the saved value itself:
+      //its "value" text cannot tell false from "false" (see buildParamElement)
+      if (answer.dataset && answer.dataset.dbTls === "true") return;
       let value = answer.value === "true";
       answer.checked = value;
     });
@@ -719,10 +722,19 @@ function buildParamElement(
       //added rows (plusElements) never run buildParamContainers' one-time
       //checkbox normalisation pass, so a checkbox created there must already
       //reflect its true/false value without relying on that later pass.
-      let checked_attr = type === "checkbox" && value === true ? "checked" : "";
+      //database SSL settings: EMHASS takes them as off only when they are false (a null is
+      //dropped, so not set), so their checkbox is ticked for any other saved value - "false"
+      //written as text, or the path of a CA bundle, which the server keeps when the save
+      //sends true. Marked, so the normalisation pass in buildParamContainers leaves them.
+      let db_tls =
+        type === "checkbox" &&
+        /^(influxdb|victoriametrics)_(use|verify)_ssl$/.test(parameter_definition_name);
+      let ticked = db_tls ? value !== false : value === true;
+      let checked_attr = type === "checkbox" && ticked ? "checked" : "";
+      let db_tls_attr = db_tls ? `data-db-tls="true"` : "";
       return `
           ${type_specific_html}
-          <input class="param_input" type="${type}" placeholder="${escapeHtml(parameter_definition_object["default_value"])}" value="${escapeHtml(value)}" ${checked_attr}>
+          <input class="param_input" type="${type}" placeholder="${escapeHtml(parameter_definition_object["default_value"])}" value="${escapeHtml(value)}" ${checked_attr} ${db_tls_attr}>
           ${type_specific_html_end}
           `;
     }
