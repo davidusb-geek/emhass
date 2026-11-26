@@ -671,6 +671,10 @@ For most Home Assistant users: Use dictionary format with timestamps for simpler
 
 If you're using Solcast then you can define the following sensors in your system:
 
+```{warning}
+The sensor definitions below use an old form: current Home Assistant ignores the `sensors:` key, so these two sensors are not created as written. Provide working forecast sensors of your own, and check that the forecast and price lists start at the first optimization step (see the note after the command). Only the battery SOC value in the command is validated.
+```
+
 ```yaml
 sensors:
 
@@ -710,11 +714,14 @@ An MPC call may look like this for 4 deferrable loads:
           ([states('sensor.amber_feed_in_price')|float] +
           state_attr('sensor.amber_feed_in_forecast', 'forecasts')|map(attribute='per_kwh')|list)[:48]) 
           }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
-          }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100
+          }}, \"prediction_horizon\":48,\"soc_init\":{% set soc = states('sensor.powerwall_charge') %}{{
+          (soc if is_number(soc) and '_' not in soc and 0 <= soc|float <= 100 else 'invalid SOC')|float / 100
           }},\"soc_final\":0.05,\"operating_hours_of_each_deferrable_load\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
 ```
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
+
+`sensor.powerwall_charge` is in percent here, hence `/ 100`. For a sensor that already reports a fraction, use `0 <= soc|float <= 1` and drop the `/ 100`. If the state is `unavailable`, `unknown`, not a decimal number or outside that range, the template fails on purpose: Home Assistant logs a template error and does not run the command, so this call creates no new plan. This does not check how old the reading is; see [Reject old readings](cookbook/battery_aware_runtime_params.md#step-4-reject-old-readings).
 
 ```{note}
 This example sends plain lists, so every list is positional from the first optimization step (see [Step indices and other positional inputs](passing_data.md#step-indices-and-other-positional-inputs)), and it prepends the current price as that first value. That only matches the grid when the first step is the 30-minute step containing now (`method_ts_round: first`) and the Amber forecast rows continue directly after the current interval. With the default `nearest`, a call in the second half of a step starts one step later and every price lands one step early. Amber forecast rows carry their own `start_time`, so a timestamped mapping avoids the alignment question.
