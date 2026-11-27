@@ -15,6 +15,7 @@ import re
 import shutil
 import ssl
 import stat
+import tempfile
 import threading
 import time
 import uuid
@@ -9186,6 +9187,63 @@ async def replace_file(path, content: str | bytes) -> None:
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+_private_temp_dir_warned = False
+
+
+def private_temp_dir(fallback: pathlib.Path | str) -> pathlib.Path:
+    """The folder for EMHASS's lock and counter files.
+
+    On Linux and the BSDs the system temp folder is shared by every account on the
+    host, so a file there with one of EMHASS's fixed names may already exist, made
+    by another account, and EMHASS could not open or lock it. The files go in
+    ``<temp>/emhass-<uid>`` instead, made 0700 for this account. A folder of this
+    account's with no group or other bits (a umask can take owner bits off) is set
+    to 0700. If that path is not a folder of this account's with mode 0700 (it was
+    already there open to others, or its mode could not be set), ``fallback`` (the
+    data folder) is used, with a warning once.
+    If it cannot be made at all (a read-only temp folder), it is returned as it is
+    and opening a file there fails, as it did before. On Windows the temp folder
+    is already per account and is used as it is.
+    """
+    global _private_temp_dir_warned
+    base = pathlib.Path(tempfile.gettempdir())
+    if not hasattr(os, "geteuid"):
+        return base
+    uid = os.geteuid()
+    folder = base / f"emhass-{uid}"
+    try:
+        folder.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    except OSError:
+        return folder
+    try:
+        st = os.lstat(folder)
+        mode = stat.S_IMODE(st.st_mode)
+        if stat.S_ISDIR(st.st_mode) and st.st_uid == uid and mode != 0o700 and not mode & 0o077:
+            # Our own folder that no other account can use, but the umask took owner
+            # bits off at mkdir. Every call (another worker's too, even one that runs
+            # before the maker gets here) sets it to 0700, so they all agree on it.
+            try:
+                os.chmod(folder, 0o700)
+            except OSError:
+                pass  # the check below decides, the same way on every call
+            else:
+                st = os.lstat(folder)
+    except OSError:
+        return folder
+    if stat.S_ISDIR(st.st_mode) and st.st_uid == uid and stat.S_IMODE(st.st_mode) == 0o700:
+        return folder
+    if not _private_temp_dir_warned:
+        _private_temp_dir_warned = True
+        logging.getLogger(__name__).warning(
+            "%s is not a folder that only this account can use; EMHASS keeps its lock "
+            "and counter files in the data folder instead",
+            folder,
+        )
+    return pathlib.Path(fallback)
 
 
 # A lock that one process holds and every other one - another Gunicorn worker
