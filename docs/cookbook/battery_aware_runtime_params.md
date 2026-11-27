@@ -33,7 +33,7 @@ Check these keys on the configuration page of the EMHASS web UI, which saves the
 
 The single runtime param this recipe drives is `soc_init`:
 
-<!-- source: src/emhass/utils.py:3229-3257 (naive-mpc-optim reads soc_init for one battery) -->
+<!-- source: src/emhass/utils.py, treat_runtimeparams (naive-mpc-optim reads soc_init) -->
 
 | Field | Type | Range | Notes |
 |---|---|---|---|
@@ -120,13 +120,13 @@ Expected: the `http request` node receives `soc_init` as a fraction from 0 to 1.
 
 ## Reading the result
 
-<!-- source: src/emhass/command_line.py:4650-4660 (SOC_opt is published times 100) -->
+<!-- source: src/emhass/command_line.py, _publish_battery_data (SOC_opt is published times 100) -->
 
 The action response is not the plan. After [`publish-data`](../publish_data.md), `sensor.soc_batt_forecast` shows SOC in percent; the `SOC_opt` column of the plan is a fraction ([Plan-output schema](../plan_output_schema.md#soc_opt-scaling-callout)). Each value is the SOC at the **end** of its time step, so the first row is not your `soc_init` unless the battery is idle in that step.
 
 ## Caveats
 
-<!-- source: src/emhass/optimization.py:5013-5055 and 9904-9951 (recovery into the SOC band) -->
+<!-- source: src/emhass/optimization.py, Optimization._add_battery_constraints and Optimization._perform_optimization_locked (recovery into the SOC band) -->
 
 - **Unit per source.** The same battery can be published as percent by one integration and as a fraction by another. Set `soc_full_scale` for the source you read and check it again if you change source or firmware. The range check catches percent values above 1 arriving on a fraction source, but not fractions arriving on a percent source: `0.74` would be taken as 0.74%.
 - **Outside the configured band.** Send the measured value; do not clamp it to your minimum or maximum, or the plan starts from a battery state that does not exist. EMHASS logs a warning and plans a return into the band, at the time it finds economic, not necessarily at once. The plan has to be back inside the band by its last step. If it cannot get there, for example because the horizon is too short for the available power, the run is infeasible. Batteries with availability or discharge-energy limits are treated differently (see [Good Practices, section 5](../study_cases/good_practices.md#5-optim_status-infeasible-triage-order)).

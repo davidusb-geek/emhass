@@ -12,7 +12,7 @@ Drive EMHASS naive-MPC optimization from a Node-RED flow on any cadence, recompu
 
 ## Step 1: Verify your static EMHASS config
 
-<!-- source: src/emhass/data/config_defaults.json:41-46,109-117 -->
+<!-- source: src/emhass/data/config_defaults.json (set_use_battery, number_of_deferrable_loads and the per-load keys shown below) -->
 
 Before runtime overrides will work, the matching static keys must exist. Check them on the configuration page of the EMHASS web UI, which saves them to `config.json`. With the Home Assistant app, they are on that page, not on the app's Configuration tab.
 
@@ -35,7 +35,7 @@ The default `maximum_power_from_grid` (9000 W) is a hard limit. Below an 11 kW E
 
 Reference table of the runtime params accepted by `treat_runtimeparams` that this recipe sends per call:
 
-<!-- source: src/emhass/utils.py:933-1015 (treat_runtimeparams) -->
+<!-- source: src/emhass/utils.py, treat_runtimeparams -->
 
 | Field | Type | Purpose |
 |---|---|---|
@@ -140,6 +140,8 @@ msg.payload = {
 };
 return msg;
 ```
+
+**No battery configured** (`set_use_battery` is `false`): delete the lines from `// Battery SOC from your battery monitor` down to `const soc_init = soc_percent / 100;`, and delete the `soc_init: soc_init` line from `msg.payload`. Otherwise the function finds no SOC reading and skips every tick. Remove both together: keeping the `soc_init` line without the lines that define it makes the function fail.
 
 Expected: `msg.payload` now contains the full runtime-params object as JSON. Wire a `debug` node temporarily to verify before continuing.
 
