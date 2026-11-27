@@ -48,7 +48,7 @@ jobs:
   scan-pr:
     needs:
       - build
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@6fc714450122bda9d00e4ad5d639ad6a39eedb1f" # v2.0.1
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932" # v2.7.1
     with:
       fail-on-vuln: false
       scan-args: |-
