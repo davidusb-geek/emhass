@@ -87,6 +87,8 @@ Expected: with `soc_full_scale = 100`, readings of `0`, `1`, `74` and `100` give
 
 Step 3 shows that a value is a plausible number, not that it is current: a reading can look valid long after the source stopped measuring. If your source provides the time of the measurement itself, check it. Use a time stamped by the device or its API when it measured, in epoch milliseconds, taken from the same message as the value. The time the value last changed is not enough (SOC can stay constant for hours), and neither is the time your flow or Home Assistant received it (a cached or retained value looks new). Choose the limit from how often that source really measures and how fast your battery's SOC can move.
 
+`measured_ms` must be a JavaScript number: digits sent as text are rejected. If your source sends text and you have confirmed that it is epoch milliseconds, store `Number(...)` of it.
+
 ```javascript
 const soc_max_age_ms = null;      // null: age is NOT checked. Set it only if measured_ms is the source's measurement time
 const soc_max_ahead_ms = 60000;   // how far the source clock may run ahead of this one
@@ -100,7 +102,7 @@ if (soc_max_age_ms !== null) {
 }
 ```
 
-Expected: with a limit set (for example `15 * 60000`), an old, missing, non-numeric or seconds-based measurement time stops the flow with a warning. With `null`, an old but plausible value is sent; where your source reports its own availability, check that as well.
+Expected: with a limit set (for example `15 * 60000`), an old, missing, seconds-based or non-number measurement time (including digits as text) stops the flow with a warning. With `null`, an old but plausible value is sent; where your source reports its own availability, check that as well.
 
 ## Step 5: Attach to runtime_params
 

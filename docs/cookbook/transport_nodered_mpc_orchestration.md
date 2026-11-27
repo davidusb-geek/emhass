@@ -8,23 +8,28 @@ Drive EMHASS naive-MPC optimization from a Node-RED flow on any cadence, recompu
 
 - EMHASS reachable via HTTP on a known host:port (default `:5000`)
 - Node-RED 3+ with the default `inject`, `function`, and `http request` nodes
-- A static EMHASS config that already declares your deferrables / battery / thermal loads. This recipe only covers the *runtime params* (the values you change per MPC call). Static config lives in `config.yaml` / config-GUI.
+- A static EMHASS config that already declares your deferrables / battery / thermal loads. This recipe only covers the *runtime params* (the values you change per MPC call). Static config lives in `config.json`, which the configuration page of the web UI edits.
 
 ## Step 1: Verify your static EMHASS config
 
 <!-- source: src/emhass/data/config_defaults.json:41-46,109-117 -->
 
-Before runtime overrides will work, the matching static keys must exist. Open your EMHASS `config.yaml` (or use the Web Config GUI) and check it has at least the keys this recipe will drive:
+Before runtime overrides will work, the matching static keys must exist. Check them on the configuration page of the EMHASS web UI, which saves them to `config.json`. With the Home Assistant app, they are on that page, not on the app's Configuration tab.
 
-```yaml
-optim_conf:
-  set_use_battery: true                              # if you have a battery
-  number_of_deferrable_loads: 2                      # adjust to your setup
-  nominal_power_of_deferrable_loads: [3000, 11000]   # second load: the EV charger (Step 3 uses charger_kw = 11)
-  operating_hours_of_each_deferrable_load: [4, 0]    # overridden per MPC call
-  start_timesteps_of_each_deferrable_load: [0, 0]    # overridden per MPC call
-  end_timesteps_of_each_deferrable_load: [0, 0]      # overridden per MPC call
+If you edit `config.json` by hand, these are top-level JSON keys, with no `optim_conf` block around them. Change or add only these keys, keep the rest of the file, and restart EMHASS. A legacy `config_emhass.yaml` uses other names for most of them (see [Parameter differences](../differences.md)).
+
+```json
+{
+  "set_use_battery": true,
+  "number_of_deferrable_loads": 2,
+  "nominal_power_of_deferrable_loads": [3000, 11000],
+  "operating_hours_of_each_deferrable_load": [4, 0],
+  "start_timesteps_of_each_deferrable_load": [0, 0],
+  "end_timesteps_of_each_deferrable_load": [0, 0]
+}
 ```
+
+This is a fragment, not a whole file. Set `set_use_battery` to `true` only if you have a battery, and adjust the loads to your setup. The second load here is the EV charger (Step 3 uses `charger_kw = 11`). The last three keys are overridden per MPC call.
 
 The default `maximum_power_from_grid` (9000 W) is a hard limit. Below an 11 kW EV charger it makes a night charge without PV or battery infeasible for every load, so set it to your connection limit.
 
@@ -42,7 +47,7 @@ Reference table of the runtime params accepted by `treat_runtimeparams` that thi
 | `soc_init` | `float` (0..1) | current battery state of charge as fraction |
 | `prediction_horizon` | `int` | number of optimization steps to plan. **Always send it:** without it `naive-mpc-optim` plans only 10 steps |
 
-Expected: EMHASS restarts cleanly with the static keys; `GET /api/get-config` returns them.
+Expected: EMHASS restarts cleanly with the static keys; `GET /get-config` (with your [API token](../api_authentication.md)) returns them.
 
 ## Step 2: Add the cron trigger
 
