@@ -83,7 +83,7 @@ def site_token_secret_usable(name) -> bool:
     (lower case, digits, _) that is not one of EMHASS's own."""
     return (
         isinstance(name, str)
-        and bool(_SITE_ID.match(name))
+        and bool(_SITE_ID.fullmatch(name))
         and name.lower() not in _SITE_RESERVED_SECRETS
     )
 
@@ -121,7 +121,7 @@ def site_kind(element: dict) -> str:
         return "limit"
     if isinstance(element.get("solver"), dict):
         return "remote"
-    if isinstance(element.get("id"), str) and _SITE_DEVICE.match(element["id"]):
+    if isinstance(element.get("id"), str) and _SITE_DEVICE.fullmatch(element["id"]):
         return "device"
     return "node"
 
@@ -137,7 +137,7 @@ def _site_element_problem(element, where: str, from_request: bool) -> str | None
         allowed = ", ".join(sorted(_SITE_KEYS[kind] - {"id"}))
         return f"{where} ({kind} {element['id']!r}) may have only {allowed}, not {', '.join(sorted(extra))}"
     if kind in ("node", "limit", "remote") and (
-        not _SITE_ID.match(element["id"]) or _SITE_DEVICE.match(element["id"])
+        not _SITE_ID.fullmatch(element["id"]) or _SITE_DEVICE.fullmatch(element["id"])
     ):
         return f"{where}.id must be a short lower-case name (letters, digits, _), not a device's"
     if element["id"] == "solar":
@@ -167,7 +167,7 @@ def _site_element_problem(element, where: str, from_request: bool) -> str | None
     if limits is not None and (
         not isinstance(limits, list)
         or len(limits) > 16
-        or not all(isinstance(x, str) and _SITE_ID.match(x) for x in limits)
+        or not all(isinstance(x, str) and _SITE_ID.fullmatch(x) for x in limits)
     ):
         return f"{where}.limits must be a list of limit ids"
     if kind == "remote":
@@ -177,7 +177,7 @@ def _site_element_problem(element, where: str, from_request: bool) -> str | None
             set(solver) - {"url", "token_secret", "trusted_network"}
             or not isinstance(solver.get("trusted_network", False), bool)
             or not isinstance(url, str)
-            or not re.match(r"^https?://[^\s/?#]+(/[^\s?#]*)?$", url)
+            or not re.fullmatch(r"^https?://[^\s/?#]+(/[^\s?#]*)?$", url)
             or len(url) > 256
         ):
             return f"{where}.solver must be {{url: http(s)://host[:port]/path, token_secret, trusted_network: true/false}}"
@@ -195,7 +195,7 @@ def _site_element_problem(element, where: str, from_request: bool) -> str | None
         if element.get("solver", "emhass") not in _SITE_SOLVERS:
             return f"{where}.solver must be {', '.join(_SITE_SOLVERS)} (EMHASS's own models)"
         group = element.get("group")
-        if group is not None and not (isinstance(group, str) and _SITE_ID.match(group)):
+        if group is not None and not (isinstance(group, str) and _SITE_ID.fullmatch(group)):
             return f"{where}.group must be a short lower-case name (letters, digits, _)"
         if group == "solar":
             return f"{where}.group 'solar' is reserved"

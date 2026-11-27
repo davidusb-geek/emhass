@@ -1,14 +1,19 @@
 import ast
 import asyncio
 import base64
+import contextvars
 import copy
 import logging
 import operator
 import os
 import pathlib
 import re
+import socket
+import threading
 import time
 import uuid
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Self
 from urllib.parse import quote
@@ -37,10 +42,16 @@ from emhass.connection_manager import (
 from emhass.connection_manager import is_supervisor_url as _is_supervisor_url
 from emhass.utils import (
     data_file_path,
+    db_aiohttp_ssl,
+    db_ca_context,
+    db_ca_unusable,
+    db_flag,
+    db_tls_setting,
     is_valid_db_host,
     is_valid_db_port,
     is_valid_entity_id,
     set_df_index_freq,
+    warn_if_unverified_ssl,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,14 +114,116 @@ def _upstream_error(exc: BaseException) -> str:
     """
     code = getattr(exc, "status", None) or getattr(exc, "code", None)
     text = type(exc).__name__ + (f" (HTTP {code})" if isinstance(code, int) else "")
-    if type(exc).__name__ == "TooManyRedirects":
-        return text + (
-            ": the server answered with a redirect, which EMHASS does not follow "
-            "(check the host, port and SSL settings)"
-        )
     message = str(exc).lower()
     reason = next((known for known in _KNOWN_DB_ERRORS if known in message), None)
     return text + (f": {reason}" if reason else "")
+
+
+def _unreachable(exc: BaseException) -> bool:
+    """True when ``exc`` means no HTTP reply came back: no such name, refused, reset,
+    timed out or a failed TLS handshake."""
+    if isinstance(exc, (aiohttp.ClientConnectionError, ConnectionError, TimeoutError)):
+        return True
+    try:
+        import requests
+    except ImportError:
+        return False
+    return isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            # A reply cut off part way
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ),
+    )
+
+
+# 4xx replies that say "not now" rather than "never": a request timeout (from a proxy),
+# too early, too many requests (InfluxDB Cloud's rate limit, a rate-limiting proxy)
+_TRANSIENT_4XX = frozenset({408, 425, 429})
+
+
+def _refused_query(exc: BaseException) -> bool:
+    """True when ``exc`` is a 4xx reply: the server answered and refuses the query. A
+    5xx, a 408, 425 or 429 (the query was not run this time), an error inside a 200
+    (InfluxDB's query timeout comes so, with no status) or a reply that is not JSON is
+    not: the query may have found something had it run."""
+    status = _http_status(exc)
+    return status is not None and 400 <= status < 500 and status not in _TRANSIENT_4XX
+
+
+def _could_not_connect(exc: BaseException) -> bool:
+    """True when a request to the InfluxDB server failed before it was connected: no such
+    name, refused, a connect timeout, a failed TLS handshake or a proxy that would not
+    connect. A read timeout, a reset or a reply cut off part way is not: the server
+    answered the connection, and the next query may still get through."""
+    try:
+        import requests
+        from urllib3.exceptions import MaxRetryError
+    except ImportError:
+        return False
+    if isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectTimeout,
+            requests.exceptions.SSLError,
+            requests.exceptions.ProxyError,
+        ),
+    ):
+        return True
+    # requests' adapter, with no retries, raises a failure to connect as a
+    # ConnectionError of urllib3's MaxRetryError; a reset on a connection it already had
+    # comes as a ConnectionError of a ProtocolError
+    return isinstance(exc, requests.exceptions.ConnectionError) and any(
+        isinstance(arg, MaxRetryError) for arg in exc.args
+    )
+
+
+# The cause of a database failure, for the operator: the error's type and its own text,
+# which can hold the server's URL or reply. It goes to this logger only, never to the
+# logger an action was given. The web server writes the action log, which a caller can
+# read, from app.logger alone (it does not propagate), and this is not a child of it.
+db_detail_logger = logging.getLogger("emhass.database")
+
+
+def _printable(value, limit: int = 300) -> str:
+    """``value`` as text for db_detail_logger: control characters escaped, so a server's
+    reply cannot start a line of its own on the console, and at most ``limit`` characters."""
+    try:
+        text = str(value)
+    except Exception:  # noqa: BLE001 - only for a log line
+        text = "?"
+    return repr(text)[1:-1][:limit]
+
+
+def _http_status(exc: BaseException) -> int | None:
+    """The HTTP status a database client error carries, if any."""
+    code = getattr(exc, "status", None) or getattr(exc, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _unexpected_reply(server: str) -> str:
+    return f"unexpected reply from the configured {server} server"
+
+
+def _db_error(exc: BaseException, server: str, level: int = logging.WARNING) -> str:
+    """A database failure in fixed words for the action log; the cause goes to
+    ``db_detail_logger`` at ``level``.
+
+    Every failure to reach the server reads the same, and so does every reply but a
+    401 or 403: which one it was would tell a caller who chose the host whether, and
+    what, answers there.
+    """
+    db_detail_logger.log(
+        level, "%s read failed: %s: %s", server, type(exc).__name__, _printable(exc)
+    )
+    if _unreachable(exc):
+        return f"could not reach the configured {server} server"
+    if _http_status(exc) in (401, 403):
+        return _upstream_error(exc)
+    return _unexpected_reply(server)
 
 
 def _names_the_supervisor(url: str | None) -> bool:
@@ -152,6 +265,288 @@ VM_DEFAULT_METRIC_REGEX = ".+_value"
 # A PromQL label name. Unlike a label value it cannot be quoted, so
 # ``victoriametrics_entity_label`` is checked against this before it enters a selector.
 VM_LABEL_NAME_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+# Limits on reading the databases, so a server that accepts a connection and never
+# answers cannot hold a read open. Constants, not settings. InfluxDB: (connect, read)
+# seconds for each request, one attempt per request, and a limit on the whole read
+# (the ping, measurement discovery and every query).
+INFLUXDB_TIMEOUT_S = (5, 60)
+INFLUXDB_RETRIES = 1
+INFLUXDB_READ_DEADLINE_S = 300
+# The action waits this much longer than the deadline before it gives up on the read,
+# shuts its connections and returns; then up to this long for the thread to end, so
+# that what it logs stays with this action.
+INFLUXDB_DEADLINE_MARGIN_S = 5
+INFLUXDB_CUT_GRACE_S = 2
+# InfluxDB reads run on threads of their own: one stuck on a slow server cannot take
+# the threads asyncio.to_thread uses for everything else. A read waits here when all are
+# busy, and its action's wait (deadline plus margin) starts when it is submitted.
+_influx_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="emhass-influxdb")
+VM_CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
+
+
+class _InfluxDeadlineExceeded(TimeoutError):
+    """The whole InfluxDB read took longer than INFLUXDB_READ_DEADLINE_S, or was cut."""
+
+
+class _InfluxReadStopped(Exception):
+    """The InfluxDB server could not be reached: the rest of the read is not tried."""
+
+
+# Either ends the whole read, not just the query it was raised in
+_INFLUX_READ_ENDED = (_InfluxDeadlineExceeded, _InfluxReadStopped)
+
+
+class _DbCaUnusable(Exception):
+    """The CA bundle a *_verify_ssl setting names was not loaded: no request is made."""
+
+
+_logged_once: set[str] = set()
+
+
+def _log_once(topic: str, message: str) -> None:
+    """Log ``message`` on db_detail_logger at ERROR, once per process."""
+    if topic not in _logged_once:
+        _logged_once.add(topic)
+        db_detail_logger.error(message)
+
+
+def _influx_session(seconds: float):
+    """A requests session that refuses redirects and keeps every request inside a deadline
+    ``seconds`` after its first request (the ping, so loading the client does not count):
+    no request starts after it, none may wait past it.
+
+    The read timeout applies to each wait for data, so a server sending a byte at a time
+    could still hold a request open past the deadline: ``cut()`` shuts every connection
+    the session opened, from any thread, and a read in progress fails at once. That holds
+    for TLS and for connections through a proxy (HTTP_PROXY and the like) as well.
+    """
+    import requests
+
+    # A duplicate of the socket of each connection the session has open: the TLS wrap
+    # takes over the socket urllib3 returns (its descriptor becomes -1), but a duplicate
+    # still reaches the same connection, so shutting it ends a TLS read or handshake too.
+    # One per urllib3 connection object. When the connection closes, or opens a new
+    # socket in place, its duplicate is closed as soon as the socket it stands for is:
+    # http.client closes a connection whose reply ends it (Connection: close) before
+    # that reply's body is read, so the duplicate is kept, and cut() still reaches the
+    # body, until then. That is checked at the next connection and at the session's
+    # close. So the server sees each connection end soon after urllib3 drops it, and no
+    # more duplicates are open than connections are in use. Shut and closed only with
+    # ``lock`` held.
+    opened = []
+    # (duplicate, weak reference to the socket it stands for) of a closed connection
+    # whose socket a reply was still being read from
+    released = []
+    lock = threading.Lock()
+    cut_off = threading.Event()
+    deadline = []
+
+    def _shut(sock) -> str | None:
+        """Shut ``sock`` (``lock`` held); the error's name when it could not be."""
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError as exc:
+            # Normal for a connection the server or urllib3 already closed
+            return type(exc).__name__
+        return None
+
+    def _not_shut(errors):
+        for name in filter(None, errors):
+            db_detail_logger.debug("InfluxDB connection not shut: %s", name)
+
+    def _still_open(ref) -> bool:
+        live = ref() if ref is not None else None
+        if live is None:
+            return False
+        try:
+            return live.fileno() != -1
+        except Exception:  # noqa: BLE001 - one that cannot say is kept, see _release
+            return True
+
+    def _drop(duplicate):
+        """Close ``duplicate`` and stop tracking it (``lock`` held)."""
+        if duplicate in opened:
+            opened.remove(duplicate)
+        duplicate.close()
+
+    def _release(connection, live):
+        """The duplicate of ``connection``, whose socket ``live`` was, is no longer its
+        own: closed now, or once ``live`` is closed (``lock`` held)."""
+        duplicate = connection.__dict__.pop("_emhass_dup", None)
+        if duplicate is None:
+            return
+        if live is None:
+            _drop(duplicate)
+            return
+        try:
+            ref = weakref.ref(live)
+        except TypeError:
+            # Cannot tell when that socket closes: the duplicate is kept until the
+            # session closes, so a reply still being read can still be cut
+            released.append((duplicate, None))
+            return
+        if _still_open(ref):
+            released.append((duplicate, ref))
+        else:
+            _drop(duplicate)
+
+    def _prune():
+        """Close the duplicates whose socket has closed since (``lock`` held)."""
+        for item in list(released):
+            if item[1] is not None and not _still_open(item[1]):
+                released.remove(item)
+                _drop(item[0])
+
+    def _tracked_connection(connection_class):
+        class _Tracked(connection_class):
+            def _new_conn(self):
+                # urllib3 reconnects in place: the socket this connection had before
+                # is no longer its own
+                previous = self.__dict__.get("sock")
+                sock = super()._new_conn()
+                with lock:
+                    _release(self, previous)
+                    _prune()
+                try:
+                    duplicate = sock.dup()
+                except Exception:  # noqa: BLE001 - a SOCKS socket may raise anything
+                    _log_once(
+                        "dup",
+                        "An InfluxDB connection cannot be duplicated, so a read on it "
+                        "cannot be cut at its deadline",
+                    )
+                    return sock
+                error = None
+                with lock:
+                    self._emhass_dup = duplicate
+                    opened.append(duplicate)
+                    if cut_off.is_set():
+                        error = _shut(duplicate)
+                _not_shut([error])
+                return sock
+
+            def close(self):
+                live = self.__dict__.get("sock")
+                try:
+                    super().close()
+                finally:
+                    with lock:
+                        _release(self, live)
+                        _prune()
+
+        return _Tracked
+
+    # Pool classes that record their connections, each derived from the class a pool
+    # manager already uses (a proxy or SOCKS manager has its own)
+    tracked_pools = {}
+
+    def _tracked_pool(pool_class):
+        if pool_class in tracked_pools.values():
+            return pool_class
+        if pool_class not in tracked_pools:
+            tracked_pools[pool_class] = type(
+                pool_class.__name__,
+                (pool_class,),
+                {"ConnectionCls": _tracked_connection(pool_class.ConnectionCls)},
+            )
+        return tracked_pools[pool_class]
+
+    def _track(manager):
+        classes = getattr(manager, "pool_classes_by_scheme", None)
+        if isinstance(classes, dict):
+            manager.pool_classes_by_scheme = {
+                scheme: _tracked_pool(pool_class) for scheme, pool_class in classes.items()
+            }
+        else:
+            _log_once(
+                "pools",
+                "This version of urllib3 has no pool_classes_by_scheme, so a stuck "
+                "InfluxDB read cannot be cut at its deadline",
+            )
+        return manager
+
+    class _Session(requests.Session):
+        def request(self, *args, **kwargs):
+            if not deadline:
+                deadline.append(time.monotonic() + seconds)
+            remaining = deadline[0] - time.monotonic()
+            if remaining <= 0 or cut_off.is_set():
+                raise _InfluxDeadlineExceeded()
+            connect, read = kwargs.get("timeout") or INFLUXDB_TIMEOUT_S
+            kwargs["timeout"] = (min(connect, remaining), min(read, remaining))
+            try:
+                return super().request(*args, **kwargs)
+            except requests.exceptions.RequestException as exc:
+                # A request that failed because the read was cut, or because its wait
+                # was the time left to the deadline, ends the whole read: it is not
+                # one query the server could not answer
+                if (
+                    cut_off.is_set()
+                    or time.monotonic() >= deadline[0]
+                    or (
+                        isinstance(exc, requests.exceptions.ConnectTimeout) and remaining <= connect
+                    )
+                    or (isinstance(exc, requests.exceptions.ReadTimeout) and remaining <= read)
+                ):
+                    raise _InfluxDeadlineExceeded() from exc
+                raise
+
+        def mount(self, prefix, adapter):
+            # Every adapter, the InfluxDB client's own included, opens its connections
+            # through pools that record them for cut(), directly or through a proxy
+            # manager, which requests builds only when a proxy is first used
+            super().mount(prefix, adapter)
+            if hasattr(adapter, "poolmanager"):
+                _track(adapter.poolmanager)
+            proxy_manager_for = getattr(adapter, "proxy_manager_for", None)
+            if proxy_manager_for is not None:
+                adapter.proxy_manager_for = lambda *a, **k: _track(proxy_manager_for(*a, **k))
+
+        def was_cut(self) -> bool:
+            return cut_off.is_set()
+
+        def cut(self):
+            with lock:
+                cut_off.set()
+                errors = [_shut(sock) for sock in opened]
+            _not_shut(errors)
+
+        def close(self):
+            super().close()
+            with lock:
+                for sock in opened:
+                    sock.close()
+                opened.clear()
+                released.clear()
+
+    session = _Session()
+    # A redirect raises instead of being followed: the configured server must
+    # not be able to send EMHASS, with its login, to an address of its choosing.
+    session.max_redirects = 0
+    return session
+
+
+# Threads running an InfluxDB read that its action no longer waits for
+_abandoned_reads: set[int] = set()
+_abandoned_lock = threading.Lock()
+
+
+class _AbandonedReadFilter(logging.Filter):
+    """On an action's logger: a line from an InfluxDB read the action stopped waiting for
+    goes to db_detail_logger instead. In the action log it would land among the lines of
+    a later action, which can fail that action's log check."""
+
+    def filter(self, record):
+        # Not on db_detail_logger itself, should it be an action's logger: the line
+        # would come back here
+        if record.thread not in _abandoned_reads or record.name == db_detail_logger.name:
+            return True
+        db_detail_logger.log(record.levelno, "After its action returned: %s", record.getMessage())
+        return False
+
+
+_abandoned_read_filter = _AbandonedReadFilter()
 
 
 class RetrieveHass:
@@ -254,8 +649,11 @@ class RetrieveHass:
         self.ssl_verify = None
         ssl_no_verify = False
         if self.params:
+            # The configuration keeps it in retrieve_hass_conf (associations.csv)
+            if self.params.get("retrieve_hass_conf", {}).get("ssl_no_verify") is True:
+                ssl_no_verify = True
             # Check root params
-            if self.params.get("ssl_no_verify", False):
+            elif self.params.get("ssl_no_verify", False):
                 ssl_no_verify = True
             # Check passed_data (runtime parameters)
             elif "passed_data" in self.params and self.params["passed_data"].get(
@@ -272,7 +670,9 @@ class RetrieveHass:
         else:
             self.logger.debug("Websocket integration disabled, using Home Assistant API")
         # Initialize InfluxDB configuration
-        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
+        # use_* is on only when it is the boolean True (see db_flag); the SSL settings are
+        # off only when they are False (see db_tls_setting)
+        self.use_influxdb = db_flag(self.params.get("retrieve_hass_conf", {}), "use_influxdb")
         if self.use_influxdb:
             influx_conf = self.params.get("retrieve_hass_conf", {})
             self.influxdb_host = influx_conf.get("influxdb_host", "localhost")
@@ -282,8 +682,12 @@ class RetrieveHass:
             self.influxdb_database = influx_conf.get("influxdb_database", "homeassistant")
             self.influxdb_measurement = influx_conf.get("influxdb_measurement", "W")
             self.influxdb_retention_policy = influx_conf.get("influxdb_retention_policy", "autogen")
-            self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
-            self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
+            self.influxdb_use_ssl = db_tls_setting(influx_conf, "influxdb_use_ssl")
+            # True, False or the path of a CA bundle file or folder, which requests takes
+            # as it is. It is loaded on the read's own thread (see _init_influx_client),
+            # not here on the event loop; one that cannot be loaded stops the read before
+            # anything is sent (as for VictoriaMetrics and the thermal reader)
+            self.influxdb_verify_ssl = db_tls_setting(influx_conf, "influxdb_verify_ssl")
             if not is_valid_db_host(self.influxdb_host) or not is_valid_db_port(self.influxdb_port):
                 # A path or query in the host or port would send the stored login, and
                 # the request, somewhere other than the database server
@@ -294,14 +698,15 @@ class RetrieveHass:
                 )
                 self.use_influxdb = False
         if self.use_influxdb:
+            warn_if_unverified_ssl(influx_conf, "influxdb", "InfluxDB")
             self.logger.info(
                 f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}"
             )
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
         # Initialize VictoriaMetrics configuration (PromQL/MetricsQL over HTTP, no client lib)
-        self.use_victoriametrics = self.params.get("retrieve_hass_conf", {}).get(
-            "use_victoriametrics", False
+        self.use_victoriametrics = db_flag(
+            self.params.get("retrieve_hass_conf", {}), "use_victoriametrics"
         )
         if self.use_victoriametrics:
             vm_conf = self.params.get("retrieve_hass_conf", {})
@@ -324,8 +729,8 @@ class RetrieveHass:
                     "matching on the entity_id and domain labels instead"
                 )
                 self.victoriametrics_entity_label = ""
-            self.victoriametrics_use_ssl = vm_conf.get("victoriametrics_use_ssl", False)
-            self.victoriametrics_verify_ssl = vm_conf.get("victoriametrics_verify_ssl", False)
+            self.victoriametrics_use_ssl = db_tls_setting(vm_conf, "victoriametrics_use_ssl")
+            self.victoriametrics_verify_ssl = db_tls_setting(vm_conf, "victoriametrics_verify_ssl")
             if not is_valid_db_host(self.victoriametrics_host) or not is_valid_db_port(
                 self.victoriametrics_port
             ):
@@ -336,6 +741,7 @@ class RetrieveHass:
                 )
                 self.use_victoriametrics = False
         if self.use_victoriametrics:
+            warn_if_unverified_ssl(vm_conf, "victoriametrics", "VictoriaMetrics")
             if self.use_influxdb:
                 self.logger.warning(
                     "Both use_influxdb and use_victoriametrics are enabled, InfluxDB takes precedence"
@@ -568,7 +974,7 @@ class RetrieveHass:
         self.marker_buckets = {}
         # Use InfluxDB if configured (Prioritize over WebSocket/REST for history)
         if self.use_influxdb:
-            return self.get_data_influxdb(days_list, var_list)
+            return await self._get_data_influxdb_off_loop(days_list, var_list)
 
         # Use VictoriaMetrics if configured (same role as InfluxDB: long history for ML)
         if self.use_victoriametrics:
@@ -1279,6 +1685,7 @@ class RetrieveHass:
         self,
         days_list: pd.date_range,
         var_list: list,
+        session=None,
     ) -> bool:
         """
         Retrieve data from InfluxDB database.
@@ -1306,16 +1713,109 @@ class RetrieveHass:
             self.logger.error("Empty days_list provided")
             return False
 
-        client = self._init_influx_client()
+        if session is None:
+            session = _influx_session(INFLUXDB_READ_DEADLINE_S)
+        client = self._init_influx_client(session=session)
         if not client:
             return False
+        try:
+            return self._read_influx(client, days_list, var_list)
+        except _InfluxDeadlineExceeded:
+            # When the read was cut, the action that cut it says why
+            if not session.was_cut():
+                self.logger.error(
+                    f"InfluxDB read stopped: it took longer than {INFLUXDB_READ_DEADLINE_S} s"
+                )
+            return False
+        except _InfluxReadStopped:
+            self.logger.error(
+                "InfluxDB read stopped: could not reach the configured InfluxDB server"
+            )
+            return False
+        finally:
+            client.close()
 
+    async def _get_data_influxdb_off_loop(self, days_list: pd.date_range, var_list: list) -> bool:
+        """get_data_influxdb on the InfluxDB threads, returning by the deadline.
+
+        The client blocks, so it runs off the event loop, which keeps serving every other
+        request while the server is slow or silent. The action, and any lock it holds,
+        returns a few seconds after INFLUXDB_READ_DEADLINE_S even if a reply is still
+        trickling in: the read's connections are then shut and its thread left to end.
+        That wait starts when the read is submitted, so a read still queued behind busy
+        threads by then is dropped without running. What the read logs once its action
+        has returned goes to db_detail_logger, not to the action's log.
+        """
+        session = _influx_session(INFLUXDB_READ_DEADLINE_S)
+        state = {"thread": None, "abandoned": False}
+
+        def run():
+            with _abandoned_lock:
+                state["thread"] = threading.get_ident()
+                if state["abandoned"]:
+                    _abandoned_reads.add(state["thread"])
+            try:
+                return self.get_data_influxdb(days_list, var_list, session)
+            finally:
+                with _abandoned_lock:
+                    _abandoned_reads.discard(state["thread"])
+                    state["thread"] = None
+
+        def abandon():
+            session.cut()
+            # A read that has not started yet never will
+            future.cancel()
+            with _abandoned_lock:
+                state["abandoned"] = True
+                if state["thread"] is not None:
+                    _abandoned_reads.add(state["thread"])
+            # However it ends, it has been answered for here
+            read.add_done_callback(lambda f: f.cancelled() or f.exception())
+
+        add_filter = getattr(self.logger, "addFilter", None)
+        if add_filter is not None:
+            add_filter(_abandoned_read_filter)  # added once per logger
+        # In the request's context, as asyncio.to_thread would run it: a dry run's
+        # records then stay with its reply, out of the action log (web_server._dry_run_log)
+        future = _influx_executor.submit(contextvars.copy_context().run, run)
+        read = asyncio.wrap_future(future)
+        try:
+            # shield: the read is not cancelled, so it can still be waited on below
+            return await asyncio.wait_for(
+                asyncio.shield(read), INFLUXDB_READ_DEADLINE_S + INFLUXDB_DEADLINE_MARGIN_S
+            )
+        except asyncio.CancelledError:
+            # Nobody waits for this read any more: end it too
+            abandon()
+            self.logger.error("InfluxDB read stopped: the action was cancelled")
+            raise
+        except TimeoutError:
+            session.cut()
+            future.cancel()
+            # A moment for the read to end, so that what it logs stays with this action
+            try:
+                await asyncio.wait({read}, timeout=INFLUXDB_CUT_GRACE_S)
+            except asyncio.CancelledError:
+                abandon()
+                self.logger.error("InfluxDB read stopped: the action was cancelled")
+                raise
+            abandon()
+            self.logger.error(
+                f"InfluxDB read stopped: it took longer than {INFLUXDB_READ_DEADLINE_S} s"
+            )
+            return False
+
+    def _read_influx(self, client, days_list: pd.date_range, var_list: list) -> bool:
+        """The body of get_data_influxdb, with a connected client."""
         # Convert all timestamps to UTC for comparison, then make naive for InfluxDB
         # This ensures we compare actual instants in time, not wall clock times
         # InfluxDB queries expect naive UTC timestamps (with 'Z' suffix). The end is
         # capped at the current time so FILL(previous) cannot create fake future points.
         start_time, requested_end, end_time = self._utc_query_window(days_list)
         total_days = (end_time - start_time).days
+        # A measurement whose tag query failed is asked once per read (see
+        # _discover_entity_measurement); the next read asks again
+        self._failed_tag_measurements = set()
 
         self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
         self.logger.debug(f"Time range: {start_time} to {end_time}")
@@ -1353,8 +1853,6 @@ class RetrieveHass:
                     continue
 
             sensor_dfs.append(df_variable)
-
-        client.close()
 
         if failed_variables:
             self.logger.error(
@@ -1484,6 +1982,8 @@ class RetrieveHass:
             elif variable not in plain_sensors:
                 plain_sensors.append(variable)
 
+        if not await self._vm_load_ca():
+            return False
         padded_start = start_time - INFLUX_EXPRESSION_LOOKBACK
         semaphore = asyncio.Semaphore(4)
 
@@ -1491,7 +1991,7 @@ class RetrieveHass:
             async with semaphore:
                 return await self._fetch_sensor_data_vm(session, entity, window_start, end_time)
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=VM_CLIENT_TIMEOUT) as session:
             fetched = await asyncio.gather(
                 *[_fetch_one(session, s, start_time) for s in plain_sensors],
                 *[_fetch_one(session, e, padded_start) for e in expression_entities],
@@ -1564,10 +2064,36 @@ class RetrieveHass:
             ) from None
         return {"Authorization": f"Basic {token}"}
 
-    def _vm_ssl(self) -> bool | None:
-        """aiohttp ``ssl`` argument: False disables certificate verification over HTTPS."""
-        if self.victoriametrics_use_ssl and not self.victoriametrics_verify_ssl:
+    async def _vm_load_ca(self) -> bool:
+        """Load the CA bundle victoriametrics_verify_ssl names, once, off the event loop
+        (see db_aiohttp_ssl). False, with a fixed line in the action log, when it cannot
+        be used: VictoriaMetrics is then not contacted."""
+        if not self.victoriametrics_use_ssl or not isinstance(self.victoriametrics_verify_ssl, str):
+            return True
+        if getattr(self, "_vm_ca_context", None) is None:
+            self._vm_ca_context = await db_aiohttp_ssl(
+                self.victoriametrics_verify_ssl, "victoriametrics_verify_ssl"
+            )
+        if self._vm_ca_context is None:
+            self.logger.error(db_ca_unusable("VictoriaMetrics"))
             return False
+        return True
+
+    def _vm_ssl(self):
+        """aiohttp ``ssl`` argument: False disables certificate verification over HTTPS,
+        a context checks the certificate against the CA bundle victoriametrics_verify_ssl
+        names, as _vm_load_ca loaded it. Raises _DbCaUnusable for a bundle that was not
+        loaded: it is never loaded here, on the event loop, and never replaced by the
+        default CAs."""
+        if not self.victoriametrics_use_ssl:
+            return None
+        if self.victoriametrics_verify_ssl is False:
+            return False
+        if isinstance(self.victoriametrics_verify_ssl, str):
+            context = getattr(self, "_vm_ca_context", None)
+            if context is None:
+                raise _DbCaUnusable()
+            return context
         return None
 
     def _vm_selector(self, sensor: str) -> str:
@@ -1627,13 +2153,18 @@ class RetrieveHass:
             self.logger.error(f"Invalid VictoriaMetrics credentials: {e}")
             return None
         try:
+            ssl_arg = self._vm_ssl()
+        except _DbCaUnusable:
+            self.logger.error(db_ca_unusable("VictoriaMetrics"))
+            return None
+        try:
             # Redirects are not followed: the configured server must not be able to send
             # EMHASS, with its credentials, to an address and path of its choosing.
             async with session.get(
                 url,
                 params=params,
                 headers=headers,
-                ssl=self._vm_ssl(),
+                ssl=ssl_arg,
                 allow_redirects=False,
             ) as response:
                 body = await response.read()
@@ -1642,25 +2173,46 @@ class RetrieveHass:
                         "VictoriaMetrics returned 401 Unauthorized, check victoriametrics_username/password"
                     )
                     return None
-                if response.status > 299:
+                if response.status == 403:
                     self.logger.error(
-                        f"VictoriaMetrics query_range error {response.status} ({len(body)} bytes)"
+                        "VictoriaMetrics returned 403 Forbidden, check victoriametrics_username/password"
+                    )
+                    return None
+                if response.status > 299:
+                    # Neither the status nor the length of the reply: they would let a
+                    # caller probe the server
+                    db_detail_logger.warning(
+                        "VictoriaMetrics read failed: HTTP %s", response.status
+                    )
+                    self.logger.error(
+                        f"VictoriaMetrics query failed: {_unexpected_reply('VictoriaMetrics')}"
                     )
                     return None
                 payload = orjson.loads(body)
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
+            # The total timeout raises TimeoutError, not a ClientError.
+            # Neither the URL nor the kind of connection error: see _db_error
             self.logger.error(
-                f"Network error connecting to VictoriaMetrics at {url}: {_upstream_error(e)}"
+                f"Network error connecting to VictoriaMetrics: {_db_error(e, 'VictoriaMetrics')}"
             )
             return None
         except (orjson.JSONDecodeError, ValueError) as e:
-            self.logger.error(f"Invalid JSON from VictoriaMetrics: {type(e).__name__}")
+            db_detail_logger.warning(
+                "VictoriaMetrics read failed: %s: %s", type(e).__name__, _printable(e)
+            )
+            self.logger.error(
+                f"VictoriaMetrics query failed: {_unexpected_reply('VictoriaMetrics')}"
+            )
             return None
         if not isinstance(payload, dict) or payload.get("status") != "success":
-            status = payload.get("status") if isinstance(payload, dict) else None
-            # Only a known value is shown: the field is the server's text
-            shown = status if status == "error" else "unexpected"
-            self.logger.error(f"VictoriaMetrics query failed (status {shown})")
+            detail = payload.get("error") if isinstance(payload, dict) else None
+            db_detail_logger.warning(
+                "VictoriaMetrics read failed: the reply is not a success: %s",
+                _printable(detail),
+            )
+            self.logger.error(
+                f"VictoriaMetrics query failed: {_unexpected_reply('VictoriaMetrics')}"
+            )
             return None
         return payload.get("data", {}).get("result", [])
 
@@ -1944,21 +2496,30 @@ class RetrieveHass:
             raise ValueError("Expression must produce a pandas Series result.")
         return result
 
-    def _init_influx_client(self):
-        """Initialize InfluxDB client connection."""
+    def _init_influx_client(self, session=None):
+        """Initialize InfluxDB client connection.
+
+        Every request the client makes, the ping included, ends by the deadline of
+        ``session`` (from _influx_session; by default a new one, so
+        INFLUXDB_READ_DEADLINE_S from the ping).
+        """
         try:
             from influxdb import InfluxDBClient
         except ImportError:
             self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
             return None
 
+        if self.influxdb_use_ssl and isinstance(self.influxdb_verify_ssl, str):
+            # Loaded here, on the read's own thread: a path that blocks (a stale network
+            # mount) holds this read, bounded by its action's wait, not the event loop.
+            # One that cannot be loaded stops the read: no request, so no login, is sent.
+            if db_ca_context(self.influxdb_verify_ssl, "influxdb_verify_ssl") is None:
+                self.logger.error(db_ca_unusable("InfluxDB"))
+                return None
+        if session is None:
+            session = _influx_session(INFLUXDB_READ_DEADLINE_S)
+        client = None
         try:
-            import requests
-
-            # A redirect raises instead of being followed: the configured server must
-            # not be able to send EMHASS, with its login, to an address of its choosing.
-            session = requests.Session()
-            session.max_redirects = 0
             client = InfluxDBClient(
                 host=self.influxdb_host,
                 port=self.influxdb_port,
@@ -1967,6 +2528,8 @@ class RetrieveHass:
                 database=self.influxdb_database,
                 ssl=self.influxdb_use_ssl,
                 verify_ssl=self.influxdb_verify_ssl,
+                timeout=INFLUXDB_TIMEOUT_S,
+                retries=INFLUXDB_RETRIES,
                 session=session,
             )
             # Test connection
@@ -1981,7 +2544,9 @@ class RetrieveHass:
 
             return client
         except Exception as e:
-            self.logger.error(f"Failed to connect to InfluxDB: {_upstream_error(e)}")
+            self.logger.error(f"Failed to connect to InfluxDB: {_db_error(e, 'InfluxDB')}")
+            if client is not None:
+                client.close()
             return None
 
     def _shown_measurement(self, measurement) -> str:
@@ -1991,11 +2556,29 @@ class RetrieveHass:
             return repr(measurement)
         return "found on the server"
 
-    def _discover_entity_measurement(self, client, entity_id: str) -> str:
-        """Auto-discover which measurement contains the given entity."""
+    def _discover_entity_measurement(self, client, entity_id: str) -> str | None:
+        """Auto-discover which measurement contains the given entity.
+
+        When a SHOW TAG VALUES it needs fails in any way but a refusal (see
+        _refused_query): no reply (a read timeout, a reset, a reply cut off part way: the
+        query is skipped, see _could_not_connect), a 5xx, a 408 or 429, a reply that is
+        not JSON (one cut off with no length given), or an error inside a 200 (InfluxDB's
+        own query timeout), that measurement is returned, not cached, and its SELECT
+        decides (see _fetch_sensor_data): data there means it is the first measurement
+        in the search order to hold the entity, which is what the tag query would have
+        found; no data skips the sensor. Neither a later measurement that also holds it
+        (a sensor whose unit changed is in both, read 1000 times off from the other) nor
+        the default measurement is taken. Such a measurement is remembered for the rest
+        of the read: a later sensor that gets to it is sent to it the same way, without
+        asking again. A refusal is passed over as before, so a server that refuses SHOW
+        TAG VALUES still falls back to the default measurement; so is an empty reply,
+        which is how a measurement without the entity answers.
+        """
         # Check cache first
         if entity_id in self._measurement_cache:
             return self._measurement_cache[entity_id]
+        # The measurements whose tag query failed in this read (see _read_influx)
+        failed = self.__dict__.setdefault("_failed_tag_measurements", set())
 
         try:
             # Get all available measurements
@@ -2017,6 +2600,8 @@ class RetrieveHass:
             for measurement in all_measurements:
                 if measurement not in measurements:
                     continue  # Skip if measurement doesn't exist
+                if measurement in failed:
+                    return measurement
 
                 try:
                     # Use SHOW TAG VALUES to get all entity_ids in this measurement
@@ -2041,17 +2626,35 @@ class RetrieveHass:
                             self._measurement_cache[entity_id] = measurement
                             return measurement
 
+                except _INFLUX_READ_ENDED:
+                    raise
                 except Exception as query_error:
                     self.logger.debug(
                         f"Tag query failed for measurement {self._shown_measurement(measurement)}: "
-                        f"{_upstream_error(query_error)}"
+                        f"{_db_error(query_error, 'InfluxDB', logging.DEBUG)}"
                     )
-                    continue
+                    # Only a server that cannot be connected to ends the read. A 4xx
+                    # says the server refuses the query: the next measurement is
+                    # searched. On any other failure the measurements after this one
+                    # cannot say where the entity is first: this one's SELECT decides
+                    if _could_not_connect(query_error):
+                        raise _InfluxReadStopped() from None
+                    if _refused_query(query_error):
+                        continue
+                    failed.add(measurement)
+                    return measurement
 
+        except _INFLUX_READ_ENDED:
+            # Ends the whole read, not just this entity's discovery: no query on the
+            # default measurement of a server that cannot be reached
+            raise
         except Exception as e:
             self.logger.error(
-                f"Error discovering measurement for entity {entity_id!r}: {_upstream_error(e)}"
+                f"Error discovering measurement for entity {entity_id!r}: "
+                f"{_db_error(e, 'InfluxDB')}"
             )
+            if _unreachable(e):
+                raise _InfluxReadStopped() from None
 
         # Fallback to default measurement if not found
         self.logger.warning(
@@ -2110,6 +2713,11 @@ class RetrieveHass:
 
         # Auto-discover which measurement contains this entity
         measurement = self._discover_entity_measurement(client, entity_id)
+        # Not found by a tag query but sent there after one failed: no data means the
+        # entity may be in a later measurement, which is not taken
+        unconfirmed = self._measurement_cache.get(entity_id) != measurement and (
+            measurement in self.__dict__.get("_failed_tag_measurements", ())
+        )
         if not measurement:
             self.logger.warning(f"Entity '{entity_id}' not found in any InfluxDB measurement")
             return None
@@ -2129,6 +2737,12 @@ class RetrieveHass:
             points = list(result.get_points())
 
             if not points:
+                if unconfirmed:
+                    self.logger.error(
+                        f"InfluxDB sensor {entity_id!r} skipped: a query looking for its "
+                        "measurement failed"
+                    )
+                    return None
                 self.logger.warning(
                     f"No data found for entity: {entity_id} in measurement "
                     f"{self._shown_measurement(measurement)}"
@@ -2173,12 +2787,18 @@ class RetrieveHass:
             )
             return df_sensor
 
+        except _INFLUX_READ_ENDED:
+            raise
         except Exception as e:
             self.logger.error(
                 f"Failed to query entity {entity_id!r} from measurement "
                 f"{self._shown_measurement(measurement)}: "
-                f"{_upstream_error(e)}"
+                f"{_db_error(e, 'InfluxDB')}"
             )
+            # Only a server that cannot be connected to ends the read: a timeout or a
+            # reset on this query skips this sensor, as a missing sensor is skipped
+            if _could_not_connect(e):
+                raise _InfluxReadStopped() from None
             return None
 
     def _validate_sensor_list(self, target_list: list, list_name: str) -> list:
@@ -2821,7 +3441,7 @@ class RetrieveHass:
                         "unit_of_measurement": unit_of_measurement,
                         "friendly_name": friendly_name,
                         "type_var": type_var,
-                        "optimization_time_step": int(self.freq.seconds / 60),
+                        "optimization_time_step": int(self.freq.total_seconds() / 60),
                     }
                     if extra_attributes:
                         metadata[entity_id]["attributes"] = extra_attributes
@@ -2829,8 +3449,8 @@ class RetrieveHass:
                     # Find lowest frequency to set for continual loop freq
                     if metadata.get("lowest_time_step") is None or metadata[
                         "lowest_time_step"
-                    ] > int(self.freq.seconds / 60):
-                        metadata["lowest_time_step"] = int(self.freq.seconds / 60)
+                    ] > int(self.freq.total_seconds() / 60):
+                        metadata["lowest_time_step"] = int(self.freq.total_seconds() / 60)
 
                     # Atomic commit: write to a per-process temp file then
                     # os.replace, so a concurrent reader always sees a complete

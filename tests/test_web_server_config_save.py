@@ -9,11 +9,13 @@ on scratch paths.
 
 import asyncio
 import errno
+import linecache
 import logging
 import os
 import pathlib
 import pickle
 import stat
+import sys
 from unittest.mock import patch
 
 import orjson
@@ -66,13 +68,24 @@ def web(tmp_path, monkeypatch):
     )
 
 
-def _failing_on_call(n, real, failure):
-    """A build_params stand-in that runs the real one except on call ``n``."""
-    calls = {"n": 0}
+def _builds_params_pkl(frame) -> bool:
+    """True when ``frame`` is the save's call of build_params for params.pkl.
+
+    A save calls build_params three times: for the configuration saved now (to compare
+    the save with, as /get-config serves it), for the body, and for params.pkl. Which
+    call is which is told by its caller's line, not by its number.
+    """
+    return "saved_params = await build_params(" in linecache.getline(
+        frame.f_code.co_filename, frame.f_lineno
+    )
+
+
+def _failing_params_pkl_build(real, failure, failed):
+    """A build_params stand-in that runs the real one except for params.pkl."""
 
     async def build(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == n:
+        if _builds_params_pkl(sys._getframe(1)):
+            failed.append(True)
             if isinstance(failure, Exception):
                 raise failure
             return failure
@@ -94,12 +107,14 @@ def test_a_save_writes_both_files_and_they_agree(web):
 )
 def test_a_failed_params_build_leaves_both_files_as_they_were(web, failure):
     before = web.files()
-    # The second build_params call in a save is the one for params.pkl.
-    with patch.object(web.ws, "build_params", _failing_on_call(2, web.ws.build_params, failure)):
+    failed = []
+    build = _failing_params_pkl_build(web.ws.build_params, failure, failed)
+    with patch.object(web.ws, "build_params", build):
         try:
             status, _ = web.post(CHANGE)
         except RuntimeError:
             status = 500
+    assert failed == [True]
     assert status == 500
     assert web.files() == before
 
@@ -111,12 +126,14 @@ def test_params_pkl_keeps_its_old_content_while_a_save_builds_the_new_one(web):
     real = web.ws.build_params
 
     async def build(*args, **kwargs):
-        seen.append(pkl.read_bytes())
+        seen.append((_builds_params_pkl(sys._getframe(1)), pkl.read_bytes()))
         return await real(*args, **kwargs)
 
     with patch.object(web.ws, "build_params", build):
         assert web.post(CHANGE)[0] == 200
-    assert seen == [before, before]
+    # Every build, the one for params.pkl among them, sees its old content
+    assert [for_pkl for for_pkl, _ in seen].count(True) == 1
+    assert all(content == before for _, content in seen)
     assert pkl.read_bytes() != before
 
 

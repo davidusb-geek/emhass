@@ -6,18 +6,19 @@ import contextvars
 import errno
 import hashlib
 import hmac
+import json
 import logging
 import os
 import pickle
 import platform
 import re
-import tempfile
 import time
 import weakref
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiofiles
 import jinja2
@@ -29,12 +30,15 @@ from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 from werkzeug.exceptions import HTTPException
+from yaml.composer import ComposerError
+from yaml.events import AliasEvent
 
 from emhass import api_auth, last_run, plan_store
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
     dayahead_forecast_optim,
+    error_place,
     export_influxdb_to_csv,
     forecast_calibration,
     forecast_model_fit,
@@ -59,13 +63,18 @@ from emhass.utils import (
     RuntimeParamError,
     SocFractionError,
     battery_count_faults,
+    bounded_value_faults,
+    bounded_value_forms,
     build_config,
     build_legacy_config_params,
     build_params,
     build_secrets,
     compile_heat_topology,
     compute_thermal_model_calibration,
+    config_shape,
     config_value_faults,
+    db_endpoint_changes,
+    db_flag,
     dry_run_request_problem,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
@@ -75,8 +84,13 @@ from emhass.utils import (
     inverter_config_faults,
     inverter_power_curve_faults,
     param_to_config,
+    private_temp_dir,
     read_flag,
     replace_file,
+    save_shape_faults,
+    stored_config_faults,
+    stored_db_logins,
+    stored_load_number_faults,
     try_lock_file,
     unlock_file,
 )
@@ -84,6 +98,91 @@ from emhass.utils import (
 app = Quart(__name__)
 # API access control: a before_request hook plus /login, /logout and /api-token.
 api_auth.install(app)
+
+
+def _malformed_request(scope: dict) -> str | None:
+    """Why Quart could not take this request in, or None.
+
+    These requests fail inside Quart before its error handling and the API's
+    access control are reached, and each one logged a full traceback with a
+    500: an empty path (a request line such as "GET ?x"), a target that is not
+    a path and that urlparse refuses (such as "http://["), and a Host whose name
+    has no IDNA form (an empty or over-long label, as in "a..b"). The checks
+    are the ones Quart and werkzeug make: Quart parses a target that does not
+    start with "/" with urlparse, and werkzeug encodes the host name when it
+    binds the URL map."""
+    path = scope.get("path")
+    if not path:
+        return "the request has no path"
+    if path[0] != "/":
+        try:
+            urlparse(path)
+        except ValueError:
+            return "the request target is not a valid URL"
+    for name, value in scope.get("headers") or ():
+        if name.lower() == b"host":
+            host = value.decode("latin-1").lower().partition(":")[0]
+            if not host.isascii():
+                # werkzeug takes a host it cannot match as empty and never encodes it;
+                # encoding a long one here would cost far more than the request
+                continue
+            try:
+                host.encode("idna")
+            except UnicodeError:
+                return "the Host header is not a valid host name"
+    return None
+
+
+# Refused malformed requests are logged at most once a minute, with a count, on
+# the server's own log (uvicorn.error, which gunicorn's error log receives) and
+# never on app.logger: its handler writes the action log, which a caller
+# without credentials must not be able to fill.
+MALFORMED_LOG_INTERVAL_S = 60.0
+_malformed_log = {"count": 0, "last": float("-inf")}
+
+
+def _note_malformed_request(problem: str) -> None:
+    _malformed_log["count"] += 1
+    now = time.monotonic()
+    if now - _malformed_log["last"] < MALFORMED_LOG_INTERVAL_S:
+        return
+    logging.getLogger("uvicorn.error").warning(
+        "EMHASS refused %d malformed request(s) since the last such message, the latest because %s",
+        _malformed_log["count"],
+        problem,
+    )
+    _malformed_log["count"] = 0
+    _malformed_log["last"] = now
+
+
+def _refusing_malformed_requests(asgi_app):
+    async def refusing(scope, receive, send):
+        problem = _malformed_request(scope) if scope["type"] in ("http", "websocket") else None
+        if problem is None:
+            return await asgi_app(scope, receive, send)
+        _note_malformed_request(problem)
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return None
+        body = f"EMHASS >> Bad request: {problem}.\n".encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 400,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"x-content-type-options", b"nosniff"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+        return None
+
+    return refusing
+
+
+app.asgi_app = _refusing_malformed_requests(app.asgi_app)
 
 
 def _api_token_sources() -> tuple[str, str]:
@@ -115,6 +214,10 @@ templates = jinja2.Environment(
 )
 
 action_log_str = "action_logs.txt"
+# The action log is cut back to its last ACTION_LOG_KEEP_BYTES once it passes
+# ACTION_LOG_MAX_BYTES (_ActionLogHandler).
+ACTION_LOG_MAX_BYTES = 4 * 1024 * 1024
+ACTION_LOG_KEEP_BYTES = 1024 * 1024
 injection_dict_file = "injection_dict.pkl"
 params_file = "params.pkl"
 # What orjson cannot write back, for the 400 a request body that hits it gets.
@@ -123,6 +226,29 @@ ORJSON_LIMITS = (
     "254 levels deep, and text must be valid UTF-8"
 )
 error_msg_associations_file = "Unable to obtain associations file"
+# The largest YAML /get-json reads: a configuration file is a few KiB.
+GET_JSON_MAX_BYTES = 256 * 1024
+# A configuration that build_params cannot read (a setting of the wrong type or shape)
+_SHAPE_REFUSED = "config is invalid: a setting has the wrong type or shape; see the log"
+
+
+class _AliasRefused(ComposerError):
+    """An alias in the YAML sent to /get-json."""
+
+
+class _NoAliasSafeLoader(yaml.SafeLoader):
+    """yaml.SafeLoader that refuses aliases. An anchor used over and over can turn a
+    few hundred bytes into a structure of millions of entries, which every later
+    step (the conversion, the JSON reply) then copies. A configuration has no use
+    for one. A merge key reuses an anchor through an alias, so it is refused too."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(AliasEvent):
+            raise _AliasRefused(
+                None, None, "aliases are not accepted", self.peek_event().start_mark
+            )
+        return super().compose_node(parent, index)
+
 
 # The (level, message) records of the dry run being served, or None outside
 # one. Each request runs in its own task with its own copy of the context, so
@@ -207,11 +333,11 @@ async def _non_json_body_response():
 
 def _dry_run_slot() -> Path:
     """The lock file that lets one dry run at a time run on this EMHASS, across
-    all its Gunicorn workers. It is outside the data folder, where a dry run
-    writes nothing, and named after that folder, so two EMHASS on one host
-    each have their own."""
+    all its Gunicorn workers. It is normally outside the data folder, where a dry
+    run writes nothing, in this account's own temp folder (see private_temp_dir), and
+    named after the data folder, so two EMHASS on one host each have their own."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-dry-run-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-dry-run-{key[:16]}.lock"
 
 
 # How long a configuration save waits for another one to finish writing. Writing the
@@ -223,7 +349,7 @@ def _config_save_slot() -> Path:
     """The lock file that lets one configuration save at a time write config.json and
     params.pkl, across all Gunicorn workers. Placed and named like the dry run's."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-config-save-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-config-save-{key[:16]}.lock"
 
 
 async def _write_config_json(path: Path, content: str) -> None:
@@ -254,7 +380,7 @@ async def _wait_for_lock(slot, timeout_s: float) -> bool:
 def _live_optim_slot() -> Path:
     """One live optimization at a time across workers sharing a data folder."""
     key = hashlib.sha256(str(Path(emhass_conf["data_path"]).resolve()).encode()).hexdigest()
-    return Path(tempfile.gettempdir()) / f"emhass-live-optim-{key[:16]}.lock"
+    return private_temp_dir(emhass_conf["data_path"]) / f"emhass-live-optim-{key[:16]}.lock"
 
 
 @asynccontextmanager
@@ -394,7 +520,9 @@ async def _participant_service_for_params():
         params is None
         or not isinstance(params["optim_conf"].get("participant_api"), dict)
         or not token
+        or not api_auth.is_text(token)
         or len(token) < api_auth.MIN_LENGTH
+        or api_auth.is_example_token(token)
         or _web_workers() > 1
     ):
         return None
@@ -474,12 +602,16 @@ async def check_file_log(ref_string: str | None = None) -> bool:
     log_array: list[str] = []
 
     if ref_string is not None:
+        if _cut_from_the_action_log("lost_error", ref_string):
+            return True  # this action logged an error, and the log has been cut past it since
         log_array = await grab_log(
             ref_string
         )  # grab reduced log array (everything after string match)
     else:
         if (emhass_conf["data_path"] / action_log_str).exists():
-            async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
+            async with aiofiles.open(
+                str(emhass_conf["data_path"] / action_log_str), errors="replace"
+            ) as fp:
                 content = await fp.read()
                 log_array = content.splitlines()
         else:
@@ -505,7 +637,9 @@ async def grab_log(ref_string: str | None = None) -> list[str]:
     is_found = []
     output = []
     if (emhass_conf["data_path"] / action_log_str).exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
+        async with aiofiles.open(
+            str(emhass_conf["data_path"] / action_log_str), errors="replace"
+        ) as fp:
             content = await fp.read()
             log_array = content.splitlines()
         # Find all string matches, log key (line Number) in is_found
@@ -516,7 +650,23 @@ async def grab_log(ref_string: str | None = None) -> list[str]:
             # Use last item in is_found to extract action logs
             for x in range(is_found[-1], len(log_array)):
                 output.append(log_array[x])
+        elif ref_string is not None and _cut_from_the_action_log("lost_action_line", ref_string):
+            # The newest action's line, the one asked for, was written and has been
+            # cut away since, so every line still in the file is newer than it.
+            output = log_array
     return output
+
+
+def _cut_from_the_action_log(what: str, ref_string: str) -> bool:
+    """Whether an action log handler on app.logger has cut away the newest action's
+    " >> " line ("lost_action_line"), or an ERROR logged after it ("lost_error"),
+    and that line is one ref_string matches. Each handler knows only its own cuts,
+    so this holds for one handler per file in one process."""
+    return any(
+        getattr(handler, what, False) is True
+        and re.search(ref_string, getattr(handler, "action_line", "")) is not None
+        for handler in app.logger.handlers
+    )
 
 
 # Clear the log file
@@ -704,8 +854,14 @@ async def json_convert():
     """
     app.logger.info("Attempting to convert YAML to JSON")
     data = await request.get_data()
+    if len(data) > GET_JSON_MAX_BYTES:
+        app.logger.warning("Refused the YAML sent to /get-json: it is larger than 256 KiB")
+        return await make_response(["The YAML must be at most 256 KiB"], 400)
     try:
-        yaml_config = yaml.safe_load(data)
+        yaml_config = yaml.load(data, Loader=_NoAliasSafeLoader)
+    except _AliasRefused:
+        app.logger.warning("Refused the YAML sent to /get-json: it uses an alias")
+        return await make_response(["YAML aliases and merge keys are not accepted"], 400)
     except Exception as e:
         # A YAML error's text quotes the lines around the error, which can hold
         # a secret: the API token, in pieces the log mask cannot match. A tag
@@ -715,15 +871,31 @@ async def json_convert():
         app.logger.warning(f"Could not parse the YAML sent to /get-json ({type(e).__name__})")
         return await make_response(["failed to Parse YAML from data"], 400)
 
-    # If filed to Parse YAML
-    if yaml_config is None:
+    # If filed to Parse YAML. A list or a scalar is not a configuration either.
+    if not isinstance(yaml_config, dict):
         return await make_response(["failed to Parse YAML from data"], 400)
     # Test YAML is legacy config format (from config_emhass.yaml)
-    test_legacy_config = await build_legacy_config_params(emhass_conf, yaml_config, app.logger)
+    try:
+        test_legacy_config = await build_legacy_config_params(emhass_conf, yaml_config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        # A legacy section that is not a mapping, for one
+        app.logger.warning("Refused the YAML sent to /get-json: %s", type(e).__name__)
+        return await make_response([_SHAPE_REFUSED], 400)
     if test_legacy_config:
         yaml_config = test_legacy_config
+    # build_params builds one entry per deferrable load, so the sizes are checked first
+    bound_faults = bounded_value_faults(yaml_config) + battery_count_faults(yaml_config)
+    if bound_faults:
+        app.logger.warning("Refused the YAML sent to /get-json: %s", bound_faults)
+        return await make_response(bound_faults, 400)
+    # As the numbers they stand for: build_params needs an int where "3.0" or 3.0 was sent
+    yaml_config.update(bounded_value_forms(yaml_config))
     # Format YAML to params (format params. check if params match legacy option.json format)
-    params = await build_params(emhass_conf, {}, yaml_config, app.logger)
+    try:
+        params = await build_params(emhass_conf, {}, yaml_config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Refused the YAML sent to /get-json: %s", type(e).__name__)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(params) is bool and not params:
         return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
@@ -733,6 +905,240 @@ async def json_convert():
     response = await make_response(orjson.dumps(config), 200)
     response.headers["Content-Type"] = "application/json"
     return response
+
+
+DB_SERVER_CHANGE_REFUSED = (
+    "The server of a database whose login is stored (its host or port, or turning SSL or "
+    "certificate checks off, or a different CA file) can only be changed in config.json "
+    "followed by a restart, or by an administrator in the EMHASS web UI opened from the "
+    "Home Assistant sidebar. Turning SSL or certificate checks on is allowed; turning them "
+    "off again needs one of those two. Nothing was saved"
+)
+# The settings that may hold the path of a CA bundle in a hand-written config.json
+_DB_CA_PATH_KEYS = ("influxdb_verify_ssl", "victoriametrics_verify_ssl")
+SAVED_PARAMS_UNREADABLE = (
+    "The saved settings cannot be read; restart EMHASS, which rebuilds them, then save "
+    "again. Nothing was saved"
+)
+
+
+async def _read_saved_params() -> dict | None:
+    """The params in params.pkl, or None when it is missing or cannot be read, or its
+    retrieve_hass_conf is not a dict."""
+    from emhass import participant_api
+
+    try:
+        params = await participant_api.read_params(emhass_conf)
+    except participant_api.ConfigUnreadable:
+        return None
+    if not isinstance(params, dict):
+        return None
+    if not isinstance(params.get("retrieve_hass_conf", {}), dict):
+        return None
+    return params
+
+
+def _ca_paths(conf) -> dict[str, str]:
+    """The CA paths (non-empty texts) in the ``*_verify_ssl`` settings of ``conf``."""
+    if not isinstance(conf, dict):
+        return {}
+    return {
+        key: conf[key] for key in _DB_CA_PATH_KEYS if isinstance(conf.get(key), str) and conf[key]
+    }
+
+
+async def _config_json_ca_paths() -> dict[str, str] | None:
+    """The CA paths written in config.json; None when it cannot be read, or holds no
+    JSON object, which says nothing about them."""
+    try:
+        async with aiofiles.open(str(emhass_conf["config_path"]), "rb") as fp:
+            written = orjson.loads(await fp.read())
+    except (OSError, orjson.JSONDecodeError):
+        return None
+    if not isinstance(written, dict):
+        return None
+    return _ca_paths(written)
+
+
+def _config_json_is_newer() -> bool:
+    """True when config.json was written after params.pkl: edited by hand since the last
+    start or save, which write config.json first."""
+    try:
+        written = os.stat(emhass_conf["config_path"]).st_mtime_ns
+        built = os.stat(emhass_conf["data_path"] / params_file).st_mtime_ns
+    except OSError:
+        return False
+    return written > built
+
+
+async def _saved_ca_paths(saved: dict | None) -> dict[str, str]:
+    """The CA paths a save keeps: those in params.pkl (``saved``), or in config.json when
+    params.pkl cannot be read or config.json was edited by hand after it. A config.json
+    that cannot be read or parsed says nothing about them: the params.pkl ones are kept,
+    so a typo in a hand edit does not turn a pinned CA into the default CAs."""
+    if saved is None or _config_json_is_newer():
+        written = await _config_json_ca_paths()
+        if written is not None:
+            return written
+        if saved is None:
+            return {}
+    return _ca_paths(saved.get("retrieve_hass_conf"))
+
+
+async def _take_resent_ca_paths_as_true(request_data: dict) -> None:
+    """A posted ``*_verify_ssl`` text equal to the saved CA path counts as true (unchanged).
+
+    GET /get-config returns the path, and the web UI's JSON view or an API client posts
+    it back as it is. config_value_faults would refuse that text; as true it passes, and
+    _keep_saved_ca_paths keeps the saved path. Only the path _saved_ca_paths gives, the
+    one such a save keeps, matches: a text equal to the other file's path stays refused,
+    as does any other. True turns no check off, so nothing is weakened.
+    """
+    posted = {
+        key: request_data[key] for key in _DB_CA_PATH_KEYS if isinstance(request_data.get(key), str)
+    }
+    if not posted:
+        return
+    kept = await _saved_ca_paths(await _read_saved_params())
+    for key, value in posted.items():
+        if kept.get(key) == value:
+            request_data[key] = True
+
+
+def _keep_saved_ca_paths(saved_paths: dict[str, str], config: dict, new_params: dict) -> bool:
+    """Keep a CA bundle path saved in ``*_verify_ssl`` when a save sends true for it.
+
+    The web UI shows such a setting as a ticked checkbox, since it is on, and cannot show
+    the path, so each save from it sends true. Taking that as "the default CAs" would
+    drop the path the operator wrote into config.json. A save that sends false still
+    turns the check off. ``saved_paths`` is from _saved_ca_paths. Changes ``config``
+    (config.json) and ``new_params`` (params.pkl) in place; True when it kept one.
+    """
+    new_conf = new_params.get("retrieve_hass_conf")
+    if not isinstance(new_conf, dict):
+        return False
+    kept = False
+    for key in _DB_CA_PATH_KEYS:
+        path = saved_paths.get(key)
+        if path and new_conf.get(key) is True:
+            new_conf[key] = path
+            config[key] = path
+            kept = True
+    return kept
+
+
+def _ingress_administrator_may_move_db() -> bool:
+    """True for a Home Assistant administrator on the add-on's ingress, as Home Assistant
+    vouches for it: only in a real add-on (``SUPERVISOR_TOKEN`` is set) whose ingress peer
+    is the Supervisor's default address (``EMHASS_INGRESS_PEERS`` not set). Only there is
+    the peer known to be a Supervisor that adds the user headers and removes a client's
+    copy of them."""
+    if not os.environ.get("SUPERVISOR_TOKEN", "").strip():
+        return False
+    if api_auth.INGRESS_PEERS_ENV in os.environ:
+        return False
+    return api_auth.is_trusted_ingress_request() and api_auth.ha_administrator_request()
+
+
+async def _db_server_change_refusal(new_params: dict, saved: dict | None):
+    """A 400 when a save would move a database whose login is stored, else None.
+
+    The login stays in the secrets and goes to whatever server the saved settings name,
+    so a caller who may save settings but cannot read the login could otherwise have it
+    sent to a server of their choosing. A Home Assistant administrator on ingress already
+    manages the add-on options that hold it. Compared with the saved values, since the
+    web UI sends every field on each save. Called with the save lock held, so the saved
+    values cannot change between this check and the write. ``saved`` is what
+    _read_saved_params read under that lock.
+    """
+    logins = stored_db_logins(params_secrets)
+    if not logins:
+        return None
+    if _ingress_administrator_may_move_db():
+        return None
+    if saved is None:
+        # Nothing to compare with: the defaults would let any server through
+        app.logger.warning(
+            "Rejected config save: a database login is stored and the saved "
+            "parameters cannot be read to compare its server with"
+        )
+        return await make_response([SAVED_PARAMS_UNREADABLE], 400)
+    changed = db_endpoint_changes(
+        saved.get("retrieve_hass_conf") or {},
+        new_params.get("retrieve_hass_conf") or {},
+        logins,
+    )
+    if not changed:
+        return None
+    app.logger.warning(
+        "Rejected config save: it changes the server of %s, whose login is stored",
+        " and ".join(changed),
+    )
+    return await make_response([DB_SERVER_CHANGE_REFUSED], 400)
+
+
+async def _current_config() -> dict | None:
+    """The configuration saved now (config.json), or None when there is none to read."""
+    path = emhass_conf.get("config_path")
+    try:
+        if path and Path(path).is_file():
+            async with aiofiles.open(str(path), "rb") as data:
+                current = orjson.loads(await data.read())
+            return current if isinstance(current, dict) else None
+    except (OSError, orjson.JSONDecodeError):
+        return None
+    return None
+
+
+async def _served_config():
+    """The configuration saved now as /get-config serves it, which is what the
+    configuration page sends back: config.json or a legacy YAML over the defaults,
+    through build_params and param_to_config, so padded lists and legacy names read as
+    the page shows them. config.json as it is when that cannot be built, whatever the
+    error, else None."""
+    try:
+        config = await build_config(
+            emhass_conf,
+            app.logger,
+            str(emhass_conf["defaults_path"]),
+            str(emhass_conf["config_path"]),
+            str(emhass_conf.get("legacy_config_path")),
+        )
+        if isinstance(config, dict):
+            params = await build_params(emhass_conf, {}, config, app.logger)
+            if isinstance(params, dict):
+                return param_to_config(params, app.logger)
+    except Exception as exc:  # noqa: BLE001 - only the reference of the checks
+        app.logger.warning(
+            "The saved configuration could not be built to compare a save with (%s)",
+            type(exc).__name__,
+        )
+    return await _current_config()
+
+
+async def _compiled_topology(config, known_topology, known_compiled):
+    """The compiled heat_topology of ``config``: ``known_compiled`` when it is
+    ``known_topology``, None when there is none or it does not compile."""
+    if config is None:
+        return None
+    topology = config.get("heat_topology")
+    if not (isinstance(topology, dict) and topology):
+        return None
+    if topology == known_topology and known_compiled is not None:
+        return known_compiled
+    try:
+        return await asyncio.to_thread(compile_heat_topology, topology)
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+async def _current_shape(current, defaults, new_topology, new_compiled):
+    """config_shape of the configuration saved now, its heat_topology compiled (the
+    one to save, when it is the same)."""
+    if current is None:
+        return None
+    compiled = await _compiled_topology(current, new_topology, new_compiled)
+    return config_shape(current, defaults, compiled)
 
 
 @app.route("/set-config", methods=["POST"])
@@ -776,6 +1182,9 @@ async def parameter_set():
     # check if data is empty (an empty body without a JSON content type reads as None)
     if not request_data:
         return await make_response(["failed to retrieve config json"], 400)
+    if not isinstance(request_data, dict):
+        app.logger.warning("Rejected config save: the body is not a JSON object")
+        return await make_response(["config is invalid: it must be a JSON object"], 400)
 
     # The body was parsed by the standard json module, but config.json is written with
     # orjson, which refuses more (ORJSON_LIMITS). Find that out now, but answer it after
@@ -790,6 +1199,7 @@ async def parameter_set():
     # run: the compiler's ValueError names the offending field, so surface it
     # in the UI alert now rather than failing an unattended run later.
     heat_topology = request_data.get("heat_topology")
+    new_compiled = None
     # An empty text box arrives as null, "", "null" or {} and means "no
     # topology". Anything else that is not an object (a list, a JSON topology
     # quoted as a string) would be saved and then silently ignored at run time.
@@ -818,7 +1228,7 @@ async def parameter_set():
             )
         try:
             # Off the event loop: a large topology must not stall other requests.
-            await asyncio.to_thread(compile_heat_topology, heat_topology)
+            compiled = await asyncio.to_thread(compile_heat_topology, heat_topology)
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as e:
             # The compiler raises ValueError with a field path; the others are a
             # backstop for malformed entries it does not check explicitly (e.g. a
@@ -826,6 +1236,8 @@ async def parameter_set():
             # as an unhandled 500.
             app.logger.warning("Rejected config save: heat_topology invalid: %s", e)
             return await make_response([f"heat_topology is invalid: {e}"], 400)
+        else:
+            new_compiled = compiled
 
     # Reject an unusable inverter curve before anything is written: build_params would
     # otherwise clear it (recovery for an already-persisted file), and a silent clear
@@ -847,8 +1259,21 @@ async def parameter_set():
         if unwritable is None:
             raise
         inverter_faults = []
-    # Settings that become a file name or a database host, checked before they are saved
-    inverter_faults += config_value_faults(request_data)
+    # Settings that become a file name or a database host, checked before they are
+    # saved. A saved CA path posted back as it is counts as unchanged first. A key the
+    # body leaves out is saved with its default (config, so far). A setting already
+    # saved outside its bound (before the bounds) may be saved again unchanged: the
+    # configuration saved now, as the page was served it, is the reference.
+    await _take_resent_ca_paths_as_true(request_data)
+    current = await _served_config()
+    inverter_faults += config_value_faults(request_data, config, current)
+    # Every run builds one entry per load and solves loads x time steps: the loads, the
+    # groups and that product, a heat_topology's included, are held to their bounds
+    if not inverter_faults:
+        inverter_faults += save_shape_faults(
+            config_shape(request_data, config, new_compiled),
+            await _current_shape(current, config, heat_topology, new_compiled),
+        )
     if inverter_faults:
         app.logger.warning("Rejected config save: settings invalid: %s", inverter_faults)
         return await make_response(inverter_faults, 400)
@@ -857,14 +1282,40 @@ async def parameter_set():
         app.logger.warning("Rejected config save: %s", unwritable)
         return await make_response([f"config is invalid: {unwritable}. {ORJSON_LIMITS}"], 400)
 
+    # The bounded settings as the numbers they stand for, so "30.0" is saved as 30 and
+    # every later run can use it
+    request_data.update(bounded_value_forms(request_data))
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
-    params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
+    try:
+        params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Rejected config save: %s: %s", type(e).__name__, e)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(params) is bool and not params:
         return await make_response([error_msg_associations_file], 500)
 
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config
     config.update(param_to_config(params, app.logger))
+    # What will be stored, judged as stored: a legacy name in the body (freq,
+    # delta_forecast, num_def_loads) is not stored as itself, so the checks above,
+    # which read the body, can count a grid or loads the save does not keep
+    stored_faults = stored_config_faults(
+        config,
+        await _compiled_topology(config, heat_topology, new_compiled),
+        current,
+        await _compiled_topology(current, heat_topology, new_compiled),
+    )
+    if stored_faults:
+        app.logger.warning("Rejected config save: settings invalid: %s", stored_faults)
+        return await make_response(stored_faults, 400)
+    # The per-load settings as a run reads them: a text or a shape the optimizer cannot
+    # use would make every later run a 500
+    load_faults, load_forms = stored_load_number_faults(config, current)
+    if load_faults:
+        app.logger.warning("Rejected config save: settings invalid: %s", load_faults)
+        return await make_response(load_faults, 400)
+    config.update(load_forms)
 
     if not os.path.exists(emhass_conf["config_path"].parent):
         return await make_response(["Unable to save config file"], 500)
@@ -873,7 +1324,11 @@ async def parameter_set():
 
     # Build both files' contents before writing either, so a failure here leaves the
     # saved pair as it was instead of a new config.json next to an empty params.pkl.
-    saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    try:
+        saved_params = await build_params(emhass_conf, params_secrets, config, app.logger)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+        app.logger.warning("Rejected config save: %s: %s", type(e).__name__, e)
+        return await make_response([_SHAPE_REFUSED], 400)
     if type(saved_params) is bool and not saved_params:
         return await make_response([error_msg_associations_file], 500)
     config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
@@ -892,8 +1347,27 @@ async def parameter_set():
             response.headers["Retry-After"] = "1"
             return response
         try:
-            await _write_config_json(emhass_conf["config_path"], config_content)
-            await replace_file(emhass_conf["data_path"] / params_file, params_content)
+            # Under the lock: against the params as they are when this save writes
+            saved = await _read_saved_params()
+            if _keep_saved_ca_paths(await _saved_ca_paths(saved), config, saved_params):
+                config_content = orjson.dumps(config, option=orjson.OPT_INDENT_2).decode()
+                params_content = pickle.dumps((emhass_conf["config_path"], saved_params))
+            refused = await _db_server_change_refusal(saved_params, saved)
+            if refused is not None:
+                return refused
+            # A file that cannot be replaced (no space, no permission, a folder in its
+            # place) gets a fixed answer, not an unhandled 500. config.json is written
+            # first, so when it fails neither file has changed
+            try:
+                await _write_config_json(emhass_conf["config_path"], config_content)
+            except OSError as e:
+                app.logger.error("Config save failed: config.json: %s", type(e).__name__)
+                return await make_response(["Unable to save config file"], 500)
+            try:
+                await replace_file(emhass_conf["data_path"] / params_file, params_content)
+            except OSError as e:
+                app.logger.error("Config save failed: params.pkl: %s", type(e).__name__)
+                return await make_response(["Unable to save params file"], 500)
         finally:
             unlock_file(slot)
 
@@ -901,10 +1375,32 @@ async def parameter_set():
     return await make_response({}, 200)
 
 
+def _runtime_params_for_log(runtimeparams: dict) -> str:
+    """The runtime parameters as JSON for a log line, with the API token masked.
+
+    JSON rather than a Python dict, so the line can be pasted back into the web UI
+    to replay a run (#468). As with ``repr()`` before, a string value cannot break
+    the line or drive the terminal: ``json.dumps`` escapes the control characters,
+    and every other non-printable character (DEL, C1, line separators, format
+    characters) is written as a ``\\u`` escape, which keeps the JSON valid. The
+    token is masked before that escaping, which could otherwise leave it in a
+    spelling the log filter does not recognise.
+    """
+    try:
+        text = api_auth.mask_text(json.dumps(api_auth.redacted(runtimeparams), ensure_ascii=False))
+    except (TypeError, ValueError, RecursionError):
+        return str(api_auth.redacted(runtimeparams))
+    return "".join(
+        char if char.isprintable() else "\\u007f" if char == "\x7f" else json.dumps(char)[1:-1]
+        for char in text
+    )
+
+
 async def _load_params_and_runtime(request, emhass_conf, logger):
     """
     Loads configuration parameters from pickle and runtime parameters from the request.
     Returns a tuple (params, costfun, runtimeparams) or raises an exception/returns None on failure.
+    A body that is JSON but not an object raises RuntimeParamError.
     """
     action_str = " >> Obtaining params: "
     logger.info(action_str)
@@ -916,13 +1412,16 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     try:
         runtimeparams = await request.get_json()
         if runtimeparams:
-            logger.info("Passed runtime parameters: " + str(api_auth.redacted(runtimeparams)))
+            logger.info("Passed runtime parameters: " + _runtime_params_for_log(runtimeparams))
         else:
             runtimeparams = {}
     except Exception as e:
         logger.error(f"Error parsing runtime params JSON: {e}")
         logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
+    # A list or a scalar would fail deep inside the run, as a 500
+    if not isinstance(runtimeparams, dict):
+        raise RuntimeParamError("The runtime parameters must be a JSON object")
 
     # The body was parsed by the standard json module, which takes more than orjson can
     # write back (ORJSON_LIMITS; orjson.JSONEncodeError is TypeError), so say so here as
@@ -1098,6 +1597,10 @@ async def _handle_action_dispatch(
             )
             injection_dict = get_injection_dict_thermal_calibration(result)
             await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        except RuntimeParamError as exc:
+            # Fixed text naming the setting, before the handler below that quotes the error
+            logger.error("Thermal model calibration: %s", exc)
+            return f"EMHASS >> ERROR: Thermal model calibration refused: {exc}\n", 400
         except Exception as exc:
             logger.error("Thermal model calibration failed: %s", exc)
             return f"EMHASS >> ERROR: Thermal model calibration failed ({exc})\n", 400
@@ -1445,11 +1948,16 @@ async def participant_v1(op: str):
     token = params_secrets.get("participant_token")
     if not token:
         return await _problem(*refused, "set participant_token in the secrets")
+    if not api_auth.is_text(token):
+        return await _problem(*refused, "participant_token must be valid text")
     if len(token) < api_auth.MIN_LENGTH:
         # as the API token: a short token is guessable, so it is not served
         return await _problem(
             *refused, f"participant_token must be at least {api_auth.MIN_LENGTH} characters"
         )
+    if api_auth.is_example_token(token):
+        # as the API token: a value published in the docs is known to everyone
+        return await _problem(*refused, "participant_token is a published placeholder value")
     presented = request.headers.get("Authorization", "").encode()
     if not hmac.compare_digest(presented, f"Bearer {token}".encode()):
         # Before any file or body is read: a caller without the token learns
@@ -1561,8 +2069,13 @@ async def api_v1_dry_run(action_name: str):
         app.logger.error(f"{exc.description} Nothing was run")
         body, code = {"status": "not-run", "plan": None}, exc.code or 400
     except Exception as exc:  # noqa: BLE001 - reported in the response, never raised
+        # The line names the error's type and place, never its text: that can quote
+        # the request, and the response returns this line. The text and the
+        # traceback stay in the console log (exc_info, made safe by
+        # _dry_run_record_safe), which the response does not carry.
         app.logger.error(
-            f"Dry run of {_log_safe(action_name)} failed: {_log_safe(exc)}",
+            f"Dry run of {_log_safe(action_name)} failed "
+            f"({_log_safe(type(exc).__name__ + error_place(exc))}); see the log",
             exc_info=exc,
         )
         body, code = {"status": "not-run", "plan": None}, 500
@@ -1631,7 +2144,7 @@ async def _dry_run(action_name: str) -> tuple[dict, int]:
         return not_run, 400
 
     if runtime:
-        app.logger.info(f"Passed runtime parameters: {api_auth.redacted(runtime)}")
+        app.logger.info(f"Passed runtime parameters: {_runtime_params_for_log(runtime)}")
     params, costfun = await _load_params(emhass_conf, app.logger)
     if params is None:
         _explain("The configuration could not be read. Nothing was run")
@@ -1780,9 +2293,13 @@ async def _action_call_unlocked(action_name: str):
         return not_json
 
     # Load Parameters
-    params, costfun, runtimeparams = await _load_params_and_runtime(
-        request, emhass_conf, app.logger
-    )
+    try:
+        params, costfun, runtimeparams = await _load_params_and_runtime(
+            request, emhass_conf, app.logger
+        )
+    except RuntimeParamError as exc:
+        app.logger.warning("Rejected runtime parameter: %r", str(exc))
+        return await make_response(f"EMHASS >> ERROR: {exc}\n", 400)
     if params is None:
         return await make_response(await grab_log(" >> Obtaining params: "), 400)
     # A dry run has a URL of its own. Asked for here, it is refused before
@@ -2013,13 +2530,136 @@ async def _build_and_save_params(
     return params
 
 
+class _ActionLogHandler(logging.FileHandler):
+    """The action log's file handler. It appends as logging.FileHandler does, and
+    once the file has grown past ACTION_LOG_MAX_BYTES it keeps only the last
+    ACTION_LOG_KEEP_BYTES of it, from the first whole line on. It never cuts into
+    the newest record it wrote, whatever its length or number of lines: one longer
+    than ACTION_LOG_KEEP_BYTES is kept whole, with up to ACTION_LOG_KEEP_BYTES of
+    whole lines before it. Older records are cut, and with them, at times, the
+    newest action's " >> " line or an ERROR logged after it. The handler remembers
+    when that happens (lost_action_line, lost_error), so that grab_log still
+    returns the action's lines that are left in the file and check_file_log still
+    reports its error. It knows only of its own cuts, which is why
+    _configure_logging keeps one handler per file in a process.
+
+    The log is read whole after every action (grab_log, check_file_log), and
+    only a start of the server empties it, so without this it grows for as long
+    as the server runs. The cut is made in emit(), which logging calls with the
+    handler's lock held, so no record of this process is written meanwhile. With
+    more than one process writing the file (more than one web worker), a record
+    another one writes during the cut can be lost, and on Windows, where an
+    append is a seek then a write, it can leave NUL bytes where it would have
+    been, and each process knows only of its own cuts, so a cut by another can
+    take an action's error unnoticed. A reader that overlaps the cut can see old
+    and new bytes spliced, so the readers decode with errors="replace"."""
+
+    # Where in the file the newest action's " >> " line is, and the first ERROR
+    # logged after it: None while there is none, -1 once it has been cut away.
+    # The handler takes for an action's line a message that starts with " >> "
+    # (every action_str does); one that only contains it may be a request's own
+    # text echoed back. (grab_log's own search still matches it anywhere.)
+    _action_line_at: int | None = None
+    _error_at: int | None = None
+    action_line = ""  # the newest action's line itself, which a reader's ref must match
+
+    @property
+    def lost_action_line(self) -> bool:
+        return self._action_line_at == -1
+
+    @property
+    def lost_error(self) -> bool:
+        return self._error_at == -1
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # open it now, as FileHandler.emit would, so that this record is measured too
+        if self.stream is None and (self.mode != "w" or not getattr(self, "_closed", False)):
+            try:
+                self.stream = self._open()
+            except OSError:
+                pass  # FileHandler.emit tries again, as it always has
+        try:
+            # where this record will start; asked of the file itself, since the
+            # stream's own position goes stale after a cut
+            before = os.fstat(self.stream.fileno()).st_size if self.stream else None
+        except (OSError, ValueError):
+            before = None
+        super().emit(record)
+        if before is not None:
+            message = getattr(record, "message", "")
+            if message.startswith(" >> "):
+                self._action_line_at, self._error_at = before, None
+                self.action_line = message
+            if (
+                record.levelname == "ERROR"
+                and self._action_line_at is not None
+                and self._error_at is None
+            ):
+                self._error_at = before
+        try:
+            cut = self._keep_the_end(before)
+        except (OSError, ValueError):
+            return  # the file stays as it is; the next record tries again
+        if cut:
+            self._action_line_at = self._moved_by(cut, self._action_line_at)
+            self._error_at = self._moved_by(cut, self._error_at)
+
+    @staticmethod
+    def _moved_by(cut: int, at: int | None) -> int | None:
+        return at if at is None or at < 0 else max(-1, at - cut)
+
+    def _keep_the_end(self, newest: int | None = None) -> int:
+        """Cut the file if it is past the limit; newest is where the newest record
+        starts. Returns how many bytes were cut from the start."""
+        if self.stream is None:
+            return 0
+        size = os.fstat(self.stream.fileno()).st_size
+        if size <= ACTION_LOG_MAX_BYTES:
+            return 0
+        with open(self.baseFilename, "rb+") as fp:
+            if newest is None or not 0 <= newest < size:
+                # not measured: take the last line for the newest record
+                newest = fp.read().rfind(b"\n", 0, size - 1) + 1
+            # Keep from the first whole line in the last ACTION_LOG_KEEP_BYTES, and
+            # never from inside the newest record, which may be more than one line.
+            want = size - ACTION_LOG_KEEP_BYTES
+            if want >= newest:
+                # the newest record alone is longer than what is kept: keep all of it,
+                # and up to ACTION_LOG_KEEP_BYTES of whole lines before it, where its
+                # action's own " >> " line is
+                want = newest - ACTION_LOG_KEEP_BYTES
+            if want <= 0:
+                return 0
+            fp.seek(want - 1)
+            line_end = fp.read(newest - want + 1).find(b"\n")
+            start = newest if line_end < 0 else want + line_end
+            fp.seek(start)
+            end = fp.read()
+            fp.seek(0)
+            fp.write(end)
+            fp.truncate()
+        return start
+
+
 async def _configure_logging(logging_level: str) -> None:
     """Helper to configure logging handlers and levels."""
     # Define loggers
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     log.default_handler.setFormatter(formatter)
-    # Action file logger
-    file_logger = logging.FileHandler(str(emhass_conf["data_path"] / action_log_str))
+    # Action file logger. A second start in one process (python -m emhass.web_server
+    # runs initialize() from main() and again before serving) replaces the handler
+    # of the same file rather than adding one: two would write every line twice and
+    # each miss the other's cuts of the file.
+    action_log_path = str(emhass_conf["data_path"] / action_log_str)
+    for old in [
+        handler
+        for handler in app.logger.handlers
+        if isinstance(handler, logging.FileHandler)
+        and handler.baseFilename == os.path.abspath(action_log_path)
+    ]:
+        app.logger.removeHandler(old)
+        old.close()
+    file_logger = _ActionLogHandler(action_log_path)
     formatter = logging.Formatter("%(levelname)s - %(name)s - %(message)s")
     file_logger.setFormatter(formatter)  # add format to Handler
     file_logger.addFilter(_not_from_a_dry_run)
@@ -2040,6 +2680,14 @@ async def _configure_logging(logging_level: str) -> None:
         file_logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(file_logger)
+    # The cause of a database failure goes to the console only, never to the action log
+    # (see retrieve_hass.db_detail_logger)
+    db_logger = logging.getLogger("emhass.database")
+    db_logger.addHandler(log.default_handler)
+    db_logger.propagate = False
+    db_logger.setLevel(
+        logging_level if logging_level in ("DEBUG", "INFO", "WARNING", "ERROR") else "DEBUG"
+    )
     # Clear Action File logger file, ready for new instance
     await clear_file_log()
 
@@ -2060,8 +2708,8 @@ async def _initialize_connections(params: dict) -> None:
     """Helper to initialize WebSocket or InfluxDB connections."""
     # Initialize persistent WebSocket connection only if use_websocket is enabled
     use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
-    use_influxdb = params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
-    use_victoriametrics = params.get("retrieve_hass_conf", {}).get("use_victoriametrics", False)
+    use_influxdb = db_flag(params.get("retrieve_hass_conf", {}), "use_influxdb")
+    use_victoriametrics = db_flag(params.get("retrieve_hass_conf", {}), "use_victoriametrics")
     # Initialize persistent WebSocket connection if enabled
     if use_websocket:
         app.logger.info("WebSocket mode enabled - initializing connection...")
@@ -2088,6 +2736,26 @@ async def _initialize_connections(params: dict) -> None:
     else:
         app.logger.info(
             "WebSocket, InfluxDB and VictoriaMetrics modes disabled - using REST API for data retrieval"
+        )
+
+
+def _log_launch_address(server_ip: str | None, port: int) -> None:
+    """Log the address the web server listens on.
+
+    Under Gunicorn (the Docker image and the add-on) the IP environment variable
+    sets it (gunicorn.conf.py); server_ip sets it only when this module is run
+    directly (main()).
+    """
+    host = api_auth.bind_host(server_ip) or "0.0.0.0"
+    app.logger.info("Launching the emhass webserver at: http://%s:%s", host, port)
+    # 0.0.0.0 is the default when server_ip is not set, so it is not reported
+    if server_ip and server_ip != "0.0.0.0" and server_ip != host:
+        app.logger.warning(
+            "server_ip is %s, but the web server listens on %s. Under Gunicorn (the Docker "
+            "image and the add-on) the IP environment variable sets the address; server_ip "
+            "is used only when web_server.py is run directly.",
+            server_ip,
+            host,
         )
 
 
@@ -2134,7 +2802,7 @@ async def initialize(args: dict | None = None):
     # Log Startup Info
     # Logging
     port = int(os.environ.get("PORT", 5000))
-    app.logger.info("Launching the emhass webserver at: http://" + server_ip + ":" + str(port))
+    _log_launch_address(server_ip, port)
     app.logger.info(
         "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )

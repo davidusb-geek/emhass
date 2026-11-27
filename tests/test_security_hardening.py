@@ -1,12 +1,20 @@
 """Security hardening: runtime parameter validation, config-only keys, request checks,
 and the Supervisor token guard."""
 
+import asyncio
+import datetime
 import html
+import itertools
+import logging
 import os
 import pathlib
+import pickle
 import re
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,10 +22,11 @@ import orjson
 import pandas as pd
 import pytz
 
-from emhass import command_line, retrieve_hass, utils, web_server
+from emhass import api_auth, command_line, retrieve_hass, utils, web_server
 from emhass.retrieve_hass import RetrieveHass, _is_supervisor_url
 from emhass.utils import RUNTIME_DENIED_KEYS, RuntimeParamError
 from tests.aioresponses_compat import aioresponses
+from tests.api_auth_support import ADMIN, BEARER, SUPERVISOR, AuthSupportBase
 
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
@@ -293,6 +302,29 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         warned = [m for m in cm.output if "only be set in the configuration" in m]
         self.assertEqual(len(warned), len(runtime))
 
+    async def test_a_runtime_time_zone_is_used(self):
+        # It used to fail for every value: the configured zone, already a tz object,
+        # was passed to pytz.timezone instead of the request's name.
+        # Not the configured zone (Europe/Paris), so a run that ignored the request's
+        # zone would show it
+        params, retrieve_hass_conf, *_ = await self._treat(
+            {"time_zone": "Asia/Tokyo"}, "dayahead-optim"
+        )
+        self.assertEqual(retrieve_hass_conf["time_zone"], pytz.timezone("Asia/Tokyo"))
+        self.assertEqual(orjson.loads(params)["retrieve_hass_conf"]["time_zone"], "Asia/Tokyo")
+        start = orjson.loads(params)["passed_data"]["forecast_start"]
+        self.assertTrue(start.endswith("+09:00"), start)
+
+    async def test_a_runtime_time_zone_that_is_not_a_zone_is_refused(self):
+        for value in ("Mars/Olympus_Mons", "", 5, ["Europe/Paris"], "Europe/" + "x" * 64):
+            with self.subTest(value=value):
+                with self.assertRaises(RuntimeParamError) as caught:
+                    await self._treat({"time_zone": value}, "dayahead-optim")
+                self.assertEqual(
+                    str(caught.exception),
+                    "time_zone must be a time zone name such as Europe/Paris",
+                )
+
     async def test_use_influxdb_is_allowed_at_runtime(self):
         # The web UI's export passes it. It picks the configured server, which stays fixed.
         base = orjson.loads(self.params_json)
@@ -303,6 +335,24 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
         conf = orjson.loads(params)["retrieve_hass_conf"]
         self.assertEqual(conf.get("use_influxdb"), flipped)
         self.assertEqual(conf.get("influxdb_host"), base["retrieve_hass_conf"].get("influxdb_host"))
+
+    async def test_a_runtime_use_influxdb_that_is_not_true_or_false_is_ignored(self):
+        # It would reach the reader, which logs such a value once, for a hand-written
+        # config.json: a request must not be the one that logs it
+        base = orjson.loads(self.params_json)
+        utils._db_settings_warned.clear()
+        for value in ("true", 1, "x"):
+            with self.subTest(value=value):
+                with self.assertLogs(logger, level="WARNING") as cm:
+                    params, *_ = await self._treat({"use_influxdb": value}, "dayahead-optim")
+                conf = orjson.loads(params)["retrieve_hass_conf"]
+                self.assertEqual(
+                    conf.get("use_influxdb"), base["retrieve_hass_conf"].get("use_influxdb")
+                )
+                self.assertTrue(
+                    any("use_influxdb ignored: it must be true or false" in m for m in cm.output)
+                )
+        self.assertNotIn("use_influxdb", utils._db_settings_warned)
 
     async def test_denied_keys_cover_every_connection_key_in_associations(self):
         lines = (emhass_conf["associations_path"]).read_text(encoding="utf-8").splitlines()
@@ -577,6 +627,47 @@ class TestTreatRuntimeparams(unittest.IsolatedAsyncioTestCase):
             with self.subTest(bad=bad), self.assertRaises(RuntimeParamError):
                 await self._treat({"model_type": bad}, "forecast-model-fit")
 
+    async def test_a_parser_failure_in_a_text_list_falls_back_to_the_default(self):
+        # 200 000 minus signs make the parser raise MemoryError, which used to escape
+        default = orjson.loads(self.params_json)["plant_conf"]["maximum_power_from_grid"]
+        _, _, _, plant_conf = await self._treat(
+            {"maximum_power_from_grid": "-" * 200000 + "1"}, "dayahead-optim"
+        )
+        self.assertEqual(plant_conf["maximum_power_from_grid"], default)
+        _, _, _, plant_conf = await self._treat(
+            {"maximum_power_from_grid": "[5000, 6000]"}, "dayahead-optim"
+        )
+        self.assertEqual(plant_conf["maximum_power_from_grid"], [5000, 6000])
+        # A true/false flag is read from a short text only
+        params, *_ = await self._treat({"model_predict_publish": "true"}, "forecast-model-predict")
+        self.assertIs(orjson.loads(params)["passed_data"]["model_predict_publish"], True)
+        with self.assertRaises(RuntimeParamError):
+            await self._treat({"model_predict_publish": "-" * 200000}, "forecast-model-predict")
+
+
+class TestLiteralEvalBounded(unittest.TestCase):
+    def test_every_parser_failure_is_one_value_error_with_fixed_text(self):
+        self.assertEqual(utils.literal_eval_bounded("[1, 2]", 16), [1, 2])
+        for text, limit in (
+            ("[1]" * 10, 8),
+            ("-" * 200000 + "1", 256 * 1024),
+            ("1" + "+1" * 200000, 1 << 20),
+            ("{{}}", 16),
+            ("[", 16),
+            ("x", 16),
+        ):
+            with self.subTest(text=text[:12]):
+                with self.assertRaises(ValueError) as caught:
+                    utils.literal_eval_bounded(text, limit)
+                self.assertIs(type(caught.exception), ValueError)
+                self.assertIn(
+                    str(caught.exception),
+                    (
+                        f"the text is longer than {limit} characters",
+                        "the text is not a Python literal",
+                    ),
+                )
+
 
 class TestPlotTitlesAreEscaped(unittest.TestCase):
     MODEL_TYPE = '<img src=x onerror="alert(1)">'
@@ -772,6 +863,74 @@ class TestRequestChecks(unittest.IsolatedAsyncioTestCase):
         text = await response.get_data(as_text=True)
         self.assertIn("csv_filename", text)
         self.assertNotIn("SHARED LOG TAIL", text)
+
+    async def test_set_config_refuses_a_body_that_is_not_an_object(self):
+        for body in ("[1]", "5", '"x"', "[{}]"):
+            with self.subTest(body=body):
+                response = await self.client.post(
+                    "/set-config", data=body, headers={"Content-Type": "application/json"}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    await response.get_json(), ["config is invalid: it must be a JSON object"]
+                )
+
+    async def test_get_json_refuses_yaml_that_is_not_a_mapping(self):
+        with patch.object(web_server, "emhass_conf", emhass_conf):
+            for body in ("- a\n- b\n", "5\n", "just text\n"):
+                with self.subTest(body=body):
+                    response = await self.client.post(
+                        "/get-json", data=body, headers={"Content-Type": "text/plain"}
+                    )
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(await response.get_json(), ["failed to Parse YAML from data"])
+
+    async def test_get_json_refuses_aliases_and_large_bodies(self):
+        lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x]"]
+        for i in range(1, 5):
+            lines.append(f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 9) + "]")
+        lines.append("sensor_replace_zero: *a4")
+        bomb = "\n".join(lines) + "\n"
+        large = "costfun: profit\n" + "#" * (256 * 1024) + "\n"
+        with patch.object(web_server, "emhass_conf", emhass_conf):
+            for name, body, reply in (
+                ("alias", bomb, ["YAML aliases and merge keys are not accepted"]),
+                ("large", large, ["The YAML must be at most 256 KiB"]),
+            ):
+                with self.subTest(name):
+                    response = await self.client.post(
+                        "/get-json", data=body, headers={"Content-Type": "text/plain"}
+                    )
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(await response.get_json(), reply)
+            # A configuration without aliases converts as before
+            response = await self.client.post(
+                "/get-json", data="costfun: cost\n", headers={"Content-Type": "text/plain"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(orjson.loads(await response.get_data())["costfun"], "cost")
+
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.grab_log", new_callable=AsyncMock)
+    @patch("emhass.web_server._load_params", new_callable=AsyncMock)
+    async def test_action_refuses_runtime_parameters_that_are_not_an_object(
+        self, mock_load, mock_log, mock_set
+    ):
+        mock_load.return_value = ("{}", "profit")
+        mock_log.return_value = ["SHARED LOG TAIL"]
+        for body in ("[1]", "5", '"x"'):
+            with self.subTest(body=body):
+                response = await self.client.post(
+                    "/action/dayahead-optim",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    await response.get_data(as_text=True),
+                    "EMHASS >> ERROR: The runtime parameters must be a JSON object\n",
+                )
+        mock_set.assert_not_called()
 
     @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
     @patch("emhass.web_server._load_params", new_callable=AsyncMock)
@@ -1180,8 +1339,9 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs(logger, level="DEBUG") as cm:
                 self.assertIsNone(rh._init_influx_client())
         self.assertFalse(any("SECRET" in line for line in cm.output))
-        # A known reason is still named, in fixed words
-        self.assertTrue(any("database not found" in line for line in cm.output))
+        # Any reply but a 401 or 403 reads the same, whatever the server said
+        self.assertTrue(any("unexpected reply" in line for line in cm.output))
+        self.assertFalse(any("database not found" in line for line in cm.output))
 
         # Measurement discovery and the query itself, at debug level too
         def query(text):
@@ -1199,8 +1359,8 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(
                 rh._fetch_sensor_data(client, "sensor.x", start, start + pd.Timedelta(days=1))
             )
-        self.assertTrue(any("HTTP 400" in line for line in cm.output))
-        self.assertFalse(any("SECRET" in line for line in cm.output))
+        self.assertTrue(any("unexpected reply" in line for line in cm.output))
+        self.assertFalse(any("HTTP 400" in line or "SECRET" in line for line in cm.output))
 
     def test_influxdb_client_refuses_a_real_redirect(self):
         # Loopback: the real client and requests, not mocks
@@ -1243,7 +1403,8 @@ class TestDatabaseQueriesAndErrors(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs(logger, level="ERROR") as cm:
                 self.assertIsNone(rh._init_influx_client())
             self.assertEqual(reached, [])
-            self.assertTrue(any("does not follow" in line for line in cm.output))
+            # Read like any other reply, so it does not confirm an HTTP service either
+            self.assertTrue(any("unexpected reply" in line for line in cm.output))
         finally:
             for server in (target, redirector):
                 server.shutdown()
@@ -1707,6 +1868,1758 @@ class TestSupervisorTokenNotSentElsewhere(unittest.IsolatedAsyncioTestCase):
         ):
             await client._connect()
         self.assertIn(REDIRECTS_NOT_REFUSABLE, logs.output[0])
+
+
+class TestDatabaseServerChange(AuthSupportBase):
+    """/set-config cannot move a database whose login is stored (finding 5)."""
+
+    SAVED = {
+        "use_influxdb": False,
+        "influxdb_host": "127.0.0.1",
+        "influxdb_port": 8086,
+        "influxdb_use_ssl": True,
+        "influxdb_verify_ssl": True,
+        "use_victoriametrics": False,
+        "victoriametrics_host": "127.0.0.1",
+        "victoriametrics_port": 8428,
+        "victoriametrics_use_ssl": False,
+        "victoriametrics_verify_ssl": False,
+    }
+    LOGIN = {"influxdb_username": "admin", "influxdb_password": "real-password"}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ.pop("INFLUXDB_USERNAME", None)
+        os.environ.pop("INFLUXDB_PASSWORD", None)
+        (self.dir / "defaults.json").write_text("{}")
+        web_server.emhass_conf.update(
+            defaults_path=self.dir / "defaults.json", config_path=self.dir / "config.json"
+        )
+        (self.data / web_server.params_file).write_bytes(
+            pickle.dumps((self.dir / "config.json", {"retrieve_hass_conf": dict(self.SAVED)}))
+        )
+        # build_params and param_to_config reduced to a pass-through, so what is saved
+        # is the defaults (none) plus the body
+        self.enterContext(
+            patch(
+                "emhass.web_server.build_params",
+                new=AsyncMock(
+                    side_effect=lambda _c, _s, cfg, _l: {"retrieve_hass_conf": dict(cfg)}
+                ),
+            )
+        )
+        self.enterContext(
+            patch(
+                "emhass.web_server.param_to_config",
+                side_effect=lambda params, _l: dict(params["retrieve_hass_conf"]),
+            )
+        )
+        self.replace = self.enterContext(
+            patch("emhass.web_server.replace_file", new_callable=AsyncMock)
+        )
+        self.secrets = self.enterContext(patch.object(web_server, "params_secrets", {}))
+        os.environ[api_auth.INGRESS_PORT_ENV] = "8099"
+        await self.enable()
+
+    async def save(self, changes, *, ingress=None):
+        body = {**self.SAVED, **changes}
+        if ingress is None:
+            return await self.send("POST", "/set-config", headers=BEARER, json=body)
+        return await self.send(
+            "POST", "/set-config", port=8099, peer=SUPERVISOR, headers=ingress, json=body
+        )
+
+    async def assert_refused(self, response):
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(await response.get_json(), [web_server.DB_SERVER_CHANGE_REFUSED])
+        self.replace.assert_not_awaited()
+
+    async def test_a_server_change_is_refused_while_a_login_is_stored(self):
+        self.secrets.update(self.LOGIN)
+        for changes in (
+            {"influxdb_host": "127.0.0.9"},
+            {"influxdb_port": 8087},
+            {"influxdb_use_ssl": False},
+            {"influxdb_verify_ssl": False},
+            # the integration off makes no difference: it can be switched on at runtime
+            {"influxdb_host": "127.0.0.9", "use_influxdb": False},
+        ):
+            with self.subTest(changes=changes):
+                await self.assert_refused(await self.save(changes))
+
+    async def test_victoriametrics_and_an_environment_login_count_too(self):
+        self.secrets.update({"victoriametrics_username": "vm", "victoriametrics_password": ""})
+        await self.assert_refused(await self.save({"victoriametrics_host": "127.0.0.9"}))
+        self.secrets.clear()
+        os.environ["INFLUXDB_PASSWORD"] = "from-env"
+        await self.assert_refused(await self.save({"influxdb_port": "8087"}))
+
+    async def test_a_placeholder_or_no_login_does_not_block_a_change(self):
+        for secrets in (
+            {},
+            {"influxdb_username": "", "influxdb_password": ""},
+            {"influxdb_username": "empty", "influxdb_password": "empty"},
+            {
+                "influxdb_username": "yourinfluxdbusername",
+                "influxdb_password": "yourinfluxdbpassword",
+            },
+        ):
+            with self.subTest(secrets=secrets):
+                self.secrets.clear()
+                self.secrets.update(secrets)
+                response = await self.save(
+                    {"influxdb_host": "127.0.0.9", "victoriametrics_port": 1}
+                )
+                self.assertEqual(response.status_code, 200)
+
+    async def test_resending_the_saved_server_is_allowed(self):
+        # The UI posts every field on each save
+        self.secrets.update(self.LOGIN)
+        self.secrets.update({"victoriametrics_username": "vm", "victoriametrics_password": "pw"})
+        for changes in (
+            {},
+            {"influxdb_port": "8086"},
+            {"use_influxdb": True, "influxdb_database": "other"},
+            {"victoriametrics_verify_ssl": True},  # turning checks on is fine
+        ):
+            with self.subTest(changes=changes):
+                response = await self.save(changes)
+                self.assertEqual(response.status_code, 200)
+        # A host name is compared without regard to case
+        self.assertEqual(
+            utils.db_endpoint_changes(
+                {"influxdb_host": "LocalHost"},
+                {"influxdb_host": "localhost"},
+                utils.stored_db_logins(self.LOGIN),
+            ),
+            [],
+        )
+
+    async def test_a_save_is_refused_when_the_saved_params_cannot_be_read(self):
+        # Nothing to compare with: compared with the defaults instead, a save naming the
+        # default server would pass whatever server config.json then names
+        self.secrets.update(self.LOGIN)
+        defaults = {
+            "influxdb_host": "localhost",
+            "influxdb_port": 8086,
+            "influxdb_use_ssl": False,
+            "influxdb_verify_ssl": False,
+        }
+        path = self.data / web_server.params_file
+        config_path = self.dir / "config.json"
+        for state, content in (
+            ("missing", None),
+            ("not a pickle", b"not a pickle"),
+            # unpickling these raises ModuleNotFoundError and AttributeError
+            ("no such module", b"cno_such_module_p3r3\nThing\n."),
+            ("no such name", b"cos\nno_such_name_p3r3\n."),
+            ("not a pair", pickle.dumps({"retrieve_hass_conf": {}})),
+            ("params not a dict", pickle.dumps((config_path, ["x"]))),
+            ("conf a list", pickle.dumps((config_path, {"retrieve_hass_conf": ["x"]}))),
+            ("conf a text", pickle.dumps((config_path, {"retrieve_hass_conf": "x"}))),
+        ):
+            with self.subTest(state=state):
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(content)
+                for changes in (defaults, {}):
+                    response = await self.save(changes)
+                    # Its own text, not the one about a database server: no save at all
+                    # can go ahead until a restart rebuilds the file
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(
+                        await response.get_json(), [web_server.SAVED_PARAMS_UNREADABLE]
+                    )
+                    self.replace.assert_not_awaited()
+        # With no login stored there is nothing to keep, and the save goes through
+        self.secrets.clear()
+        self.assertEqual((await self.save(defaults)).status_code, 200)
+
+    async def test_a_home_assistant_administrator_on_ingress_may_change_it(self):
+        self.secrets.update(self.LOGIN)
+        os.environ["SUPERVISOR_TOKEN"] = "supervisor-token"
+        response = await self.save({"influxdb_host": "127.0.0.9"}, ingress=ADMIN)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.replace.await_count, 2)
+
+    async def test_the_administrator_exception_needs_a_real_add_on(self):
+        # Without SUPERVISOR_TOKEN this is not an add-on, and with EMHASS_INGRESS_PEERS
+        # set the peer is not known to be a Supervisor that strips a client's user headers
+        self.secrets.update(self.LOGIN)
+        for env in ({}, {"SUPERVISOR_TOKEN": "t", api_auth.INGRESS_PEERS_ENV: SUPERVISOR}):
+            with self.subTest(env=env), patch.dict(os.environ, env):
+                await self.assert_refused(
+                    await self.save({"influxdb_host": "127.0.0.9"}, ingress=ADMIN)
+                )
+
+    async def test_any_other_ingress_user_may_not(self):
+        self.secrets.update(self.LOGIN)
+        os.environ["SUPERVISOR_TOKEN"] = "supervisor-token"
+        for headers in (
+            {"X-Remote-User-Id": "ha-user-2", "X-Remote-User-Groups": "system-users"},
+            {},
+        ):
+            with self.subTest(headers=headers):
+                await self.assert_refused(
+                    await self.save({"influxdb_host": "127.0.0.9"}, ingress=headers)
+                )
+
+    def test_the_refusal_names_the_web_ui_from_the_sidebar(self):
+        text = web_server.DB_SERVER_CHANGE_REFUSED
+        self.assertIn("EMHASS web UI opened from the Home Assistant sidebar", text)
+        self.assertNotIn("configuration page", text)
+        # What counts as a change of server, and that turning a check on is one way
+        self.assertIn(
+            "its host or port, or turning SSL or certificate checks off, or a different CA file",
+            text,
+        )
+        self.assertIn("turning them off again needs one of those two", text)
+        self.assertNotIn("SSL setting", text)
+
+
+class TestDatabaseErrorTexts(unittest.IsolatedAsyncioTestCase):
+    """A caller reads the action log, so a database failure there is in fixed words."""
+
+    def test_every_failure_to_reach_the_server_reads_the_same(self):
+        import aiohttp
+        import requests
+
+        fixed = "could not reach the configured InfluxDB server"
+        for exc in (
+            requests.exceptions.ConnectionError("host='127.0.0.9' port=1 SECRET"),
+            requests.exceptions.ConnectTimeout("SECRET"),
+            requests.exceptions.ReadTimeout("SECRET"),
+            requests.exceptions.SSLError("SECRET"),
+            # a reply cut off part way
+            requests.exceptions.ChunkedEncodingError("SECRET"),
+            requests.exceptions.ContentDecodingError("SECRET"),
+            aiohttp.ClientConnectionError("SECRET"),
+            aiohttp.ServerDisconnectedError("SECRET"),
+            TimeoutError("SECRET"),
+            ConnectionRefusedError("SECRET"),
+        ):
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(retrieve_hass._db_error(exc, "InfluxDB"), fixed)
+        # A 401 or 403 is still named by its status, so a wrong login can be told apart
+        from influxdb.exceptions import InfluxDBClientError
+
+        for code in (401, 403):
+            self.assertEqual(
+                retrieve_hass._db_error(InfluxDBClientError("SECRET", code), "InfluxDB"),
+                f"InfluxDBClientError (HTTP {code})",
+            )
+
+    def test_every_other_reply_reads_the_same(self):
+        import aiohttp
+        import requests
+        from influxdb.exceptions import InfluxDBClientError
+
+        redirect = aiohttp.ClientResponseError(
+            MagicMock(), (), status=307, message="redirect not followed"
+        )
+        for exc in (
+            InfluxDBClientError("SECRET", 404),
+            InfluxDBClientError("SECRET", 500),
+            InfluxDBClientError('{"error":"database not found: SECRET"}', 200),
+            InfluxDBClientError("error parsing query: SECRET"),
+            requests.exceptions.TooManyRedirects("SECRET"),
+            redirect,
+            RuntimeError("InfluxDB query returned a statement error"),
+            ValueError("SECRET"),
+        ):
+            with self.subTest(exc=repr(exc)[:40]):
+                self.assertEqual(
+                    retrieve_hass._db_error(exc, "InfluxDB"),
+                    "unexpected reply from the configured InfluxDB server",
+                )
+
+    def test_the_detail_line_cannot_forge_a_log_line(self):
+        # The server's reply is in the error's text: control characters are escaped and
+        # the text is cut short, so it stays one bounded line on the console
+        forged = "x\r\n\x1b[2K[2026-11-24 00:00:00] INFO in web_server: forged\u2028" + "y" * 5000
+        with self.assertLogs("emhass.database", level="WARNING") as cm:
+            retrieve_hass._db_error(ValueError(forged), "InfluxDB")
+        message = cm.records[-1].getMessage()
+        for raw in ("\r", "\n", "\x1b", "\u2028"):
+            self.assertNotIn(raw, message)
+        self.assertIn("\\x1b", message)
+        self.assertLess(len(message), 400)
+
+    def test_the_influxdb_connection_check_does_not_name_the_host(self):
+        import requests
+
+        rh = TestDatabaseQueriesAndErrors._rh({"use_influxdb": True, "influxdb_host": "127.0.0.9"})
+        with patch("influxdb.InfluxDBClient") as client_class:
+            client_class.return_value.ping.side_effect = requests.exceptions.ConnectionError(
+                "HTTPConnectionPool(host='127.0.0.9', port=8086): Max retries exceeded"
+            )
+            with self.assertLogs(logger, level="ERROR") as cm:
+                self.assertIsNone(rh._init_influx_client())
+        self.assertEqual(
+            cm.output[-1].split(":", 2)[-1],
+            "Failed to connect to InfluxDB: could not reach the configured InfluxDB server",
+        )
+
+    async def test_victoriametrics_errors_do_not_name_the_url_or_the_size(self):
+        import aiohttp
+
+        rh = TestDatabaseQueriesAndErrors._rh(
+            {"use_victoriametrics": True, "victoriametrics_host": "127.0.0.9"}
+        )
+        for kwargs, expected in (
+            ({"exc": aiohttp.ClientConnectionError("SECRET")}, "could not reach the configured"),
+            ({"status": 500, "body": b"x" * 1234}, "VictoriaMetrics query failed: unexpected"),
+            ({"status": 403, "body": b""}, "403 Forbidden"),
+        ):
+            session = MagicMock()
+            if "exc" in kwargs:
+                session.get = MagicMock(side_effect=kwargs["exc"])
+            else:
+                response = MagicMock()
+                response.status = kwargs["status"]
+                response.read = AsyncMock(return_value=kwargs["body"])
+                context = MagicMock()
+                context.__aenter__ = AsyncMock(return_value=response)
+                context.__aexit__ = AsyncMock(return_value=False)
+                session.get = MagicMock(return_value=context)
+            with self.subTest(expected=expected):
+                with self.assertLogs(logger, level="ERROR") as cm:
+                    self.assertIsNone(await rh._vm_query_range(session, "up", 0, 60, 60))
+                line = cm.output[-1]
+                self.assertIn(expected, line)
+                for leaked in ("SECRET", "127.0.0.9", "1234", "bytes", "ClientConnectionError"):
+                    self.assertNotIn(leaked, line)
+
+    async def test_the_thermal_reader_warning_is_fixed_text(self):
+        import aiohttp
+        import requests
+
+        idx = pd.date_range("2026-11-19", periods=4, freq="30min", tz="UTC")
+        cfg = {
+            "entity_t_in": "sensor.t_in",
+            "entity_t_out": "sensor.t_out",
+            "entity_power": "",
+            "entity_t_pred": "",
+            "entity_switch": "",
+            "start_utc": idx[0],
+            "end_utc": idx[-1],
+            "dt_minutes": 30,
+            "dt_hours": 0.5,
+            "nominal_power": 1000.0,
+            "lookback_hours": 2,
+            "sense": "heat",
+        }
+        for exc, expected in (
+            (
+                requests.exceptions.ConnectionError("http://127.0.0.9:1/query SECRET"),
+                "could not reach the configured InfluxDB server",
+            ),
+            (RuntimeError("http://127.0.0.9:1/query SECRET"), "unexpected reply"),
+            (
+                aiohttp.ClientResponseError(
+                    MagicMock(), (), status=302, message="redirect not followed"
+                ),
+                "unexpected reply",
+            ),
+        ):
+            with self.subTest(exc=type(exc).__name__):
+                with (
+                    patch("emhass.utils._fetch_influx_thermal_window", side_effect=exc),
+                    self.assertLogs(logger, level="WARNING") as cm,
+                ):
+                    _, source = await utils._load_thermal_calibration_frame(
+                        emhass_conf, {}, {"use_influxdb": True}, {}, cfg, False, logger
+                    )
+                self.assertEqual(source, "offline_demo")
+                line = next(x for x in cm.output if "thermal history" in x)
+                self.assertIn(expected, line)
+                self.assertNotIn("SECRET", line)
+                self.assertNotIn("127.0.0.9", line)
+
+
+class TestDatabaseFlags(AuthSupportBase):
+    """/set-config through the real build_params and param_to_config: a database on/off
+    setting must be true or false. "true", 1 or "yes" would be read as off by the InfluxDB
+    client, but looked unchanged to the check that keeps a stored login with its server,
+    so a saved use_ssl true could be turned into plain HTTP."""
+
+    LOGIN = {"influxdb_username": "admin", "influxdb_password": "real-password"}
+    FLAGS = (
+        "use_influxdb",
+        "influxdb_use_ssl",
+        "influxdb_verify_ssl",
+        "use_victoriametrics",
+        "victoriametrics_use_ssl",
+        "victoriametrics_verify_ssl",
+    )
+    SERVER = {
+        "use_influxdb": True,
+        "influxdb_host": "127.0.0.1",
+        "influxdb_port": 8086,
+        "influxdb_use_ssl": True,
+        "influxdb_verify_ssl": True,
+    }
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        os.environ.pop("INFLUXDB_USERNAME", None)
+        os.environ.pop("INFLUXDB_PASSWORD", None)
+        self.src = pathlib.Path(web_server.__file__).parent
+        web_server.emhass_conf.update(
+            defaults_path=self.src / "data/config_defaults.json",
+            associations_path=self.src / "data/associations.csv",
+            config_path=self.dir / "config.json",
+            legacy_config_path=self.dir / "legacy_missing.yaml",
+            root_path=self.src,
+        )
+        self.enterContext(patch.object(web_server, "params_secrets", dict(self.LOGIN)))
+        await self.enable()
+
+    async def _startup(self, overrides):
+        """What a worker does as it starts: config.json, build_config, build_params, params.pkl."""
+        config = orjson.loads((self.src / "data/config_defaults.json").read_bytes())
+        config.update(overrides)
+        (self.dir / "config.json").write_bytes(orjson.dumps(config))
+        built = await utils.build_config(
+            web_server.emhass_conf,
+            logger,
+            str(self.src / "data/config_defaults.json"),
+            str(self.dir / "config.json"),
+            None,
+        )
+        params = await utils.build_params(
+            web_server.emhass_conf, web_server.params_secrets, built, logger
+        )
+        (self.data / web_server.params_file).write_bytes(
+            pickle.dumps((self.dir / "config.json", params))
+        )
+        return built
+
+    async def _save(self, body):
+        return await self.send("POST", "/set-config", headers=BEARER, json=body)
+
+    async def test_a_flag_that_is_not_true_or_false_is_refused(self):
+        built = await self._startup(self.SERVER)
+        saved = (self.data / web_server.params_file).read_bytes()
+        for key in self.FLAGS:
+            for value in ("true", 1, "yes"):
+                with self.subTest(key=key, value=value):
+                    response = await self._save({**built, key: value})
+                    self.assertEqual(response.status_code, 400)
+                    # Fixed text, without the value
+                    self.assertEqual(await response.get_json(), [f"{key} must be true or false"])
+        self.assertEqual((self.data / web_server.params_file).read_bytes(), saved)
+
+    async def test_true_and_false_still_save(self):
+        # The web UI sends every field on each save, as JSON booleans
+        built = await self._startup(self.SERVER)
+        self.assertEqual((await self._save(built)).status_code, 200)
+        response = await self._save({**built, "use_influxdb": False, "influxdb_verify_ssl": True})
+        self.assertEqual(response.status_code, 200)
+        # Turning SSL off is still a change of server
+        response = await self._save({**built, "influxdb_use_ssl": False})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(await response.get_json(), [web_server.DB_SERVER_CHANGE_REFUSED])
+
+    def _reader(self):
+        """A RetrieveHass built from the saved params.pkl, as an action builds it."""
+        params = pickle.loads((self.data / web_server.params_file).read_bytes())[1]
+        return RetrieveHass(
+            "http://127.0.0.1:1/",
+            "token",
+            pd.Timedelta(minutes=30),
+            datetime.UTC,
+            {"retrieve_hass_conf": params["retrieve_hass_conf"]},
+            web_server.emhass_conf,
+            logger,
+        )
+
+    async def test_hand_written_values_are_read_on_their_safe_side(self):
+        # config.json edited by hand, read as at start-up
+        await self._startup({"use_influxdb": "true", "influxdb_host": "127.0.0.1"})
+        self.assertFalse(self._reader().use_influxdb)
+        for value in ("true", "false"):
+            with self.subTest(value=value):
+                await self._startup(
+                    {
+                        "use_victoriametrics": True,
+                        "victoriametrics_host": "127.0.0.1",
+                        "victoriametrics_use_ssl": value,
+                    }
+                )
+                self.assertTrue(self._reader()._vm_base_url().startswith("https://"))
+
+    async def test_a_hand_written_ca_bundle_path_is_kept_for_influxdb(self):
+        trusted, other = _TLSInflux(), _TLSInflux()
+        for server in (trusted, other):
+            self.addCleanup(server.close)
+        ca_path = trusted.ca_file(self.dir)
+        for server, connects in ((trusted, True), (other, False)):
+            with self.subTest(connects=connects):
+                await self._startup(
+                    {**self.SERVER, "influxdb_port": server.port, "influxdb_verify_ssl": ca_path}
+                )
+                rh = self._reader()
+                self.assertEqual(rh.influxdb_verify_ssl, ca_path)
+                with self.assertLogs(logger, level="DEBUG"):
+                    client = rh._init_influx_client()
+                if client is not None:
+                    client.close()
+                self.assertEqual(client is not None, connects)
+                # The login reached the server the bundle vouches for, and no other
+                self.assertEqual(server.logins, [True] if connects else [])
+
+    async def test_turning_ssl_or_the_check_on_saves_and_off_does_not(self):
+        built = await self._startup(
+            {**self.SERVER, "influxdb_use_ssl": False, "influxdb_verify_ssl": False}
+        )
+        for key in ("influxdb_use_ssl", "influxdb_verify_ssl"):
+            with self.subTest(on=key):
+                built[key] = True
+                self.assertEqual((await self._save(built)).status_code, 200)
+        for changes in (
+            {"influxdb_use_ssl": False},
+            {"influxdb_verify_ssl": False},
+            {"influxdb_port": 8087},
+        ):
+            with self.subTest(changes=changes):
+                response = await self._save({**built, **changes})
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(await response.get_json(), [web_server.DB_SERVER_CHANGE_REFUSED])
+        # On at once with another port is a change of server too
+        built = await self._startup(
+            {**self.SERVER, "influxdb_use_ssl": False, "influxdb_verify_ssl": False}
+        )
+        response = await self._save({**built, "influxdb_use_ssl": True, "influxdb_port": 443})
+        self.assertEqual(response.status_code, 400)
+
+    async def _ingress_admin_save(self, body):
+        with patch.dict(
+            os.environ, {"SUPERVISOR_TOKEN": "supervisor-token", api_auth.INGRESS_PORT_ENV: "8099"}
+        ):
+            return await self.send(
+                "POST", "/set-config", port=8099, peer=SUPERVISOR, headers=ADMIN, json=body
+            )
+
+    def _saved_conf(self):
+        params = pickle.loads((self.data / web_server.params_file).read_bytes())[1]
+        return params["retrieve_hass_conf"], orjson.loads((self.dir / "config.json").read_bytes())
+
+    async def test_a_ui_resave_keeps_a_hand_written_ca_path(self):
+        # The web UI shows a CA path as a ticked checkbox and sends true for it. The path
+        # stays, in params.pkl and config.json, for a token caller and for an ingress
+        # administrator, and the rest of the save goes through
+        influx_ca, vm_ca = str(self.dir / "influx-ca.pem"), str(self.dir / "vm-ca.pem")
+        hand_written = {
+            **self.SERVER,
+            "influxdb_verify_ssl": influx_ca,
+            "victoriametrics_use_ssl": True,
+            "victoriametrics_verify_ssl": vm_ca,
+        }
+        for caller, save in (("token", self._save), ("ingress admin", self._ingress_admin_save)):
+            with self.subTest(caller=caller):
+                built = await self._startup(hand_written)
+                body = {
+                    **built,
+                    "influxdb_verify_ssl": True,
+                    "victoriametrics_verify_ssl": True,
+                    "influxdb_database": "resaved",
+                }
+                response = await save(body)
+                self.assertEqual(response.status_code, 200, await response.get_json())
+                params, config = self._saved_conf()
+                for key, path in (
+                    ("influxdb_verify_ssl", influx_ca),
+                    ("victoriametrics_verify_ssl", vm_ca),
+                ):
+                    self.assertEqual(params[key], path)
+                    self.assertEqual(config[key], path)
+                self.assertEqual(params["influxdb_database"], "resaved")
+        # A "false" written as text is on: the ticked checkbox resaves it as true
+        built = await self._startup({**self.SERVER, "influxdb_use_ssl": "false"})
+        self.assertEqual((await self._save({**built, "influxdb_use_ssl": True})).status_code, 200)
+        self.assertIs(self._saved_conf()[0]["influxdb_use_ssl"], True)
+
+    async def test_false_still_turns_a_ca_path_off(self):
+        # Refused for a token caller; an ingress administrator may, and false is saved
+        built = await self._startup({**self.SERVER, "influxdb_verify_ssl": "/ca/bundle.pem"})
+        response = await self._save({**built, "influxdb_verify_ssl": False})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(await response.get_json(), [web_server.DB_SERVER_CHANGE_REFUSED])
+        self.assertEqual(self._saved_conf()[0]["influxdb_verify_ssl"], "/ca/bundle.pem")
+        response = await self._ingress_admin_save({**built, "influxdb_verify_ssl": False})
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(self._saved_conf()[0]["influxdb_verify_ssl"], False)
+
+    async def test_the_saved_ca_path_posted_back_saves_unchanged(self):
+        # GET /get-config returns the path; the web UI's JSON view, or an API client,
+        # posts that reply back as it is. It counts as unchanged: saved, path kept
+        ca = str(self.dir / "private-ca.pem")
+        hand_written = {
+            **self.SERVER,
+            "influxdb_verify_ssl": ca,
+            "victoriametrics_use_ssl": True,
+            "victoriametrics_verify_ssl": "false",
+        }
+        for caller, save in (("token", self._save), ("ingress admin", self._ingress_admin_save)):
+            with self.subTest(caller=caller):
+                await self._startup(hand_written)
+                reply = await self.send("GET", "/get-config", headers=BEARER)
+                self.assertEqual(reply.status_code, 200)
+                shown = await reply.get_json()
+                self.assertEqual(shown["influxdb_verify_ssl"], ca)
+                response = await save({**shown, "influxdb_database": "resaved"})
+                self.assertEqual(response.status_code, 200, await response.get_json())
+                params, config = self._saved_conf()
+                self.assertEqual(params["influxdb_database"], "resaved")
+                for key, value in (
+                    ("influxdb_verify_ssl", ca),
+                    ("victoriametrics_verify_ssl", "false"),
+                ):
+                    self.assertEqual(params[key], value)
+                    self.assertEqual(config[key], value)
+        # Any other text is still refused, for every caller
+        built = await self._startup(hand_written)
+        saved = (self.data / web_server.params_file).read_bytes()
+        for value in (str(self.dir / "other-ca.pem"), "true", ca.upper()):
+            for caller, save in (
+                ("token", self._save),
+                ("ingress admin", self._ingress_admin_save),
+            ):
+                with self.subTest(value=value, caller=caller):
+                    response = await save({**built, "influxdb_verify_ssl": value})
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(
+                        await response.get_json(), ["influxdb_verify_ssl must be true or false"]
+                    )
+        self.assertEqual((self.data / web_server.params_file).read_bytes(), saved)
+
+    def _edit_config_json(self, **changes):
+        """Edit config.json by hand, after the last start: newer than params.pkl."""
+        path = self.dir / "config.json"
+        written = orjson.loads(path.read_bytes())
+        written.update(changes)
+        path.write_bytes(orjson.dumps(written))
+        built = (self.data / web_server.params_file).stat().st_mtime_ns
+        os.utime(path, ns=(built + 10**9, built + 10**9))
+
+    async def test_a_ca_path_edited_into_config_json_since_the_start_is_kept(self):
+        # params.pkl still holds the old path. A save keeps the one in config.json, which
+        # the web UI showed: an ingress administrator saves it; for a token caller it is
+        # a different CA file than the readers use, so refused, and nothing is written
+        old_ca, new_ca = str(self.dir / "old-ca.pem"), str(self.dir / "new-ca.pem")
+        built = await self._startup({**self.SERVER, "influxdb_verify_ssl": old_ca})
+        self._edit_config_json(influxdb_verify_ssl=new_ca)
+        body = {**built, "influxdb_verify_ssl": True}
+        response = await self._save(body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(await response.get_json(), [web_server.DB_SERVER_CHANGE_REFUSED])
+        self.assertEqual(self._saved_conf()[0]["influxdb_verify_ssl"], old_ca)
+        response = await self._ingress_admin_save(body)
+        self.assertEqual(response.status_code, 200)
+        params, config = self._saved_conf()
+        self.assertEqual(params["influxdb_verify_ssl"], new_ca)
+        self.assertEqual(config["influxdb_verify_ssl"], new_ca)
+
+    async def test_a_ca_path_is_kept_from_config_json_when_params_pkl_cannot_be_read(self):
+        ca = str(self.dir / "private-ca.pem")
+        built = await self._startup({**self.SERVER, "influxdb_verify_ssl": ca})
+        (self.data / web_server.params_file).write_bytes(b"not a pickle")
+        response = await self._ingress_admin_save({**built, "influxdb_verify_ssl": True})
+        self.assertEqual(response.status_code, 200)
+        params, config = self._saved_conf()
+        self.assertEqual(params["influxdb_verify_ssl"], ca)
+        self.assertEqual(config["influxdb_verify_ssl"], ca)
+
+    def _age_config_json(self):
+        """config.json older than params.pkl, as after restoring a backup of it."""
+        built = (self.data / web_server.params_file).stat().st_mtime_ns
+        os.utime(self.dir / "config.json", ns=(built - 10**9, built - 10**9))
+
+    async def test_a_config_json_older_than_params_pkl_gives_no_ca_path(self):
+        # Only a config.json written after params.pkl was edited since: an older one
+        # (a restored backup) leaves the params.pkl path in place, for every caller
+        saved_ca, older_ca = str(self.dir / "saved-ca.pem"), str(self.dir / "older-ca.pem")
+        for caller, save in (("token", self._save), ("ingress admin", self._ingress_admin_save)):
+            with self.subTest(caller=caller):
+                built = await self._startup({**self.SERVER, "influxdb_verify_ssl": saved_ca})
+                self._edit_config_json(influxdb_verify_ssl=older_ca)
+                self._age_config_json()
+                response = await save({**built, "influxdb_verify_ssl": True})
+                self.assertEqual(response.status_code, 200, await response.get_json())
+                params, config = self._saved_conf()
+                self.assertEqual(params["influxdb_verify_ssl"], saved_ca)
+                self.assertEqual(config["influxdb_verify_ssl"], saved_ca)
+
+    async def test_a_posted_path_counts_as_unchanged_only_if_it_is_the_one_kept(self):
+        # The text is matched against the path the save will keep, not against either
+        # file: posting the other file's path is refused, as any other text, and saves
+        # nothing; posting the kept one saves it
+        pkl_ca, json_ca = str(self.dir / "pkl-ca.pem"), str(self.dir / "json-ca.pem")
+        refused = ["influxdb_verify_ssl must be true or false"]
+        for newer, kept in (("params.pkl", pkl_ca), ("config.json", json_ca)):
+            other = json_ca if kept == pkl_ca else pkl_ca
+            with self.subTest(newer=newer):
+                built = await self._startup({**self.SERVER, "influxdb_verify_ssl": pkl_ca})
+                self._edit_config_json(influxdb_verify_ssl=json_ca)
+                if newer == "params.pkl":
+                    self._age_config_json()
+                before = (self.data / web_server.params_file).read_bytes()
+                for caller, save in (
+                    ("token", self._save),
+                    ("ingress admin", self._ingress_admin_save),
+                ):
+                    response = await save({**built, "influxdb_verify_ssl": other})
+                    self.assertEqual(response.status_code, 400, caller)
+                    self.assertEqual(await response.get_json(), refused)
+                self.assertEqual((self.data / web_server.params_file).read_bytes(), before)
+                response = await self._ingress_admin_save({**built, "influxdb_verify_ssl": kept})
+                self.assertEqual(response.status_code, 200, await response.get_json())
+                params, config = self._saved_conf()
+                self.assertEqual(params["influxdb_verify_ssl"], kept)
+                self.assertEqual(config["influxdb_verify_ssl"], kept)
+        # With params.pkl unreadable the config.json path is the one kept, and matches
+        ca = str(self.dir / "private-ca.pem")
+        built = await self._startup({**self.SERVER, "influxdb_verify_ssl": ca})
+        (self.data / web_server.params_file).write_bytes(b"not a pickle")
+        response = await self._ingress_admin_save({**built, "influxdb_verify_ssl": ca})
+        self.assertEqual(response.status_code, 200, await response.get_json())
+        self.assertEqual(self._saved_conf()[0]["influxdb_verify_ssl"], ca)
+
+    async def test_a_config_json_that_cannot_be_parsed_keeps_the_saved_ca_path(self):
+        # Newer than params.pkl, as after a hand edit with a typo: it says nothing about
+        # the CA path, so the one in params.pkl is kept, never true in its place. For the
+        # ingress administrator, and for any caller while no login is stored
+        ca = str(self.dir / "pinned-ca.pem")
+        cases = (
+            ("ingress admin", self._ingress_admin_save, self.LOGIN),
+            ("token, no login", self._save, {}),
+            ("token, login", self._save, self.LOGIN),
+        )
+        for caller, save, secrets in cases:
+            for text in (b'{"influxdb_verify_ssl": "/other/ca.pem",', b"[1, 2]"):
+                for posted in (True, ca):
+                    with (
+                        self.subTest(caller=caller, config_json=text, posted=posted),
+                        patch.object(web_server, "params_secrets", dict(secrets)),
+                    ):
+                        built = await self._startup({**self.SERVER, "influxdb_verify_ssl": ca})
+                        (self.dir / "config.json").write_bytes(text)
+                        built_ns = (self.data / web_server.params_file).stat().st_mtime_ns
+                        os.utime(self.dir / "config.json", ns=(built_ns + 10**9, built_ns + 10**9))
+                        response = await save({**built, "influxdb_verify_ssl": posted})
+                        self.assertEqual(response.status_code, 200, await response.get_json())
+                        params, config = self._saved_conf()
+                        self.assertEqual(params["influxdb_verify_ssl"], ca)
+                        self.assertEqual(config["influxdb_verify_ssl"], ca)
+
+    async def test_with_neither_file_readable_a_save_keeps_no_ca_path(self):
+        # params.pkl cannot be read and config.json cannot be parsed: neither names a CA
+        # path, so none is kept and the save is decided as one with no path in it. True
+        # saves for the ingress administrator and for a token caller while no login is
+        # stored; with one stored there is nothing to compare its server with. A posted
+        # path matches no kept one, so it is refused as any other text
+        ca = str(self.dir / "pinned-ca.pem")
+        unreadable = [web_server.SAVED_PARAMS_UNREADABLE]
+        refused = ["influxdb_verify_ssl must be true or false"]
+        cases = (
+            ("ingress admin", self._ingress_admin_save, self.LOGIN, 200),
+            ("token, no login", self._save, {}, 200),
+            ("token, login", self._save, self.LOGIN, 400),
+        )
+        for caller, save, secrets, status in cases:
+            for posted in (True, ca):
+                with (
+                    self.subTest(caller=caller, posted=posted),
+                    patch.object(web_server, "params_secrets", dict(secrets)),
+                ):
+                    built = await self._startup({**self.SERVER, "influxdb_verify_ssl": ca})
+                    (self.data / web_server.params_file).write_bytes(b"not a pickle")
+                    (self.dir / "config.json").write_bytes(b'{"influxdb_verify_ssl": ')
+                    response = await save({**built, "influxdb_verify_ssl": posted})
+                    if posted is not True:
+                        self.assertEqual(response.status_code, 400)
+                        self.assertEqual(await response.get_json(), refused)
+                        self.assertEqual(
+                            (self.data / web_server.params_file).read_bytes(), b"not a pickle"
+                        )
+                        continue
+                    self.assertEqual(response.status_code, status, await response.get_json())
+                    if status == 200:
+                        params, config = self._saved_conf()
+                        self.assertIs(params["influxdb_verify_ssl"], True)
+                        self.assertIs(config["influxdb_verify_ssl"], True)
+                    else:
+                        self.assertEqual(await response.get_json(), unreadable)
+
+    async def test_a_config_json_that_cannot_be_replaced_gets_a_fixed_answer(self):
+        # A folder where config.json should be stands in for a file that cannot be
+        # replaced. It cannot be read either, so the params.pkl path is kept and the save
+        # gets as far as the write: a fixed 500, and neither file changes
+        ca = str(self.dir / "pinned-ca.pem")
+        config_json = self.dir / "config.json"
+        for caller, save in (("token", self._save), ("ingress admin", self._ingress_admin_save)):
+            for posted in (True, ca):
+                with self.subTest(caller=caller, posted=posted):
+                    built = await self._startup({**self.SERVER, "influxdb_verify_ssl": ca})
+                    before = (self.data / web_server.params_file).read_bytes()
+                    config_json.unlink()
+                    config_json.mkdir()
+                    try:
+                        response = await save({**built, "influxdb_verify_ssl": posted})
+                        self.assertEqual(response.status_code, 500)
+                        self.assertEqual(await response.get_json(), ["Unable to save config file"])
+                        self.assertEqual((self.data / web_server.params_file).read_bytes(), before)
+                        self.assertEqual(list(config_json.iterdir()), [])
+                        self.assertEqual(list(self.dir.glob("*.tmp")), [])
+                    finally:
+                        config_json.rmdir()
+
+    async def test_the_saved_params_are_read_with_the_save_lock_held(self):
+        built = await self._startup(self.SERVER)
+        held = []
+        real_read = web_server._read_saved_params
+
+        async def read_checking_the_lock():
+            with open(web_server._config_save_slot(), "a+") as other:
+                taken = utils.try_lock_file(other)
+                if taken:
+                    utils.unlock_file(other)
+            held.append(not taken)
+            return await real_read()
+
+        with patch.object(web_server, "_read_saved_params", read_checking_the_lock):
+            self.assertEqual((await self._save(built)).status_code, 200)
+        self.assertEqual(held, [True])
+
+    async def test_a_refused_save_does_not_use_up_the_error_for_a_hand_written_value(self):
+        # The error for a use_* that is not true or false is logged once per process; a
+        # request that /set-config refuses must not be the one that logs it
+        utils._db_settings_warned.clear()
+        captured = []
+        handler = logging.Handler(logging.DEBUG)
+        handler.emit = captured.append
+        db_logger = logging.getLogger("emhass.database")
+        self.addCleanup(db_logger.setLevel, db_logger.level)
+        db_logger.setLevel(logging.DEBUG)
+        db_logger.addHandler(handler)
+        self.addCleanup(db_logger.removeHandler, handler)
+        built = await self._startup(self.SERVER)
+        response = await self._save({**built, "use_influxdb": "x"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse([r for r in captured if "use_influxdb" in r.getMessage()])
+        TestDatabaseFlagReaders._rh({"use_influxdb": "x"})
+        self.assertEqual(
+            [r.getMessage() for r in captured if "use_influxdb" in r.getMessage()],
+            ["use_influxdb is not true or false, so it is taken as off"],
+        )
+
+    async def test_a_hand_written_null_is_taken_as_not_set(self):
+        # build_params drops a null, so it reads as the default, off, as before this
+        # series; the web UI shows it unticked and its save changes nothing
+        built = await self._startup(
+            {**self.SERVER, "influxdb_use_ssl": None, "influxdb_verify_ssl": None}
+        )
+        rh = self._reader()
+        self.assertIs(rh.influxdb_use_ssl, False)
+        self.assertIs(rh.influxdb_verify_ssl, False)
+        response = await self._save(
+            {**built, "influxdb_use_ssl": False, "influxdb_verify_ssl": False}
+        )
+        self.assertEqual(response.status_code, 200)
+
+
+def _written(path: pathlib.Path, text: str) -> str:
+    path.write_text(text)
+    return str(path)
+
+
+class _TLSInflux:
+    """A TLS stand-in for InfluxDB on 127.0.0.1 with a certificate from its own throwaway
+    CA. Counts the connections it accepts and records, per connection, whether the
+    client sent a login."""
+
+    def __init__(self):
+        import socket
+        import ssl
+        import threading
+
+        import trustme
+
+        self.ca = trustme.CA()
+        self.accepted = 0
+        self.logins = []
+        self._ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ca.issue_cert("127.0.0.1").configure_cert(self._ctx)
+        self._sock = socket.socket()
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(8)
+        self._sock.settimeout(0.05)
+        self.port = self._sock.getsockname()[1]
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def ca_file(self, folder: pathlib.Path) -> str:
+        path = folder / f"ca-{id(self)}.pem"
+        self.ca.cert_pem.write_to_path(str(path))
+        return str(path)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+            except TimeoutError:
+                continue
+            self.accepted += 1
+            try:
+                conn.settimeout(2)
+                conn = self._ctx.wrap_socket(conn, server_side=True)
+                request = conn.recv(65536).decode("latin1").lower()
+                self.logins.append("authorization:" in request)
+                conn.sendall(
+                    b"HTTP/1.1 204 No Content\r\nX-Influxdb-Version: 1.8\r\n"
+                    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+    def close(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+        self._sock.close()
+
+
+class TestDatabaseFlagReaders(unittest.IsolatedAsyncioTestCase):
+    """Every reader, and the /set-config check, take a database setting the same way, and
+    each fails in its safe direction: use_influxdb and use_victoriametrics are on only
+    when they are the boolean True, the SSL settings are off only when they are the
+    boolean False. A hand-written config.json can still hold "true", "false" or the path
+    of a CA bundle."""
+
+    NOT_BOOL = ("true", "false", 1, 0, "yes", None)
+
+    def setUp(self):
+        utils._db_settings_warned.clear()
+
+    @staticmethod
+    def _rh(conf):
+        return RetrieveHass(
+            "http://127.0.0.1:1/",
+            "token",
+            pd.Timedelta(minutes=30),
+            datetime.UTC,
+            {"retrieve_hass_conf": conf},
+            emhass_conf,
+            logger,
+        )
+
+    def _db_log(self, db_logger=None):
+        """What the "emhass.database" logger (or ``db_logger``) logs from here on."""
+        captured = []
+        handler = logging.Handler(logging.DEBUG)
+        handler.emit = lambda record: captured.append(record)
+        db_logger = db_logger or logging.getLogger("emhass.database")
+        self.addCleanup(db_logger.setLevel, db_logger.level)
+        db_logger.setLevel(logging.DEBUG)
+        db_logger.addHandler(handler)
+        self.addCleanup(db_logger.removeHandler, handler)
+        return captured
+
+    def test_a_use_flag_that_is_not_true_is_off(self):
+        for value in self.NOT_BOOL:
+            with self.subTest(value=value):
+                self.assertFalse(self._rh({"use_influxdb": value}).use_influxdb)
+                self.assertFalse(self._rh({"use_victoriametrics": value}).use_victoriametrics)
+
+    def test_an_ssl_setting_that_is_not_false_is_on(self):
+        for value in self.NOT_BOOL:
+            with self.subTest(value=value):
+                rh = self._rh(
+                    {
+                        "use_influxdb": True,
+                        "influxdb_use_ssl": value,
+                        "influxdb_verify_ssl": value,
+                        "use_victoriametrics": True,
+                        "victoriametrics_use_ssl": value,
+                        "victoriametrics_verify_ssl": value,
+                    }
+                )
+                self.assertIs(rh.influxdb_use_ssl, True)
+                self.assertTrue(rh._vm_base_url().startswith("https://"))
+                if isinstance(value, str):
+                    # A text is taken as a CA path; none of these names one, so the
+                    # database is not contacted at all (see the tests below)
+                    self.assertEqual(rh.influxdb_verify_ssl, value)
+                    with self.assertRaises(retrieve_hass._DbCaUnusable):
+                        rh._vm_ssl()
+                else:
+                    # The default CAs
+                    self.assertIs(rh.influxdb_verify_ssl, True)
+                    self.assertIsNone(rh._vm_ssl())
+        # Not set: the default, off
+        rh = self._rh({"use_influxdb": True, "use_victoriametrics": True})
+        self.assertIs(rh.influxdb_use_ssl, False)
+        self.assertIs(rh.influxdb_verify_ssl, False)
+        self.assertTrue(rh._vm_base_url().startswith("http://"))
+        # The boolean False is off
+        rh = self._rh(
+            {
+                "use_victoriametrics": True,
+                "victoriametrics_use_ssl": True,
+                "victoriametrics_verify_ssl": False,
+            }
+        )
+        self.assertIs(rh._vm_ssl(), False)
+
+    async def test_a_ca_bundle_path_is_loaded_once_off_the_event_loop(self):
+        import ssl
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        ca_path = server.ca_file(pathlib.Path(tmp.name))
+        rh = self._rh(
+            {
+                "use_victoriametrics": True,
+                "victoriametrics_use_ssl": True,
+                "victoriametrics_verify_ssl": ca_path,
+            }
+        )
+        self.assertTrue(await rh._vm_load_ca())
+        context = rh._vm_ssl()
+        self.assertIsInstance(context, ssl.SSLContext)
+        self.assertTrue(await rh._vm_load_ca())
+        self.assertIs(rh._vm_ssl(), context)  # built once
+
+    # (name, how to make it) of CA paths that cannot be used
+    UNUSABLE_CA = (
+        ("missing", lambda folder: str(folder / "missing.pem")),
+        ("empty", lambda folder: _written(folder / "empty.pem", "")),
+        ("junk", lambda folder: _written(folder / "junk.pem", "not a certificate")),
+        ("the text false", lambda folder: "false"),
+        ("a device", lambda folder: os.devnull),
+    )
+    UNUSABLE_CA_LINE = "The CA file named by {} cannot be loaded, so that database is not contacted"
+
+    def _readers(self, port, path):
+        """(name, the line it logs, a coroutine reading through it) for the three readers,
+        each pointed at 127.0.0.1:``port`` over SSL with ``path`` as its CA."""
+        conf = {
+            "influxdb_host": "127.0.0.1",
+            "influxdb_port": port,
+            "influxdb_username": "admin",
+            "influxdb_password": "real-password",
+            "influxdb_use_ssl": True,
+            "influxdb_verify_ssl": path,
+        }
+        days = pd.date_range("2026-11-19", periods=1, freq="D", tz="UTC")
+        influx = self._rh({"use_influxdb": True, **conf})
+        vm = self._rh(
+            {
+                "use_victoriametrics": True,
+                "victoriametrics_host": "127.0.0.1",
+                "victoriametrics_port": port,
+                "victoriametrics_username": "admin",
+                "victoriametrics_password": "real-password",
+                "victoriametrics_use_ssl": True,
+                "victoriametrics_verify_ssl": path,
+            }
+        )
+        idx = pd.date_range("2026-11-19", periods=4, freq="30min", tz="UTC")
+        thermal_args = ("sensor.t_in", "sensor.t_out", "", "", "", idx[0], idx[-1], 30, 1.0)
+
+        async def influx_read():
+            return await influx._get_data_influxdb_off_loop(days, ["sensor.x"])
+
+        async def vm_read():
+            return await vm.get_data_victoriametrics(days, ["sensor.x"])
+
+        async def thermal_read():
+            try:
+                frame = await utils._fetch_influx_thermal_window(conf, *thermal_args, logger)
+            except Exception:  # noqa: BLE001 - this stand-in sends no query results
+                return False
+            return not frame.empty
+
+        return (
+            ("InfluxDB", "influxdb_verify_ssl", influx_read),
+            ("VictoriaMetrics", "victoriametrics_verify_ssl", vm_read),
+            ("InfluxDB", "influxdb_verify_ssl", thermal_read),
+        )
+
+    async def test_an_unusable_ca_path_contacts_no_database(self):
+        # A path naming no CA file or folder that can be loaded: no reader connects, so
+        # no login leaves, where checking against the default CAs would send it to any
+        # server they vouch for. The action log has a fixed line on every read;
+        # "emhass.database" an error naming the setting, once per process
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = pathlib.Path(tmp.name)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        for name, make in self.UNUSABLE_CA:
+            path = make(folder)
+            utils._db_settings_warned.clear()
+            captured = self._db_log()
+            for reader, _key, read in self._readers(server.port, path):
+                with self.subTest(path=name, reader=read.__name__):
+                    for _ in range(2):
+                        with self.assertLogs(logger, level="ERROR") as cm:
+                            self.assertFalse(await read())
+                        self.assertIn(
+                            f"the configured CA file for {reader} cannot be used; "
+                            "the database was not contacted",
+                            [r.getMessage() for r in cm.records],
+                        )
+                    self.assertEqual(server.accepted, 0)
+                    self.assertEqual(server.logins, [])
+            lines = [r.getMessage() for r in captured if r.levelno == logging.ERROR]
+            for key in ("influxdb_verify_ssl", "victoriametrics_verify_ssl"):
+                self.assertEqual(lines.count(self.UNUSABLE_CA_LINE.format(key)), 1, lines)
+            for line in lines:
+                self.assertNotIn(str(folder), line)
+
+    async def test_a_usable_ca_path_is_contacted_by_every_reader(self):
+        # A bundle file, or a folder (here not prepared with openssl rehash, which is
+        # hinted at once): the reader connects and checks against it
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = pathlib.Path(tmp.name)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        bundle = server.ca_file(folder)
+        for path in (bundle, str(folder)):
+            utils._db_settings_warned.clear()
+            captured = self._db_log()
+            action_log = self._db_log(logger)
+            for _reader, _key, read in self._readers(server.port, path):
+                with self.subTest(path=pathlib.Path(path).name, reader=read.__name__):
+                    before = server.accepted
+                    await read()
+                    self.assertGreater(server.accepted, before)
+            self.assertFalse([r for r in action_log if "CA file" in r.getMessage()])
+            lines = [r.getMessage() for r in captured]
+            self.assertFalse([line for line in lines if "cannot be loaded, so" in line])
+            hint = [line for line in lines if "openssl rehash gives" in line]
+            self.assertEqual(len(hint), 0 if path == bundle else 2, lines)
+
+    async def test_a_ca_path_is_not_opened_on_the_event_loop(self):
+        # A path that blocks (a FIFO, CON, a share that does not answer) must not hold
+        # the server: it is loaded on a worker thread, never while the loop runs
+        import ssl
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        path = server.ca_file(pathlib.Path(tmp.name))
+        on_loop = []
+        real = ssl.create_default_context
+
+        def recording(*args, **kwargs):
+            if kwargs.get("cafile") == path:
+                on_loop.append(asyncio._get_running_loop() is not None)
+            return real(*args, **kwargs)
+
+        with patch.object(ssl, "create_default_context", recording):
+            for _reader, _key, read in self._readers(server.port, path):
+                await read()
+        # Loaded by each of the three readers, never on the loop
+        self.assertEqual(on_loop, [False, False, False])
+
+    async def test_a_ca_load_that_blocks_is_given_up(self):
+        # One that does not return in DB_CA_LOAD_TIMEOUT_S counts as unusable: the
+        # action goes on, and the loop keeps serving meanwhile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        path = server.ca_file(pathlib.Path(tmp.name))
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def blocking(*_args):
+            release.wait(5)
+
+        self.enterContext(patch.object(utils, "DB_CA_LOAD_TIMEOUT_S", 0.3, create=True))
+        self.enterContext(patch.object(utils, "db_ca_context", blocking, create=True))
+        ticks = []
+
+        async def ticker():
+            while True:
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.02)
+
+        task = asyncio.create_task(ticker())
+        try:
+            # VictoriaMetrics and the thermal reader; InfluxDB loads on its own thread
+            for reader, _key, read in self._readers(server.port, path)[1:]:
+                with self.subTest(reader=read.__name__):
+                    start = time.monotonic()
+                    with self.assertLogs(logger, level="ERROR") as cm:
+                        self.assertFalse(await read())
+                    self.assertLess(time.monotonic() - start, 2)
+                    self.assertIn(
+                        f"the configured CA file for {reader} cannot be used; "
+                        "the database was not contacted",
+                        [r.getMessage() for r in cm.records],
+                    )
+        finally:
+            task.cancel()
+        self.assertLess(max(b - a for a, b in itertools.pairwise(ticks)), 0.25)
+        self.assertEqual(server.accepted, 0)
+
+    async def test_a_ca_load_that_never_returns_holds_no_shared_thread(self):
+        # A stat on a stale network mount can block for ever. Its load holds one thread
+        # of the CA loader's own, however many reads ask for that path: asyncio.to_thread
+        # and aiofiles, which every action uses to read params.pkl, keep working. A read
+        # after the first wait is refused at once instead of starting another load
+        import aiofiles
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+        loads, started = [], threading.Event()
+
+        def never_returns(path, _key):
+            loads.append(path)
+            started.set()
+            release.wait(30)
+
+        self.enterContext(patch.object(utils, "DB_CA_LOAD_TIMEOUT_S", 1, create=True))
+        self.enterContext(patch.object(utils, "db_ca_context", never_returns, create=True))
+        shared = ThreadPoolExecutor(max_workers=2)
+        self.addCleanup(shared.shutdown, wait=False)
+        asyncio.get_running_loop().set_default_executor(shared)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = str(pathlib.Path(tmp.name) / "stale-mount" / "ca.pem")
+        took = []
+        for n in range(6):
+            start = time.monotonic()
+            with self.assertLogs("emhass.database", "ERROR") as cm:
+                read = asyncio.create_task(utils.db_aiohttp_ssl(path, "victoriametrics_verify_ssl"))
+                if n == 0:
+                    # Its load runs on its thread before the later reads are timed
+                    # against it; one still queued at its due time would be dropped
+                    self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                self.assertIsNone(await read)
+                # The once-per-process line, logged here for the test's own capture
+                utils._db_settings_warned.clear()
+            took.append(time.monotonic() - start)
+            self.assertIn(self.UNUSABLE_CA_LINE.format("victoriametrics_verify_ssl"), cm.output[0])
+            self.assertEqual(await asyncio.wait_for(asyncio.to_thread(lambda: 1), 2), 1)
+
+            async def read_this_file():
+                async with aiofiles.open(__file__, "rb") as handle:
+                    return len(await handle.read())
+
+            self.assertGreater(await asyncio.wait_for(read_this_file(), 2), 0)
+        self.assertEqual(loads, [path])
+        self.assertGreater(took[0], 0.75)
+        self.assertLess(max(took[1:]), 0.1)
+        # Once it returns, the next read loads the path again
+        release.set()
+        for _ in range(100):
+            if path not in utils._db_ca_loads:
+                break
+            await asyncio.sleep(0.02)
+        self.assertIsNone(await utils.db_aiohttp_ssl(path, "victoriametrics_verify_ssl"))
+        self.assertEqual(loads, [path, path])
+
+    async def test_reads_asking_for_one_ca_path_at_once_share_its_load(self):
+        import ssl
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        path = server.ca_file(pathlib.Path(tmp.name))
+        real, loads = utils.db_ca_context, []
+
+        def slow_load(load_path, key):
+            loads.append(load_path)
+            time.sleep(0.2)
+            return real(load_path, key)
+
+        self.enterContext(patch.object(utils, "db_ca_context", slow_load, create=True))
+        first, second = await asyncio.gather(
+            utils.db_aiohttp_ssl(path, "victoriametrics_verify_ssl"),
+            utils.db_aiohttp_ssl(path, "influxdb_verify_ssl"),
+        )
+        self.assertIsInstance(first, ssl.SSLContext)
+        self.assertIs(second, first)
+        self.assertEqual(loads, [path])
+
+    def _ca_loader_stand_in(self, timeout_s):
+        """db_ca_context stood in for, with DB_CA_LOAD_TIMEOUT_S at ``timeout_s``: a path
+        whose name starts with "stuck" blocks until ``release`` is set (by the cleanup
+        at the latest, which then waits until every load has ended), any other returns a
+        text. Returns (loads, release): the paths loaded, in order, and the event."""
+        loads, release = [], threading.Event()
+
+        def stand_in(path, _key):
+            loads.append(path)
+            if path.startswith("stuck"):
+                release.wait(30)
+                return None
+            return f"context for {path}"
+
+        def drain():
+            release.set()
+            deadline = time.monotonic() + 5
+            while utils._db_ca_loads and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.enterContext(patch.object(utils, "DB_CA_LOAD_TIMEOUT_S", timeout_s, create=True))
+        self.enterContext(patch.object(utils, "db_ca_context", stand_in, create=True))
+        self.addCleanup(drain)
+        return loads, release
+
+    async def _until(self, condition, timeout_s=5):
+        deadline = time.monotonic() + timeout_s
+        while not condition():
+            self.assertLess(time.monotonic(), deadline, "the condition did not come true")
+            await asyncio.sleep(0.01)
+
+    async def _hold_both_ca_threads(self, loads):
+        """Two loads that never return (until released), running on both threads."""
+        holders = [
+            asyncio.create_task(utils.db_aiohttp_ssl(f"stuck-{n}", "victoriametrics_verify_ssl"))
+            for n in (1, 2)
+        ]
+        await self._until(lambda: len(loads) >= 2)
+        return holders
+
+    async def test_a_queued_ca_load_is_dropped_only_when_its_last_caller_goes(self):
+        # Both loader threads busy: reads of a good path wait for its load, queued. One
+        # whose action is cancelled leaves it to the others, which get it once a thread
+        # frees, well within their wait. Only when the last one goes is it dropped, and
+        # then never run
+        loads, release = self._ca_loader_stand_in(5)
+        holders = await self._hold_both_ca_threads(loads)
+        first = asyncio.create_task(utils.db_aiohttp_ssl("good-ca.pem", "influxdb_verify_ssl"))
+        second = asyncio.create_task(
+            utils.db_aiohttp_ssl("good-ca.pem", "victoriametrics_verify_ssl")
+        )
+        alone = asyncio.create_task(utils.db_aiohttp_ssl("other-ca.pem", "influxdb_verify_ssl"))
+        await asyncio.sleep(0.1)
+        for task in (first, alone):
+            task.cancel()
+        await asyncio.gather(first, alone, return_exceptions=True)
+        self.assertNotIn("other-ca.pem", utils._db_ca_loads)
+        await asyncio.sleep(0.05)
+        release.set()
+        self.assertEqual(await asyncio.wait_for(second, 4), "context for good-ca.pem")
+        self.assertEqual(await asyncio.gather(*holders), [None, None])
+        await self._until(lambda: utils._db_ca_executor._work_queue.empty())
+        await self._until(lambda: not utils._db_ca_loads)
+        self.assertEqual(sorted(loads), ["good-ca.pem", "stuck-1", "stuck-2"])
+
+    async def test_a_new_ca_path_is_refused_at_once_while_every_loader_thread_is_held(self):
+        # Two paths whose loads never return hold both threads past their due time. A
+        # third path could only queue behind them, every read adding an item that is
+        # never run: it is refused at once, with the usual line, and nothing is queued.
+        # A load queued before then is dropped at its due time. Once a thread frees, the
+        # path loads again
+        loads, release = self._ca_loader_stand_in(0.3)
+        holders = await self._hold_both_ca_threads(loads)
+        queued = asyncio.create_task(
+            utils.db_aiohttp_ssl("good-ca.pem", "victoriametrics_verify_ssl")
+        )
+        self.assertIsNone(await queued)
+        self.assertEqual(await asyncio.gather(*holders), [None, None])
+        self.assertNotIn("good-ca.pem", utils._db_ca_loads)
+        # A wait can end up to one tick of a coarse clock (16 ms on Windows) before the
+        # due time it waits for: be well past it
+        await asyncio.sleep(0.05)
+        waiting = utils._db_ca_executor._work_queue.qsize()
+        for _ in range(20):
+            utils._db_settings_warned.clear()
+            start = time.monotonic()
+            with self.assertLogs("emhass.database", "ERROR") as cm:
+                self.assertIsNone(
+                    await utils.db_aiohttp_ssl("good-ca.pem", "victoriametrics_verify_ssl")
+                )
+            self.assertLess(time.monotonic() - start, 0.1)
+            self.assertIn(self.UNUSABLE_CA_LINE.format("victoriametrics_verify_ssl"), cm.output[0])
+        self.assertEqual(utils._db_ca_executor._work_queue.qsize(), waiting)
+        self.assertNotIn("good-ca.pem", utils._db_ca_loads)
+        self.assertEqual(sorted(loads), ["stuck-1", "stuck-2"])
+        release.set()
+        await self._until(lambda: not utils._db_ca_loads)
+        self.assertEqual(
+            await utils.db_aiohttp_ssl("good-ca.pem", "victoriametrics_verify_ssl"),
+            "context for good-ca.pem",
+        )
+
+    def test_only_a_regular_file_or_a_folder_is_loaded(self):
+        # A FIFO, a device or a socket could block the load for ever: refused before it is
+        # opened. Stood in for by a valid bundle reported as one, so it would load were it
+        # not refused, on Windows too
+        import ssl
+        import stat
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = pathlib.Path(tmp.name)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        bundle = server.ca_file(folder)
+        key = "influxdb_verify_ssl"
+        # A file is loaded as a bundle (its CA in the store now), a folder as a folder
+        # (looked up by hash name during a handshake, so nothing in the store yet)
+        as_file = utils.db_ca_context(bundle, key)
+        self.assertIsInstance(as_file, ssl.SSLContext)
+        self.assertEqual(as_file.cert_store_stats()["x509_ca"], 1)
+        as_folder = utils.db_ca_context(str(folder), key)
+        self.assertIsInstance(as_folder, ssl.SSLContext)
+        self.assertEqual(as_folder.cert_store_stats()["x509_ca"], 0)
+        real_stat = os.stat
+        for kind in (stat.S_IFIFO, stat.S_IFCHR, stat.S_IFBLK, stat.S_IFSOCK):
+            with self.subTest(kind=stat.filemode(kind)):
+
+                def reported_as(path, *args, kind=kind, **kwargs):
+                    if os.fspath(path) == bundle:
+                        return os.stat_result((kind | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+                    return real_stat(path, *args, **kwargs)
+
+                with (
+                    patch.object(utils.os, "stat", reported_as),
+                    self.assertLogs("emhass.database", "ERROR"),
+                ):
+                    utils._db_settings_warned.clear()
+                    self.assertIsNone(utils.db_ca_context(bundle, key))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs a FIFO")
+    def test_a_fifo_is_refused_without_being_opened(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fifo = os.path.join(tmp.name, "ca.pem")
+        os.mkfifo(fifo)
+        result = []
+        loader = threading.Thread(
+            target=lambda: result.append(utils.db_ca_context(fifo, "influxdb_verify_ssl")),
+            daemon=True,
+        )
+        with self.assertLogs("emhass.database", "ERROR"):
+            loader.start()
+            loader.join(2)
+        if loader.is_alive():
+            # Opened for reading, it waits for a writer: give it one, and an end
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+            loader.join(2)
+            self.fail("the FIFO was opened")
+        self.assertEqual(result, [None])
+
+    async def test_over_plain_http_no_reader_checks_the_ca_path(self):
+        # No certificate is checked, so a path that cannot be used stops nothing: the
+        # aiohttp readers neither load it nor log that it cannot be used
+        missing = str(pathlib.Path(tempfile.gettempdir()) / "p3-missing-dir" / "missing.pem")
+        seen = []
+
+        async def fetch(_session, conn, *_args):
+            seen.append((conn["base_url"].split(":", 1)[0], conn["verify_ssl"]))
+            return pd.DataFrame()
+
+        idx = pd.date_range("2026-11-19", periods=4, freq="30min", tz="UTC")
+        args = ("sensor.t_in", "sensor.t_out", "", "", "", idx[0], idx[-1], 30, 1000.0, logger)
+        conf = {"influxdb_host": "127.0.0.1", "influxdb_use_ssl": False}
+        conf["influxdb_verify_ssl"] = missing
+        loaded = MagicMock(side_effect=AssertionError("loaded"))
+        with (
+            patch.object(utils, "db_ca_context", loaded, create=True),
+            patch("emhass.utils._fetch_influx_numeric_series", side_effect=fetch),
+            self.assertNoLogs(logger, "ERROR"),
+        ):
+            await utils._fetch_influx_thermal_window(conf, *args)
+            vm = self._rh(
+                {
+                    "use_victoriametrics": True,
+                    "victoriametrics_host": "127.0.0.1",
+                    "victoriametrics_use_ssl": False,
+                    "victoriametrics_verify_ssl": missing,
+                }
+            )
+            self.assertTrue(await vm._vm_load_ca())
+            self.assertIsNone(vm._vm_ssl())
+        self.assertEqual(seen, [("http", True)])
+        loaded.assert_not_called()
+
+    def test_an_unusable_influxdb_ca_path_is_not_contacted(self):
+        # Before, the certificate was checked against the default CAs instead (and before
+        # that requests refused the path, logged as "unexpected reply")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        rh = self._rh(
+            {
+                "use_influxdb": True,
+                "influxdb_host": "127.0.0.1",
+                "influxdb_port": server.port,
+                "influxdb_username": "admin",
+                "influxdb_password": "real-password",
+                "influxdb_use_ssl": True,
+                "influxdb_verify_ssl": str(pathlib.Path(tmp.name) / "missing.pem"),
+            }
+        )
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertIsNone(rh._init_influx_client())
+        self.assertEqual(
+            cm.records[-1].getMessage(),
+            "the configured CA file for InfluxDB cannot be used; the database was not contacted",
+        )
+        self.assertEqual(server.accepted, 0)
+        # Over plain HTTP no certificate is checked, so the path is not needed
+        rh = self._rh(
+            {
+                "use_influxdb": True,
+                "influxdb_host": "127.0.0.1",
+                "influxdb_port": 9,
+                "influxdb_use_ssl": False,
+                "influxdb_verify_ssl": str(pathlib.Path(tmp.name) / "missing.pem"),
+            }
+        )
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertIsNone(rh._init_influx_client())
+        self.assertTrue(cm.output[-1].endswith("could not reach the configured InfluxDB server"))
+
+    def test_a_non_boolean_is_warned_about_by_key_once(self):
+        captured = self._db_log()
+        secret = str(pathlib.Path(tempfile.gettempdir()) / "SECRET-ca.pem")
+        for _ in range(2):
+            self._rh(
+                {
+                    "use_influxdb": True,
+                    "influxdb_use_ssl": "SECRET-VALUE",
+                    "influxdb_verify_ssl": secret,
+                }
+            )
+        lines = [record.getMessage() for record in captured]
+        for key in ("influxdb_use_ssl", "influxdb_verify_ssl"):
+            self.assertEqual(sum(line.startswith(key + " ") for line in lines), 1, lines)
+        for line in lines:
+            self.assertNotIn("SECRET", line)
+        # An error, so that an integration taken as off is never silent
+        self.assertTrue(all(record.levelno == logging.ERROR for record in captured))
+        captured.clear()
+        self._rh({"use_influxdb": "true"})
+        self.assertEqual(
+            [(r.levelno, r.getMessage()) for r in captured],
+            [(logging.ERROR, "use_influxdb is not true or false, so it is taken as off")],
+        )
+
+    async def test_the_thermal_reader_takes_them_the_same_way(self):
+        import ssl
+
+        seen = []
+
+        async def fetch(_session, conn, *_args):
+            seen.append((conn["base_url"].split(":", 1)[0], conn["verify_ssl"]))
+            return pd.DataFrame()
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = _TLSInflux()
+        self.addCleanup(server.close)
+        ca_path = server.ca_file(pathlib.Path(tmp.name))
+        idx = pd.date_range("2026-11-19", periods=4, freq="30min", tz="UTC")
+        args = ("sensor.t_in", "sensor.t_out", "", "", "", idx[0], idx[-1], 30, 1000.0, logger)
+        with patch("emhass.utils._fetch_influx_numeric_series", side_effect=fetch):
+            for value in self.NOT_BOOL:
+                conf = {"influxdb_host": "127.0.0.1", "influxdb_use_ssl": value}
+                conf["influxdb_verify_ssl"] = value
+                await utils._fetch_influx_thermal_window(conf, *args)
+            for conf in (
+                {"influxdb_use_ssl": False, "influxdb_verify_ssl": False},
+                {},
+                {"influxdb_use_ssl": True, "influxdb_verify_ssl": ca_path},
+            ):
+                await utils._fetch_influx_thermal_window(
+                    {"influxdb_host": "127.0.0.1", **conf}, *args
+                )
+        # A text is a CA path: one that names no file is not contacted at all
+        others = [v for v in self.NOT_BOOL if not isinstance(v, str)]
+        self.assertEqual(seen[: len(others)], [("https", True)] * len(others))
+        self.assertEqual(seen[len(others) : -1], [("http", False)] * 2)
+        self.assertEqual(seen[-1][0], "https")
+        self.assertIsInstance(seen[-1][1], ssl.SSLContext)
+        # use_influxdb "true" does not send the thermal read to InfluxDB
+        cfg = {
+            "entity_t_in": "sensor.t_in",
+            "entity_t_out": "sensor.t_out",
+            "entity_power": "",
+            "entity_t_pred": "",
+            "entity_switch": "",
+            "start_utc": idx[0],
+            "end_utc": idx[-1],
+            "dt_minutes": 30,
+            "dt_hours": 0.5,
+            "nominal_power": 1000.0,
+            "lookback_hours": 2,
+            "sense": "heat",
+        }
+        with patch("emhass.utils._fetch_influx_thermal_window", new=AsyncMock()) as window:
+            await utils._load_thermal_calibration_frame(
+                emhass_conf, {}, {"use_influxdb": "true"}, {}, cfg, False, logger
+            )
+        window.assert_not_awaited()
+
+    def test_the_server_change_check_reads_them_the_same_way(self):
+        logins = utils.stored_db_logins(
+            {"influxdb_password": "real-password", "victoriametrics_password": "pw"}
+        )
+
+        def changes(saved, new):
+            return utils.db_endpoint_changes(saved, new, logins)
+
+        for value in self.NOT_BOOL:
+            with self.subTest(value=value):
+                # A non-boolean is on, as the readers take it
+                self.assertEqual(
+                    changes({"influxdb_use_ssl": True}, {"influxdb_use_ssl": value}), []
+                )
+                self.assertEqual(
+                    changes({"influxdb_use_ssl": value}, {"influxdb_use_ssl": False}),
+                    ["InfluxDB"],
+                )
+                self.assertEqual(
+                    changes({"influxdb_verify_ssl": value}, {"influxdb_verify_ssl": False}),
+                    ["InfluxDB"],
+                )
+        for prefix, name in (("influxdb", "InfluxDB"), ("victoriametrics", "VictoriaMetrics")):
+            for key in (f"{prefix}_use_ssl", f"{prefix}_verify_ssl"):
+                with self.subTest(key=key):
+                    # On, at the same host and port, sends the login nowhere new
+                    self.assertEqual(changes({key: False}, {key: True}), [])
+                    self.assertEqual(changes({}, {key: True}), [])
+                    # Off is a change, and so is on together with another host
+                    self.assertEqual(changes({key: True}, {key: False}), [name])
+                    self.assertEqual(
+                        changes({key: False}, {key: True, f"{prefix}_host": "127.0.0.9"}),
+                        [name],
+                    )
+        # Another CA bundle, or none, is a change; the same one is not
+        saved = {"influxdb_verify_ssl": "/ca/a.pem"}
+        self.assertEqual(changes(saved, {"influxdb_verify_ssl": "/ca/b.pem"}), ["InfluxDB"])
+        self.assertEqual(changes(saved, {"influxdb_verify_ssl": True}), ["InfluxDB"])
+        self.assertEqual(changes(saved, {"influxdb_verify_ssl": False}), ["InfluxDB"])
+        self.assertEqual(changes(saved, dict(saved)), [])
+
+    def test_ssl_without_certificate_checks_is_warned_about_once(self):
+        login = {"influxdb_username": "SECRET-USER", "influxdb_password": "SECRET-PASS"}
+        for conf, warned in (
+            ({"influxdb_use_ssl": True, "influxdb_verify_ssl": False}, True),
+            ({"influxdb_use_ssl": True}, True),
+            ({"influxdb_use_ssl": True, "influxdb_verify_ssl": True}, False),
+            ({"influxdb_use_ssl": False}, False),
+        ):
+            with self.subTest(conf=conf):
+                utils._db_settings_warned.clear()
+                captured = self._db_log()
+                with self.assertLogs(logger, level="DEBUG") as cm:
+                    for _ in range(2):
+                        self._rh(
+                            {"use_influxdb": True, "influxdb_host": "198.51.100.7"} | login | conf
+                        )
+                lines = [r.getMessage() for r in captured if "certificate" in r.getMessage()]
+                self.assertEqual(len(lines), 1 if warned else 0)
+                for line in lines:
+                    for leaked in ("198.51.100.7", "SECRET"):
+                        self.assertNotIn(leaked, line)
+                # Not in the action's log, where it would repeat on every action
+                self.assertFalse(any("certificate" in line for line in cm.output))
+        captured = self._db_log()
+        self._rh(
+            {
+                "use_victoriametrics": True,
+                "victoriametrics_host": "198.51.100.7",
+                "victoriametrics_use_ssl": True,
+            }
+        )
+        self.assertTrue(any("VictoriaMetrics is read over SSL" in r.getMessage() for r in captured))
+
+
+class TestDatabaseFailureDetail(unittest.IsolatedAsyncioTestCase):
+    """The cause of a database failure reaches the operator on the "emhass.database"
+    logger, and never the action log a caller can read."""
+
+    async def test_the_cause_is_logged_apart_from_the_action_log(self):
+        import requests
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        data = pathlib.Path(tmp.name)
+        app_logger = web_server.app.logger
+        db_logger = logging.getLogger("emhass.database")
+        before = (
+            list(app_logger.handlers),
+            app_logger.level,
+            app_logger.propagate,
+            list(db_logger.handlers),
+            db_logger.propagate,
+            db_logger.level,
+        )
+        captured = []
+        catcher = logging.Handler(logging.DEBUG)
+        catcher.emit = lambda record: captured.append(record.getMessage())
+        self.enterContext(patch.object(web_server, "emhass_conf", {"data_path": data}))
+        try:
+            await web_server._configure_logging("DEBUG")
+            # The configured level, not one inherited from an ancestor
+            self.assertEqual(db_logger.level, logging.DEBUG)
+            db_logger.addHandler(catcher)
+            # Where the action log is written from: app.logger only, which does not
+            # propagate, and neither the database logger nor an ancestor writes it
+            action_log_path = os.path.abspath(data / web_server.action_log_str)
+            writers = [
+                name
+                for name in ("emhass.web_server", "emhass.database", "emhass", "")
+                for h in logging.getLogger(name).handlers
+                if os.path.abspath(getattr(h, "baseFilename", "")) == action_log_path
+            ]
+            self.assertEqual(writers, [app_logger.name])
+            self.assertFalse(app_logger.propagate)
+            rh = RetrieveHass(
+                "http://127.0.0.1:1/",
+                "token",
+                pd.Timedelta(minutes=30),
+                datetime.UTC,
+                {"retrieve_hass_conf": {"use_influxdb": True, "influxdb_host": "127.0.0.1"}},
+                {"data_path": data},
+                app_logger,
+            )
+            with patch("influxdb.InfluxDBClient") as client_class:
+                client_class.return_value.ping.side_effect = requests.exceptions.SSLError(
+                    "certificate verify failed for 127.0.0.9 SECRET-DETAIL"
+                )
+                self.assertIsNone(rh._init_influx_client())
+            for handler in app_logger.handlers:
+                handler.flush()
+            action_log = (data / web_server.action_log_str).read_text()
+        finally:
+            for handler in app_logger.handlers:
+                if handler not in before[0]:
+                    app_logger.removeHandler(handler)
+                    handler.close()
+            app_logger.setLevel(before[1])
+            app_logger.propagate = before[2]
+            for handler in list(db_logger.handlers):
+                if handler not in before[3]:
+                    db_logger.removeHandler(handler)
+            db_logger.propagate = before[4]
+            db_logger.setLevel(before[5])
+        self.assertIn("could not reach the configured InfluxDB server", action_log)
+        for leaked in ("SECRET-DETAIL", "SSLError", "certificate verify", "127.0.0.9"):
+            self.assertNotIn(leaked, action_log)
+        self.assertTrue(
+            any("SSLError" in line and "SECRET-DETAIL" in line for line in captured), captured
+        )
 
 
 if __name__ == "__main__":

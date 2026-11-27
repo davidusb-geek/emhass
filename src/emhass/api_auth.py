@@ -38,7 +38,8 @@ operator choice, logged at start-up, and it restores the unauthenticated access
 the advisory describes.
 
 If a token source is there but cannot be used (see ``read_api_token``), or the
-token is shorter than ``MIN_LENGTH``, every request except ``/healthz`` and
+token is shorter than ``MIN_LENGTH`` or is a copy of a placeholder value published in
+the example file or the docs (``EXAMPLE_TOKENS``), every request except ``/healthz`` and
 ``/logout`` gets a 503 rather than running unauthenticated or with a guessable
 token. Only a missing file counts as "not configured". The request hook looks
 the token up on every request.
@@ -75,6 +76,7 @@ import pathlib
 import secrets
 import sys
 import time
+import unicodedata
 import urllib.parse
 
 import orjson
@@ -91,6 +93,36 @@ SESSION_MAX_AGE_S = 30 * 24 * 3600
 # bearer check is not rate limited, and a session cookie is an HMAC keyed with
 # the token, so a short token could be guessed online or offline from a cookie.
 MIN_LENGTH = 16
+# Placeholder values published in this repository (the example secrets file, the docs, the 401
+# reply) and the commands the docs give for making a token. Anyone can read them, so a configured
+# token that is a copy of one is refused like a short one: copying an example as it is would otherwise
+# turn on a token everyone knows. The match ignores case, quotes, white space and separators (see
+# ``_canonical``), because those survive common ways of copying a value (a quoted line in a Docker
+# env file, a paste into the add-on options, "Bearer " kept in front), and with them a short
+# placeholder can reach the minimum length. It does not try to catch look-alike characters or
+# shortened copies, or weak tokens in general.
+EXAMPLE_TOKENS = (
+    "replace-with-a-long-random-value",  # secrets_emhass(example).yaml, until this version
+    "a-long-random-value",
+    "a-long-development-token",  # docs/develop.md, until this version
+    "PASTE_THE_TOKEN_HERE",  # docs/api_authentication.md (the Home Assistant side)
+    "YOUR_API_TOKEN",  # docs/automations.md
+    "emhass_api_token",  # the setting's own name, as in "Bearer <emhass_api_token>" or $EMHASS_API_TOKEN
+    "openssl rand",  # a command from the docs, passed on unexpanded
+    "thatverylongtokenhere",  # secrets_emhass(example).yaml, long_lived_token
+    "yoursecretsolcastapikey",  # secrets_emhass(example).yaml, solcast_api_key
+    "your_secret_api_key",  # docs/forecasts.md
+    "YOURHAKEYHERE",  # docs
+    "HOMEASSISTANTKEYHERE",  # docs/develop.md
+    "yourinfluxdbusername",  # default database login placeholders
+    "yourinfluxdbpassword",
+)
+# Shortest placeholder entry, as reduced by ``_canonical``. Long enough that a random token
+# practically never contains one (about 36**-10 per position), short enough for the names above.
+_EXAMPLE_MIN_CANONICAL = 10
+# Longest non-ASCII text the placeholder check normalises in one piece: Unicode normalisation is
+# slow on some long inputs. A longer non-ASCII token is checked at its head and its tail.
+_EXAMPLE_CHECK_MAX = 4096
 # Explicit operator opt-out (read on every request, so a test or an operator can flip it).
 DISABLE_ENV = "EMHASS_API_AUTH_DISABLED"
 AUTOGENERATE_ENV = "EMHASS_API_TOKEN_AUTOGENERATE"
@@ -167,6 +199,86 @@ def _normalise(value) -> str | None:
     return value.strip(_TOKEN_SPACE) or None
 
 
+def _canonical(text: str) -> str:
+    """``text`` reduced to lower-case ASCII letters and digits, for the placeholder check only.
+
+    Non-ASCII text is decomposed first (NFKD), so full-width and other compatibility forms
+    become plain letters and accents are split from their letter, then case folded; quotes,
+    spaces, separators, marks and invisible characters are dropped.
+    """
+    if not text.isascii():
+        text = unicodedata.normalize("NFKD", text).casefold()
+    return "".join(c for c in text.lower() if c.isascii() and c.isalnum())
+
+
+_EXAMPLE_CANONICAL = tuple(_canonical(value) for value in EXAMPLE_TOKENS)
+# An empty or very short entry would be contained in ordinary tokens and refuse them.
+assert all(len(value) >= _EXAMPLE_MIN_CANONICAL for value in _EXAMPLE_CANONICAL)
+# Words a copy keeps around a value ("Authorization: Bearer <token>"). Only these two: removing
+# shorter words such as "set" anywhere would also take letters out of a random part.
+_WRAPPER_WORDS = ("authorization", "bearer")
+
+
+def _is_placeholder_copy(canonical: str) -> bool:
+    """True when ``canonical`` holds a placeholder and too little else to be a token of its own.
+
+    A token that contains a placeholder is refused unless at least ``MIN_LENGTH`` ASCII letters
+    and digits are left that no placeholder or wrapper word covers: a placeholder with
+    a few characters added is guessable, but one that only prefixes a long random value (as in
+    "emhass_api_token_<random>") is as strong as that value.
+    """
+    if not any(value in canonical for value in _EXAMPLE_CANONICAL):
+        return False
+    # Count the characters no placeholder or wrapper word covers. Marking positions, rather
+    # than removing words one after another, does not depend on the order when they overlap.
+    covered = bytearray(len(canonical))
+    for value in (*_EXAMPLE_CANONICAL, *_WRAPPER_WORDS):
+        start = canonical.find(value)
+        while start != -1:
+            covered[start : start + len(value)] = b"\x01" * len(value)
+            start = canonical.find(value, start + 1)
+    return len(canonical) - sum(covered) < MIN_LENGTH
+
+
+def is_text(value) -> bool:
+    """True for a string that can be encoded as UTF-8 (no lone surrogate), as a token must be."""
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+class PlaceholderTokenError(ApiTokenError):
+    """The configured token is a copy of a published placeholder value."""
+
+
+def is_example_token(token: str | None) -> bool:
+    """True when ``token`` is a copy of a published placeholder value (``EXAMPLE_TOKENS``):
+    it contains one, with fewer than ``MIN_LENGTH`` other letters and digits.
+
+    For configured tokens only. A presented credential is still compared byte for byte with
+    the token in force.
+    """
+    if not isinstance(token, str):
+        return False
+    if token.isascii() or len(token) <= _EXAMPLE_CHECK_MAX:
+        pieces = (token,)
+    else:
+        pieces = (token[:_EXAMPLE_CHECK_MAX], token[-_EXAMPLE_CHECK_MAX:])
+    return any(_is_placeholder_copy(_canonical(piece)) for piece in pieces)
+
+
+def _refuse_example(token: str | None, where: str) -> None:
+    if is_example_token(token):
+        raise PlaceholderTokenError(
+            f"the value from {where} is a copy of a placeholder published in the EMHASS "
+            "example file or documentation; set a long random value"
+        )
+
+
 def _top_level_key_count(content: str, name: str) -> int:
     """How many times ``name`` is a key of the top-level YAML mapping in
     ``content``, counting the keys that ``<<`` merge keys bring in."""
@@ -193,9 +305,10 @@ def read_api_token(
     used, so the caller can fail closed: a path that cannot be read (a
     directory, no permission), a file that does not parse, a non-empty file
     whose top level is not a mapping, the token key twice in the secrets file
-    (merge keys included), or a YAML key with no value (an unquoted token that
-    starts with ``#`` reads as a comment). Only a missing file means "not
-    configured". Synchronous, so it can run at import.
+    (merge keys included), a YAML key with no value (an unquoted token that
+    starts with ``#`` reads as a comment), or a token in force that is a copy of a
+    published placeholder value (``EXAMPLE_TOKENS``). Only a missing file means
+    "not configured". Synchronous, so it can run at import.
 
     In options.json a repeated key also keeps the last value; the add-on
     writes that file, so it is not checked.
@@ -205,6 +318,7 @@ def read_api_token(
     """
     env = os.environ if environ is None else environ
     token = _normalise(env.get(ENV_NAME))
+    where = f"the {ENV_NAME} environment variable"
 
     content = _read_source(options_path)
     if content is not None:
@@ -214,7 +328,9 @@ def read_api_token(
             raise ApiTokenError("options file is not valid JSON") from None
         if not isinstance(options, dict):
             raise ApiTokenError("options file is not a JSON object")
-        token = _normalise(options.get(SETTING_NAME)) or token
+        option = _normalise(options.get(SETTING_NAME))
+        if option is not None:
+            token, where = option, "the options file"
 
     content = _read_source(secrets_path)
     if content is not None:
@@ -235,8 +351,13 @@ def read_api_token(
             raise ApiTokenError(f"{SETTING_NAME} is set more than once in the secrets file")
         if SETTING_NAME in loaded and loaded[SETTING_NAME] is None:
             raise ApiTokenError(f"{SETTING_NAME} has no value; quote the token in YAML")
-        token = _normalise(loaded.get(SETTING_NAME)) or token
+        secret = _normalise(loaded.get(SETTING_NAME))
+        if secret is not None:
+            token, where = secret, "the secrets file"
 
+    # Only the token in force is checked: an example value that a later source replaces is
+    # never used.
+    _refuse_example(token, where)
     return token
 
 
@@ -286,6 +407,10 @@ def _read_generated(path: pathlib.Path) -> str | None:
     token = _normalise(_read_source(path))
     if token is not None and len(token) < MIN_LENGTH:
         raise ApiTokenError("the generated token file holds a short token")
+    if is_example_token(token):
+        raise PlaceholderTokenError(
+            "the generated token file holds a published placeholder value; delete it"
+        )
     return token
 
 
@@ -515,7 +640,7 @@ def configure_now(
             token, source = provision_token(data_dir, logger)
             source = "generated-new" if source == "new" else "generated"
     except Exception as e:
-        _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
+        _fail(logger, _failure_reason(e))
         return
     _state.update(loaded=True, token=token, failed=False, source=source if token else None)
 
@@ -538,7 +663,7 @@ def recheck_now(
     try:
         token = read_api_token(secrets_path, options_path)
     except Exception as e:
-        _fail(logger, f"Could not read {SETTING_NAME} ({_describe(e)})")
+        _fail(logger, _failure_reason(e))
         return
     if token is not None:
         _fail(
@@ -556,6 +681,13 @@ async def configure(
 ) -> None:
     """``configure_now`` for async callers."""
     configure_now(secrets_path, options_path, logger, data_dir)
+
+
+def _failure_reason(error: Exception) -> str:
+    """The first part of the log line for a token that cannot be used."""
+    if isinstance(error, PlaceholderTokenError):
+        return f"Refusing {SETTING_NAME}: {error}"
+    return f"Could not read {SETTING_NAME} ({_describe(error)})"
 
 
 def _describe(error: Exception) -> str:
@@ -591,9 +723,13 @@ def current_token() -> str | None:
     if _state["loaded"]:
         return _state["token"]
     try:
-        return _normalise(os.environ.get(ENV_NAME))
+        token = _normalise(os.environ.get(ENV_NAME))
     except ApiTokenError:
         return None
+    # The same rules configure() applies: a short or placeholder token is not used.
+    if token is None or len(token) < MIN_LENGTH or is_example_token(token):
+        return None
+    return token
 
 
 def redacted(value):

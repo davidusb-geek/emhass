@@ -18,6 +18,7 @@ import pathlib
 import pickle
 import re
 import shutil
+import socket
 import tempfile
 import time
 import types
@@ -1483,7 +1484,77 @@ def test_a_dry_run_that_raises_answers_500_with_its_error():
     assert dry_status == 500
     assert live_status == 200
     _conforms(dry_body)
-    assert any("solver crashed" in e for e in dry_body["errors"])
+    # The error is named by its type and place, never its text
+    assert any(
+        e.startswith("Dry run of naive-mpc-optim failed (RuntimeError at ")
+        for e in dry_body["errors"]
+    )
+    assert not any("solver crashed" in e for e in dry_body["errors"])
+
+
+def _closed_loopback_port() -> int:
+    """A port on 127.0.0.1 that nothing listens on."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _influxdb_at(port: int):
+    """History read from an InfluxDB server on 127.0.0.1:`port`, with no Home
+    Assistant to fall back on."""
+
+    def configure(params: dict) -> None:
+        params["retrieve_hass_conf"].update(
+            use_influxdb=True,
+            influxdb_host="127.0.0.1",
+            influxdb_port=port,
+            influxdb_use_ssl=False,
+            influxdb_verify_ssl=False,
+            hass_url="",
+            long_lived_token="",
+        )
+        params.setdefault("params_secrets", {}).update(hass_url="", long_lived_token="")
+
+    return configure
+
+
+@pytest.mark.parametrize(
+    "action, body",
+    [
+        ("perfect-optim", {}),
+        (
+            "naive-mpc-optim",
+            {
+                "prediction_horizon": 48,
+                "load_cost_forecast": FORECASTS["load_cost_forecast"],
+                "prod_price_forecast": FORECASTS["prod_price_forecast"],
+                "pv_power_forecast": FORECASTS["pv_power_forecast"],
+            },
+        ),
+    ],
+    ids=["perfect-optim", "naive-mpc-optim"],
+)
+def test_a_dry_run_keeps_an_influxdb_read_error_with_its_reply(action, body):
+    """The InfluxDB read runs on a thread of its own: what it logs during a dry run
+    is that dry run's, so it is in the reply and never in the action log, where a
+    live action's status is read from."""
+    with _data_copy() as data_path:
+        _write_params(data_path, _influxdb_at(_closed_loopback_port()))
+        with _web(data_path) as client:
+
+            async def post():
+                response = await client.post(f"/api/v1/dry-run/{action}", json=body)
+                return response.status_code, await response.get_json()
+
+            status, answer = asyncio.run(post())
+        log = data_path / web_server.action_log_str
+        action_log = log.read_text() if log.exists() else ""
+    assert status == 400
+    _conforms(answer)
+    assert answer["status"] == "not-run"
+    error = "Failed to connect to InfluxDB: could not reach the configured InfluxDB server"
+    assert error in answer["errors"]
+    assert [line for line in action_log.splitlines() if line.startswith(("ERROR", "WARNING"))] == []
 
 
 # --------------------------------------------------------------------------
@@ -1696,6 +1767,20 @@ def test_a_known_backend_and_a_valid_site_pass():
     assert "unknown backend" in _coordinated_config_problem({"optimization_backend": "rogue"})
     # documented as future work, not offered: it says so and the default solver plans
     assert "later release" in _coordinated_config_problem({"optimization_backend": "admm"})
+
+
+def test_an_unknown_saved_backend_is_not_copied_into_the_plan():
+    """A saved backend EMHASS does not know is not written into every row as it is:
+    the reason and backend_requested are fixed text."""
+    rows = pd.DataFrame({"x": range(96)})
+    out = optimization._with_backend(rows.copy(), "B" * 5000, "reason")
+    assert (out["backend_requested"] == "unknown").all()
+    assert (out["backend_used"] == "cvxpy").all()
+    out = optimization._with_backend(rows.copy(), "dantzig_wolfe", None)
+    assert (out["backend_requested"] == "dantzig_wolfe").all()
+    reason = _coordinated_config_problem({"optimization_backend": "B" * 5000})
+    assert reason == "unknown backend (known: cvxpy, dantzig_wolfe)"
+    assert _BACKENDS == utils.OPTIMIZATION_BACKENDS
 
 
 def test_a_remote_solver_comes_from_the_configuration_only():

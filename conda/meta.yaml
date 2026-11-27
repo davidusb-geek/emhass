@@ -28,16 +28,14 @@ requirements:
     - scipy >=1.15.0
     - pandas >=2.2.0
     - pvlib-python >=0.11.0
-    - protobuf >=5.29.3
     - pytz >=2024.2
     - h5py >=3.12.1
     - highspy >=1.10.0
     - cvxpy >=1.6.0,<1.10.0
     - pyyaml >=6.0.2
     - skforecast >=0.19.1,<0.23.0
-    - waitress >=3.0.2
     - plotly >=6.0.0
-    - gunicorn >=23.0.0
+    - gunicorn >=23.0.0,!=24.1.0
     - quart
     - aiofiles
     - jinja2

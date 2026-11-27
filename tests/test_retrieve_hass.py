@@ -2,14 +2,25 @@ import asyncio
 import copy
 import datetime
 import inspect
+import itertools
+import logging
 import os
 import pathlib
 import pickle
 import re
+import select
+import socket
+import struct
 import tempfile
+import threading
+import time
 import unittest
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import aiofiles
 import aiohttp
@@ -18,7 +29,7 @@ import orjson
 import pandas as pd
 import time_machine
 
-from emhass import utils
+from emhass import retrieve_hass, utils
 from emhass.command_line import _retrieve_from_hass
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import get_days_list, get_logger, get_yaml_parse
@@ -704,6 +715,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             database="fake-db",
             ssl=False,
             verify_ssl=False,
+            timeout=(5, 60),
+            retries=1,
             session=ANY,  # a session that does not follow redirects
         )
         self.assertEqual(mock_influx_client_class.call_args.kwargs["session"].max_redirects, 0)
@@ -1259,9 +1272,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         """401, HTTP errors, network failures and invalid JSON return None and are logged."""
         cases = [
             ({"status": 401}, "401 Unauthorized"),
-            ({"status": 500, "body": b"boom"}, "query_range error 500"),
+            ({"status": 500, "body": b"boom"}, "query failed: unexpected reply"),
             ({"exc": aiohttp.ClientConnectionError("down")}, "Network error connecting"),
-            ({"body": b"not json"}, "Invalid JSON from VictoriaMetrics"),
+            ({"body": b"not json"}, "query failed: unexpected reply"),
         ]
         for kwargs, expected in cases:
             with self.subTest(expected=expected):
@@ -3852,6 +3865,1321 @@ class TestRestHistoryEpochGrid(unittest.IsolatedAsyncioTestCase):
         expected = pd.date_range("2026-02-19 22:00", "2026-02-19 23:00", freq="60min", tz="UTC")
         self.assertEqual(list(found[0]), list(expected))
         self.assertEqual(found[0].dtype, frame.index.dtype)
+
+
+class TestSslNoVerify(unittest.IsolatedAsyncioTestCase):
+    """ssl_no_verify, saved in the configuration, reaches the Home Assistant calls."""
+
+    async def build(self, ssl_no_verify=None):
+        environ = self.enterContext(patch.dict(os.environ))
+        for name in ("EMHASS_URL", "SUPERVISOR_TOKEN", "TIME_ZONE"):
+            environ.pop(name, None)
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        if ssl_no_verify is not None:
+            config["ssl_no_verify"] = ssl_no_verify
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        params = await utils.build_params(emhass_conf, secrets, config, logger)
+        return RetrieveHass(
+            "https://ha.invalid:8123/", "token", 30, "UTC", params, emhass_conf, logger
+        )
+
+    async def test_default_verifies(self):
+        self.assertIsNone((await self.build()).ssl_verify)
+        self.assertIsNone((await self.build(False)).ssl_verify)
+        # only a real true turns it off, not text such as "false"
+        self.assertIsNone((await self.build("false")).ssl_verify)
+
+    async def test_set_in_the_configuration_turns_verification_off(self):
+        with self.assertLogs(logger, level="WARNING") as cm:
+            rh = await self.build(True)
+        self.assertIs(rh.ssl_verify, False)
+        self.assertTrue(any("SSL verification is disabled" in m for m in cm.output))
+
+    async def test_requests_are_sent_with_it(self):
+        rh = await self.build(True)
+        self.addAsyncCleanup(rh.close)
+        with aioresponses() as mocked:
+            mocked.get("https://ha.invalid:8123/api/config", payload={"time_zone": "UTC"})
+            await rh.get_ha_config()
+            (call,) = mocked.requests.values()
+        self.assertIs(call[0].kwargs.get("ssl"), False)
+
+
+class _SilentServer:
+    """Accepts TCP connections on 127.0.0.1 and never answers. Each connection is closed
+    after ``hold_s``, so a client with no timeout of its own still finishes."""
+
+    def __init__(self, hold_s: float):
+        self.hold_s = hold_s
+        self.accepted = 0
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(16)
+        self._sock.settimeout(0.05)
+        self.port = self._sock.getsockname()[1]
+        self._open = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+                self.accepted += 1
+                self._open.append((time.monotonic() + self.hold_s, conn))
+            except TimeoutError:
+                pass
+            now = time.monotonic()
+            for item in [item for item in self._open if item[0] <= now]:
+                item[1].close()
+                self._open.remove(item)
+
+    def close(self):
+        self._stop.set()
+        self._thread.join()
+        for _, conn in self._open:
+            conn.close()
+        self._sock.close()
+
+
+class _TrickleServer:
+    """Answers the first connection on 127.0.0.1 with a reply that never ends: one header
+    byte every 0.5 s, inside any read timeout, for up to ``seconds``. Over TLS when given
+    a server ``tls`` context. Records the request and whether the client shut the
+    connection."""
+
+    # The reply's start: by default its headers never end. A complete head that ends the
+    # connection (Connection: close) is closed by http.client before its body is read.
+    HEADER_TRICKLE = b"HTTP/1.1 204 No Content\r\nX-Influxdb-Version: 1.8\r\nX-Pad: "
+    BODY_TRICKLE = (
+        b"HTTP/1.1 200 OK\r\nX-Influxdb-Version: 1.8\r\nContent-Type: text/plain\r\n"
+        b"Content-Length: 100000\r\nConnection: close\r\n\r\n"
+    )
+
+    def __init__(self, seconds: float, tls=None, head=HEADER_TRICKLE):
+        self.seconds = seconds
+        self.tls = tls
+        self.head = head
+        self.request = b""
+        self.answering = threading.Event()
+        self.client_closed = threading.Event()
+        self._stop = threading.Event()
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(4)
+        self._sock.settimeout(0.05)
+        self.port = self._sock.getsockname()[1]
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+                break
+            except TimeoutError:
+                continue
+        else:
+            return
+        conn.settimeout(2)
+        if self.tls is not None:
+            try:
+                conn = self.tls.wrap_socket(conn, server_side=True)
+            except OSError:
+                conn.close()
+                return
+        with conn:
+            self.request = conn.recv(4096)
+            conn.sendall(self.head)
+            self.answering.set()
+            end = time.monotonic() + self.seconds
+            while time.monotonic() < end and not self._stop.is_set():
+                readable, _, _ = select.select([conn], [], [], 0.5)
+                try:
+                    if readable and not conn.recv(1):
+                        self.client_closed.set()
+                        return
+                    conn.sendall(b"a")
+                except OSError:
+                    self.client_closed.set()
+                    return
+
+    def close(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+        self._sock.close()
+
+
+def _selected_measurement(query: str) -> str:
+    """The measurement a SELECT built by _build_influx_query_for_measurement reads."""
+    source = query.split("FROM", 1)[1].split("WHERE", 1)[0].strip()
+    return source.rsplit('"."', 1)[-1].strip('"')
+
+
+class _InfluxStandin:
+    """An InfluxDB 1.x stand-in on 127.0.0.1: SHOW MEASUREMENTS lists ``measurements``,
+    SHOW TAG VALUES FROM a measurement lists the entities ``entity_in`` gives it, and a
+    SELECT for an entity returns its ``points``, from any measurement, or with
+    ``by_measurement`` only from one ``entity_in`` lists it in. A query holding a key of
+    ``slow`` waits that many seconds first; one holding a key of ``faults`` gets that
+    reply instead (see FAULTS). With ``close`` every reply ends its connection."""
+
+    # How a loaded server, or a proxy in front of it, can answer a query
+    FAULTS = {
+        "http400": (400, b'{"error":"error parsing query"}', "application/json"),
+        "http403": (403, b'{"error":"error authorizing query"}', "application/json"),
+        # Not now, rather than never: a proxy's request timeout, a rate limit
+        "http408": (408, b"<html>408 Request Time-out</html>", "text/html"),
+        "http429": (
+            429,
+            b'{"code":"too many requests","message":"rate limited"}',
+            "application/json",
+        ),
+        "http500": (500, b'{"error":"timeout"}', "application/json"),
+        "http504": (504, b"<html>504 Gateway Time-out</html>", "text/html"),
+        "query timeout": (
+            200,
+            b'{"results":[{"statement_id":0,"error":"query-timeout limit exceeded"}]}',
+            "application/json",
+        ),
+        "max queries": (
+            200,
+            b'{"results":[{"statement_id":0,'
+            b'"error":"max-concurrent-queries limit exceeded(20, 20)"}]}',
+            "application/json",
+        ),
+        # A 200 cut off part way with no Content-Length: it ends with the connection
+        "cut, no length": (200, None, "application/json"),
+    }
+
+    def __init__(
+        self,
+        measurements=(),
+        entity_in=None,
+        slow=None,
+        points=None,
+        close=False,
+        faults=None,
+        by_measurement=False,
+    ):
+        self.queries = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code, body=b""):
+                self.send_response(code)
+                self.send_header("X-Influxdb-Version", "1.8.10")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                if close:
+                    self.send_header("Connection", "close")
+                    self.close_connection = True
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _fault(self, query, code, body, content_type):
+                if body is None:
+                    whole = orjson.dumps({"results": [{"statement_id": 0, **self._result(query)}]})
+                    self.send_response(code)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(whole[: len(whole) // 2])
+                    self.close_connection = True
+                    return
+                self.send_response(code)
+                self.send_header("X-Influxdb-Version", "1.8.10")
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _result(self, query):
+                if query.startswith("SHOW MEASUREMENTS"):
+                    values = [[m] for m in measurements]
+                    return {
+                        "series": [{"name": "measurements", "columns": ["name"], "values": values}]
+                    }
+                if query.startswith("SHOW TAG VALUES"):
+                    measurement = query.split('FROM "', 1)[1].split('"', 1)[0]
+                    values = [["entity_id", e] for e in (entity_in or {}).get(measurement, [])]
+                    if values:
+                        return {
+                            "series": [
+                                {"name": measurement, "columns": ["key", "value"], "values": values}
+                            ]
+                        }
+                if "SELECT" in query:
+                    entity = query.split('"entity_id"=\'', 1)[1].split("'", 1)[0]
+                    held = (entity_in or {}).get(_selected_measurement(query), [])
+                    if (points or {}).get(entity) and (not by_measurement or entity in held):
+                        return {
+                            "series": [
+                                {
+                                    "name": "x",
+                                    "columns": ["time", "mean_value"],
+                                    "values": points[entity],
+                                }
+                            ]
+                        }
+                return {}
+
+            def do_GET(self):
+                try:
+                    if self.path.startswith("/ping"):
+                        return self._send(204)
+                    query = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+                    outer.queries.append(query)
+                    for key, seconds in (slow or {}).items():
+                        if key in query:
+                            time.sleep(seconds)
+                    for key, fault in (faults or {}).items():
+                        if key in query:
+                            return self._fault(query, *outer.FAULTS[fault])
+                    body = {"results": [{"statement_id": 0, **self._result(query)}]}
+                    self._send(200, orjson.dumps(body))
+                except OSError:
+                    # The client gave up on a slow reply
+                    self.close_connection = True
+
+            do_POST = do_GET
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+class TestDatabaseReadLimits(unittest.IsolatedAsyncioTestCase):
+    """A database server that is slow or never answers cannot hold the event loop or a
+    read open (finding 6). Only 127.0.0.1 is contacted."""
+
+    DAYS = pd.date_range(start="2026-11-01", periods=1, freq="D", tz="UTC")
+
+    def setUp(self):
+        # Loaded before any timed window, so the first import does not count in it
+        import influxdb  # noqa: F401
+        import requests  # noqa: F401
+
+    @staticmethod
+    def _rh(retrieve_hass_conf):
+        return RetrieveHass(
+            "http://127.0.0.1:1/",
+            "token",
+            pd.Timedelta(minutes=30),
+            datetime.UTC,
+            {"retrieve_hass_conf": retrieve_hass_conf},
+            emhass_conf,
+            logger,
+        )
+
+    def _influx_rh(self, port):
+        return self._rh({"use_influxdb": True, "influxdb_host": "127.0.0.1", "influxdb_port": port})
+
+    def _short_limits(self, timeout_s=(0.3, 0.3), deadline_s=30):
+        # create=True: the same test runs against a build without these constants
+        for name, value in (
+            ("INFLUXDB_TIMEOUT_S", timeout_s),
+            ("INFLUXDB_READ_DEADLINE_S", deadline_s),
+            ("INFLUXDB_DEADLINE_MARGIN_S", 0.3),
+            ("INFLUXDB_CUT_GRACE_S", 1),
+            ("VM_CLIENT_TIMEOUT", aiohttp.ClientTimeout(total=0.5)),
+        ):
+            self.enterContext(patch.object(retrieve_hass, name, value, create=True))
+
+    async def test_a_silent_influxdb_server_leaves_the_event_loop_free(self):
+        self._short_limits(timeout_s=(0.5, 0.5))
+        server = _SilentServer(hold_s=1.5)
+        self.addCleanup(server.close)
+        ticks = []
+
+        async def ticker():
+            while True:
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.02)
+
+        task = asyncio.create_task(ticker())
+        try:
+            self.assertFalse(await self._influx_rh(server.port).get_data(self.DAYS, ["sensor.x"]))
+        finally:
+            task.cancel()
+        # The loop kept running other work while the read waited, with no long stall
+        self.assertGreaterEqual(len(ticks), 5)
+        self.assertLess(max(b - a for a, b in itertools.pairwise(ticks)), 0.25)
+
+    async def test_the_request_timeout_ends_an_influxdb_read(self):
+        self._short_limits()
+        server = _SilentServer(hold_s=2)
+        self.addCleanup(server.close)
+        start = time.monotonic()
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertFalse(await self._influx_rh(server.port).get_data(self.DAYS, ["sensor.x"]))
+        self.assertLess(time.monotonic() - start, 1.5)
+        self.assertEqual(server.accepted, 1)  # one attempt, no retries
+        self.assertTrue(any("could not reach the configured InfluxDB" in x for x in cm.output))
+
+    async def test_the_overall_deadline_ends_an_influxdb_read(self):
+        # Every query answers, slowly, inside the request timeout; the read as a whole
+        # must still stop at the deadline
+        requests_seen = []
+
+        class SlowInflux(BaseHTTPRequestHandler):
+            def _reply(self):
+                requests_seen.append(self.path)
+                if self.path.startswith("/ping"):
+                    self.send_response(204)
+                    self.send_header("X-Influxdb-Version", "1.8")
+                    self.end_headers()
+                    return
+                time.sleep(0.25)
+                query = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+                result = {"statement_id": 0}
+                if query == "SHOW MEASUREMENTS":
+                    result["series"] = [
+                        {"name": "measurements", "columns": ["name"], "values": [["W"]]}
+                    ]
+                body = orjson.dumps({"results": [result]})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = _reply
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SlowInflux)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self._short_limits(timeout_s=(1, 1), deadline_s=0.6)
+        sensors = [f"sensor.s{i}" for i in range(4)]
+        start = time.monotonic()
+        with self.assertLogs(logger, level="ERROR") as cm:
+            ok = await self._influx_rh(server.server_port).get_data(self.DAYS, sensors)
+        self.assertFalse(ok)
+        self.assertLess(time.monotonic() - start, 1.5)
+        self.assertTrue(any("InfluxDB read stopped" in x for x in cm.output))
+        # 4 sensors take 12 slow queries; the deadline stopped it after a few
+        self.assertLessEqual(len(requests_seen), 5)
+
+    async def test_a_trickling_influxdb_reply_is_cut_at_the_deadline(self):
+        # A byte every 0.5 s never trips the 1 s read timeout, so only the deadline can
+        # end this read: the action returns and the connection is shut
+        self._short_limits(timeout_s=(1, 1), deadline_s=1)
+        server = _TrickleServer(seconds=8)
+        self.addCleanup(server.close)
+        start = time.monotonic()
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertFalse(await self._influx_rh(server.port).get_data(self.DAYS, ["sensor.x"]))
+        took = time.monotonic() - start
+        self.assertTrue(server.answering.is_set())
+        self.assertLess(took, 3.5)
+        self.assertTrue(any("InfluxDB read stopped" in x for x in cm.output))
+        # The client shut the connection, long before the reply would have ended
+        self.assertTrue(server.client_closed.wait(2))
+
+    async def test_a_stuck_influxdb_read_does_not_hold_up_to_thread(self):
+        # One thread for asyncio.to_thread, as on a small machine with every thread busy:
+        # an InfluxDB read stuck on a slow server must not be using it
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        self._short_limits(timeout_s=(1, 1), deadline_s=30)
+        server = _TrickleServer(seconds=8)
+        self.addCleanup(server.close)
+        read = asyncio.create_task(self._influx_rh(server.port).get_data(self.DAYS, ["sensor.x"]))
+        for _ in range(100):
+            if server.answering.is_set():
+                break
+            await asyncio.sleep(0.05)
+        self.assertTrue(server.answering.is_set())
+        start = time.monotonic()
+        try:
+            await asyncio.wait_for(asyncio.to_thread(time.sleep, 0), 2)
+            waited = time.monotonic() - start
+        except TimeoutError:
+            waited = None
+        finally:
+            # Ends the read: the server closes the connection
+            server.close()
+            with self.assertLogs(logger, level="ERROR"):
+                self.assertFalse(await read)
+        self.assertIsNotNone(waited, "asyncio.to_thread waited behind the InfluxDB read")
+        self.assertLess(waited, 0.5)
+
+    def _tls_context(self):
+        import ssl
+
+        import trustme
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        trustme.CA().issue_cert("127.0.0.1").configure_cert(context)
+        return context
+
+    async def _assert_cut(self, server, rh):
+        """The read returns at its deadline and its connection is shut at once."""
+        start = time.monotonic()
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertFalse(await rh.get_data(self.DAYS, ["sensor.x"]))
+        self.assertTrue(server.answering.is_set())
+        self.assertLess(time.monotonic() - start, 3.5)
+        self.assertTrue(any("InfluxDB read stopped" in x for x in cm.output))
+        self.assertTrue(server.client_closed.wait(2), "the connection was not shut")
+
+    async def test_a_trickling_tls_reply_is_cut_at_the_deadline(self):
+        # The TLS wrap takes over the socket urllib3 opened: shutting that one does nothing
+        self._short_limits(timeout_s=(1, 1), deadline_s=1)
+        server = _TrickleServer(seconds=8, tls=self._tls_context())
+        self.addCleanup(server.close)
+        rh = self._rh(
+            {
+                "use_influxdb": True,
+                "influxdb_host": "127.0.0.1",
+                "influxdb_port": server.port,
+                "influxdb_use_ssl": True,
+                "influxdb_verify_ssl": False,
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # InsecureRequestWarning
+            await self._assert_cut(server, rh)
+
+    async def test_a_read_through_a_trickling_proxy_is_cut_at_the_deadline(self):
+        # requests builds a proxy's connection pools apart from the others, on first use
+        for use_ssl, variable in ((False, "HTTP_PROXY"), (True, "HTTPS_PROXY")):
+            with self.subTest(proxy=variable):
+                self._short_limits(timeout_s=(1, 1), deadline_s=1)
+                server = _TrickleServer(seconds=8)
+                self.addCleanup(server.close)
+                proxy = {variable: f"http://127.0.0.1:{server.port}"}
+                with patch.dict(os.environ, proxy):
+                    for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+                        os.environ.pop(name, None)
+                    rh = self._rh(
+                        {
+                            "use_influxdb": True,
+                            "influxdb_host": "127.0.0.1",
+                            "influxdb_port": 9,  # never reached: the proxy stands in
+                            "influxdb_use_ssl": use_ssl,
+                            "influxdb_verify_ssl": False,
+                        }
+                    )
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        await self._assert_cut(server, rh)
+                # It went through the proxy: a proxy request or a CONNECT
+                first = server.request.split(b" ", 2)[:2]
+                self.assertIn(
+                    first, ([b"GET", b"http://127.0.0.1:9/ping"], [b"CONNECT", b"127.0.0.1:9"])
+                )
+
+    async def test_a_queued_read_is_dropped_at_its_deadline(self):
+        # One InfluxDB thread, held by another read: this one waits in the queue, and
+        # once its action has given up on it, it must never run
+        self._short_limits(timeout_s=(1, 1), deadline_s=0.3)
+        self.enterContext(patch.object(retrieve_hass, "INFLUXDB_CUT_GRACE_S", 0.1))
+        executor = ThreadPoolExecutor(max_workers=1)
+        self.enterContext(patch.object(retrieve_hass, "_influx_executor", executor))
+        release = threading.Event()
+        blocker = executor.submit(release.wait, 10)
+        self.addCleanup(release.set)
+        rh = self._influx_rh(9)
+        with patch.object(rh, "get_data_influxdb", return_value=True) as read:
+            with self.assertLogs(logger, level="ERROR"):
+                self.assertFalse(await rh.get_data(self.DAYS, ["sensor.x"]))
+            release.set()
+            blocker.result(timeout=5)
+            await asyncio.to_thread(executor.shutdown, wait=True)
+        read.assert_not_called()
+
+    async def test_what_an_abandoned_read_logs_later_stays_out_of_the_action_log(self):
+        self._short_limits(timeout_s=(1, 1), deadline_s=0.3)
+        self.enterContext(patch.object(retrieve_hass, "INFLUXDB_CUT_GRACE_S", 0.1))
+        release, done = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        rh = self._influx_rh(9)
+
+        def stuck_read(*_args):
+            # A read that does not notice the cut, and logs once it gets going again
+            release.wait(10)
+            rh.logger.error("LATE LINE from the abandoned read")
+            done.set()
+            return False
+
+        action_lines, detail_lines = [], []
+        for name, lines in ((logger.name, action_lines), ("emhass.database", detail_lines)):
+            handler = logging.Handler(logging.DEBUG)
+            handler.emit = lambda record, lines=lines: lines.append(record.getMessage())
+            target = logging.getLogger(name)
+            target.addHandler(handler)
+            self.addCleanup(target.removeHandler, handler)
+            self.addCleanup(target.setLevel, target.level)
+            target.setLevel(logging.DEBUG)
+        with patch.object(rh, "get_data_influxdb", side_effect=stuck_read):
+            self.assertFalse(await rh.get_data(self.DAYS, ["sensor.x"]))
+            release.set()
+            self.assertTrue(await asyncio.to_thread(done.wait, 5))
+        self.assertFalse(any("LATE LINE" in line for line in action_lines), action_lines)
+        self.assertTrue(any("LATE LINE" in line for line in detail_lines), detail_lines)
+        # The thread is free again, and what it logs next reaches its action as before
+        self.assertFalse(retrieve_hass._abandoned_reads)
+
+    def test_a_server_that_cannot_be_reached_stops_the_read(self):
+        # No query on the default measurement, and no next sensor, once the server has
+        # failed to answer
+        import requests
+
+        rh = self._influx_rh(9)
+        rh._measurement_cache = {}  # as _init_influx_client leaves it
+        client = MagicMock()
+        client.query.side_effect = requests.exceptions.ConnectionError("down")
+        with (
+            patch.object(rh, "_init_influx_client", return_value=client),
+            self.assertLogs(logger, level="ERROR") as cm,
+        ):
+            self.assertFalse(rh.get_data_influxdb(self.DAYS, ["sensor.a", "sensor.b"]))
+        self.assertEqual(client.query.call_count, 1)
+        self.assertTrue(any("could not reach" in x for x in cm.output))
+        client.close.assert_called_once()
+
+    def test_the_deadline_starts_at_the_first_request(self):
+        # Loading the client and building it do not count against the read
+        class Ping(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Ping)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        session = retrieve_hass._influx_session(0.3)
+        self.addCleanup(session.close)
+        time.sleep(0.4)
+        url = f"http://127.0.0.1:{server.server_port}/ping"
+        self.assertEqual(session.request("GET", url, timeout=(1, 1)).status_code, 204)
+        time.sleep(0.4)
+        with self.assertRaises(TimeoutError):
+            session.request("GET", url, timeout=(1, 1))
+
+    def test_a_deadline_during_the_ping_reads_as_could_not_reach(self):
+        rh = self._influx_rh(9)
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertIsNone(rh._init_influx_client(session=retrieve_hass._influx_session(0)))
+        self.assertTrue(cm.output[-1].endswith("could not reach the configured InfluxDB server"))
+        self.assertNotIn("Deadline", cm.output[-1])
+
+    def test_a_pool_manager_that_cannot_be_tracked_is_logged_once(self):
+        import requests
+
+        self.enterContext(patch.object(retrieve_hass, "_logged_once", set()))
+        with self.assertLogs("emhass.database", level="ERROR") as cm:
+            for _ in range(2):
+                adapter = requests.adapters.HTTPAdapter()
+                adapter.poolmanager = object()
+                retrieve_hass._influx_session(1).mount("http://", adapter)
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("cannot be cut", cm.output[0])
+
+    def _points(self):
+        start = self.DAYS[0]
+        return [
+            [(start + pd.Timedelta(minutes=30 * i)).strftime("%Y-%m-%dT%H:%M:%SZ"), 100.0 + i]
+            for i in range(48)
+        ]
+
+    def _standin(self, **kwargs):
+        server = _InfluxStandin(**kwargs)
+        self.addCleanup(server.stop)
+        return server
+
+    def test_a_server_that_closes_every_connection_keeps_one_duplicate_open(self):
+        # Connection: close, as some reverse proxies answer: a new connection for each
+        # query. Each one's duplicate is closed once urllib3 is done with that
+        # connection, not when the whole read ends
+        server = self._standin(measurements=[f"m{i}" for i in range(60)], close=True)
+        made, peak = [], [0]
+        real_dup = socket.socket.dup
+
+        def counting_dup(sock):
+            duplicate = real_dup(sock)
+            made.append(duplicate)
+            peak[0] = max(peak[0], sum(d.fileno() != -1 for d in made))
+            return duplicate
+
+        rh = self._influx_rh(server.port)
+        with patch.object(socket.socket, "dup", counting_dup), self.assertLogs(logger, "DEBUG"):
+            rh.get_data_influxdb(self.DAYS, ["sensor.x"])
+        self.assertGreater(len(server.queries), 60)
+        self.assertGreater(len(made), 60)
+        # No more than the connections the pool can hold (10)
+        self.assertLessEqual(peak[0], 10)
+        self.assertEqual(sum(d.fileno() != -1 for d in made), 0)
+
+    def test_a_connection_urllib3_drops_is_closed_at_once(self):
+        # The server sees the client close a connection when urllib3 drops it, not when
+        # the read ends
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        self.addCleanup(listener.close)
+        saw_close = []
+
+        def serve():
+            conn, _ = listener.accept()
+            with conn:
+                conn.settimeout(2)
+                conn.recv(65536)
+                conn.sendall(b"HTTP/1.1 204 No Content\r\nX-Influxdb-Version: 1.8\r\n\r\n")
+                try:
+                    saw_close.append(conn.recv(1) == b"")
+                except OSError:
+                    saw_close.append(False)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        session = retrieve_hass._influx_session(60)
+        self.addCleanup(session.close)
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/ping"
+        self.assertEqual(session.get(url, timeout=(1, 1)).status_code, 204)
+        for adapter in session.adapters.values():
+            adapter.poolmanager.clear()
+        thread.join(3)
+        self.assertEqual(saw_close, [True])
+
+    async def test_a_body_trickling_after_connection_close_is_cut_at_the_deadline(self):
+        # http.client closes such a connection before reading the body: its duplicate
+        # must still be there for the cut
+        self._short_limits(timeout_s=(1, 1), deadline_s=1)
+        server = _TrickleServer(seconds=8, head=_TrickleServer.BODY_TRICKLE)
+        self.addCleanup(server.close)
+        await self._assert_cut(server, self._influx_rh(server.port))
+
+    def test_a_connection_opened_after_the_cut_is_shut_at_once(self):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        self.addCleanup(listener.close)
+        session = retrieve_hass._influx_session(60)
+        self.addCleanup(session.close)
+        session.cut()
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
+        conn = session.get_adapter(url).poolmanager.connection_from_url(url)._new_conn()
+        conn.connect()
+        self.addCleanup(conn.close)
+        # The server sees the client end it at once
+        accepted, _ = listener.accept()
+        self.addCleanup(accepted.close)
+        accepted.settimeout(1)
+        try:
+            got = accepted.recv(1)
+        except TimeoutError:
+            got = "not shut"
+        except OSError:
+            got = b""
+        self.assertEqual(got, b"")
+
+    def test_a_socket_that_cannot_be_duplicated_is_still_read(self):
+        # A SOCKS socket may raise anything from dup(): the read goes on, uncuttable
+        server = self._standin()
+        self.enterContext(patch.object(retrieve_hass, "_logged_once", set()))
+
+        def no_dup(_sock):
+            raise ValueError("cannot dup")
+
+        session = retrieve_hass._influx_session(60)
+        self.addCleanup(session.close)
+        url = f"http://127.0.0.1:{server.port}/ping"
+        with (
+            patch.object(socket.socket, "dup", no_dup),
+            self.assertLogs("emhass.database", level="ERROR") as cm,
+        ):
+            for _ in range(2):
+                self.assertEqual(session.get(url, timeout=(1, 1)).status_code, 204)
+                for adapter in session.adapters.values():
+                    adapter.poolmanager.clear()
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("cannot be duplicated", cm.output[0])
+
+    def _tracked_connection(self):
+        """(session, a connection of its own pool to a listener on 127.0.0.1, the
+        duplicates made from here on)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        self.addCleanup(listener.close)
+        session = retrieve_hass._influx_session(60)
+        self.addCleanup(session.close)
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
+        conn = session.get_adapter(url).poolmanager.connection_from_url(url)._new_conn()
+        made = []
+        real_dup = socket.socket.dup
+
+        def recording_dup(sock):
+            duplicate = real_dup(sock)
+            made.append(duplicate)
+            return duplicate
+
+        self.enterContext(patch.object(socket.socket, "dup", recording_dup))
+        return session, conn, made
+
+    def test_a_connection_that_reconnects_in_place_closes_its_old_duplicate(self):
+        # urllib3 can open a new socket on the same connection object: the duplicate of
+        # the socket it had is closed once that socket is, not kept for the whole read
+        session, conn, made = self._tracked_connection()
+        conn.connect()
+        first = conn.sock
+        first.close()
+        conn.connect()
+        self.addCleanup(conn.close)
+        self.assertEqual(len(made), 2)
+        self.assertEqual(made[0].fileno(), -1)
+        self.assertNotEqual(made[1].fileno(), -1)
+
+    def test_the_session_closes_a_duplicate_still_waiting_for_its_socket(self):
+        # A connection closed while its reply is still being read (Connection: close)
+        # keeps its duplicate until that socket closes; the session's close ends it
+        session, conn, made = self._tracked_connection()
+        conn.connect()
+        # As http.client leaves it: the reply's file object keeps the socket open
+        reply = conn.sock.makefile("rb")
+        self.addCleanup(reply.close)
+        conn.close()
+        self.assertNotEqual(made[0].fileno(), -1)
+        session.close()
+        self.assertEqual(made[0].fileno(), -1)
+
+    def test_a_socket_that_cannot_be_weakly_referenced_keeps_its_duplicate(self):
+        # It cannot tell when that socket closes: the duplicate is kept until the
+        # session closes, so a reply still on that socket can still be cut
+        session, conn, made = self._tracked_connection()
+
+        def no_weak_reference(_obj):
+            raise TypeError("cannot create weak reference")
+
+        self.enterContext(
+            patch.object(retrieve_hass, "weakref", SimpleNamespace(ref=no_weak_reference))
+        )
+        conn.connect()
+        first = conn.sock
+        self.addCleanup(first.close)
+        conn.connect()
+        self.addCleanup(conn.close)
+        self.assertNotEqual(made[0].fileno(), -1)
+        session.cut()
+        session.close()
+        self.assertEqual(made[0].fileno(), -1)
+
+    def test_a_socket_that_cannot_say_whether_it_is_open_keeps_its_duplicate(self):
+        # Its fileno() raises: "cannot tell" is not taken as closed, so the duplicate is
+        # kept, through the next connection's check, until the session closes
+        session, conn, made = self._tracked_connection()
+        conn.connect()
+        first = conn.sock
+        self.addCleanup(first.close)
+
+        class Unsure:
+            def fileno(self):
+                raise OSError("cannot tell")
+
+        unsure = Unsure()
+        conn.sock = unsure
+        conn.connect()
+        self.addCleanup(conn.close)
+        other = session.get_adapter(f"http://127.0.0.1:{conn.port}/")
+        another = other.poolmanager.connection_from_url(f"http://127.0.0.1:{conn.port}/")
+        extra = another._new_conn()
+        extra.connect()
+        self.addCleanup(extra.close)
+        self.assertEqual(len(made), 3)
+        self.assertNotEqual(made[0].fileno(), -1)
+        session.close()
+        self.assertEqual(made[0].fileno(), -1)
+        self.assertIsNotNone(unsure)
+
+    def test_a_request_ends_the_read_when_the_cut_or_the_deadline_failed_it(self):
+        # How a failed request is told apart from one query the server could not answer.
+        # The clock is the session's own, held still unless a case moves it
+        import requests
+
+        clock = [1000.0]
+        self.enterContext(
+            patch.object(retrieve_hass, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+        )
+        url = "http://127.0.0.1:9/query"
+
+        def failing(session, exc, effect=None):
+            def request(*_args, **_kwargs):
+                if effect is not None:
+                    effect(session)
+                raise exc
+
+            return request
+
+        def advance(_session):
+            clock[0] += 100
+
+        cases = (
+            # its read timeout was the time left: the deadline
+            ("read timeout at the deadline", 0.5, requests.exceptions.ReadTimeout(), None, True),
+            (
+                "connect timeout at the deadline",
+                0.5,
+                requests.exceptions.ConnectTimeout(),
+                None,
+                True,
+            ),
+            # a read timeout shorter than the time left: one slow query
+            (
+                "read timeout before the deadline",
+                100,
+                requests.exceptions.ReadTimeout(),
+                None,
+                False,
+            ),
+            (
+                "reset after the deadline passed",
+                100,
+                requests.exceptions.ConnectionError(),
+                advance,
+                True,
+            ),
+            ("reset because of the cut", 100, requests.exceptions.ConnectionError(), "cut", True),
+            ("reset", 100, requests.exceptions.ConnectionError(), None, False),
+        )
+        for name, seconds, exc, effect, ends in cases:
+            with self.subTest(case=name):
+                session = retrieve_hass._influx_session(seconds)
+                self.addCleanup(session.close)
+                if effect == "cut":
+                    effect = type(session).cut
+                with patch.object(requests.Session, "request", failing(session, exc, effect)):
+                    expected = retrieve_hass._InfluxDeadlineExceeded if ends else type(exc)
+                    with self.assertRaises(expected) as caught:
+                        session.request("GET", url, timeout=(5, 5))
+                    if not ends:
+                        self.assertNotIsInstance(caught.exception, TimeoutError)
+
+    def test_only_a_failure_to_connect_is_taken_as_the_server_down(self):
+        # The read ends on these; on anything else the query is skipped
+        import requests
+
+        closed = socket.socket()
+        closed.bind(("127.0.0.1", 0))
+        refused_port = closed.getsockname()[1]
+        closed.close()
+        silent = _SilentServer(hold_s=2)
+        self.addCleanup(silent.close)
+
+        def one_shot(reply: bytes, reset: bool):
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            self.addCleanup(listener.close)
+
+            def serve():
+                conn, _ = listener.accept()
+                conn.recv(65536)
+                conn.sendall(reply)
+                if reset:
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                conn.close()
+
+            threading.Thread(target=serve, daemon=True).start()
+            return listener.getsockname()[1]
+
+        session = retrieve_hass._influx_session(60)
+        self.addCleanup(session.close)
+        cases = (
+            ("refused", refused_port, True),
+            ("read timeout", silent.port, False),
+            ("reset", one_shot(b"", reset=True), False),
+            (
+                "cut off",
+                one_shot(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial", reset=False),
+                False,
+            ),
+        )
+        for name, port, ends in cases:
+            with self.subTest(case=name):
+                with self.assertRaises(requests.exceptions.RequestException) as caught:
+                    _ = session.get(f"http://127.0.0.1:{port}/query", timeout=(1, 0.3)).content
+                self.assertEqual(retrieve_hass._could_not_connect(caught.exception), ends)
+                # Each still reads as "could not reach" in the action log
+                self.assertTrue(retrieve_hass._unreachable(caught.exception))
+
+    def test_one_slow_query_skips_that_query_not_the_read(self):
+        # A read timeout on one tag query or one SELECT: the server answers the rest. A
+        # skipped tag query sends the sensor it was looking for to that measurement's
+        # SELECT (see the next test), here where it is
+        self._short_limits(timeout_s=(1, 0.3), deadline_s=30)
+        points = self._points()
+        server = self._standin(
+            measurements=["W", "kWh"],
+            entity_in={"W": ["w"], "kWh": ["e"]},
+            slow={'FROM "kWh"': 0.8},
+            points={"e": points, "w": points},
+            by_measurement=True,
+        )
+        rh = self._influx_rh(server.port)
+        with self.assertLogs(logger, "DEBUG"):
+            self.assertTrue(rh.get_data_influxdb(self.DAYS, ["sensor.w", "sensor.e"]))
+        self.assertEqual(list(rh.df_final.columns), ["sensor.w", "sensor.e"])
+        self.assertEqual(rh._measurement_cache, {"w": "W"})
+        server = self._standin(
+            measurements=["W"],
+            entity_in={"W": ["a", "b"]},
+            slow={"'a'": 0.8},
+            points={"a": points, "b": points},
+        )
+        rh = self._influx_rh(server.port)
+        with self.assertLogs(logger, "DEBUG"):
+            self.assertTrue(rh.get_data_influxdb(self.DAYS, ["sensor.a", "sensor.b"]))
+        self.assertEqual(list(rh.df_final.columns), ["sensor.b"])
+
+    @staticmethod
+    def _selected_from(server):
+        """The measurement of each SELECT the stand-in was sent, in order."""
+        return [_selected_measurement(q) for q in server.queries if "SELECT" in q]
+
+    def _assert_read_from_w_only(self, server, rh, sensors, read, cm):
+        """``read`` are the sensors read; the rest are skipped with the fixed line. Every
+        SELECT is from W, kW is never asked, and nothing is cached."""
+        self.assertEqual(list(rh.df_final.columns) if read else [], read)
+        self.assertEqual(self._selected_from(server), ["W"] * len(sensors))
+        self.assertFalse([q for q in server.queries if 'FROM "kW"' in q])
+        self.assertEqual(rh._measurement_cache, {})
+        skipped = [
+            f"InfluxDB sensor {s.removeprefix('sensor.')!r} skipped: a query looking for its "
+            "measurement failed"
+            for s in sensors
+            if s not in read
+        ]
+        lines = [r.getMessage() for r in cm.records if "skipped" in r.getMessage()]
+        self.assertEqual(lines, skipped)
+
+    def test_a_skipped_tag_query_takes_no_other_measurement(self):
+        # A sensor whose unit changed from W to kW is in both. With the tag query on W
+        # skipped, kW would be the first match, read with values 1000 times off; the
+        # default measurement would be a guess. Neither is taken: W's own SELECT decides,
+        # as a tag query that found the sensor there would have. Data there is read;
+        # none skips the sensor, with a fixed line. Nothing is cached either way
+        self._short_limits(timeout_s=(1, 0.3), deadline_s=30)
+        points = self._points()
+        for entity_in, read in (
+            ({"W": ["e"], "kW": ["e"]}, ["sensor.e"]),
+            ({"W": ["e"]}, ["sensor.e"]),
+            ({"kW": ["e"]}, []),
+        ):
+            with self.subTest(entity_in=entity_in):
+                server = self._standin(
+                    measurements=["W", "kW"],
+                    entity_in=entity_in,
+                    slow={'SHOW TAG VALUES FROM "W"': 0.8},
+                    points={"e": points},
+                    by_measurement=True,
+                )
+                rh = self._influx_rh(server.port)
+                with self.assertLogs(logger, "DEBUG") as cm:
+                    self.assertEqual(rh.get_data_influxdb(self.DAYS, ["sensor.e"]), bool(read))
+                self._assert_read_from_w_only(server, rh, ["sensor.e"], read, cm)
+
+    def test_a_failed_tag_query_takes_no_other_measurement(self):
+        # A 5xx, a 408 or 429 (not now), an error inside a 200 (InfluxDB's own query
+        # timeout) or a reply cut off with no length (it arrives as JSON that does not
+        # parse) may hide the entity as well as no reply does: W's SELECT decides, never
+        # kW, which would read it 1000 times off
+        self._short_limits(timeout_s=(1, 1), deadline_s=30)
+        points = self._points()
+        faults = (
+            "http500",
+            "http504",
+            "http408",
+            "http429",
+            "query timeout",
+            "max queries",
+            "cut, no length",
+        )
+        for fault in faults:
+            for entity_in, read in (
+                ({"W": ["e"], "kW": ["e"]}, ["sensor.e"]),
+                ({"kW": ["e"]}, []),
+            ):
+                with self.subTest(fault=fault, entity_in=entity_in):
+                    server = self._standin(
+                        measurements=["W", "kW"],
+                        entity_in=entity_in,
+                        faults={'SHOW TAG VALUES FROM "W"': fault},
+                        points={"e": points},
+                        by_measurement=True,
+                    )
+                    rh = self._influx_rh(server.port)
+                    with self.assertLogs(logger, "DEBUG") as cm:
+                        self.assertEqual(rh.get_data_influxdb(self.DAYS, ["sensor.e"]), bool(read))
+                    self._assert_read_from_w_only(server, rh, ["sensor.e"], read, cm)
+        # Every tag query failing so: a sensor in W is still read from it; one only in
+        # kW, a later measurement, is skipped, not read from W or the default
+        for fault in faults:
+            with self.subTest(fault=fault, every_tag_query=True):
+                server = self._standin(
+                    measurements=["W", "kW", "%"],
+                    entity_in={"W": ["a"], "kW": ["b"]},
+                    faults={"SHOW TAG VALUES": fault},
+                    points={"a": points, "b": points},
+                    by_measurement=True,
+                )
+                rh = self._influx_rh(server.port)
+                sensors = ["sensor.a", "sensor.b"]
+                with self.assertLogs(logger, "DEBUG") as cm:
+                    self.assertTrue(rh.get_data_influxdb(self.DAYS, sensors))
+                self._assert_read_from_w_only(server, rh, sensors, ["sensor.a"], cm)
+                asked = [q for q in server.queries if "SHOW TAG VALUES" in q]
+                self.assertEqual(len(asked), 1)
+        # A 4xx refuses the query: the next measurement is searched as before; an empty
+        # reply is how a measurement without the entity answers
+        for faults, entity_in in (
+            ({'SHOW TAG VALUES FROM "W"': "http400"}, {"W": ["e"], "kW": ["e"]}),
+            ({'SHOW TAG VALUES FROM "W"': "http403"}, {"W": ["e"], "kW": ["e"]}),
+            ({}, {"kW": ["e"]}),
+        ):
+            with self.subTest(faults=faults):
+                server = self._standin(
+                    measurements=["W", "kW"],
+                    entity_in=entity_in,
+                    faults=faults,
+                    points={"e": points},
+                )
+                rh = self._influx_rh(server.port)
+                with self.assertLogs(logger, "DEBUG"):
+                    self.assertTrue(rh.get_data_influxdb(self.DAYS, ["sensor.e"]))
+                self.assertEqual(rh._measurement_cache, {"e": "kW"})
+
+    def test_a_failed_tag_query_is_asked_once_per_read(self):
+        # Each sensor behind it would wait out the same timeout again: the measurement
+        # is remembered for the rest of the read, and asked again by the next read. The
+        # slow reply comes well after the read timeout, so a loaded machine still times
+        # it out
+        self._short_limits(timeout_s=(1, 0.6), deadline_s=30)
+        points = self._points()
+        for name, how in (
+            ("slow", {"slow": {'SHOW TAG VALUES FROM "W"': 1.5}}),
+            ("http500", {"faults": {'SHOW TAG VALUES FROM "W"': "http500"}}),
+        ):
+            with self.subTest(failure=name):
+                server = self._standin(
+                    measurements=["W", "kW"],
+                    entity_in={"kW": ["a", "b", "c"]},
+                    points={"a": points, "b": points, "c": points},
+                    by_measurement=True,
+                    **how,
+                )
+                rh = self._influx_rh(server.port)
+                sensors = ["sensor.a", "sensor.b", "sensor.c"]
+                for reads in (1, 2):
+                    with self.assertLogs(logger, "DEBUG") as cm:
+                        self.assertFalse(rh.get_data_influxdb(self.DAYS, sensors))
+                    asked = [q for q in server.queries if 'SHOW TAG VALUES FROM "W"' in q]
+                    self.assertEqual(len(asked), reads)
+                    skipped = [r.getMessage() for r in cm.records if "skipped" in r.getMessage()]
+                    self.assertEqual(len(skipped), 3, skipped)
+                    self.assertEqual(self._selected_from(server), ["W"] * 3 * reads)
+                self.assertFalse([q for q in server.queries if 'FROM "kW"' in q])
+
+    def test_a_tag_query_the_server_refuses_is_passed_over(self):
+        # A 4xx says the server refuses the query: the next measurement is searched as
+        # before, and the default is still the fallback for a server that refuses all.
+        # On any other failure the failed measurement is given for its SELECT to decide,
+        # never a later one, and nothing is cached
+        import requests
+        from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
+
+        def shown(*names):
+            result = MagicMock()
+            result.get_points.return_value = [{"name": n} for n in names]
+            return result
+
+        def tags(*entities):
+            result = MagicMock()
+            result.get_points.return_value = [{"key": "entity_id", "value": e} for e in entities]
+            return result
+
+        refused = InfluxDBClientError("error parsing query", 400)
+        forbidden = InfluxDBClientError("error authorizing query", 403)
+        for answers, found in (
+            ([shown("W", "kW"), refused, tags("e")], "kW"),
+            ([shown("W", "kW"), forbidden, tags("e")], "kW"),
+            ([shown("W", "kW"), refused, refused], "W"),
+            ([shown("W", "kW"), requests.exceptions.ReadTimeout("slow")], "W"),
+            ([shown("W", "kW"), requests.exceptions.ChunkedEncodingError("cut")], "W"),
+            ([shown("W", "kW"), InfluxDBServerError("timeout")], "W"),
+            ([shown("W", "kW"), InfluxDBClientError("request time-out", 408)], "W"),
+            ([shown("W", "kW"), InfluxDBClientError("too early", 425)], "W"),
+            ([shown("W", "kW"), InfluxDBClientError("too many requests", 429)], "W"),
+            ([shown("W", "kW"), InfluxDBClientError("query-timeout limit exceeded")], "W"),
+            ([shown("W", "kW"), requests.exceptions.JSONDecodeError("cut", "{", 1)], "W"),
+            ([shown("W", "kW"), KeyError("value")], "W"),
+        ):
+            with self.subTest(answers=answers[1:], found=found):
+                rh = self._influx_rh(9)
+                rh._measurement_cache = {}  # as _init_influx_client leaves it
+                client = MagicMock()
+                client.query.side_effect = answers
+                self.assertEqual(rh._discover_entity_measurement(client, "e"), found)
+                self.assertEqual(client.query.call_count, len(answers))
+                self.assertEqual(rh._measurement_cache, {"e": found} if found == "kW" else {})
+
+    def test_a_failure_to_connect_on_any_query_ends_the_read(self):
+        import requests
+        from urllib3.exceptions import MaxRetryError, NewConnectionError
+
+        refused = requests.exceptions.ConnectionError(
+            MaxRetryError(None, "/query", NewConnectionError(None, "refused"))
+        )
+        shown = MagicMock()
+        shown.get_points.return_value = [{"name": "W"}]
+        tags = MagicMock()
+        tags.get_points.return_value = [{"key": "entity_id", "value": "a"}]
+        for site, answers in (("tag query", [shown, refused]), ("select", [shown, tags, refused])):
+            with self.subTest(site=site):
+                rh = self._influx_rh(9)
+                rh._measurement_cache = {}  # as _init_influx_client leaves it
+                client = MagicMock()
+                client.query.side_effect = answers
+                with (
+                    patch.object(rh, "_init_influx_client", return_value=client),
+                    self.assertLogs(logger, level="ERROR") as cm,
+                ):
+                    self.assertFalse(rh.get_data_influxdb(self.DAYS, ["sensor.a", "sensor.b"]))
+                # Nothing after the failure: no default measurement, no next sensor
+                self.assertEqual(client.query.call_count, len(answers))
+                self.assertTrue(any("could not reach" in x for x in cm.output))
+
+    def test_a_query_that_runs_into_the_deadline_ends_the_read(self):
+        # Its read timeout was the time left: the deadline, not one slow query
+        self._short_limits(timeout_s=(2, 2), deadline_s=0.6)
+        points = self._points()
+        server = self._standin(
+            measurements=["W"],
+            entity_in={"W": ["a", "b"]},
+            slow={"'b'": 3},
+            points={"a": points, "b": points},
+        )
+        rh = self._influx_rh(server.port)
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertFalse(rh.get_data_influxdb(self.DAYS, ["sensor.a", "sensor.b"]))
+        self.assertTrue(any("took longer than" in x for x in cm.output), cm.output)
+
+    async def test_a_cancel_during_the_grace_wait_still_lets_the_read_go(self):
+        self._short_limits(timeout_s=(1, 1), deadline_s=0.2)
+        self.enterContext(patch.object(retrieve_hass, "INFLUXDB_CUT_GRACE_S", 5))
+        release, done = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        rh = self._influx_rh(9)
+
+        def stuck_read(*_args):
+            release.wait(10)
+            rh.logger.error("LATE LINE from the cancelled read")
+            done.set()
+            return False
+
+        action_lines, detail_lines = self._capture_lines(logger.name, "emhass.database")
+        with patch.object(rh, "get_data_influxdb", side_effect=stuck_read):
+            task = asyncio.create_task(rh.get_data(self.DAYS, ["sensor.x"]))
+            # Past the deadline and its margin, inside the grace wait
+            await asyncio.sleep(1.2)
+            self.assertFalse(task.done())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            release.set()
+            self.assertTrue(await asyncio.to_thread(done.wait, 5))
+        self.assertTrue(any("the action was cancelled" in x for x in action_lines), action_lines)
+        self.assertFalse(any("LATE LINE" in x for x in action_lines), action_lines)
+        self.assertTrue(any("LATE LINE" in x for x in detail_lines), detail_lines)
+
+    async def test_an_abandoned_read_on_the_database_logger_itself_does_not_loop(self):
+        self._short_limits(timeout_s=(1, 1), deadline_s=0.2)
+        self.enterContext(patch.object(retrieve_hass, "INFLUXDB_CUT_GRACE_S", 0.1))
+        db_logger = logging.getLogger("emhass.database")
+        self.addCleanup(db_logger.removeFilter, retrieve_hass._abandoned_read_filter)
+        release, done = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        rh = self._influx_rh(9)
+        rh.logger = db_logger
+
+        def stuck_read(*_args):
+            release.wait(10)
+            rh.logger.error("LATE LINE on the database logger")
+            done.set()
+            return False
+
+        (detail_lines,) = self._capture_lines("emhass.database")
+        with patch.object(rh, "get_data_influxdb", side_effect=stuck_read):
+            self.assertFalse(await rh.get_data(self.DAYS, ["sensor.x"]))
+            release.set()
+            self.assertTrue(await asyncio.to_thread(done.wait, 5))
+        self.assertEqual(sum("LATE LINE" in x for x in detail_lines), 1, detail_lines)
+
+    def _capture_lines(self, *names):
+        """The messages each named logger handles from here on, one list per name."""
+        captured = []
+        for name in names:
+            lines = []
+            handler = logging.Handler(logging.DEBUG)
+            handler.emit = lambda record, lines=lines: lines.append(record.getMessage())
+            target = logging.getLogger(name)
+            target.addHandler(handler)
+            self.addCleanup(target.removeHandler, handler)
+            self.addCleanup(target.setLevel, target.level)
+            target.setLevel(logging.DEBUG)
+            captured.append(lines)
+        return captured
+
+    async def test_the_victoriametrics_session_has_a_timeout(self):
+        rh = self._rh({"use_victoriametrics": True, "victoriametrics_host": "127.0.0.1"})
+        with (
+            patch.object(rh, "_fetch_sensor_data_vm", AsyncMock(return_value=None)),
+            patch(
+                "emhass.retrieve_hass.aiohttp.ClientSession", wraps=aiohttp.ClientSession
+            ) as session_class,
+        ):
+            await rh.get_data_victoriametrics(self.DAYS, ["sensor.x"])
+        timeout = session_class.call_args.kwargs["timeout"]
+        self.assertEqual((timeout.total, timeout.connect, timeout.sock_read), (60, 10, 30))
+
+    async def test_a_silent_victoriametrics_server_times_out_cleanly(self):
+        self._short_limits()
+        server = _SilentServer(hold_s=2)
+        self.addCleanup(server.close)
+        rh = self._rh(
+            {
+                "use_victoriametrics": True,
+                "victoriametrics_host": "127.0.0.1",
+                "victoriametrics_port": server.port,
+            }
+        )
+        start = time.monotonic()
+        with self.assertLogs(logger, level="ERROR") as cm:
+            self.assertFalse(await rh.get_data(self.DAYS, ["sensor.x"]))
+        self.assertLess(time.monotonic() - start, 1.5)
+        line = next(x for x in cm.output if "Network error" in x)
+        self.assertIn("could not reach the configured VictoriaMetrics server", line)
+        self.assertNotIn(str(server.port), line)
 
 
 if __name__ == "__main__":

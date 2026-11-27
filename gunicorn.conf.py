@@ -25,7 +25,12 @@ workers = int(os.getenv("WEB_CONCURRENCY", 1))
 worker_connections = int(os.getenv("WORKER_CONNECTIONS", 1000))
 
 # Process management
-max_requests = int(os.getenv("MAX_REQUESTS", 1000))
+# No restart after a number of requests unless MAX_REQUESTS asks for one (0 means none).
+# The count takes every request, the ones refused for lack of credentials and /healthz
+# included, so with a limit anyone who can reach the port decides when the worker restarts,
+# and a restart drops what the worker holds: the continual publish loop, the published
+# entity files, the action log.
+max_requests = int(os.getenv("MAX_REQUESTS", 0))
 max_requests_jitter = int(os.getenv("MAX_REQUESTS_JITTER", 100))
 preload_app = True
 
@@ -51,6 +56,11 @@ limit_request_field_size = 8190
 
 # Performance
 worker_tmp_dir = "/dev/shm"  # Use memory for worker temp files if available
+# Gunicorn 25.1 and later open a control socket by default, from 25.2 in $HOME/.gunicorn. A
+# user picked with docker run --user has no home in the image (HOME=/) and can't create it
+# there, so in that case the socket goes in /tmp instead. Older versions ignore this setting.
+if not os.access(os.path.expanduser("~"), os.W_OK):
+    control_socket = "/tmp/gunicorn.ctl"
 
 
 def when_ready(server):

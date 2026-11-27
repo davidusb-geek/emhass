@@ -3950,15 +3950,23 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         these tests never touch a real developer/runtime quota counter."""
         counter_dir = tempfile.TemporaryDirectory()
         self.addCleanup(counter_dir.cleanup)
-        patcher = unittest.mock.patch(
-            "emhass.forecast.tempfile.gettempdir", return_value=counter_dir.name
-        )
+        patcher = unittest.mock.patch("tempfile.gettempdir", return_value=counter_dir.name)
         patcher.start()
         self.addCleanup(patcher.stop)
         self._counter_dir = counter_dir.name
 
+    def _solcast_counter_paths(self):
+        """The counter files, wherever under the temp dir they are kept (a
+        sub-folder of the account's own on POSIX)."""
+        return sorted(
+            glob.glob(
+                os.path.join(self._counter_dir, "**", "emhass_solcast_calls_*.count"),
+                recursive=True,
+            )
+        )
+
     def _read_solcast_counter(self):
-        paths = glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count"))
+        paths = self._solcast_counter_paths()
         assert len(paths) == 1, f"expected exactly one counter file, found {paths}"
         with open(paths[0]) as f:
             return int(f.read().strip())
@@ -4054,13 +4062,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # land on the Jan-1 UTC-day file.
         self.assertTrue(self.fcst._solcast_rate_limit_ok(required_calls=5))
         self.assertEqual(self._read_solcast_counter(), 5)
-        paths = glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count"))
+        paths = self._solcast_counter_paths()
         self.assertIn("emhass_solcast_calls_2026-01-01.count", paths[0])
 
         # Real UTC midnight rollover creates a fresh counter, not reused.
         fixed["now"] = pd.Timestamp("2026-01-02 00:05:00", tz="UTC")
         self.assertTrue(self.fcst._solcast_rate_limit_ok())
-        paths = sorted(glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count")))
+        paths = self._solcast_counter_paths()
         self.assertEqual(len(paths), 2, "a new UTC-day counter file must be created, not reused")
         with open(paths[1]) as f:
             self.assertEqual(int(f.read().strip()), 1, "the new UTC day's counter starts fresh")
@@ -4124,7 +4132,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(res)
                 self.assertEqual(len(mocked.requests), 0)
                 self.assertFalse(
-                    glob.glob(os.path.join(self._counter_dir, "emhass_solcast_calls_*.count")),
+                    self._solcast_counter_paths(),
                     "no quota counter file must be created",
                 )
 

@@ -69,6 +69,8 @@ The coordinator asks it what it would do at given prices, and, once it has chose
 
 **Serving this EMHASS** to a coordinator elsewhere: set `participant_api` and a `participant_token` secret.
 
+**On the Home Assistant add-on**, these secrets come from its Configuration page (`options.json`) rather than `secrets_emhass.yaml`: `participant_token`, and `remote_solver_tokens`, a list of `name` and `token` pairs, the tokens of the remote solvers `site` names. Each is stored under its `name`, which a remote's `token_secret` names. A name must be one a `token_secret` may take (lower case letters, digits and `_`, not one of EMHASS's own secrets); an entry that is not is skipped, and the log says which entry by its position. The participant API is served on the add-on's port 5000, not through ingress, which refuses it.
+
 ```json
 "participant_api": {"publish_prefix": "garage_"}
 ```
@@ -161,7 +163,7 @@ python scripts/federated_benchmark.py
 
 ## Future
 
-**ADMM.** A second coordinator, ADMM, is planned but not offered yet: `optimization_backend` accepts only `cvxpy` and `dantzig_wolfe`, and `admm` set by hand logs that it is not available and runs the default MILP. It needs EMHASS's model to accept a pull towards a target plan (a linear, absolute-value term, so the problem stays a MILP HiGHS can solve), and it gives no bound on how far its plan is from the best, so it would report no `fed_gap`.
+**ADMM.** A second coordinator, ADMM, is planned but not offered yet: `optimization_backend` accepts only `cvxpy` and `dantzig_wolfe`, so a request or a configuration save that sets `admm` is refused. A configuration saved with `admm` before that check logs that it is not available and runs the default MILP. It needs EMHASS's model to accept a pull towards a target plan (a linear, absolute-value term, so the problem stays a MILP HiGHS can solve), and it gives no bound on how far its plan is from the best, so it would report no `fed_gap`.
 
 ## How it works
 

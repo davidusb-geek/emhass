@@ -100,7 +100,6 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
     root = str(canonical_supervisor_url(base)).rstrip("/")
     path = "/states/" if root in SUPERVISOR_URLS else "/api/states/"
     url = root + path + urllib.parse.quote(sensor)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     # ssl_no_verify, as the user set it for Home Assistant's other calls
     context = (
         ssl._create_unverified_context()  # noqa: S323 - the user's own setting
@@ -116,6 +115,9 @@ def soc_now(retrieve_hass_conf: dict, logger: logging.Logger) -> float | None:
         urllib.request.ProxyHandler({}), _NoRedirect, urllib.request.HTTPSHandler(context=context)
     )
     try:
+        # Built in here: a hass_url with neither a scheme nor a port cannot
+        # be asked at all, which is a failure to read the sensor like any other
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with opener.open(req, timeout=5) as r:  # Home Assistant's own URL
             state = json.load(r)
     except Exception as exc:  # noqa: BLE001 - any failure: the configured target stands in
@@ -181,10 +183,11 @@ async def build_session(
     if abs(window.step_minutes - step) > 1e-9:
         raise WindowRefused(f"this EMHASS plans {step:g}-minute slots, not {window.step_minutes:g}")
     n = window.slots
-    if n < 1 or n * step > MAX_HORIZON_MINUTES:
-        raise WindowRefused(
-            f"this EMHASS plans 1 to {int(MAX_HORIZON_MINUTES // step)} slots, not {n}"
-        )
+    # At most a week, and at most the time steps any run may have (utils.MAX_TIME_STEPS):
+    # the window becomes this EMHASS's prediction_horizon
+    most = min(int(MAX_HORIZON_MINUTES // step), utils.MAX_TIME_STEPS)
+    if n < 1 or n > most:
+        raise WindowRefused(f"this EMHASS plans 1 to {most} slots, not {n}")
     runtime = {
         "prediction_horizon": n,
         "pv_power_forecast": [0.0] * n,

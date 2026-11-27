@@ -162,8 +162,15 @@ loads, single-constant loads, startup penalties):
 
 ### Why the threads setting matters
 
-HiGHS' default behaviour (`num_threads: 0`) runs the simplex single-threaded
-and uses HiGHS' internal parallel scheduler for the MIP branch-and-bound. On a
+With `num_threads: 0` (the default) EMHASS passes no thread count, and HiGHS
+uses its own default, about half the logical cores; it runs the simplex
+single-threaded and uses its internal parallel scheduler for the MIP
+branch-and-bound. The memory the branch-and-bound takes grows with the threads:
+4 semi-continuous loads over 480 steps took 261 MiB on 1 thread, 525 MiB on 4,
+and with 0 about 1.4 GiB within 40 seconds on the 16-core test machine. HiGHS
+sizes one thread pool per process at its first solve, so a later solve that sets
+a different count fails; set `num_threads` in the configuration rather than per
+request, and leave it at 0 or one fixed number. On a
 4-core Pi 4 with no other heavy workloads, `num_threads: 2` is typically the
 sweet spot:
 

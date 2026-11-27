@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import bz2
 import copy
@@ -47,7 +46,6 @@ import os
 import pickle
 import pickle as cPickle
 import re
-import tempfile
 from datetime import datetime, timedelta
 from typing import Literal
 from urllib.parse import quote
@@ -71,12 +69,16 @@ from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
+    LITERAL_SHORT_LIST_MAX_CHARS,
+    RuntimeParamError,
     add_date_features,
     add_local_calendar_days,
     data_file_path,
     describe_invalid_forecast_value,
     get_days_list,
     get_forecast_start,
+    literal_eval_bounded,
+    private_temp_dir,
     pv_carrying_inverters,
     replace_file,
     set_df_index_freq,
@@ -84,6 +86,17 @@ from emhass.utils import (
 )
 
 header_accept = "application/json"
+# A run the default typical load forecast cannot be made for
+TYPICAL_FORECAST_REFUSED = (
+    "The typical load forecast has no value at every time step of this "
+    "optimization_time_step; send load_power_forecast as a list, or use a step "
+    "such as 20, 30 or 60 minutes"
+)
+# A cost or price forecast read from a list or a file over a grid of one time step
+ONE_STEP_FORECAST_REFUSED = (
+    "load_cost_forecast and prod_price_forecast, from a list or a file, need at least "
+    "two time steps: delta_forecast_daily x 1440 / optimization_time_step must be 2 or more"
+)
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
 error_msg_method_not_valid = "Passed method is not valid"
 error_msg_tariff_schedule_time_zone = (
@@ -864,7 +877,7 @@ class Forecast:
         Returns True (and reserves) if it fits under max_calls, else False.
         """
         today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
-        temp_dir = tempfile.gettempdir()
+        temp_dir = private_temp_dir(self.emhass_conf["data_path"])
         counter_path = os.path.join(temp_dir, f"emhass_solcast_calls_{today}.count")
 
         try:
@@ -1095,7 +1108,7 @@ class Forecast:
             "Authorization": "Bearer " + self.retrieve_hass_conf["solcast_api_key"],
             "Accept": header_accept,
         }
-        days_solcast = int(len(self.forecast_dates) * self.freq.seconds / 3600)
+        days_solcast = int(len(self.forecast_dates) * self.freq.total_seconds() / 3600)
         total_data = pd.DataFrame()
         # Each rooftop's own series, in rooftop order, before the sum.
         roof_series = []
@@ -1347,8 +1360,9 @@ class Forecast:
         setting = self.retrieve_hass_conf.get("solar_forecast_kwp")
         if isinstance(setting, str) and setting.strip().startswith("["):
             try:
-                setting = ast.literal_eval(setting.strip())
-            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                # Length first: a few hundred KiB of text is a structure of a hundred MB
+                setting = literal_eval_bounded(setting.strip(), LITERAL_SHORT_LIST_MAX_CHARS)
+            except ValueError:
                 setting = None
             if not isinstance(setting, list):
                 return None, (
@@ -3159,6 +3173,9 @@ class Forecast:
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv = df_csv.drop(["ts"], axis=1)
+        if df_csv.index.nunique() < 2:
+            # No time step to read from one row: the grid has a single step
+            raise RuntimeParamError(ONE_STEP_FORECAST_REFUSED)
         df_csv = set_df_index_freq(df_csv)
         return df_csv
 
@@ -3565,6 +3582,10 @@ class Forecast:
             else:
                 forecast = pd.concat([forecast, forecast_tmp], axis=0)
         forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
+        if len(forecast_out) != len(self.forecast_dates):
+            # The 30-minute typical profile, resampled to the step, has no value at some
+            # of the run's forecast times
+            raise RuntimeParamError(TYPICAL_FORECAST_REFUSED)
         forecast_out.index = self.forecast_dates
         forecast_out.index.name = "ts"
         max_power = self.plant_conf["maximum_power_from_grid"]

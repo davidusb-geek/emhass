@@ -11,6 +11,7 @@ import pathlib
 import pickle
 import threading
 import time as _time
+import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -2539,6 +2540,11 @@ def _apply_cached_opt_runtime_updates(
         opt.var_prod_price = fcst.var_prod_price
     opt.plant_conf = plant_conf
     opt.optim_conf = optim_conf
+    # The time zone is not part of the cache key: a run in another zone (a request's
+    # time_zone) reuses the problem, and its own zone is used for it
+    time_zone = (input_data_dict.get("retrieve_hass_conf") or {}).get("time_zone")
+    if time_zone is not None:
+        opt.time_zone = time_zone
     opt.update_thermal_start_temps(optim_conf)
     opt.update_battery_power_limits(plant_conf)
     runtime_solver_opts = [
@@ -2549,6 +2555,54 @@ def _apply_cached_opt_runtime_updates(
     for key in runtime_solver_opts:
         if key in optim_conf:
             opt.optim_conf[key] = optim_conf[key]
+
+
+# The errors a value of the wrong type or shape in the run's settings raises while the
+# run is set up; answered with SETTINGS_REFUSED (a 400), not a 500
+_SHAPE_ERRORS = (ValueError, TypeError, KeyError, AttributeError, IndexError)
+# Errors of that kind with their own answer
+_OWN_ANSWER_ERRORS = (utils.SocFractionError, utils.InverterConfigError, utils.BatteryConfigError)
+# The package's own directory: the last frame of an error in it is the one logged
+_EMHASS_DIR = pathlib.Path(__file__).resolve().parent
+SETTINGS_REFUSED = (
+    "The run's settings could not be used: a value has the wrong type or shape; see the log"
+)
+
+
+def error_place(exc: BaseException) -> str:
+    """The text ``" at <file>:<line>"`` for the last place in EMHASS ``exc`` passed (the
+    last frame of its traceback when none is in EMHASS), or "" when it has no traceback."""
+    where = traceback.extract_tb(exc.__traceback__)
+    ours = [frame for frame in where if _EMHASS_DIR in pathlib.Path(frame.filename).parents]
+    frame = (ours or where)[-1] if where else None
+    return f" at {pathlib.Path(frame.filename).name}:{frame.lineno}" if frame else ""
+
+
+def _settings_refused(exc: BaseException, logger: logging.Logger) -> utils.RuntimeParamError:
+    """The fixed RuntimeParamError for ``exc``. The error line names its type and the
+    last place in EMHASS it passed, never its text: that can quote the value, and the dry
+    run returns the warnings and errors it logs. The text of a utils.SettingsError, which
+    names settings and counts only, is logged as it is. The whole error, with its
+    traceback, is logged at DEBUG level, which the dry run does not return."""
+    place = error_place(exc)
+    if isinstance(exc, utils.SettingsError):
+        logger.error("The run's settings could not be used (%s%s): %s", "SettingsError", place, exc)
+    else:
+        logger.error("The run's settings could not be used (%s%s)", type(exc).__name__, place)
+    logger.debug("The run's settings could not be used, the error in full:", exc_info=exc)
+    return utils.RuntimeParamError(SETTINGS_REFUSED)
+
+
+def _built(logger: logging.Logger, build, *args, **kwargs):
+    """``build(*args, **kwargs)``: the run's Forecast, its Optimization or the cache
+    lookup that hashes its settings. A value of the wrong type or shape they meet is
+    answered as treat_runtimeparams answers it (_settings_refused)."""
+    try:
+        return build(*args, **kwargs)
+    except (utils.RuntimeParamError, *_OWN_ANSWER_ERRORS):
+        raise
+    except _SHAPE_ERRORS as exc:
+        raise _settings_refused(exc, logger) from None
 
 
 async def set_input_data_dict(
@@ -2654,6 +2708,13 @@ async def _set_input_data_dict(
         # The fraction-vs-percentage, inverter and battery count errors are already
         # logged. Stop before the solver.
         return False
+    except utils.RuntimeParamError:
+        raise
+    except _SHAPE_ERRORS as exc:
+        # A value of the wrong type or shape (a def_load_config entry that is not an
+        # object, a soc_init that is not a number, a forecast mapping with a key that is
+        # not a time...) fails deep in the parsing: a 400 with a fixed text, not a 500.
+        raise _settings_refused(exc, logger) from None
     log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
         params = dict(orjson.loads(params))
@@ -2708,7 +2769,9 @@ async def _set_input_data_dict(
         (params.get("passed_data") or {}).pop("forecast_start", None)
         logger.debug(f"Skipping Optimization creation for action: {set_type}")
     else:
-        fcst = Forecast(
+        fcst = _built(
+            logger,
+            Forecast,
             retrieve_hass_conf,
             optim_conf,
             plant_conf,
@@ -2727,7 +2790,9 @@ async def _set_input_data_dict(
             # live solve would then warm-start from, and carry thermal state
             # from, the dry run - and storing would evict the live problem.
             # The price is a cold start for the dry run, nothing else.
-            opt = Optimization(
+            opt = _built(
+                logger,
+                Optimization,
                 retrieve_hass_conf,
                 optim_conf,
                 plant_conf,
@@ -2755,8 +2820,15 @@ async def _set_input_data_dict(
             # these like thermal_battery to restore warm-starting.)
             use_optim_cache = not optim_conf.get("shared_thermal_tanks")
             opt = (
-                OptimizationCache.get(
-                    optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                _built(
+                    logger,
+                    OptimizationCache.get,
+                    optim_conf,
+                    plant_conf,
+                    costfun,
+                    retrieve_hass_conf,
+                    logger,
+                    _num_ts,
                 )
                 if use_optim_cache
                 else None
@@ -2768,7 +2840,9 @@ async def _set_input_data_dict(
                         "OptimizationCache bypassed: shared_thermal_tanks present; "
                         "rebuilding so MPC tank-temperature feedback is honored (#970)"
                     )
-                opt = Optimization(
+                opt = _built(
+                    logger,
+                    Optimization,
                     retrieve_hass_conf,
                     optim_conf,
                     plant_conf,
@@ -2796,6 +2870,7 @@ async def _set_input_data_dict(
                                 "fcst": fcst,
                                 "optim_conf": optim_conf,
                                 "plant_conf": plant_conf,
+                                "retrieve_hass_conf": retrieve_hass_conf,
                             },
                             logger,
                         )
@@ -2806,6 +2881,7 @@ async def _set_input_data_dict(
                             "fcst": fcst,
                             "optim_conf": optim_conf,
                             "plant_conf": plant_conf,
+                            "retrieve_hass_conf": retrieve_hass_conf,
                         },
                         logger,
                     )
@@ -3645,6 +3721,21 @@ async def pv_bias_calibration(runtimeparams: str | dict | None, logger: logging.
 
     if not isinstance(payload, dict):
         raise ValueError("pv-bias-calibration payload must be a JSON object")
+    # This action does not go through treat_runtimeparams: its own bounds are here.
+    faults = utils.bounded_value_faults(payload)
+    if faults:
+        raise utils.RuntimeParamError(faults[0])
+    payload = {**payload, **utils.bounded_value_forms(payload)}
+    for key in ("p10", "p50", "actual", "curtailed"):
+        if isinstance(payload.get(key), list) and len(payload[key]) > utils.MAX_PV_BIAS_ROWS:
+            raise utils.RuntimeParamError(
+                f"{key} must have at most {utils.MAX_PV_BIAS_ROWS} entries"
+            )
+        # A list of lists would pass the row count with any number of values
+        if isinstance(payload.get(key), list) and any(
+            isinstance(entry, list | dict) for entry in payload[key]
+        ):
+            raise utils.RuntimeParamError(f"{key} must be a list of numbers, not of lists")
 
     missing = [key for key in ("p10", "p50", "actual") if key not in payload]
     if missing:

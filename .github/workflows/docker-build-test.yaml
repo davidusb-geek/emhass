@@ -12,8 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      security-events: write
       contents: read
     strategy:
       fail-fast: false
@@ -25,14 +23,14 @@ jobs:
           ]
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: ${{ matrix.platform.buildx }}
@@ -42,6 +40,55 @@ jobs:
           load: true
       - name: Test Image #Assume Docker fail with FileNotFound secrets_emhass.yaml error
         run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      - name: Test image starts without network access
+        run: |
+          docker run -d --name emhass-offline --network none ${{ steps.build.outputs.imageid }}
+          # Any HTTP answer means the server is up: /healthz returns 503 until a first optimization has run.
+          # Up to 90 tries 5 s apart, as the aarch64 image runs under QEMU.
+          start=$SECONDS
+          for _ in $(seq 1 90); do
+            if status=$(docker exec emhass-offline python -c "import http.client; c = http.client.HTTPConnection('127.0.0.1', 5000, timeout=5); c.request('GET', '/healthz'); print(c.getresponse().status)" 2>/dev/null); then
+              echo "EMHASS answered /healthz (HTTP $status) after $((SECONDS - start)) s with no network access"
+              docker rm -f emhass-offline
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' emhass-offline)" != "true" ]; then
+              echo "Container exited before serving"
+              break
+            fi
+            sleep 5
+          done
+          docker logs emhass-offline
+          docker rm -f emhass-offline
+          exit 1
+      - name: Test image starts as a non-root user
+        run: |
+          docker run -d --name emhass-nonroot --user 1000:0 --network none ${{ steps.build.outputs.imageid }}
+          # As above, any HTTP answer from /healthz means the server is up
+          start=$SECONDS
+          for _ in $(seq 1 90); do
+            if status=$(docker exec emhass-nonroot python -c "import http.client; c = http.client.HTTPConnection('127.0.0.1', 5000, timeout=5); c.request('GET', '/healthz'); print(c.getresponse().status)" 2>/dev/null); then
+              echo "EMHASS answered /healthz (HTTP $status) after $((SECONDS - start)) s as $(docker exec emhass-nonroot id)"
+              # The first start copies the default data files into /data as this user
+              if docker exec emhass-nonroot ls -ln /data/opt_res_latest.csv /data/long_train_data.pkl \
+                && docker exec emhass-nonroot test -O /data/opt_res_latest.csv -a -O /data/long_train_data.pkl \
+                && docker exec emhass-nonroot sh -c 'touch /share/.write-test /share/emhass/.write-test && rm /share/.write-test /share/emhass/.write-test' \
+                && ! docker logs emhass-nonroot 2>&1 | grep "Permission denied"; then
+                docker rm -f emhass-nonroot
+                exit 0
+              fi
+              echo "The default data files are missing from /data, /share is not writable, or the log has a permission error"
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' emhass-nonroot)" != "true" ]; then
+              echo "Container exited before serving"
+              break
+            fi
+            sleep 5
+          done
+          docker logs emhass-nonroot
+          docker rm -f emhass-nonroot
+          exit 1
       # Google OSV-Scanner
       # Extract Debian and Python packadge list stored in Image
       - name: Export Debian package list
@@ -49,7 +96,7 @@ jobs:
       - name: Export Python package list
         run: docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
       - name: Upload package list as digest
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ matrix.platform.target_arch }}-packages
           path: ./OSV/*
@@ -68,7 +115,7 @@ jobs:
             { target_arch: aarch64 }
           ]
     # Check Docker image debian and python packages list for known vulnerabilities
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2" # v2.3.0
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"

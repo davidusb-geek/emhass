@@ -4,12 +4,15 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   notify-addon:
     runs-on: ubuntu-latest
     steps:
       - name: Send repository_dispatch to emhass-add-on
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
         with:
           token: ${{ secrets.ADDON_REPO_PAT }}
           repository: davidusb-geek/emhass-add-on

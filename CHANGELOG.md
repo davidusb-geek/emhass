@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.19.0 - 2026-11-25
+
+Version 0.19.0 is a major release featuring a **modernized Web UI**, **native federated multi-site optimization**, and important **security hardening** improvements:
+
+- **Modernized Web UI**: A complete overhaul of the dashboard, action views, and configuration pages for a cleaner, more responsive experience. Also hopefully easier for new users on-boarding.
+- **Federated Coordinator & Participant API**: Native Dantzig-Wolfe coordinated optimization (`optimization_backend: dantzig_wolfe`), remote solver support, and the Participant API—complete with Home Assistant add-on secret configuration for multi-site deployments.
+- **Security Hardening**: Overal improve of code security and addressed SonarQube Cloud findings. Check the [published advisories](https://github.com/davidusb-geek/emhass/security/advisories) for mode detail.
+
+Many thanks to all contributors! Special mention to @ameetdesh, @LesIT1 and @MMicieli for the huge amount of work to make this possible!
+
+### Improvement
+- test: isolate ML DST recorder state between tests (Stage 4D-1) (@MMicieli)
+- test: replace the pickled HTTP response fixtures with JSON bodies (@LesIT1)
+- feat: Participant API: its secrets from the Home Assistant add-on's options (@ameetdesh)
+- feat: soft soc_floor with hold and battery_discharge_availability for naive-mpc-optim (#1348) (@LesIT1)
+- feat: extend deferrable_load_groups to batteries, weights, per-step limits and overlapping budgets (#1366) (@LesIT1)
+- test: Stage 4C-2 tighten exception-test assertions (S5778, S8714) (@MMicieli)
+- test: Stage 4C-1 — improve assertion clarity and specificity (@MMicieli)
+- test: Stage 4B (S8997) — isolate shared test state and fixtures (@MMicieli)
+- test: Stage 4A clarify NaN and cache-key stability assertions (@MMicieli)
+- feat: EMHASS webui modernization (@davidusb-geek)
+- test(forecast): cover #1287 Copenhagen Open-Meteo PV publishing across DST (@MMicieli)
+- feat: Remote solvers and the participant API, native (stacked on #1362) (@ameetdesh)
+- feat: hold short battery sensor silences at the last recorded state (#1073) (@LesIT1)
+- ci: parallelize isolated DST coverage tests (Stage 3D) (@MMicieli)
+- feat: Coordinated backend, native (optimization_backend: dantzig_wolfe) (@ameetdesh)
+
+### Documentation
+- docs: note that a hybrid inverter treats the PV forecast as DC (#1350) (@LesIT1)
+
+### Fix
+- fix: honour ssl_no_verify, log the listen address in use, match site names whole (@LesIT1)
+- fix(docker): let the container start without network access (@LesIT1)
+- Fix Docker run command --rm and --restart can be together in a run co… (@pgroene)
+- fix: Remove '--rm' flag from Docker run command (@pgroene)
+- fix: plan from the battery target when the SoC sensor cannot be asked (@draarivpatel-ui)
+- fix: log the runtime parameters as JSON (#468) (@kirill-morozov-n)
+- fix: use a reserved .invalid name for the example hass_url (@LesIT1)
+- fix: put every REST history day on one epoch-anchored grid (#1381) (@LesIT1)
+- fix: publish to one /api/states/ on a Core URL without a trailing slash (@LesIT1)
+- fix: use one Supervisor URL check on every REST path (#1403) (@LesIT1)
+- fix: align Open-Meteo weather and covariates by timestamp (#1353) (@MMicieli)
+- fix: keep websocket statistics gaps for battery identification only (#1360) (@LesIT1)
+- fix: count charge efficiency in the soc_target reach check (@LesIT1)
+- fix: stop serving a retained near-ceiling battery_id estimate after an agreement hold (#1294) (@LesIT1)
+- fix: read EMHASS_KEY for long-lived token (@anubhavlal07)
+- fix: sanitise dry-run API error logs (CWE-117) (@MMicieli)
+- fix: Addressing SonarQube Cloud issues (@davidusb-geek)
+- fix(security): remove configuration UI DOM-XSS sinks (@MMicieli)
+- fix(config UI): render parameter definition metadata as text (@MMicieli)
+- fix: honor max_thermal_power on a thermal_battery load, and let supply_temperature follow a per-step profile (@pawelmaliczak)
+- fix: do not warm-start HiGHS on an OptimizationCache hit (#1364) (@mathiasi)
+
 ## 0.18.11 - 2026-11-18
 ### Fix
 - Fix Home Assistant add-on ingress port (8099) and expose `emhass_api_token` configuration option
