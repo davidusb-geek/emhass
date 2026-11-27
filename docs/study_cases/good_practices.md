@@ -57,6 +57,8 @@ The two SOC parameters behave differently across optimization actions, so it pay
 
 `soc_final` is a strongly penalised **soft** target, not a guarantee: a run can be `Optimal` and still end away from it.
 
+(practical-recipes-for-rolling-mpc)=
+
 ### Terminal targets in rolling MPC
 
 Each run applies `soc_final` at the end of its own horizon. With a fixed `prediction_horizon` that end moves forward at every run, but the target is still part of every solve and can change the plan, including its first step. These choices ask for different things and are not equivalent:
