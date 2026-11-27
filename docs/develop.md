@@ -415,22 +415,29 @@ The check is not required for every pull request, because fork pull requests can
 
 #### Maintainer verification of a fork pull request
 
-A maintainer can analyse a fork contribution by opening a temporary pull request from a branch in this repository. **This runs the contributor's code with this repository's credentials and write permissions.** Use it only for a contribution that you have reviewed and explicitly accepted as trusted, including all code that will be executed and every dependency it adds or changes. **Human review is not technical isolation.** It can miss things, and it does not cover what dependencies and build tools download and execute, so credentials can still be exposed. If in doubt, leave the pull request unanalysed.
+A maintainer can analyse a fork contribution by opening a temporary pull request from a branch in this repository. **This runs the contributor's code with this repository's credentials.** Use it only when a maintainer responsible for those credentials has explicitly decided to trust the contribution and authorised running it, after reviewing all code that will be executed and every dependency it adds or changes. A quick or partial review is not enough. **Review does not isolate credentials.** It can miss things, and it does not cover what dependencies and build tools download and execute, so credentials can still be exposed. If trust cannot be established, do not use this procedure: the Sonar result for that pull request stays unavailable.
 
-Opening that pull request to `master` starts these workflows. The table lists secrets and write access, not read access:
+Opening that pull request to `master` starts these workflows. `Check CEC databases` sets its permissions for the whole workflow; the others set them per job. The table lists repository secrets and write permissions, not read permissions:
 
-| Workflow and job | Use of contributor files | Exposed |
-| --- | --- | --- |
-| `CodeCov`: `run` | Installs the project and runs the tests | `SONAR_TOKEN`, `CODECOV_TOKEN`, write access to security results |
-| `Code Quality Scan`: `build` | Installs the project | `SOURCERY_TOKEN`, write access to packages and attestations, OIDC token requests |
-| `Code Quality Scan`: `scan-pr` | Dependency scan | Write access to security results |
-| `Python test`: `build` | Installs the project and runs the tests on Linux, macOS and Windows | Write access to security results |
-| `Python test`: `scan-pr` | Dependency scan | Write access to security results |
-| `Test Building Docker Image`: `build` | Builds and runs the image | Write access to security results |
-| `Test Building Docker Image`: `osv-scan` | Scans the package lists from the build | Write access to security results |
-| `CodeQL`: `analyze` | Static analysis | Write access to security results |
+| Workflow and job | Use of contributor files | Secrets | Write permissions |
+| --- | --- | --- | --- |
+| `CodeCov`: `run` | Installs the project and runs the tests | `SONAR_TOKEN`, `CODECOV_TOKEN` | None |
+| `Code Quality Scan`: `build` | Runs a code review action and installs the project | `SOURCERY_TOKEN` | None |
+| `Code Quality Scan`: `scan-pr` | Dependency scan | None | Security results |
+| `Python test`: `build` | Installs the project and runs the tests on Linux, macOS and Windows | None | None |
+| `Python test`: `scan-pr` | Dependency scan | None | Security results |
+| `Test Building Docker Image`: `build` | Builds and runs the image | None | None |
+| `Test Building Docker Image`: `osv-scan` | Scans the package lists from the build | None | Security results |
+| `CodeQL`: `analyze` | Static analysis | None | Security results |
+| `Check CEC databases`: `check` (only if the pull request changes a file in its path filter) | Runs the database build script, with package versions named in the pull request | None | None |
 
-Treat every credential in a job as available to any code that runs in it, including code that runs before the step that uses the credential. That includes the job's `GITHUB_TOKEN`, which `actions/checkout` by default keeps available to later steps. Package and attestation write access together can allow container images to be published and attested. If `.github/` differs from `master`, workflows can change, and can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check published packages, attestations and security alerts. Do not run any workflow manually on the temporary branch, because the publishing workflows could publish its code.
+Treat every secret and token in a job as available to any code that runs in it, including code that runs before the step that uses it:
+
+- **Checkout:** `actions/checkout` by default keeps the job's `GITHUB_TOKEN` available to later steps.
+- **Dependencies:** installing, testing and building download and execute third-party code. the `uv.lock` you reviewed does not fix everything that runs. `Python test` installs with `--upgrade`, `uv sync` re-resolves a lock file that is out of date, and `CodeCov` and `Code Quality Scan` also install tools that are not in the lock file.
+- **Caches:** jobs can restore caches saved from `master`. GitHub limits a cache saved by a pull request run to that pull request.
+
+If `.github/` differs from `master`, the table no longer holds, and changed workflows can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check security alerts and workflow runs. Do not run any workflow manually on the temporary branch, because the publishing workflows could publish its code.
 
 In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhass`.
 
@@ -444,13 +451,13 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    git fetch --no-tags upstream refs/pull/<number>/head &&
    head=$(git rev-parse --verify 'FETCH_HEAD^{commit}') &&
    test "$head" = <reviewed-head-sha> &&
-   git diff --exit-code "$base" "$head" -- .github/ &&
+   git diff --no-ext-diff --no-textconv --exit-code "$base" "$head" -- ':(top).github/' &&
    verified=$head verified_base=$base &&
    echo "OK head=$head base=$base"
    ```
 
-   It stops if a fetch fails, if the pull request head is not the one you reviewed, or if `.github/` differs from current `master` (which also happens when the branch is simply out of date).
-3. In the same shell, run the following. It fetches again and pushes the reviewed commit only if step 2 succeeded and neither `master` nor the pull request head has changed since. `<attempt>` is a number you have not used before for this pull request.
+   It stops if a fetch fails, if the pull request head is not the one you reviewed, or if `.github/` differs from current `master` (which also happens when `master` changed `.github/` after the branch was created).
+3. In the same shell, run the following. It fetches again and pushes the reviewed commit only if step 2 succeeded and neither `master` nor the pull request head has changed since. `<n>` is a number you have not used before for this pull request.
 
    ```bash
    test -n "$verified" &&
@@ -458,12 +465,18 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$verified_base" &&
    git fetch --no-tags upstream refs/pull/<number>/head &&
    test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$verified" &&
-   git push upstream "$verified:refs/heads/verify/pr-<number>-<attempt>"
+   git push upstream "$verified:refs/heads/verify/pr-<number>-<n>"
    ```
 
    If it does not push, start again from step 1. The check narrows the window but cannot close it: `master` or the pull request can still change after the check and before the workflows run.
 4. Open a draft pull request from that branch to `master`, titled so that it is clearly not for merging.
-5. Wait for the `CodeCov` job and note its run and attempt number. In the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit is what was checked out and scanned. `<head-sha>` must be the head you reviewed and `<base-sha>` the base printed in step 2. Otherwise the result is unverified, although the code has already run.
+5. Wait for the `CodeCov` job and note its run ID and attempt number. Check GitHub's own record of that run:
+
+   ```bash
+   gh run view <run-id> --repo davidusb-geek/emhass --attempt <attempt> --json event,headBranch,headSha,attempt
+   ```
+
+   `event` must be `pull_request`, `headBranch` the temporary branch and `headSha` the reviewed head SHA. Then, in the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit is what was checked out and scanned. `<head-sha>` must be the head you reviewed and `<base-sha>` the base printed in step 2. Otherwise the result is unverified, although the code has already run.
 6. In the log of the `SonarQube Scan` step of that same run and attempt, confirm all of the following:
    - the scanner configured itself for the temporary pull request's number;
    - `SCM revision ID` is the reviewed head SHA, not the merge SHA;
