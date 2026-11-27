@@ -49,20 +49,28 @@ If your downstream automation or display does need a different convention (e.g. 
 
 ## 4. `soc_init` and `soc_final` runtime semantics
 
-The two SOC parameters behave differently across optimization actions, so it pays to know exactly what EMHASS does with each.
+The two SOC parameters behave differently across optimization actions, so it pays to know exactly what EMHASS does with each. The defaults, the clamping and how binding each SOC input is are listed in [Battery SOC inputs](../passing_data.md#battery-soc-inputs-defaults-and-how-binding-they-are). In short:
 
-**`naive-mpc-optim`** reads `soc_init` and `soc_final` from `runtimeparams` independently. If one is missing, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that value alone; it does **not** mirror the passed value onto the missing one. So passing only `soc_init = 0.45` yields `soc_init = 0.45, soc_final = 0.6`, which still imposes a terminal-SOC constraint at every solve. Always pass both explicitly.
+- **`naive-mpc-optim`** resolves `soc_init` and `soc_final` independently. An omitted one is `battery_target_state_of_charge` (default `0.6`); it does **not** copy the other. Passing only `soc_init = 0.45` therefore still asks the plan to end at `0.6`.
+- **`dayahead-optim`** copies the one you pass onto the one you omit. If you pass neither, both are `battery_target_state_of_charge`.
+- **`perfect-optim`** does not apply either runtime value: it uses `battery_target_state_of_charge` for both.
 
-**`dayahead-optim`** also reads `soc_init` and `soc_final` from `runtimeparams`, with different defaults: if you pass only one of them, the other takes the same value, and if you pass neither, both are `battery_target_state_of_charge`.
+`soc_final` is a strongly penalised **soft** target, not a guarantee: a run can be `Optimal` and still end away from it.
 
-### Practical recipes for rolling MPC
+### Terminal targets in rolling MPC
 
-Two patterns work well in production. Both pass *both* values explicitly per MPC call, just with different `soc_final`:
+Each run applies `soc_final` at the end of its own horizon. With a fixed `prediction_horizon` that end moves forward at every run, but the target is still part of every solve and can change the plan, including its first step. These choices ask for different things and are not equivalent:
 
-- **`soc_final = soc_init`** (pass current measured SOC for both). The trailing-edge constraint becomes neutral: the battery's end-of-horizon SOC is allowed to land wherever it started, so the optimizer is free to use it inside the horizon. Good for systems with no hard end-of-day target.
-- **`soc_final = 0`** (or `battery_minimum_state_of_charge` if you prefer to stay above the floor). With a 48-step (24 h) rolling horizon and re-runs every 30 min, the deadline at step 48 is always 24 h ahead. Each run replaces the schedule before that deadline ever arrives, so the trailing target is never actually reached. In practice the optimizer behaves the same as the neutral-edge case, just expressed differently. Useful when your runtime layer wants a single static `soc_final` value rather than tracking the live sensor.
+| `soc_final` | What each run is asked to do |
+|-------------|------------------------------|
+| omitted | end at `battery_target_state_of_charge` |
+| the current SOC (same value as `soc_init`) | end where this run started, so the target moves with the measured SOC; a value outside the SOC bounds is moved to the nearer bound |
+| `0` | in `naive-mpc-optim`, `0` is raised to `battery_minimum_state_of_charge`, so end at the minimum; by default ending above it is penalised too |
+| another value | end at that level, within the SOC bounds |
 
-If you do have a real end-of-horizon deadline (for example "must be at 60% before tomorrow 06:00 to absorb morning PV"), pass that target as `soc_final` and extend `prediction_horizon` so the deadline sits at the actual point in time, not at the trailing edge of a fixed 24 h window.
+Which one suits you depends on what the energy left at the end of the horizon is for. Compare the resulting plans with your own forecasts.
+
+If you need a level at a particular time rather than at the end of the horizon, use `soc_target` with `soc_target_timestep` (`naive-mpc-optim` only), a hard minimum at that step: see [Requiring an intermediate battery SOC target](../passing_data.md#requiring-an-intermediate-battery-soc-target-naive-mpc-optim). The index counts from the first step of each run, so recompute it every run (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)). To keep a reserve over a stretch of the horizon, see [`soc_floor`](../passing_data.md#holding-a-soc-reserve-over-part-of-the-horizon-naive-mpc-optim).
 
 In `naive-mpc-optim`, a measured `soc_init` below `battery_minimum_state_of_charge` or above `battery_maximum_state_of_charge` is kept as the starting state, and the plan brings the battery back inside the bounds. See Section 5 below (item 4) for when that cannot be done.
 

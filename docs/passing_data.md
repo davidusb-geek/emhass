@@ -136,10 +136,10 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
 
 | Parameter | Type | Default | Description / Usage |
 | --- | --- | --- | --- |
-| **`soc_init`** | Float or List | Configured default | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. |
-| **`soc_final`** | Float or List | Configured default | Desired final State of Charge target at the end of the optimization window (`[0, 1]` fraction). |
-| **`soc_target`** | Float or List | None | Desired minimum battery SOC target as a fraction in `[0, 1]`. |
-| **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep index by which `soc_target` must be achieved. |
+| **`soc_init`** | Float or List | Depends on the action | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. See [Battery SOC inputs](#battery-soc-inputs-defaults-and-how-binding-they-are). |
+| **`soc_final`** | Float or List | Depends on the action | Soft SOC target at the end of the optimization window (`[0, 1]` fraction). The plan can miss it. |
+| **`soc_target`** | Float or List | None | Hard minimum SOC at one timestep, as a fraction in `[0, 1]` (`naive-mpc-optim` only). |
+| **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep at whose end `soc_target` must be met (`naive-mpc-optim` only). |
 | **`battery_availability`** | Float, List, or Nested Structure | `null` (Always available) | Per-battery availability flag/fraction in `[0, 1]` per timestep. Scales max charge/discharge limits (`1` = full power, `0` = disconnected/frozen SOC; ideal for EV modeling). |
 | **`battery_discharge_energy_max`** | Float or List | `null` (No cap) | Maximum energy (Wh, battery side) the battery may deliver over the horizon (for V2G warranties or cycle limits). |
 | **`battery_discharge_availability`** | Float, List, or Nested Structure | `null` (No cap) | Per-battery fraction in `[0, 1]` per timestep that scales only the discharge power limit (`0` = may not discharge, charging still allowed). Same shape as `battery_availability` and multiplied with it. |
@@ -303,7 +303,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `battery_maximum_state_of_charge` the maximum possible SOC.
 
-- `battery_target_state_of_charge` for the desired target value of the initial and final SOC.
+- `battery_target_state_of_charge` for the SOC used when `soc_init` or `soc_final` is not given (see [Battery SOC inputs](#battery-soc-inputs-defaults-and-how-binding-they-are)).
 
 - `battery_discharge_power_max` for the maximum battery discharge power.
 
@@ -313,24 +313,46 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Used by `naive-mpc-optim` and `dayahead-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
+### Battery SOC inputs: defaults and how binding they are
+
+The value used for an omitted `soc_init` or `soc_final` depends on the action. `battery_target_state_of_charge` defaults to `0.6`.
+
+| Action | `soc_init` when omitted | `soc_final` when omitted |
+|--------|-------------------------|--------------------------|
+| `naive-mpc-optim` | `battery_target_state_of_charge` | `battery_target_state_of_charge` |
+| `dayahead-optim` | `soc_final` if given, otherwise `battery_target_state_of_charge` | `soc_init` if given, otherwise `battery_target_state_of_charge` |
+| `perfect-optim` | always `battery_target_state_of_charge` | always `battery_target_state_of_charge` |
+
+`perfect-optim` does not apply runtime `soc_init` or `soc_final`: each of its optimization windows starts at `battery_target_state_of_charge` and targets it at the end. `soc_target`, `soc_target_timestep` and `soc_floor` are applied only by `naive-mpc-optim`.
+
+The value used can differ from the one you sent. `naive-mpc-optim` keeps a `soc_init` outside `battery_minimum_state_of_charge` and `battery_maximum_state_of_charge` as the real starting state, but moves a `soc_final` outside them to the nearer bound, and logs a warning for each. `dayahead-optim` rewrites neither value; the bounds still apply to the plan, so it misses a `soc_final` outside them.
+
+The three SOC requests are not equally binding:
+
+- `soc_final` is a **soft** target for the SOC at the end of the horizon. Missing it carries a high penalty (for a shortfall, 100 times the largest import price in the horizon, per kWh), but the plan can still miss it, for example when the charge power or the horizon is too small. `optim_status` stays `Optimal` and a miss on its own logs no warning, so check the last `SOC_opt` value. Ending above the target is penalised too, unless `battery_soc_final_reward_factor` is above `0`, which rewards a surplus instead.
+- `soc_target` is a **hard** minimum at the end of one step. If it cannot be met, the run is infeasible. See [the next section](#requiring-an-intermediate-battery-soc-target-naive-mpc-optim).
+- `soc_floor` is a **soft** minimum over a stretch of steps. A run that starts under it holds the battery rather than forcing a recharge. See [Holding a SOC reserve](#holding-a-soc-reserve-over-part-of-the-horizon-naive-mpc-optim).
+
+These describe the plan. Whether the battery follows it depends on your hardware and automations.
+
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
-By default the battery SOC is only pinned at the start (`soc_init`) and end (`soc_final`) of the horizon, leaving the optimizer free to choose the trajectory in between. Sometimes you want to *guarantee* the battery reaches a given charge level **partway through** the horizon — for example, "make sure the battery is full by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
+By default the plan starts at `soc_init` and aims to end at `soc_final` (a soft target), and the optimizer is free to choose the trajectory in between, within the SOC bounds. Sometimes you want to *require* the plan to reach a given charge level **partway through** the horizon — for example, "have the battery charged by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
 
 Two optional runtime keys (only used by `naive-mpc-optim`) make this possible:
 
 - `soc_target`: the desired *minimum* SOC as a fraction in `[0, 1]` (NOT percent). It is clamped to `[battery_minimum_state_of_charge, battery_maximum_state_of_charge]`.
-- `soc_target_timestep`: the 0-based horizon timestep by which `soc_target` must be reached. After this step the battery is free to discharge again. Defaults to the last timestep if `soc_target` is given without it.
+- `soc_target_timestep`: the 0-based horizon timestep at whose end the SOC must be at least `soc_target` (index `0` is the first row of the plan). The target applies to that step only, so afterwards the battery is free to discharge again. Defaults to the last timestep if `soc_target` is given without it.
 
 Both default to *unset* (`None`), in which case nothing changes — the constraint is a no-op and existing behaviour is preserved. The target is a one-sided constraint (`SOC >= soc_target` at that step), so it never forces the battery to discharge.
 
-For example, the following runtime payload tells EMHASS that the battery must reach 100% SOC by horizon step index 14 (the SoC after that step, ~7.5 h into a 30-min-step horizon), while still letting it discharge in the steps after that:
+For example, the following runtime payload tells EMHASS that the planned SOC must be at least 90% (the default `battery_maximum_state_of_charge`) at the end of horizon step index 14 (~7.5 h into a 30-min-step horizon), while still letting the battery discharge in the steps after that. `soc_final` is omitted, so it is `battery_target_state_of_charge`:
 
 ```json
 {
   "prediction_horizon": 48,
   "soc_init": 0.30,
-  "soc_target": 1.0,
+  "soc_target": 0.9,
   "soc_target_timestep": 14
 }
 ```
@@ -349,13 +371,13 @@ rest_command:
       {
         "prediction_horizon": 48,
         "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
-        "soc_target": 1.0,
+        "soc_target": 0.9,
         "soc_target_timestep": 14
       }
 ```
 
 ```{warning}
-The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max`, `battery_charge_efficiency`, `battery_availability`, `battery_charge_power_derating` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
+The target must be *reachable* by its timestep. If it is not, the run is **infeasible**: the target is a hard constraint and is not relaxed. EMHASS logs a warning when `soc_init`, `battery_charge_power_max`, `battery_charge_efficiency`, `battery_availability`, `battery_charge_power_derating` and the optimization time step show the target is out of reach; that estimate does not cover site limits such as the available grid and PV power. Size `soc_target` / `soc_target_timestep` to what your system allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Because `soc_final` is soft, a high target that cannot be discharged back down to `soc_final` afterwards (for example low load with the default `set_nodischarge_to_grid: true`) does not by itself make the run infeasible: the plan ends above `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
 ```
 
 ### Holding a SOC reserve over part of the horizon (naive-mpc-optim)

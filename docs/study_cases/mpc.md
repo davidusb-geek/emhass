@@ -53,13 +53,13 @@ In addition to the parameters from [Basic — PV + Battery](basic_pv_battery.md)
 |-------------|-------|
 | `prediction_horizon` | number of timesteps to plan ahead |
 | `soc_init` | current battery SOC, fraction of nominal capacity (read from your battery sensor) |
-| `soc_final` | end-of-horizon SOC target (see note below) |
+| `soc_final` | soft end-of-horizon SOC target (see note below) |
 | `def_total_hours` | remaining required operating hours per deferrable load |
 
 For the full list of runtime keys, see [Passing data](../passing_data.md).
 
 ```{note}
-`soc_init` and `soc_final` are read from `runtimeparams` independently. If one is omitted, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that single value; it does **not** mirror the passed value onto the missing one. Always pass both explicitly. Two production-tested rolling-MPC patterns: `soc_final = soc_init` (current SOC for both, neutral trailing edge) or `soc_final = 0` (with a 24 h horizon re-run every 30 min, the deadline is always 24 h away and never reached, so this behaves the same in practice). For a hard end-of-horizon target, pass that value and extend `prediction_horizon` so the deadline sits at the real point in time.
+In `naive-mpc-optim`, `soc_init` and `soc_final` are resolved independently. If one is omitted, EMHASS uses `battery_target_state_of_charge` (default `0.6`) for that value only; it does **not** copy the other. Send the measured `soc_init`; omit `soc_final` only if you want the configured target. `soc_final` is a soft target, so a plan can end away from it. Ending at the current SOC, at the minimum (`soc_final = 0` is raised to it) and at the configured target are different requests: see [Terminal targets in rolling MPC](good_practices.md#terminal-targets-in-rolling-mpc). For defaults per action, `soc_target` and `soc_floor`, see [Battery SOC inputs](../passing_data.md#battery-soc-inputs-defaults-and-how-binding-they-are).
 ```
 
 ## Run
@@ -86,7 +86,7 @@ rest_command:
       }
 ```
 
-(`soc_final` is intentionally omitted; see the note above. Adjust the literal `48` if your `optimization_time_step` is not 30 minutes.)
+(`soc_final` is omitted here, so each run targets `battery_target_state_of_charge` at the end of its horizon; see the note above. Adjust the literal `48` if your `optimization_time_step` is not 30 minutes.)
 
 Trigger it every 30 minutes:
 
@@ -105,7 +105,7 @@ For the matching `shell_command.emhass_publish_data`, see [Automations](../autom
 
 ## Output
 
-After each MPC run, EMHASS publishes the same sensors as `dayahead-optim` (`sensor.p_deferrable0`, `sensor.soc_optim`, etc.), but the schedule covering the prediction horizon replaces the previous one. Your HA automations follow the current state of `sensor.p_deferrable*` to switch real loads on/off; they don't care whether the underlying schedule came from `dayahead-optim` or `naive-mpc-optim`.
+After each MPC run, `publish-data` publishes the same sensors as after `dayahead-optim` (`sensor.p_deferrable0`, `sensor.soc_batt_forecast` with one battery, `sensor.soc_batt_forecast_battery{k}` with several, etc.), but the schedule covering the prediction horizon replaces the previous one. Your HA automations follow the current state of `sensor.p_deferrable*` to switch real loads on/off; they don't care whether the underlying schedule came from `dayahead-optim` or `naive-mpc-optim`.
 
 The first optimization step of each run is set by `method_ts_round`. `nearest` (default) rounds on the UTC timeline and the result is then shown in the configured time zone, so the local clock time of the first step depends on the zone's UTC offset. The examples assume a zone whose UTC offset is a whole number of optimization steps, such as Australia/Sydney with a 30-minute step: a run at 12:20 plans from 12:30 with `nearest`, and from 12:00 with `first`. In a fractional-offset zone such as Asia/Kathmandu (+05:45) the same 12:20 run plans from 12:15 with `nearest`; `first` and `last` stay on the local clock (12:00 and 12:30). Plain price lists, `end_timesteps_of_each_deferrable_load` and other step-indexed inputs start at that first step, so set `method_ts_round` to `first` when you build them from your own clock, or send timestamped mappings (see [Step indices and other positional inputs](../passing_data.md#step-indices-and-other-positional-inputs)).
 
