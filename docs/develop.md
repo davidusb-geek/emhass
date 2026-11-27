@@ -434,7 +434,7 @@ Opening that pull request to `master` starts these workflows. `Check CEC databas
 Treat every secret and token in a job as available to any code that runs in it, including code that runs before the step that uses it:
 
 - **Checkout:** `actions/checkout` by default keeps the job's `GITHUB_TOKEN` available to later steps.
-- **Dependencies:** installing, testing and building download and execute third-party code. the `uv.lock` you reviewed does not fix everything that runs. `Python test` installs with `--upgrade`, `uv sync` re-resolves a lock file that is out of date, and `CodeCov` and `Code Quality Scan` also install tools that are not in the lock file.
+- **Dependencies:** installing, testing and building download and execute third-party code. The `uv.lock` you reviewed does not fix everything that runs. `Python test` installs with `--upgrade`, `uv sync` re-resolves a lock file that is out of date, and `CodeCov` and `Code Quality Scan` also install tools that are not in the lock file.
 - **Caches:** jobs can restore caches saved from `master`. GitHub limits a cache saved by a pull request run to that pull request.
 
 If `.github/` differs from `master`, the table no longer holds, and changed workflows can run as soon as the branch is pushed. If the code does something you did not expect, rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`, and check security alerts and workflow runs. Do not run any workflow manually on the temporary branch, because the publishing workflows could publish its code.
