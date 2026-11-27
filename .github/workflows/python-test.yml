@@ -11,8 +11,6 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     permissions:
-      actions: read
-      security-events: write
       contents: read
     strategy:
       fail-fast: false
@@ -29,10 +27,10 @@ jobs:
       OS: ${{ matrix.os }}
       
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
@@ -50,7 +48,7 @@ jobs:
   scan-pr:
     needs:
       - build
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@6fc714450122bda9d00e4ad5d639ad6a39eedb1f" # v2.0.1
     with:
       fail-on-vuln: false
       scan-args: |-

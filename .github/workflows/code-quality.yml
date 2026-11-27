@@ -13,28 +13,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      packages: write
-      attestations: write
-      id-token: write
     strategy:
       matrix:
         os: [ubuntu-latest]
     env:
       OS: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: ".python-version"
 
-      - uses: sourcery-ai/action@v1
+      - uses: sourcery-ai/action@438ce67e9f15fbeacb72257da23e2fffb1b6d354 # v1
         continue-on-error: true
         with:
           token: ${{ secrets.SOURCERY_TOKEN }}
@@ -53,7 +50,7 @@ jobs:
         run: uvx ruff format --check --diff
 
   scan-pr:
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@6fc714450122bda9d00e4ad5d639ad6a39eedb1f" # v2.0.1
     with:
       fail-on-vuln: false
       scan-args: |-
