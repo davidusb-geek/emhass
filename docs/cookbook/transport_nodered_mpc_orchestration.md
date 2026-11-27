@@ -8,29 +8,34 @@ Drive EMHASS naive-MPC optimization from a Node-RED flow on any cadence, recompu
 
 - EMHASS reachable via HTTP on a known host:port (default `:5000`)
 - Node-RED 3+ with the default `inject`, `function`, and `http request` nodes
-- A static EMHASS config that already declares your deferrables / battery / thermal loads. This recipe only covers the *runtime params* (the values you change per MPC call). Static config lives in `config.yaml` / config-GUI.
+- A static EMHASS config that already declares your deferrables / battery / thermal loads. This recipe only covers the *runtime params* (the values you change per MPC call). Static config lives in `config.json`, which the configuration page of the web UI edits.
 
 ## Step 1: Verify your static EMHASS config
 
-<!-- source: src/emhass/data/config_defaults.json:41-46,109-117 -->
+<!-- source: src/emhass/data/config_defaults.json (set_use_battery, number_of_deferrable_loads and the per-load keys shown below) -->
 
-Before runtime overrides will work, the matching static keys must exist. Open your EMHASS `config.yaml` (or use the Web Config GUI) and check it has at least the keys this recipe will drive:
+Before runtime overrides will work, the matching static keys must exist. Check them on the configuration page of the EMHASS web UI, which saves them to `config.json`. With the Home Assistant app, they are on that page, not on the app's Configuration tab.
 
-```yaml
-optim_conf:
-  set_use_battery: true                              # if you have a battery
-  number_of_deferrable_loads: 2                      # adjust to your setup
-  nominal_power_of_deferrable_loads: [3000, 11000]   # second load: the EV charger (Step 3 uses charger_kw = 11)
-  operating_hours_of_each_deferrable_load: [4, 0]    # overridden per MPC call
-  start_timesteps_of_each_deferrable_load: [0, 0]    # overridden per MPC call
-  end_timesteps_of_each_deferrable_load: [0, 0]      # overridden per MPC call
+If you edit `config.json` by hand, these are top-level JSON keys, with no `optim_conf` block around them. Change or add only these keys, keep the rest of the file, and restart EMHASS. A legacy `config_emhass.yaml` uses other names for most of them (see [Parameter differences](../differences.md)).
+
+```json
+{
+  "set_use_battery": true,
+  "number_of_deferrable_loads": 2,
+  "nominal_power_of_deferrable_loads": [3000, 11000],
+  "operating_hours_of_each_deferrable_load": [4, 0],
+  "start_timesteps_of_each_deferrable_load": [0, 0],
+  "end_timesteps_of_each_deferrable_load": [0, 0]
+}
 ```
+
+This is a fragment, not a whole file. Set `set_use_battery` to `true` only if you have a battery, and adjust the loads to your setup. The second load here is the EV charger (Step 3 uses `charger_kw = 11`). The last three keys are overridden per MPC call.
 
 The default `maximum_power_from_grid` (9000 W) is a hard limit. Below an 11 kW EV charger it makes a night charge without PV or battery infeasible for every load, so set it to your connection limit.
 
 Reference table of the runtime params accepted by `treat_runtimeparams` that this recipe sends per call:
 
-<!-- source: src/emhass/utils.py:933-1015 (treat_runtimeparams) -->
+<!-- source: src/emhass/utils.py, treat_runtimeparams -->
 
 | Field | Type | Purpose |
 |---|---|---|
@@ -42,7 +47,7 @@ Reference table of the runtime params accepted by `treat_runtimeparams` that thi
 | `soc_init` | `float` (0..1) | current battery state of charge as fraction |
 | `prediction_horizon` | `int` | number of optimization steps to plan. **Always send it:** without it `naive-mpc-optim` plans only 10 steps |
 
-Expected: EMHASS restarts cleanly with the static keys; `GET /api/get-config` returns them.
+Expected: EMHASS restarts cleanly with the static keys; `GET /get-config` (with your [API token](../api_authentication.md)) returns them.
 
 ## Step 2: Add the cron trigger
 
@@ -99,8 +104,8 @@ if (ev_steps === 0) end_step = horizon_steps;
 
 // Battery SOC from your battery monitor, normalized to fraction 0..1
 const soc_raw = flow.get("battery_soc_percent");
-const soc_percent = (typeof soc_raw === "number" ||
-    (typeof soc_raw === "string" && soc_raw.trim() !== ""))
+const decimal = /^\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?\s*$/;   // plain decimal strings only
+const soc_percent = typeof soc_raw === "number" || (typeof soc_raw === "string" && decimal.test(soc_raw))
     ? Number(soc_raw) : NaN;
 if (!Number.isFinite(soc_percent) || soc_percent < 0 || soc_percent > 100) {
     node.warn("Skipping MPC tick: battery SOC missing, non-numeric or outside 0-100%");
@@ -135,6 +140,8 @@ msg.payload = {
 };
 return msg;
 ```
+
+**No battery configured** (`set_use_battery` is `false`): delete the lines from `// Battery SOC from your battery monitor` down to `const soc_init = soc_percent / 100;`, and delete the `soc_init: soc_init` line from `msg.payload`. Otherwise the function finds no SOC reading and skips every tick. Remove both together: keeping the `soc_init` line without the lines that define it makes the function fail.
 
 Expected: `msg.payload` now contains the full runtime-params object as JSON. Wire a `debug` node temporarily to verify before continuing.
 
@@ -177,7 +184,7 @@ The following are observed-in-production patterns from running this flow shape f
 - **State between ticks.** Use `flow.set(...)` / `flow.get(...)` (not `context.set/get`) so the values survive Node-RED redeploys of unrelated tabs.
 - **Overlapping requests.** EMHASS does not order `naive-mpc-optim` requests or guard the result file: every run writes the same `opt_res_latest.csv` that a later `publish-data` reads, and the request that *finishes* last wins. If a request takes longer than the tick interval (a solve with deferrables and thermal loads can take 90-120 s on small hardware, and the `http request` node timing out does not stop the solve on the server), the second request can finish first and the older plan then replaces the newer one. In a deterministic test with two overlapping requests, the request sent first finished second and replaced the newer plan. Skip a tick while a request is in flight. At the top of the Step 3 function: `const t = flow.get("mpc_in_flight_since"); if (t && Date.now() - t < 10 * 60000) { node.warn("Skipping MPC tick: previous request still in flight"); return null; }`. Set the flag only when the request is really sent, with `flow.set("mpc_in_flight_since", Date.now());` just before `return msg;` (the earlier `return null` paths send nothing, so they must not set it). Clear it with `flow.set("mpc_in_flight_since", null)` in a function node after the `http request` node, only when `typeof msg.statusCode === "number"` (a response arrived, so the solve has finished). Do not clear it on a timeout or connection error: the server may still be solving, so let the limit expire instead. Choose the 10-minute limit above your slowest solve; it is what releases the flag after a timeout or a lost response, so it can never stop the flow for good (a Node-RED restart also clears the in-memory flag). This protects one Node-RED flow only; several callers need a server-side guard, which EMHASS does not provide.
 - **Price arrays.** As plain lists, `load_cost_forecast` and `prod_price_forecast` are positional from the first optimization step and must have at least `horizon_steps` entries of finite numbers (a list that starts one step early or late places every price on the wrong interval and still gives a valid-looking plan). EMHASS rejects a shorter list with an error instead of padding it, and fails the cycle on `NaN`, `null`, booleans or strings. Step 3 above checks both and skips the tick rather than sending a fabricated fallback. If your tariff source publishes timestamped prices, you can send them as a timestamped mapping instead and let EMHASS align them. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
-- **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. Step 3 preserves a valid 0% SOC and skips the tick if the source is missing, non-numeric, or outside 0-100%, rather than substituting a fabricated 50%. See [Battery-aware runtime params](battery_aware_runtime_params.md) for the full story.
+- **Battery SOC unit.** EMHASS expects `soc_init` as a fraction in [0, 1]. Most sensor sources publish percent; divide by 100. Step 3 preserves a valid 0% SOC and skips the tick if the source is missing, non-numeric, or outside 0-100%, rather than substituting a fabricated 50%. It does not check how old the reading is. See [Battery-aware runtime params](battery_aware_runtime_params.md) for a fraction source, the age check and the result.
 
 ## Credits
 
