@@ -84,6 +84,71 @@ docker run -it --restart always  -p 5000:5000 --name emhass-container -v /emhass
 
 - Inside the container the web server listens on the address in the `IP` environment variable (default `0.0.0.0`, all interfaces) and the port in `PORT` (default `5000`). `server_ip` in `secrets_emhass.yaml` does not change it: it is used only when `web_server.py` is run directly. To choose which host address the port is reachable on, use Docker's port mapping, for example `-p 192.0.2.10:5000:5000`.
 
+### Running as a non-root user
+
+The image runs as root unless you pick another user, and the Home Assistant app keeps running it that way. To run it as a non-root user, give Docker the UID and group to use. The image's own `/data` and `/share` folders belong to group 0 and that group can write to them, so without mounts any UID in group 0 works. With the folders mounted from the host as in Method 2:
+
+```bash
+docker run -it --restart always -p 5000:5000 --user 1000:0 -v /emhass/share:/share -v /emhass/data:/data -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container ghcr.io/davidusb-geek/emhass:latest
+```
+
+- Folders you mount from the host must be writable by that UID, and `secrets_emhass.yaml` readable by it. For example `sudo chown -R 1000 /emhass/share /emhass/data`.
+- If the container ran as root before, the files EMHASS created in those folders belong to root. Change their owner as above before you start it as another user, or it starts but can't use the files it made before and its API requests fail. For a named volume, run the chown in a container, for example `docker run --rm -v emhass-data:/data -v emhass-share:/share --entrypoint chown ghcr.io/davidusb-geek/emhass:latest -R 1000 /data /share`.
+- Another group (for example `--user 1000:1000`) works too, as long as both `/data` and `/share` are mounted from folders that user can write to. EMHASS writes to both, and saves `config.json` in `/share` by default.
+- With new named volumes, keep group 0. Docker copies the image folder's owner and mode into an empty named volume each time it is mounted, so the volume stays writable for group 0 and a `chown` of the empty volume doesn't last.
+
+With Docker Compose, set `user:` on the service:
+
+```yaml
+services:
+  emhass:
+    image: ghcr.io/davidusb-geek/emhass:latest
+    user: "1000:0"
+    restart: always
+    ports:
+      - "5000:5000"
+    volumes:
+      - /emhass/share:/share
+      - /emhass/data:/data
+      - /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml
+```
+
+On Kubernetes, set the user in the pod's `securityContext` and mount writable volumes on `/data` and `/share`. `fsGroup` makes the volumes writable for that group, on volume types that support it (`hostPath` doesn't). This is the pod spec; in a Deployment it goes under `spec.template.spec`. Together with the pod-level settings, the container `securityContext` below meets the restricted Pod Security profile. EMHASS needs no capabilities and no privilege escalation:
+
+```yaml
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: emhass
+      image: ghcr.io/davidusb-geek/emhass:latest
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      ports:
+        - containerPort: 5000
+      volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: share
+          mountPath: /share
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: emhass-data
+    - name: share
+      persistentVolumeClaim:
+        claimName: emhass-share
+```
+
+Provide `secrets_emhass.yaml` the same way as with Docker, for example from a Secret mounted at `/app/secrets_emhass.yaml` with `subPath`.
+
 ## Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*
 
 If you wish to run EMHASS optimizations with cli commands. *(no persistent web server session)* you can run EMHASS via the python package alone *(not wrapped in a Docker container)*.

@@ -56,6 +56,11 @@ limit_request_field_size = 8190
 
 # Performance
 worker_tmp_dir = "/dev/shm"  # Use memory for worker temp files if available
+# Gunicorn 25.1 and later open a control socket by default, from 25.2 in $HOME/.gunicorn. A
+# user picked with docker run --user has no home in the image (HOME=/) and can't create it
+# there, so in that case the socket goes in /tmp instead. Older versions ignore this setting.
+if not os.access(os.path.expanduser("~"), os.W_OK):
+    control_socket = "/tmp/gunicorn.ctl"
 
 
 def when_ready(server):

@@ -20,6 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_NO_CACHE=1 \
     UV_LINK_MODE=copy \
+    # Outside root's home, so the interpreter the venv links to works for any user (docker run --user)
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     PATH="/app/.venv/bin:$PATH" \
     WORKER_CLASS=uvicorn.workers.UvicornWorker \
     PORT=5000 \
@@ -45,6 +47,9 @@ RUN apt-get update \
         libhdf5-hl-100 \
         libhdf5-103-1 \
     && mkdir -p /data/ /share/emhass/ \
+    # Group 0 may write here too, so the image also runs as a non-root user in group 0 (docker run --user 1000:0)
+    && chgrp -R 0 /data /share \
+    && chmod -R g=u /data /share \
     && rm -rf /var/cache/apt/* /var/lib/apt/lists/*
 
 # 2. Install Python and create virtualenv (cached unless .python-version changes)
@@ -97,9 +102,8 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # Entrypoint script inline
-# The environment is fully synced at build time (step 4), so start with --no-sync. Without it, uv
-# rebuilds the project when a new container starts and fetches the build backend from PyPI, which
-# fails without network access.
+# The environment is fully synced at build time (step 4), so gunicorn starts straight from the venv
+# and uv has no part in starting the container.
 ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "-c", "set -e && \
 if [ ! -f /data/long_train_data.pkl ]; then \
     echo 'Initializing data: Copying default PKL file...'; \
@@ -112,4 +116,4 @@ fi && \
 WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
-exec uv run --no-sync gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
+exec /app/.venv/bin/gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
