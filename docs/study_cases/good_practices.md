@@ -39,7 +39,9 @@ Concrete example: a 24-hour horizon at 30-minute step = 48 items per list; at 15
 
 EMHASS expresses SOC as a fraction `[0.0, 1.0]` of the **nominal** battery capacity (`battery_nominal_energy_capacity`, `Enom`). The bounds `battery_minimum_state_of_charge` (default 0.3) and `battery_maximum_state_of_charge` (default 0.9) are operational *limits* the optimizer respects; they do **not** rescale the reported SOC value.
 
-So a published `sensor.soc_optim = 0.45` means 45% of nominal capacity, regardless of what the bounds are. This matches what your battery management system reports (assuming it also uses 0..100% of nominal). No conversion is needed when comparing the two.
+Runtime inputs such as `soc_init` and the `SOC_opt` column of the plan are fractions. The published Home Assistant sensor (with one battery, by default `sensor.soc_batt_forecast`) is the same value in percent. So `SOC_opt = 0.45`, published as `45`, means 45% of nominal capacity, regardless of what the bounds are. This is comparable with what your battery management system reports, assuming it also uses 0..100% of nominal.
+
+Each `SOC_opt` value is the SOC at the **end** of its time step. The first row therefore already includes the first step's charge or discharge and can differ from the `soc_init` you passed. Convert a sensor reading to a fraction according to the sensor's known unit, not its value: see [Battery-aware runtime params](../cookbook/battery_aware_runtime_params.md).
 
 Source: `optimization.py` constraints `min_energy = battery_minimum_state_of_charge × cap`, `max_energy = battery_maximum_state_of_charge × cap`.
 
@@ -51,7 +53,7 @@ The two SOC parameters behave differently across optimization actions, so it pay
 
 **`naive-mpc-optim`** reads `soc_init` and `soc_final` from `runtimeparams` independently. If one is missing, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that value alone; it does **not** mirror the passed value onto the missing one. So passing only `soc_init = 0.45` yields `soc_init = 0.45, soc_final = 0.6`, which still imposes a terminal-SOC constraint at every solve. Always pass both explicitly.
 
-**`dayahead-optim`** and **`perfect-optim`** do not read `soc_init` or `soc_final` from `runtimeparams` at all. Both fall back to `battery_target_state_of_charge`. Use day-ahead when that single value is the right answer for both ends of the horizon, and switch to MPC when you need runtime control of either.
+**`dayahead-optim`** also reads `soc_init` and `soc_final` from `runtimeparams`, with different defaults: if you pass only one of them, the other takes the same value, and if you pass neither, both are `battery_target_state_of_charge`.
 
 ### Practical recipes for rolling MPC
 
@@ -62,7 +64,7 @@ Two patterns work well in production. Both pass *both* values explicitly per MPC
 
 If you do have a real end-of-horizon deadline (for example "must be at 60% before tomorrow 06:00 to absorb morning PV"), pass that target as `soc_final` and extend `prediction_horizon` so the deadline sits at the actual point in time, not at the trailing edge of a fixed 24 h window.
 
-A common new-user trap is starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
+In `naive-mpc-optim`, a measured `soc_init` below `battery_minimum_state_of_charge` or above `battery_maximum_state_of_charge` is kept as the starting state, and the plan brings the battery back inside the bounds. See Section 5 below (item 4) for when that cannot be done.
 
 ## 5. `optim_status: Infeasible` triage order
 
@@ -71,7 +73,7 @@ When EMHASS returns `optim_status: "Infeasible"` and publishes nothing, work thr
 1. Invalid forecast value. A sensor publishing `unavailable` becomes a NaN, `null` or string in the forecast. EMHASS rejects such values before the solver runs: the action fails with one error naming the forecast key, the reason and the first offending position or timestamp, so look for that error in the log first. Fix it at the source. Use a fallback only when it is trustworthy for that quantity, for example 0 W of PV at night. Otherwise let the cycle fail rather than fabricate a zero load or a zero price, which gives a valid-looking but wrong plan. See the [Forecast input contract](../passing_data.md#forecast-input-contract).
 2. Timestep mismatch. A list shorter than `prediction_horizon` is rejected and ignored. See section 2 above.
 3. Windowed-deferrable infeasibility. A windowed deferrable load (EV, washing machine with hard deadline) requires more energy than the window×nominal-power product allows. Either widen the window, increase the power, or reduce the required energy.
-4. Battery state contradicts limits. `soc_init = 0.05` but `battery_minimum_state_of_charge = 0.30` (the default): the optimizer cannot find any valid trajectory because the *initial* state already violates a constraint. Either lower `battery_minimum_state_of_charge`, clamp `soc_init` before passing it, or accept that the battery genuinely cannot be used until it recovers above the minimum. See [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
+4. Battery cannot get back inside its SOC bounds. In `naive-mpc-optim`, starting outside them, for example `soc_init = 0.05` with `battery_minimum_state_of_charge = 0.30` (the default), is not infeasible by itself: EMHASS keeps the measured value and plans the recovery at the time it finds economic. Normally the plan must be back inside the bounds by its last step, so the run is infeasible if the horizon, the charge or discharge power, or the site's power limits do not allow that. Check first that the reading is real and in the right unit, then the horizon and those limits. Do not clamp `soc_init`: the plan would then start from a battery state that does not exist. The exception: with `battery_availability` or `battery_discharge_availability` below 1, or `battery_discharge_energy_max` set, a bound that EMHASS estimates the battery cannot reach in the horizon is not enforced for that battery in that run, and a warning is logged. The estimate ignores ramp limits (`set_battery_dynamic`) and the site's power limits, so the run can still be infeasible with no such warning.
 5. Thermal-battery infeasibility. `start_temperature` outside the `min_temperatures[0]` / `max_temperatures[0]` range, or a heating/cooling rate that physically cannot reach `min_temperatures` from `start_temperature` within the available timesteps. Widen the comfort range or increase the heat pump power.
 6. Solver time-limit. `lp_solver_timeout` (default 45 s) exceeded for very large problems (long horizon × many deferrable loads × many timesteps). Reduce horizon or increase timeout.
 

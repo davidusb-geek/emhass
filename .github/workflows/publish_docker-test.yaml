@@ -114,7 +114,7 @@ jobs:
             { target_arch: amd64 },
             { target_arch: aarch64 },
           ]
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2" # v2.3.0
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932" # v2.7.1
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
