@@ -391,3 +391,125 @@ Edit order:
 
 Once developed, commit your code, and push the commit to your fork on GitHub.
 Once ready, submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.
+
+#### SonarQube Cloud analysis on pull requests
+
+The `CodeCov` workflow generates `coverage.xml`, uploads it to Codecov and runs the SonarQube Cloud scan. The scan waits up to 300 seconds for the quality gate, and the job fails if the gate fails.
+
+GitHub does not give repository secrets such as `SONAR_TOKEN` to workflows triggered by pull requests from forks, so for those pull requests the upload and scan steps are skipped. **A green `CodeCov` check therefore does not mean that Sonar analysed the change.** Check the steps in the job log:
+
+| Result | What you see |
+| --- | --- |
+| Skipped | The `SonarQube Scan` step is skipped on a fork pull request. |
+| Passed | The step succeeds and its log reports `QUALITY GATE STATUS: PASSED`. |
+| Failed | The step fails and its log reports `QUALITY GATE STATUS: FAILED`. |
+| Unavailable | No verdict was reported: the step failed for another reason (token, network, timeout), or it never ran because an earlier step failed. |
+
+Dependabot pull requests use branches in this repository, but runs that Dependabot triggers receive only Dependabot secrets. The Codecov upload can then fail before the scan starts, so the result is unavailable.
+
+A pull request run checks out and scans a temporary merge of the head into `master`, not the head alone. The checkout step logs it as `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The scanner nevertheless records the head commit as the analysed revision (`SCM revision ID` in its log), so that SHA alone does not show which `master` commit was included. If the head conflicts with `master`, the workflow does not run and the result is unavailable.
+
+Only "Passed" counts as a pass. For a failed gate, follow the dashboard link in the log, fix the findings and run the analysis again on the new revision. On a timeout or other unavailable result, re-run the job (but never on a temporary verification pull request, see below); the analysis is not verified until a verdict is reported. On pushes to `master` the gate covers the project's whole new code period, so it can fail because of findings merged earlier.
+
+The check is not required for every pull request, because fork pull requests cannot produce it.
+
+#### Maintainer verification of a fork pull request
+
+A maintainer can analyse a fork contribution by opening a temporary pull request from a branch in this repository. **This runs the contributor's code with this repository's credentials.** Use it only when a maintainer responsible for those credentials has explicitly decided to trust the contribution and authorised running it, after reviewing all code that will be executed and every dependency it adds or changes. A quick or partial review is not enough. **Review does not isolate credentials.** It can miss things, and it does not cover what dependencies and build tools download and execute, so credentials can still be exposed. If trust cannot be established, do not use this procedure: the Sonar result for that pull request stays unavailable.
+
+Opening that pull request to `master` starts these workflows. `Check CEC databases` sets its permissions for the whole workflow; the others set them per job. The table lists repository secrets and write permissions, not read permissions:
+
+| Workflow and job | Use of contributor files | Secrets | Write permissions |
+| --- | --- | --- | --- |
+| `CodeCov`: `run` | Installs the project and runs the tests | `SONAR_TOKEN`, `CODECOV_TOKEN` | None |
+| `Code Quality Scan`: `build` | Runs a code review action and installs the project | `SOURCERY_TOKEN` | None |
+| `Code Quality Scan`: `scan-pr` | Dependency scan | None | Security results |
+| `Python test`: `build` | Installs the project and runs the tests on Linux, macOS and Windows | None | None |
+| `Python test`: `scan-pr` | Dependency scan | None | Security results |
+| `Test Building Docker Image`: `build` | Builds and runs the image | None | None |
+| `Test Building Docker Image`: `osv-scan` | Scans the package lists from the build | None | Security results |
+| `CodeQL`: `analyze` | Static analysis | None | Security results |
+| `Check CEC databases`: `check` (only if the pull request changes a file in its path filter) | Runs the database build script, with package versions named in the pull request | None | None |
+
+Treat every secret and token in a job as available to any code that runs in it, including code that runs before the step that uses it:
+
+- **Checkout:** `actions/checkout` by default keeps the job's `GITHUB_TOKEN` available to later steps.
+- **Dependencies:** installing, testing and building download and execute third-party code. The `uv.lock` you reviewed does not fix everything that runs. `Python test` installs with `--upgrade`, `uv sync` re-resolves a lock file that is out of date, and `CodeCov` and `Code Quality Scan` also install tools that are not in the lock file.
+- **Caches:** jobs can restore caches saved from `master`. GitHub limits a cache saved by a pull request run to that pull request.
+
+If `.github/` differs from `master`, the table no longer holds, and changed workflows can run as soon as the branch is pushed. Do not run any workflow manually on the temporary branch, because the publishing workflows could publish its code.
+
+In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhass`.
+
+1. Pin the head and the base before you review. Record the full 40-character SHAs printed by these commands, the pull request head and current `master`:
+
+   ```bash
+   git fetch --no-tags upstream refs/pull/<number>/head && git rev-parse 'FETCH_HEAD^{commit}'
+   git fetch --no-tags upstream refs/heads/master && git rev-parse 'FETCH_HEAD^{commit}'
+   ```
+2. Review the complete change between those two commits (`git diff --no-ext-diff --no-textconv --text <reviewed-base-sha>...<reviewed-head-sha>`, so that no local diff or text conversion program runs on the contributor's files), including build and dependency files (`pyproject.toml`, `uv.lock`, `Dockerfile`), tests and `conftest.py`, scripts, and `sonar-project.properties`. Do not run this verification if any changed content cannot be adequately reviewed (`--text` also prints files that attributes mark as binary or `-diff`, which may still be unreadable), or if you cannot account for every change and accept the contribution as trusted. Then run the following in a `bash` shell, and continue only if it prints the `OK` line:
+
+   ```bash
+   unset verified verified_base
+   git fetch --no-tags upstream refs/heads/master &&
+   base=$(git rev-parse --verify 'FETCH_HEAD^{commit}') &&
+   test "$base" = <reviewed-base-sha> &&
+   git fetch --no-tags upstream refs/pull/<number>/head &&
+   head=$(git rev-parse --verify 'FETCH_HEAD^{commit}') &&
+   test "$head" = <reviewed-head-sha> &&
+   git diff --no-ext-diff --no-textconv --exit-code "$base" "$head" -- ':(top).github/' &&
+   verified=$head verified_base=$base &&
+   echo "OK head=$head base=$base"
+   ```
+
+   It stops if a fetch fails, if the pull request head or `master` is not the commit you recorded in step 1, or if `.github/` differs from current `master` (which also happens when `master` changed `.github/` after the branch was created).
+3. In the same shell, run the following. It fetches again and pushes the reviewed commit only if step 2 succeeded and neither `master` nor the pull request head has changed since. `<n>` is a number you have not used before for this pull request.
+
+   ```bash
+   test -n "$verified" &&
+   git fetch --no-tags upstream refs/heads/master &&
+   test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$verified_base" &&
+   git fetch --no-tags upstream refs/pull/<number>/head &&
+   test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$verified" &&
+   git push upstream "$verified:refs/heads/verify/pr-<number>-<n>"
+   ```
+
+   If it does not push, start again from step 1. The check narrows the window but cannot close it: `master` or the pull request can still change after the check and before the workflows run.
+4. Open a draft pull request from that branch to `master`, titled so that it is clearly not for merging.
+5. Wait for the `CodeCov` job and note its run ID and attempt number. Check GitHub's own record of that run:
+
+   ```bash
+   gh run view <run-id> --repo davidusb-geek/emhass --attempt <attempt> --json event,headBranch,headSha,attempt
+   ```
+
+   `event` must be `pull_request`, `headBranch` the temporary branch and `headSha` the reviewed head SHA. Then, in the log of its checkout step, find the line `HEAD is now at <merge-sha> Merge <head-sha> into <base-sha>`. The merge commit is what was checked out and scanned. `<head-sha>` must be the head you reviewed and `<base-sha>` the base you recorded in step 1. Otherwise the result is unverified, although the code has already run.
+6. In the log of the `SonarQube Scan` step of that same run and attempt, confirm all of the following:
+   - the scanner configured itself for the temporary pull request's number;
+   - `SCM revision ID` is the reviewed head SHA, not the merge SHA;
+   - a `QUALITY GATE STATUS` line gives the verdict;
+   - the `ANALYSIS SUCCESSFUL` link is for the temporary pull request's number.
+
+   The `SonarCloud Code Analysis` check and the SonarQube Cloud page are supporting evidence only. The same head SHA also belongs to the original pull request, and they show a latest analysis that may not be this run's. If anything above is missing, ambiguous or contradicted by them, or the temporary pull request was reopened or updated, the result is unverified. Neither the job log nor SonarQube Cloud can prove the result for malicious code: it runs earlier in the same job and can alter the files, the log or the submitted analysis.
+7. Stop the temporary pull request's runs before cleaning up. Waiting for `CodeCov` is not enough: other workflows can still be running the contributor's code, and you must not rely on closing the pull request or deleting the branch to stop them. Check every run on the temporary branch, reading all pages of the result:
+
+   ```bash
+   runs=$(gh api --paginate 'repos/davidusb-geek/emhass/actions/runs?branch=verify/pr-<number>-<n>&per_page=100' \
+     --jq '.total_count as $total | .workflow_runs[] | "\($total) \(.id) \(.status) \(.name)"') &&
+   printf '%s\n' "$runs" | awk '
+     NF { total[$1]; seen[$2]; expected = $1; if ($3 != "completed") { print "ACTIVE", $0; active = 1 } }
+     END {
+       for (t in total) totals++
+       for (i in seen) found++
+       if (totals != 1 || found != expected || expected > 1000) { print "INCOMPLETE LISTING"; exit 1 }
+       if (active) exit 1
+       print "ALL COMPLETED: " found " runs"
+     }'
+   ```
+
+   Only the `ALL COMPLETED` line counts as success. An error, `INCOMPLETE LISTING` or no output means the state is unknown, so treat runs as still active. GitHub returns at most 1,000 runs for this search; beyond that, use the repository's Actions page. For each `ACTIVE` line, cancel the run ID (the second number) with `gh run cancel <run-id> --repo davidusb-geek/emhass`, adding `--force` if it does not stop. New runs can take a moment to appear: repeat the check until it prints `ALL COMPLETED` with the same count twice, at least two minutes apart, and confirm on the Actions page that every workflow you expected has run.
+8. Save the logs (`gh run view <run-id> --repo davidusb-geek/emhass --log > run-<run-id>.log`) and do not delete the runs. Close the temporary pull request without merging it, delete the branch, then run the check from step 7 again. Cleanup has succeeded only if it still prints `ALL COMPLETED`. **Never re-run any of them:** a re-run executes the same commit again with the job's credentials, and GitHub allows it for up to 30 days. If the result was unavailable, start again from step 1 with a new `<n>`.
+9. Comment on the original pull request with the temporary pull request number, the head, base and merge SHAs, the result, the link to the workflow run and attempt, and the Sonar link from that log.
+
+**If the code did something you did not expect, or you suspect a compromise,** act at once, without waiting for any job to finish: cancel all runs of the temporary branch, do not re-run them, save their logs, and promptly revoke or rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`. Do not let a run that will not stop, or a listing you cannot complete, delay the rotation. Cancelling does not undo what has already been sent elsewhere, so rotate even if you cancelled quickly. Then check security alerts, code scanning results, workflow runs and branches.
+
+The result applies only to the head and base SHAs from step 5. It is stale as soon as the original pull request's head or `master` differs from them: verify again, with a new review if the head changed.
