@@ -136,14 +136,14 @@ For example, an aligned external P50/P10 PV pair can be supplied directly:
 
 | Parameter | Type | Default | Description / Usage |
 | --- | --- | --- | --- |
-| **`soc_init`** | Float or List | Configured default | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. |
-| **`soc_final`** | Float or List | Configured default | Desired final State of Charge target at the end of the optimization window (`[0, 1]` fraction). |
-| **`soc_target`** | Float or List | None | Desired minimum battery SOC target as a fraction in `[0, 1]`. |
-| **`soc_target_timestep`** | Integer or List | Last timestep | The 0-based horizon timestep index by which `soc_target` must be achieved. |
+| **`soc_init`** | Float or List | Depends on the action | Initial State of Charge (SOC) as a fraction between `0` and `1` per battery. See [Battery SOC inputs](#battery-soc-inputs-defaults-and-how-binding-they-are). |
+| **`soc_final`** | Float or List | Depends on the action | Soft SOC target at the end of the optimization window (`[0, 1]` fraction). The plan can miss it. |
+| **`soc_target`** | Float or List | None | Hard minimum SOC at one timestep, as a fraction in `[0, 1]` (`naive-mpc-optim` only). |
+| **`soc_target_timestep`** | Integer or List | Last available timestep | The 0-based horizon timestep at whose end `soc_target` must be met (`naive-mpc-optim` only). |
 | **`battery_availability`** | Float, List, or Nested Structure | `null` (Always available) | Per-battery availability flag/fraction in `[0, 1]` per timestep. Scales max charge/discharge limits (`1` = full power, `0` = disconnected/frozen SOC; ideal for EV modeling). |
 | **`battery_discharge_energy_max`** | Float or List | `null` (No cap) | Maximum energy (Wh, battery side) the battery may deliver over the horizon (for V2G warranties or cycle limits). |
 | **`battery_discharge_availability`** | Float, List, or Nested Structure | `null` (No cap) | Per-battery fraction in `[0, 1]` per timestep that scales only the discharge power limit (`0` = may not discharge, charging still allowed). Same shape as `battery_availability` and multiplied with it. |
-| **`soc_floor`** | List or Nested List | `null` (No floor) | Minimum SOC per timestep as a fraction in `[0, 1]`, held as a soft floor (for example a reserve over part of the horizon); a run that starts under it is held, not charged back up. See [Holding a SOC reserve over part of the horizon](#holding-a-soc-reserve-over-part-of-the-horizon-naive-mpc-optim). |
+| **`soc_floor`** | List or Nested List | `null` (No floor) | Minimum SOC per timestep as a fraction in `[0, 1]`, held as a soft floor (for example a reserve over part of the horizon); starting under it does not by itself require charging back up to it. See [Holding a SOC reserve over part of the horizon](#holding-a-soc-reserve-over-part-of-the-horizon-naive-mpc-optim). |
 
 ---
 
@@ -303,7 +303,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `battery_maximum_state_of_charge` the maximum possible SOC.
 
-- `battery_target_state_of_charge` for the desired target value of the initial and final SOC.
+- `battery_target_state_of_charge` for the SOC used when `soc_init` or `soc_final` is not given (see [Battery SOC inputs](#battery-soc-inputs-defaults-and-how-binding-they-are)).
 
 - `battery_discharge_power_max` for the maximum battery discharge power.
 
@@ -313,24 +313,46 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Used by `naive-mpc-optim` and `dayahead-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
+### Battery SOC inputs: defaults and how binding they are
+
+The value used for an omitted `soc_init` or `soc_final` depends on the action. `battery_target_state_of_charge` defaults to `0.6`.
+
+| Action | `soc_init` when omitted | `soc_final` when omitted |
+|--------|-------------------------|--------------------------|
+| `naive-mpc-optim` | `battery_target_state_of_charge` | `battery_target_state_of_charge` |
+| `dayahead-optim` | `soc_final` if given, otherwise `battery_target_state_of_charge` | `soc_init` if given, otherwise `battery_target_state_of_charge` |
+| `perfect-optim` | always `battery_target_state_of_charge` | always `battery_target_state_of_charge` |
+
+`perfect-optim` does not apply runtime `soc_init` or `soc_final`: each of its optimization windows starts at `battery_target_state_of_charge` and targets it at the end. `soc_target`, `soc_target_timestep` and `soc_floor` are applied only by `naive-mpc-optim`.
+
+The value used can differ from the one you sent. `naive-mpc-optim` keeps a `soc_init` outside `battery_minimum_state_of_charge` and `battery_maximum_state_of_charge` as the real starting state, but moves a `soc_final` outside them to the nearer bound, and logs a warning for each. `dayahead-optim` rewrites neither value; the bounds still apply to the plan, so it misses a `soc_final` outside them.
+
+The three SOC requests are not equally binding:
+
+- `soc_final` is a **soft** target for the SOC at the end of the horizon. Missing it carries a high penalty, but the plan can still miss it, because of physical constraints (for example too little charge power or too short a horizon) or because other parts of the optimization objective outweigh it. A miss does not by itself make the run infeasible and logs no warning, so check the last `SOC_opt` value. By default ending above the target is penalised too. A positive `battery_soc_final_reward_factor` instead prices a surplus from the final reference tariff (normally the last step's import price), keeping its sign, so a surplus is not necessarily rewarded.
+- `soc_target` is a **hard** minimum at the end of one step. If it cannot be met, the run is infeasible (a battery unavailable for the whole horizon is the exception: its target is ignored with a warning). See [the next section](#requiring-an-intermediate-battery-soc-target-naive-mpc-optim).
+- `soc_floor` is a **soft** minimum over a stretch of steps. Starting below it does not by itself require the plan to restore the requested level. See [Holding a SOC reserve](#holding-a-soc-reserve-over-part-of-the-horizon-naive-mpc-optim).
+
+These describe the plan. Whether the battery follows it depends on your hardware and automations.
+
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
-By default the battery SOC is only pinned at the start (`soc_init`) and end (`soc_final`) of the horizon, leaving the optimizer free to choose the trajectory in between. Sometimes you want to *guarantee* the battery reaches a given charge level **partway through** the horizon — for example, "make sure the battery is full by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
+By default the plan starts at `soc_init` and aims to end at `soc_final` (a soft target), and the optimizer is free to choose the trajectory in between, within the SOC bounds. Sometimes you want to *require* the plan to reach a given charge level **partway through** the horizon — for example, "have the battery charged by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
 
 Two optional runtime keys (only used by `naive-mpc-optim`) make this possible:
 
 - `soc_target`: the desired *minimum* SOC as a fraction in `[0, 1]` (NOT percent). It is clamped to `[battery_minimum_state_of_charge, battery_maximum_state_of_charge]`.
-- `soc_target_timestep`: the 0-based horizon timestep by which `soc_target` must be reached. After this step the battery is free to discharge again. Defaults to the last timestep if `soc_target` is given without it.
+- `soc_target_timestep`: the 0-based horizon timestep at whose end the SOC must be at least `soc_target` (index `0` is the first row of the plan). The target applies to that step only, so afterwards the battery is free to discharge again. Defaults to the last available timestep if `soc_target` is given without it (the last timestep, unless `battery_availability` says otherwise). The target of a battery that is unavailable for the whole horizon is ignored, with a warning.
 
 Both default to *unset* (`None`), in which case nothing changes — the constraint is a no-op and existing behaviour is preserved. The target is a one-sided constraint (`SOC >= soc_target` at that step), so it never forces the battery to discharge.
 
-For example, the following runtime payload tells EMHASS that the battery must reach 100% SOC by horizon step index 14 (the SoC after that step, ~7.5 h into a 30-min-step horizon), while still letting it discharge in the steps after that:
+For example, the following runtime payload tells EMHASS that the planned SOC must be at least 90% (the default `battery_maximum_state_of_charge`) at the end of horizon step index 14 (~7.5 h into a 30-min-step horizon), while still letting the battery discharge in the steps after that. `soc_final` is omitted, so it is `battery_target_state_of_charge`:
 
 ```json
 {
   "prediction_horizon": 48,
   "soc_init": 0.30,
-  "soc_target": 1.0,
+  "soc_target": 0.9,
   "soc_target_timestep": 14
 }
 ```
@@ -349,13 +371,13 @@ rest_command:
       {
         "prediction_horizon": 48,
         "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
-        "soc_target": 1.0,
+        "soc_target": 0.9,
         "soc_target_timestep": 14
       }
 ```
 
 ```{warning}
-The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max`, `battery_charge_efficiency`, `battery_availability`, `battery_charge_power_derating` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
+The target must be *reachable* by its timestep. If it is not, the run is **infeasible**: the target is a hard constraint and is not relaxed. The exception is a battery that is unavailable for the whole horizon: its target is ignored, with a warning. EMHASS logs a warning when `soc_init`, `battery_charge_power_max`, `battery_charge_efficiency`, `battery_availability`, `battery_charge_power_derating` and the optimization time step show the target is out of reach; that estimate does not cover site limits such as the available grid and PV power. Size `soc_target` / `soc_target_timestep` to what your system allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Because `soc_final` is soft, a high target that cannot be discharged back down to `soc_final` afterwards (for example low load with the default `set_nodischarge_to_grid: true`) does not by itself make the run infeasible: the plan can end above `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
 ```
 
 ### Holding a SOC reserve over part of the horizon (naive-mpc-optim)
@@ -363,12 +385,12 @@ The target must be *reachable* by its timestep. If the requested SOC cannot be a
 `soc_target` asks for a level at one step. To keep a reserve in the battery over a stretch of the horizon, for example 60 % through a block of steps where a grid outage or a price spike is likely, pass `soc_floor`, a minimum SOC for each step (issue [#1348](https://github.com/davidusb-geek/emhass/issues/1348)). It is only used by `naive-mpc-optim` and defaults to no floor.
 
 - One entry per battery: `null` (no floor for that battery) or a list with one value per timestep. With one battery a flat list is its series. A single number in place of a list, a list nested deeper than one list per battery or `true`/`false` is rejected with an error; for one floor over the whole horizon use `battery_minimum_state_of_charge`.
-- A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected with an error) and holds **through** that step: the SOC at the end of the step and at its start (the end of the step before) are both kept at or above it, so the level is in place when the step begins. The first value covers the current step, whose start is `soc_init`. A dip of a single step between two higher values therefore has no effect.
+- A value is a fraction in `[0, 1]` (not percent: a value outside that range is rejected with an error) and applies **through** that step: the floor covers the SOC at the end of the step and at its start (the end of the step before), so it asks for the level to be in place when the step begins. The first value covers the current step, whose start is `soc_init`. A dip of a single step between two higher values therefore has no effect.
 - `null` or a value at or below `battery_minimum_state_of_charge` means no floor at that step. A value above `battery_maximum_state_of_charge` is lowered to it.
 - A list shorter than the horizon means no floor after it, so a reserve never runs past what you sent. A longer list is cut to the horizon.
 - A step where `battery_availability` is `0` gets no floor, since the SOC is frozen there. Its value is ignored, as if it were `null`.
 
-Example: a 48-step horizon at 30 minutes, keep at least 60 % from step 9 to step 23 and leave the battery free after that:
+Example: a 48-step horizon at 30 minutes, ask for at least 60 % from step 9 to step 23 and leave the battery free after that:
 
 ```json
 {
@@ -379,15 +401,17 @@ Example: a 48-step horizon at 30 minutes, keep at least 60 % from step 9 to step
 }
 ```
 
-The floor is soft. Each kWh the plan would leave the battery under the floor costs, at every step it stays there, 1000 times the largest import or export price in the horizon by size (1000 times more again under the `self-consumption` cost function, as for `soc_final`). So the plan keeps the reserve whenever the battery can, rather than selling it at a price spike, emptying it to soak up a negative price, using it to reach `soc_final` or draining it first under `set_battery_first_priority` (with one limit, below). The floor itself never makes the problem infeasible. When the plan cannot keep it, it is still made, `optim_status` stays `Optimal`, and a warning names the first step under the floor and the largest miss, so the log is where you see it.
+The floor is soft. A shortfall under it carries a high penalty in the optimization objective for every step it lasts, set from the size of the import and export prices in the horizon and scaled up further under the `self-consumption` cost function. So the plan normally keeps the reserve when the battery can, rather than selling it at a price spike, emptying it to soak up a negative price, using it to reach `soc_final` or draining it first under `set_battery_first_priority` (with one limit, below). The floor itself never makes the problem infeasible.
 
-When a run starts under the reserve, for example an MPC tick inside the window after the battery was drained, the battery is held where it is instead of being charged back up at whatever the price is right now. The plan keeps the shortfall it started with: each later floor is its value less that shortfall, but never under `soc_init` while the value itself is above it. A flat reserve therefore holds the battery at `soc_init`, and a reserve that rises (a ramp, or 50 % now and 60 % from the next step) is built by its rise only. The next tick starts from its own `soc_init`, so the plan can still charge inside the window when that is cheap, and it does not discharge back down while the battery is under the reserve.
+EMHASS does not always apply the values you send as they are. From them and `soc_init` it calculates an **effective floor**, which can differ from your values both in level and in the steps it covers: it can be lower (see below), and a level is also carried back to the preceding step in which the battery is available, even if you left that step `null`. The effective floor is what the plan is penalised against, not a promise of the SOC the plan reaches: the planned SOC can still be under it. After the solve, a warning names the first step and the largest miss when the plan is under the effective floor by more than 0.1 % of the battery capacity. Smaller shortfalls are not reported, and neither is a plan that is under the value you sent but not under the effective floor, so check `SOC_opt` for the SOC actually planned.
 
-A floor that starts later in the horizon is a level to build up to: the plan charges for it at the cheapest steps it finds before the window opens. It has to be in place by the start of the window, not the end of its first step, because in MPC only the first step of each plan is applied: a plan that left the charge for the window's first step would hand the next tick a battery under the reserve, and that tick would hold it there. A step with no floor inside a window counts the same way, as a step the plan may use to charge, so the floor after it can ask for up to that much more. Only a step with no floor does this: in a run held at 40 % under a 60 % reserve with a 30 % minimum SOC, a `0.3` inside the window lets the plan build the 60 % after it, while `0.31` there is a floor below the held level and does not. Leave the step `null` if you want the plan to use it. If the battery cannot reach a floor by the start of its step from `soc_init`, given `battery_charge_power_max`, `battery_charge_efficiency` and `battery_availability`, the floor is lowered to what it can reach, that shortfall is kept from then on like the one a run starts with, and a warning names the step. For example, a tick sent one step before a reserve it cannot fill charges in that step and then holds what it reached.
+When a run starts under the reserve, for example an MPC tick inside the window after the battery was drained, the floor does not by itself require charging back up to it at whatever the price is right now. Instead, the plan keeps the shortfall it started with: each later floor is its value less that shortfall, but never under `soc_init` while the value itself is above it. For a flat reserve the effective floor is therefore `soc_init`, and for a reserve that rises (a ramp, or 50 % now and 60 % from the next step) it climbs by the rise only. The plan can still charge inside the window when that is cheap. Because the floor is soft, the battery can also discharge while under the value you sent, for example when the load leaves no alternative. The next tick calculates a new effective floor from its own `soc_init`.
 
-That reach estimate does not count `battery_charge_power_derating`, `maximum_power_from_grid`, `set_nocharge_from_grid`, the AC input of a hybrid inverter or the ramp limits of `set_battery_dynamic`, and a load above PV plus `maximum_power_from_grid` can force a discharge inside the window. Then the plan misses the floor by that part only and the warning after the solve says so. The miss is then most of the objective, so set `lp_solver_mip_rel_gap: 0` if you want the smallest miss the solver can find.
+A floor that starts later in the horizon is a level to build up to: the plan charges for it at the cheapest steps it finds before the window opens. It has to be in place by the start of the window, not the end of its first step, because in MPC only the first step of each plan is applied: a plan that left the charge for the window's first step would hand the next tick a battery under the reserve, and that tick's effective floor would not require charging it back up. A step with no floor inside a window counts the same way, as a step the plan may use to charge, so the floor after it can ask for up to that much more. Only a step with no floor does this: in a run held at 40 % under a 60 % reserve with a 30 % minimum SOC, a `0.3` inside the window lets the plan build the 60 % after it, while `0.31` there is a floor below the held level and does not. Leave the step `null` if you want the plan to use it. If the battery cannot reach a floor by the start of its step from `soc_init`, given `battery_charge_power_max`, `battery_charge_efficiency` and `battery_availability`, the floor is lowered to what it can reach, that shortfall is kept from then on like the one a run starts with, and a warning names the step. For example, a tick sent one step before a reserve it cannot fill can charge in that step, and the effective floor for the later steps stays at the reachable level.
 
-`soc_target` stays a hard target, and both can be used together: where both apply, the higher one binds. With `set_battery_first_priority` the floor holds unless it sits just above the minimum SOC: within about 0.1 x `battery_discharge_power_max` x the time step (in Wh) of minimum SOC + 1 %, the plan can drop to that level instead, since that frees grid import from the battery-first penalty. For a 5 kW, 10 kWh battery at 30 minutes that is 2.5 % of the capacity, so with a 30 % minimum a floor up to about 33.5 % can dip to 31 %. Keep the reserve further above the minimum than that when you use both. While the floor keeps the battery above its minimum SOC, grid import in those steps counts as avoidable and pays the battery-first penalty, so the objective value grows. A tick that adds or removes the floor rebuilds the cached optimization problem once; a new floor value on the next tick does not.
+That reach estimate does not count `battery_charge_power_derating`, `maximum_power_from_grid`, `set_nocharge_from_grid`, the AC input of a hybrid inverter or the ramp limits of `set_battery_dynamic`, and a load above PV plus `maximum_power_from_grid` can force a discharge inside the window. The plan can then be under the effective floor, and the warning after the solve reports a miss above the 0.1 % threshold. The miss is then most of the objective, so set `lp_solver_mip_rel_gap: 0` if you want the smallest miss the solver can find.
+
+`soc_target` and `soc_floor` can be used together. Where both apply, `soc_target` remains a hard minimum, while the effective `soc_floor` remains a penalised soft minimum. With `set_battery_first_priority` the plan normally keeps the floor unless it sits just above the minimum SOC: within about 0.1 x `battery_discharge_power_max` x the time step (in Wh) of minimum SOC + 1 %, the plan can drop to that level instead, since that frees grid import from the battery-first penalty. For a 5 kW, 10 kWh battery at 30 minutes that is 2.5 % of the capacity, so with a 30 % minimum a floor up to about 33.5 % can dip to 31 %. Keep the reserve further above the minimum than that when you use both. While the floor keeps the battery above its minimum SOC, grid import in those steps counts as avoidable and pays the battery-first penalty, so the objective value grows. A tick that adds or removes the floor rebuilds the cached optimization problem once; a new floor value on the next tick does not.
 
 ### Batteries that are not always connected: EV / V2G availability windows (naive-mpc-optim)
 
