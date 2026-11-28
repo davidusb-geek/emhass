@@ -39,6 +39,13 @@ def test_a_failed_scan_fails_the_job(job):
     assert "continue-on-error" not in job
 
 
+@pytest.mark.parametrize("action", ["codecov/codecov-action", "SonarSource/sonarqube-scan-action"])
+def test_upload_and_scan_are_skipped_only_for_fork_pull_requests(job, action):
+    assert "if" not in job
+    step = job["steps"][_step_index(job, action)]
+    assert step.get("if") == "github.event.pull_request.head.repo.fork == false"
+
+
 def test_coverage_is_uploaded_before_the_gate_can_fail_the_job(job):
     upload = _step_index(job, "codecov/codecov-action")
     assert upload < _step_index(job, "SonarSource/sonarqube-scan-action")

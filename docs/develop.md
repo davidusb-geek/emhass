@@ -447,7 +447,7 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    git fetch --no-tags upstream refs/pull/<number>/head && git rev-parse 'FETCH_HEAD^{commit}'
    git fetch --no-tags upstream refs/heads/master && git rev-parse 'FETCH_HEAD^{commit}'
    ```
-2. Review the complete change between those two commits (`git diff --no-ext-diff --no-textconv <reviewed-base-sha>...<reviewed-head-sha>`, so that no local diff or text conversion program runs on the contributor's files), including build and dependency files (`pyproject.toml`, `uv.lock`, `Dockerfile`), tests and `conftest.py`, scripts, and `sonar-project.properties`. Do not run this verification if you cannot account for every change and accept the contribution as trusted. Then run the following in a `bash` shell, and continue only if it prints the `OK` line:
+2. Review the complete change between those two commits (`git diff --no-ext-diff --no-textconv --text <reviewed-base-sha>...<reviewed-head-sha>`, so that no local diff or text conversion program runs on the contributor's files), including build and dependency files (`pyproject.toml`, `uv.lock`, `Dockerfile`), tests and `conftest.py`, scripts, and `sonar-project.properties`. Do not run this verification if any changed content cannot be adequately reviewed (`--text` also prints files that attributes mark as binary or `-diff`, which may still be unreadable), or if you cannot account for every change and accept the contribution as trusted. Then run the following in a `bash` shell, and continue only if it prints the `OK` line:
 
    ```bash
    unset verified verified_base
