@@ -447,7 +447,7 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    git fetch --no-tags upstream refs/pull/<number>/head && git rev-parse 'FETCH_HEAD^{commit}'
    git fetch --no-tags upstream refs/heads/master && git rev-parse 'FETCH_HEAD^{commit}'
    ```
-2. Review the complete change between those two commits (`git diff <reviewed-base-sha>...<reviewed-head-sha>`), including build and dependency files (`pyproject.toml`, `uv.lock`, `Dockerfile`), tests and `conftest.py`, scripts, and `sonar-project.properties`. Do not run this verification if you cannot account for every change and accept the contribution as trusted. Then run the following in a `bash` shell, and continue only if it prints the `OK` line:
+2. Review the complete change between those two commits (`git diff --no-ext-diff --no-textconv <reviewed-base-sha>...<reviewed-head-sha>`, so that no local diff or text conversion program runs on the contributor's files), including build and dependency files (`pyproject.toml`, `uv.lock`, `Dockerfile`), tests and `conftest.py`, scripts, and `sonar-project.properties`. Do not run this verification if you cannot account for every change and accept the contribution as trusted. Then run the following in a `bash` shell, and continue only if it prints the `OK` line:
 
    ```bash
    unset verified verified_base
@@ -490,16 +490,26 @@ In the commands below, `upstream` is the remote pointing at `davidusb-geek/emhas
    - the `ANALYSIS SUCCESSFUL` link is for the temporary pull request's number.
 
    The `SonarCloud Code Analysis` check and the SonarQube Cloud page are supporting evidence only. The same head SHA also belongs to the original pull request, and they show a latest analysis that may not be this run's. If anything above is missing, ambiguous or contradicted by them, or the temporary pull request was reopened or updated, the result is unverified. Neither the job log nor SonarQube Cloud can prove the result for malicious code: it runs earlier in the same job and can alter the files, the log or the submitted analysis.
-7. Stop the temporary pull request's runs before cleaning up. Waiting for `CodeCov` is not enough: other workflows can still be running the contributor's code, and you must not rely on closing the pull request or deleting the branch to stop them. List the runs:
+7. Stop the temporary pull request's runs before cleaning up. Waiting for `CodeCov` is not enough: other workflows can still be running the contributor's code, and you must not rely on closing the pull request or deleting the branch to stop them. Check every run on the temporary branch, reading all pages of the result:
 
    ```bash
-   gh run list --repo davidusb-geek/emhass --branch verify/pr-<number>-<n> --limit 100 --json databaseId,workflowName,status
+   runs=$(gh api --paginate 'repos/davidusb-geek/emhass/actions/runs?branch=verify/pr-<number>-<n>&per_page=100' \
+     --jq '.total_count as $total | .workflow_runs[] | "\($total) \(.id) \(.status) \(.name)"') &&
+   printf '%s\n' "$runs" | awk '
+     NF { total[$1]; seen[$2]; expected = $1; if ($3 != "completed") { print "ACTIVE", $0; active = 1 } }
+     END {
+       for (t in total) totals++
+       for (i in seen) found++
+       if (totals != 1 || found != expected || expected > 1000) { print "INCOMPLETE LISTING"; exit 1 }
+       if (active) exit 1
+       print "ALL COMPLETED: " found " runs"
+     }'
    ```
 
-   Cancel every run whose `status` is not `completed` with `gh run cancel <run-id> --repo davidusb-geek/emhass`, adding `--force` if it does not stop. List again until every run is `completed`. An empty list means the command is wrong, not that nothing ran.
-8. Save the logs (`gh run view <run-id> --repo davidusb-geek/emhass --log > run-<run-id>.log`) and do not delete the runs. Close the temporary pull request without merging it, delete the branch, then list the runs once more. **Never re-run any of them:** a re-run executes the same commit again with the job's credentials, and GitHub allows it for up to 30 days. If the result was unavailable, start again from step 1 with a new `<n>`.
+   Only the `ALL COMPLETED` line counts as success. An error, `INCOMPLETE LISTING` or no output means the state is unknown, so treat runs as still active. GitHub returns at most 1,000 runs for this search; beyond that, use the repository's Actions page. For each `ACTIVE` line, cancel the run ID (the second number) with `gh run cancel <run-id> --repo davidusb-geek/emhass`, adding `--force` if it does not stop. New runs can take a moment to appear: repeat the check until it prints `ALL COMPLETED` with the same count twice, at least two minutes apart, and confirm on the Actions page that every workflow you expected has run.
+8. Save the logs (`gh run view <run-id> --repo davidusb-geek/emhass --log > run-<run-id>.log`) and do not delete the runs. Close the temporary pull request without merging it, delete the branch, then run the check from step 7 again. Cleanup has succeeded only if it still prints `ALL COMPLETED`. **Never re-run any of them:** a re-run executes the same commit again with the job's credentials, and GitHub allows it for up to 30 days. If the result was unavailable, start again from step 1 with a new `<n>`.
 9. Comment on the original pull request with the temporary pull request number, the head, base and merge SHAs, the result, the link to the workflow run and attempt, and the Sonar link from that log.
 
-**If the code did something you did not expect, or you suspect a compromise,** act at once, without waiting for any job to finish: cancel all runs of the temporary branch, do not re-run them, save their logs, and promptly revoke or rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`. Cancelling does not undo what has already been sent elsewhere, so rotate even if you cancelled quickly. Then check security alerts, code scanning results, workflow runs and branches.
+**If the code did something you did not expect, or you suspect a compromise,** act at once, without waiting for any job to finish: cancel all runs of the temporary branch, do not re-run them, save their logs, and promptly revoke or rotate `SONAR_TOKEN`, `CODECOV_TOKEN` and `SOURCERY_TOKEN`. Do not let a run that will not stop, or a listing you cannot complete, delay the rotation. Cancelling does not undo what has already been sent elsewhere, so rotate even if you cancelled quickly. Then check security alerts, code scanning results, workflow runs and branches.
 
 The result applies only to the head and base SHAs from step 5. It is stale as soon as the original pull request's head or `master` differs from them: verify again, with a new review if the head changed.
